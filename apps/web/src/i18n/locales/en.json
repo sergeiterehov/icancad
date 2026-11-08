@@ -84,7 +84,11 @@
     "noSelection": "Select a feature or body to edit its properties.",
     "rolledBack": "History is rolled back",
     "body": "Body",
-    "operation": "Operation"
+    "operation": "Operation",
+    "watertight": "Watertight",
+    "volume": "Volume",
+    "surfaceArea": "Surface area",
+    "components": "Components"
   },
   "timeline": {
     "empty": "No operations yet. Add a box or import a mesh.",
@@ -153,7 +157,9 @@
     "apply": "Apply",
     "delete": "Delete",
     "rename": "Rename",
-    "ok": "OK"
+    "ok": "OK",
+    "yes": "Yes",
+    "no": "No"
   },
   "context": {
     "deleteOperation": "Delete operation"

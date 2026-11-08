@@ -34,6 +34,7 @@ export function Inspector() {
   const renameProject = useDocumentStore((state) => state.renameProject);
   const meshes = useKernelStore((state) => state.meshes);
   const shapeStats = useKernelStore((state) => state.shapeStats);
+  const meshStats = useKernelStore((state) => state.meshStats);
   const featureErrors = useKernelStore((state) => state.featureErrors);
 
   const feature =
@@ -49,6 +50,7 @@ export function Inspector() {
   const mesh = selectedBodyId ? meshes[selectedBodyId] : undefined;
   const statsFeatureId = feature?.id ?? body?.createdBy;
   const stats = statsFeatureId ? shapeStats[statsFeatureId] : undefined;
+  const importedStats = statsFeatureId ? meshStats[statsFeatureId] : undefined;
   const featureError = feature
     ? featureErrors[feature.id]
     : body
@@ -239,17 +241,49 @@ export function Inspector() {
 
         {(feature || body) && (
           <PanelSection title={t('inspector.statistics')}>
-            <StatRow label={t('inspector.faces')} value={stats?.faces ?? '—'} />
-            <StatRow label={t('inspector.edges')} value={stats?.edges ?? '—'} />
-            <StatRow
-              label={t('inspector.triangles')}
-              value={mesh ? formatNumber(mesh.triangleCount, locale, 0) : '—'}
-            />
-            <StatRow
-              label={t('inspector.vertices')}
-              value={mesh ? formatNumber(mesh.vertexCount, locale, 0) : '—'}
-            />
-            <StatRow label={t('inspector.bounds')} value={boundsOf(mesh)} />
+            {importedStats ? (
+              <>
+                <StatRow
+                  label={t('inspector.triangles')}
+                  value={formatNumber(importedStats.triangleCount, locale, 0)}
+                />
+                <StatRow
+                  label={t('inspector.vertices')}
+                  value={formatNumber(importedStats.vertexCount, locale, 0)}
+                />
+                <StatRow
+                  label={t('inspector.watertight')}
+                  value={importedStats.watertight ? t('common.yes') : t('common.no')}
+                />
+                <StatRow
+                  label={t('inspector.volume')}
+                  value={`${formatNumber(importedStats.volume, locale, 1)} mm³`}
+                />
+                <StatRow
+                  label={t('inspector.surfaceArea')}
+                  value={`${formatNumber(importedStats.surfaceArea, locale, 1)} mm²`}
+                />
+                <StatRow
+                  label={t('inspector.components')}
+                  value={formatNumber(importedStats.componentCount, locale, 0)}
+                />
+                <StatRow label={t('inspector.bounds')} value={boundsOf(mesh)} />
+              </>
+            ) : (
+              <>
+                <StatRow label={t('inspector.faces')} value={stats?.faces ?? '—'} />
+                <StatRow label={t('inspector.edges')} value={stats?.edges ?? '—'} />
+                <StatRow
+                  label={t('inspector.triangles')}
+                  value={mesh ? formatNumber(mesh.triangleCount, locale, 0) : '—'}
+                />
+                <StatRow
+                  label={t('inspector.vertices')}
+                  value={mesh ? formatNumber(mesh.vertexCount, locale, 0) : '—'}
+                />
+                <StatRow label={t('inspector.bounds')} value={boundsOf(mesh)} />
+              </>
+            )}
           </PanelSection>
         )}
       </div>

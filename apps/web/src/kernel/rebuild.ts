@@ -1,6 +1,6 @@
 import type { MakeBoxResult, ShapeStats, TessellationResult } from '@icancad/kernel';
 import { HISTORY_START, featureBodyId, type ImportMeshFeature, type Project } from '@icancad/model';
-import type { MeshFormat, ParsedMesh } from '@icancad/io';
+import type { MeshFormat, MeshStats, ParsedMesh } from '@icancad/io';
 import { loadAsset } from '../persistence/db';
 import { useKernelStore } from '../stores/kernelStore';
 import { parseMeshInWorker } from '../io/client';
@@ -117,6 +117,7 @@ async function runRebuild(project: Project): Promise<void> {
 
   const meshes: Record<string, TessellationResult> = {};
   const shapeStats: Record<string, ShapeStats> = {};
+  const meshStats: Record<string, MeshStats> = {};
   const featureErrors: Record<string, string> = {};
   const shapeIds: string[] = [];
 
@@ -126,6 +127,7 @@ async function runRebuild(project: Project): Promise<void> {
       try {
         const parsed = await loadImportedMesh(feature.assetId, feature.format ?? 'stl');
         meshes[featureBodyId(feature.id)] = transformImportedMesh(parsed, feature);
+        meshStats[feature.id] = parsed.stats;
       } catch (error) {
         const message = error instanceof Error ? error.message : 'IMPORT_FAILED';
         featureErrors[feature.id] = message === 'MISSING_ASSET' ? 'MISSING_ASSET' : 'IMPORT_FAILED';
@@ -159,7 +161,7 @@ async function runRebuild(project: Project): Promise<void> {
 
   if (epoch !== rebuildEpoch) return;
 
-  useKernelStore.getState().setScene(meshes, shapeStats, shapeIds, featureErrors);
+  useKernelStore.getState().setScene(meshes, shapeStats, meshStats, shapeIds, featureErrors);
 
   for (const shapeId of kernel.shapeIds) {
     if (!shapeIds.includes(shapeId)) {

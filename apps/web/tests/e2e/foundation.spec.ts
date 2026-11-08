@@ -339,5 +339,26 @@ test.describe('ICANCad foundation', () => {
     await expect(page.getByTestId('left').locator('.tree-row')).toHaveCount(1);
     await expect(page.getByText('20 × 20 × 20 mm')).toBeVisible();
     await expect(page.getByText('Imported mesh')).toBeVisible();
+    await expect(page.getByText('Watertight')).toBeVisible();
+    await expect(page.getByText('Volume')).toBeVisible();
+    await expect(page.getByText('Components')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Section', exact: true }).click();
+    await expect(page.locator('.section-plane')).toHaveCount(1);
+    const offset = page.getByRole('textbox', { name: 'Offset' });
+    await offset.fill('10');
+    await offset.press('Enter');
+
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Export', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'STL', exact: true }).click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe('untitled-project.stl');
+
+    await expect(page.getByTestId('save-state')).toHaveAttribute('data-state', 'saved');
+    await page.reload();
+    await expect(page.getByTestId('left').locator('.tree-row')).toHaveCount(1, {
+      timeout: 120_000,
+    });
   });
 });

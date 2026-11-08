@@ -17,6 +17,9 @@ export interface MeshStats {
   bounds: Bounds;
   boundaryEdges: number;
   watertight: boolean;
+  volume: number;
+  surfaceArea: number;
+  componentCount: number;
 }
 
 export interface ParsedMesh extends MeshData {

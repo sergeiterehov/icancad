@@ -5,6 +5,7 @@ import type {
   TessellationResult,
 } from '@icancad/kernel';
 import { create } from 'zustand';
+import type { MeshStats } from '@icancad/io';
 import type { KernelTask } from '../kernel/scheduler';
 
 export type KernelStatus = 'idle' | 'loading' | 'ready' | 'error';
@@ -18,6 +19,7 @@ interface KernelState {
   error: string | null;
   meshes: Record<string, TessellationResult>;
   shapeStats: Record<string, ShapeStats>;
+  meshStats: Record<string, MeshStats>;
   shapeIds: string[];
   featureErrors: Record<string, string>;
   tasks: KernelTask[];
@@ -28,6 +30,7 @@ interface KernelState {
   setScene: (
     meshes: Record<string, TessellationResult>,
     shapeStats: Record<string, ShapeStats>,
+    meshStats: Record<string, MeshStats>,
     shapeIds: string[],
     featureErrors: Record<string, string>,
   ) => void;
@@ -43,6 +46,7 @@ export const useKernelStore = create<KernelState>((set) => ({
   error: null,
   meshes: {},
   shapeStats: {},
+  meshStats: {},
   shapeIds: [],
   featureErrors: {},
   tasks: [],
@@ -78,8 +82,9 @@ export const useKernelStore = create<KernelState>((set) => ({
 
   setTasks: (tasks) => set({ tasks }),
 
-  setScene: (meshes, shapeStats, shapeIds, featureErrors) =>
-    set({ meshes, shapeStats, shapeIds, featureErrors }),
+  setScene: (meshes, shapeStats, meshStats, shapeIds, featureErrors) =>
+    set({ meshes, shapeStats, meshStats, shapeIds, featureErrors }),
 
-  clearScene: () => set({ meshes: {}, shapeStats: {}, shapeIds: [], featureErrors: {} }),
+  clearScene: () =>
+    set({ meshes: {}, shapeStats: {}, meshStats: {}, shapeIds: [], featureErrors: {} }),
 }));

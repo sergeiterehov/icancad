@@ -47,11 +47,16 @@ export function computeSmoothNormals(positions: Float32Array, indices: Uint32Arr
   return normals;
 }
 
-export function countBoundaryEdges(positions: Float32Array, indices: Uint32Array): number {
-  const welded = new Map<string, number>();
-  const edgeCounts = new Map<string, number>();
-  const quantize = (value: number) => Math.round(value * 10_000);
+interface TopologyStats {
+  boundaryEdges: number;
+  componentCount: number;
+  volume: number;
+  surfaceArea: number;
+}
 
+function analyzeTopology(positions: Float32Array, indices: Uint32Array): TopologyStats {
+  const welded = new Map<string, number>();
+  const quantize = (value: number) => Math.round(value * 10_000);
   const vertexId = (index: number): number => {
     const key = `${quantize(positions[index * 3]!)},${quantize(positions[index * 3 + 1]!)},${quantize(positions[index * 3 + 2]!)}`;
     const existing = welded.get(key);
@@ -61,10 +66,36 @@ export function countBoundaryEdges(positions: Float32Array, indices: Uint32Array
     return id;
   };
 
+  const parent: number[] = [];
+  const find = (id: number): number => {
+    while (parent[id] !== id) {
+      parent[id] = parent[parent[id]!]!;
+      id = parent[id]!;
+    }
+    return id;
+  };
+  const union = (a: number, b: number): void => {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA !== rootB) parent[rootB] = rootA;
+  };
+
+  const edgeCounts = new Map<string, number>();
+  let volume = 0;
+  let surfaceArea = 0;
+
   for (let triangle = 0; triangle < indices.length; triangle += 3) {
-    const a = vertexId(indices[triangle]!);
-    const b = vertexId(indices[triangle + 1]!);
-    const c = vertexId(indices[triangle + 2]!);
+    const ia = indices[triangle]!;
+    const ib = indices[triangle + 1]!;
+    const ic = indices[triangle + 2]!;
+    const a = vertexId(ia);
+    const b = vertexId(ib);
+    const c = vertexId(ic);
+    for (const id of [a, b, c]) {
+      if (parent[id] === undefined) parent[id] = id;
+    }
+    union(a, b);
+    union(b, c);
     for (const [from, to] of [
       [a, b],
       [b, c],
@@ -73,13 +104,38 @@ export function countBoundaryEdges(positions: Float32Array, indices: Uint32Array
       const key = from < to ? `${from}:${to}` : `${to}:${from}`;
       edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1);
     }
+
+    const ax = positions[ia * 3]!;
+    const ay = positions[ia * 3 + 1]!;
+    const az = positions[ia * 3 + 2]!;
+    const bx = positions[ib * 3]!;
+    const by = positions[ib * 3 + 1]!;
+    const bz = positions[ib * 3 + 2]!;
+    const cx = positions[ic * 3]!;
+    const cy = positions[ic * 3 + 1]!;
+    const cz = positions[ic * 3 + 2]!;
+    volume += (ax * (by * cz - bz * cy) + ay * (bz * cx - bx * cz) + az * (bx * cy - by * cx)) / 6;
+    const ux = bx - ax;
+    const uy = by - ay;
+    const uz = bz - az;
+    const vx = cx - ax;
+    const vy = cy - ay;
+    const vz = cz - az;
+    surfaceArea += Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / 2;
   }
 
-  let boundary = 0;
+  let boundaryEdges = 0;
   for (const count of edgeCounts.values()) {
-    if (count !== 2) boundary += 1;
+    if (count !== 2) boundaryEdges += 1;
   }
-  return boundary;
+  const roots = new Set<number>();
+  for (let id = 0; id < parent.length; id += 1) roots.add(find(id));
+  return {
+    boundaryEdges,
+    componentCount: roots.size,
+    volume: Math.abs(volume),
+    surfaceArea,
+  };
 }
 
 export function buildParsedMesh(
@@ -87,7 +143,10 @@ export function buildParsedMesh(
   indices: Uint32Array,
   normals?: Float32Array,
 ): ParsedMesh {
-  const boundaryEdges = positions.length > 0 ? countBoundaryEdges(positions, indices) : 0;
+  const topology =
+    positions.length > 0
+      ? analyzeTopology(positions, indices)
+      : { boundaryEdges: 0, componentCount: 0, volume: 0, surfaceArea: 0 };
   return {
     positions,
     normals:
@@ -99,8 +158,11 @@ export function buildParsedMesh(
       triangleCount: Math.floor(indices.length / 3),
       vertexCount: positions.length / 3,
       bounds: computeBounds(positions),
-      boundaryEdges,
-      watertight: boundaryEdges === 0,
+      boundaryEdges: topology.boundaryEdges,
+      watertight: topology.boundaryEdges === 0,
+      volume: topology.volume,
+      surfaceArea: topology.surfaceArea,
+      componentCount: topology.componentCount,
     },
   } satisfies MeshData & ParsedMesh;
 }

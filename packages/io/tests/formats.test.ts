@@ -151,6 +151,9 @@ function expectCube(mesh: ReturnType<typeof parseObj>): void {
   expect(mesh.stats.bounds.min).toEqual([0, 0, 0]);
   expect(mesh.stats.bounds.max).toEqual([1, 1, 1]);
   expect(mesh.stats.watertight).toBe(true);
+  expect(mesh.stats.volume).toBeCloseTo(1);
+  expect(mesh.stats.surfaceArea).toBeCloseTo(6);
+  expect(mesh.stats.componentCount).toBe(1);
 }
 
 describe('mesh import formats', () => {
