@@ -1,23 +1,23 @@
 import type { MakeBoxResult, ShapeStats, TessellationResult } from '@icancad/kernel';
 import { HISTORY_START, featureBodyId, type ImportMeshFeature, type Project } from '@icancad/model';
-import type { ParsedMesh } from '@icancad/io';
+import type { MeshFormat, ParsedMesh } from '@icancad/io';
 import { loadAsset } from '../persistence/db';
 import { useKernelStore } from '../stores/kernelStore';
-import { parseStlInWorker } from '../io/client';
+import { parseMeshInWorker } from '../io/client';
 import { getKernelClient } from './client';
 import { kernelTaskQueue } from './scheduler';
 
 let rebuildEpoch = 0;
 const importedMeshCache = new Map<string, Promise<ParsedMesh>>();
 
-async function loadImportedMesh(assetId: string): Promise<ParsedMesh> {
+async function loadImportedMesh(assetId: string, format: MeshFormat): Promise<ParsedMesh> {
   const cached = importedMeshCache.get(assetId);
   if (cached) return cached;
   const promise = (async () => {
     const blob = await loadAsset(assetId);
     if (!blob) throw new Error('MISSING_ASSET');
     const bytes = new Uint8Array(await blob.arrayBuffer());
-    return parseStlInWorker(bytes);
+    return parseMeshInWorker(bytes, format);
   })();
   importedMeshCache.set(assetId, promise);
   promise.catch(() => importedMeshCache.delete(assetId));
@@ -124,7 +124,7 @@ async function runRebuild(project: Project): Promise<void> {
     if (epoch !== rebuildEpoch) return;
     if (feature.type === 'import-mesh') {
       try {
-        const parsed = await loadImportedMesh(feature.assetId);
+        const parsed = await loadImportedMesh(feature.assetId, feature.format ?? 'stl');
         meshes[featureBodyId(feature.id)] = transformImportedMesh(parsed, feature);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'IMPORT_FAILED';

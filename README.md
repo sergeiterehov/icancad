@@ -38,14 +38,15 @@ Kernel worker pool                          Sketch solver worker
 OCCT WASM · shapes · tessellation           planegcs WASM (M2)
             │
             ▼
-IO / mesh worker (M1+)
-STL/OBJ/PLY/GLB parsing, voxel remesh, decimation
+IO / mesh worker
+STL/OBJ/PLY/GLB parsing; voxel remesh and decimation arrive in M3
 ```
 
 - **Kernel is authoritative.** Main thread never owns `TopoDS_Shape`; it receives typed arrays only.
 - **Document is declarative.** `packages/model` holds the feature list, command validation and history checks. Geometry is rebuilt from features.
 - **Tessellation respects OCCT face orientation**; triangle winding and normals are normalized for WebGL (`packages/kernel/src/engine.ts`).
-- **Section view (M1)** will be view state, not history: stencil caps + hatch shader.
+- **Mesh import** parses STL/OBJ/PLY/GLB in the IO worker; an imported mesh becomes a body directly.
+- **Section view** is view state, not history: multiple clip planes with stencil caps and screen-space hatching.
 - **i18n** is English/Russian from the first commit; keys are typed and error codes are localized in the UI.
 - **Python (later)** will use the same serializable command/feature layer; no API is frozen yet.
 

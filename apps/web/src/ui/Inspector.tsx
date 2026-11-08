@@ -1,4 +1,10 @@
-import { featureBodyId, type BodyMeta, type Feature, type PrimitiveFeature } from '@icancad/model';
+import {
+  bodiesInHistory,
+  featureBodyId,
+  type BodyMeta,
+  type Feature,
+  type PrimitiveFeature,
+} from '@icancad/model';
 import { Box } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useDocumentStore } from '../stores/documentStore';
@@ -226,7 +232,7 @@ export function Inspector() {
             <TextField label={t('inspector.name')} value={project.name} onCommit={renameProject} />
             <StatRow label={t('inspector.units')} value={project.units} />
             <StatRow label={t('inspector.features')} value={project.features.length} />
-            <StatRow label={t('inspector.bodies')} value={project.bodies.length} />
+            <StatRow label={t('inspector.bodies')} value={bodiesInHistory(project).length} />
             {project.historyEnd && <p className="hint">{t('inspector.rolledBack')}</p>}
           </PanelSection>
         )}

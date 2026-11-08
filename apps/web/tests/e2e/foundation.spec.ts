@@ -54,6 +54,40 @@ function cubeStl(size: number): Buffer {
   return buffer;
 }
 
+function cubeObj(size: number): Buffer {
+  const h = size / 2;
+  const vertices: [number, number, number][] = [
+    [-h, -h, 0],
+    [h, -h, 0],
+    [h, h, 0],
+    [-h, h, 0],
+    [-h, -h, size],
+    [h, -h, size],
+    [h, h, size],
+    [-h, h, size],
+  ];
+  const faces: [number, number, number][] = [
+    [0, 2, 1],
+    [0, 3, 2],
+    [4, 5, 6],
+    [4, 6, 7],
+    [0, 1, 5],
+    [0, 5, 4],
+    [1, 2, 6],
+    [1, 6, 5],
+    [2, 3, 7],
+    [2, 7, 6],
+    [3, 0, 4],
+    [3, 4, 7],
+  ];
+  return Buffer.from(
+    [
+      ...vertices.map((vertex) => `v ${vertex.join(' ')}`),
+      ...faces.map((face) => `f ${face.map((index) => index + 1).join(' ')}`),
+    ].join('\n'),
+  );
+}
+
 async function addBox(page: Page) {
   await page.getByRole('button', { name: 'Add object' }).click();
   await page.getByRole('menuitem', { name: 'Box' }).click();
@@ -178,6 +212,7 @@ test.describe('ICANCad foundation', () => {
     await expect(page.locator('.dimension-unit')).toHaveCount(3);
 
     const bodyRows = page.locator('.tree-row');
+    await expect(bodyRows).toHaveCount(2);
     await bodyRows.first().click();
     await expect(page.locator('.timeline-op.dimmed')).toHaveCount(1);
 
@@ -198,13 +233,17 @@ test.describe('ICANCad foundation', () => {
     await expect(page.getByRole('tooltip')).toHaveText('Go to operation #1');
     await caret.click();
     await expect(page.locator('.timeline-op.muted')).toHaveCount(1);
+    await expect(bodyRows).toHaveCount(1);
     await page.locator('.timeline-caret').last().click();
     await expect(page.locator('.timeline-op.muted')).toHaveCount(0);
+    await expect(bodyRows).toHaveCount(2);
 
     await page.locator('.timeline-caret').first().click();
     await expect(page.locator('.timeline-op.muted')).toHaveCount(2);
+    await expect(bodyRows).toHaveCount(0);
     await page.locator('.timeline-caret').last().click();
     await expect(page.locator('.timeline-op.muted')).toHaveCount(0);
+    await expect(bodyRows).toHaveCount(2);
 
     await page.getByRole('button', { name: 'Language' }).click();
     await page.getByRole('menuitem', { name: 'Русский' }).click();
@@ -273,5 +312,32 @@ test.describe('ICANCad foundation', () => {
     await sectionTool.click();
     await expect(planes.first().getByRole('button', { name: 'Show plane' })).toBeVisible();
     await expect(page.getByTestId('save-state')).toHaveAttribute('data-state', 'saved');
+
+    await page.reload();
+    await expect(sectionTool).toBeVisible({ timeout: 120_000 });
+    await expect(sectionTool).toHaveAttribute('data-active', 'true');
+    await expect(planes.first().getByRole('button', { name: 'Show plane' })).toBeVisible();
+
+    await sectionTool.click();
+    await expect(sectionTool).not.toHaveAttribute('data-active', 'true');
+    await page.reload();
+    await expect(sectionTool).toBeVisible({ timeout: 120_000 });
+    await expect(sectionTool).not.toHaveAttribute('data-active', 'true');
+    await expect(planes).toHaveCount(0);
+  });
+  test('imports OBJ meshes', async ({ page }) => {
+    await openApp(page);
+    await page.setInputFiles('[data-testid="import-mesh"]', {
+      name: 'cube.obj',
+      mimeType: 'text/plain',
+      buffer: cubeObj(20),
+    });
+
+    await expect(
+      page.getByTestId('left').getByRole('button', { name: 'cube', exact: true }),
+    ).toBeVisible();
+    await expect(page.getByTestId('left').locator('.tree-row')).toHaveCount(1);
+    await expect(page.getByText('20 × 20 × 20 mm')).toBeVisible();
+    await expect(page.getByText('Imported mesh')).toBeVisible();
   });
 });

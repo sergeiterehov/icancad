@@ -1,4 +1,4 @@
-import { createId, type BodyMeta } from '@icancad/model';
+import { bodiesInHistory, createId, type BodyMeta, type MeshFormat } from '@icancad/model';
 import clsx from 'clsx';
 import { Box, Eye, EyeOff, FileUp, Plus, Trash2 } from 'lucide-react';
 import { useRef, type ChangeEvent, type MouseEvent, type ReactNode } from 'react';
@@ -12,12 +12,27 @@ import { IconButton } from './Controls';
 import { showContextMenu, useContextMenuStore } from './ContextMenu';
 import { formatNumber } from './format';
 
-const MESH_ACCEPT = '.stl';
+const MESH_ACCEPT = '.stl,.obj,.ply,.glb';
+
+const MESH_FORMATS: Record<string, MeshFormat> = {
+  stl: 'stl',
+  obj: 'obj',
+  ply: 'ply',
+  glb: 'glb',
+};
+
+const MESH_MIME: Record<MeshFormat, string> = {
+  stl: 'model/stl',
+  obj: 'text/plain',
+  ply: 'application/octet-stream',
+  glb: 'model/gltf-binary',
+};
 
 export function LeftPanel() {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? 'en';
   const project = useDocumentStore((state) => state.project);
+  const bodies = bodiesInHistory(project);
   const selection = useDocumentStore((state) => state.selection);
   const select = useDocumentStore((state) => state.select);
   const toggleBodyVisibility = useDocumentStore((state) => state.toggleBodyVisibility);
@@ -30,7 +45,7 @@ export function LeftPanel() {
   const meshInput = useRef<HTMLInputElement>(null);
 
   const highlightedBodyIds = linkedBodyIds(selection, project);
-  const isEmpty = project.bodies.length === 0;
+  const isEmpty = bodies.length === 0;
 
   const openAddMenu = (event: MouseEvent<HTMLButtonElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -56,12 +71,14 @@ export function LeftPanel() {
     event.target.value = '';
     if (!file) return;
     try {
+      const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+      const format = MESH_FORMATS[extension];
+      if (!format) throw new Error('UNSUPPORTED_FORMAT');
       const bytes = new Uint8Array(await file.arrayBuffer());
       const featureId = createId('feat');
-      const mimeType = file.type || 'model/stl';
-      await saveAsset(featureId, new Blob([new Uint8Array(bytes)], { type: mimeType }));
+      await saveAsset(featureId, new Blob([new Uint8Array(bytes)], { type: MESH_MIME[format] }));
       const name = file.name.replace(/\.[^.]+$/, '') || file.name;
-      useDocumentStore.getState().addImportedMesh(name, featureId);
+      useDocumentStore.getState().addImportedMesh(name, featureId, format);
       showToast('toast.meshImported');
     } catch {
       showToast('toast.importFailed', 'error');
@@ -127,7 +144,7 @@ export function LeftPanel() {
   };
 
   const bodiesByCreator = new Map<string, BodyMeta[]>();
-  for (const body of project.bodies) {
+  for (const body of bodies) {
     const list = bodiesByCreator.get(body.createdBy) ?? [];
     list.push(body);
     bodiesByCreator.set(body.createdBy, list);
@@ -141,7 +158,7 @@ export function LeftPanel() {
       placedBodies.add(body.id);
     }
   }
-  for (const body of project.bodies) {
+  for (const body of bodies) {
     if (!placedBodies.has(body.id)) rows.push(renderBody(body));
   }
 

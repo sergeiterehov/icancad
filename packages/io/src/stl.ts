@@ -1,11 +1,9 @@
-import type { Bounds, MeshData, ParsedMesh, Vec3 } from './types';
+import { buildParsedMesh } from './mesh';
+import type { MeshData, ParsedMesh, Vec3 } from './types';
 
 const ASCII_VERTEX = /vertex\s+(-?[\d.eE+]+)\s+(-?[\d.eE+]+)\s+(-?[\d.eE+]+)/g;
 
-function computeNormal(
-  positions: Float32Array,
-  offset: number,
-): [number, number, number] {
+function computeNormal(positions: Float32Array, offset: number): [number, number, number] {
   const ax = positions[offset]!;
   const ay = positions[offset + 1]!;
   const az = positions[offset + 2]!;
@@ -99,78 +97,11 @@ function parseAsciiStl(bytes: Uint8Array): { positions: Float32Array; normals: F
   return { positions, normals };
 }
 
-function computeBounds(positions: Float32Array): Bounds {
-  if (positions.length === 0) {
-    return { min: [0, 0, 0], max: [0, 0, 0] };
-  }
-  const min: Vec3 = [Infinity, Infinity, Infinity];
-  const max: Vec3 = [-Infinity, -Infinity, -Infinity];
-  for (let index = 0; index < positions.length; index += 3) {
-    for (let axis = 0; axis < 3; axis += 1) {
-      const value = positions[index + axis]!;
-      if (value < min[axis]!) min[axis] = value;
-      if (value > max[axis]!) max[axis] = value;
-    }
-  }
-  return { min, max };
-}
-
-function countBoundaryEdges(positions: Float32Array): number {
-  const welded = new Map<string, number>();
-  const edgeCounts = new Map<number, number>();
-  const quantize = (value: number) => Math.round(value * 10_000);
-
-  const vertexId = (index: number): number => {
-    const key = `${quantize(positions[index]!)},${quantize(positions[index + 1]!)},${quantize(positions[index + 2]!)}`;
-    const existing = welded.get(key);
-    if (existing !== undefined) return existing;
-    const id = welded.size;
-    welded.set(key, id);
-    return id;
-  };
-
-  const countTriangles = Math.floor(positions.length / 9);
-  for (let triangle = 0; triangle < countTriangles; triangle += 1) {
-    const base = triangle * 9;
-    const a = vertexId(base);
-    const b = vertexId(base + 3);
-    const c = vertexId(base + 6);
-    for (const [from, to] of [
-      [a, b],
-      [b, c],
-      [c, a],
-    ] as const) {
-      const low = Math.min(from, to);
-      const high = Math.max(from, to);
-      const key = low * 1_000_000 + high;
-      edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1);
-    }
-  }
-
-  let boundary = 0;
-  for (const count of edgeCounts.values()) {
-    if (count !== 2) boundary += 1;
-  }
-  return boundary;
-}
-
 export function parseStl(bytes: Uint8Array): ParsedMesh {
   const { positions, normals } = isBinaryStl(bytes) ? parseBinaryStl(bytes) : parseAsciiStl(bytes);
   const indices = new Uint32Array(positions.length / 3);
   for (let index = 0; index < indices.length; index += 1) indices[index] = index;
-  const boundaryEdges = positions.length > 0 ? countBoundaryEdges(positions) : 0;
-  return {
-    positions,
-    normals,
-    indices,
-    stats: {
-      triangleCount: Math.floor(positions.length / 9),
-      vertexCount: positions.length / 3,
-      bounds: computeBounds(positions),
-      boundaryEdges,
-      watertight: boundaryEdges === 0,
-    },
-  };
+  return buildParsedMesh(positions, indices, normals);
 }
 
 export function exportStlBinary(meshes: readonly MeshData[], header = 'ICanCAD'): Uint8Array {
@@ -187,16 +118,23 @@ export function exportStlBinary(meshes: readonly MeshData[], header = 'ICanCAD')
 
   let offset = 84;
   for (const mesh of meshes) {
-    const count =
-      mesh.indices.length > 0 ? mesh.indices.length / 3 : mesh.positions.length / 9;
+    const count = mesh.indices.length > 0 ? mesh.indices.length / 3 : mesh.positions.length / 9;
     for (let triangle = 0; triangle < count; triangle += 1) {
       const indices =
         mesh.indices.length > 0
-          ? [mesh.indices[triangle * 3]!, mesh.indices[triangle * 3 + 1]!, mesh.indices[triangle * 3 + 2]!]
+          ? [
+              mesh.indices[triangle * 3]!,
+              mesh.indices[triangle * 3 + 1]!,
+              mesh.indices[triangle * 3 + 2]!,
+            ]
           : [triangle * 3, triangle * 3 + 1, triangle * 3 + 2];
       const points = indices.map(
         (index) =>
-          [mesh.positions[index * 3]!, mesh.positions[index * 3 + 1]!, mesh.positions[index * 3 + 2]!] as Vec3,
+          [
+            mesh.positions[index * 3]!,
+            mesh.positions[index * 3 + 1]!,
+            mesh.positions[index * 3 + 2]!,
+          ] as Vec3,
       );
       const [a, b, c] = points as [Vec3, Vec3, Vec3];
       const ux = b[0] - a[0];

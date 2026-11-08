@@ -2,6 +2,8 @@ export const HISTORY_START = 'start';
 
 export type Vec3 = [number, number, number];
 
+export type MeshFormat = 'stl' | 'obj' | 'ply' | 'glb';
+
 export interface Transform {
   translation: Vec3;
   rotation: Vec3;
@@ -38,6 +40,7 @@ export interface PrimitiveFeature extends FeatureBase {
 export interface ImportMeshFeature extends FeatureBase {
   type: 'import-mesh';
   assetId: string;
+  format: MeshFormat;
   transform: Transform;
   scale: number;
 }

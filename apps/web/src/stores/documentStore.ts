@@ -5,9 +5,11 @@ import {
   createId,
   createProject,
   featureBodyId,
+  isFeatureInHistory,
   type BodyMeta,
   type Command,
   type ImportMeshFeature,
+  type MeshFormat,
   type PrimitiveFeature,
   type Project,
   type SectionPlane,
@@ -38,7 +40,7 @@ interface DocumentState {
   select: (item: SelectionItem | null, options?: { additive?: boolean }) => void;
   setSaveState: (state: SaveState) => void;
   addPrimitiveBox: (name: string) => void;
-  addImportedMesh: (name: string, featureId: string) => void;
+  addImportedMesh: (name: string, featureId: string, format: MeshFormat) => void;
   setSectionPlanes: (planes: SectionPlane[]) => void;
   removeFeature: (featureId: string) => void;
   renameProject: (name: string) => void;
@@ -50,10 +52,12 @@ const HISTORY_LIMIT = 100;
 
 function exists(project: Project, item: SelectionItem): boolean {
   switch (item.kind) {
-    case 'body':
-      return project.bodies.some((body) => body.id === item.id);
+    case 'body': {
+      const body = project.bodies.find((candidate) => candidate.id === item.id);
+      return body ? isFeatureInHistory(project, body.createdBy) : false;
+    }
     case 'feature':
-      return project.features.some((feature) => feature.id === item.id);
+      return isFeatureInHistory(project, item.id);
   }
 }
 
@@ -168,7 +172,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     }
   },
 
-  addImportedMesh: (name, featureId) => {
+  addImportedMesh: (name, featureId, format) => {
     const state = get();
     const feature: ImportMeshFeature = {
       id: featureId,
@@ -176,6 +180,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       suppressed: false,
       type: 'import-mesh',
       assetId: featureId,
+      format,
       transform: { translation: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
       scale: 1,
     };

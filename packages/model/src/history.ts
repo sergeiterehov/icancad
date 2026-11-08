@@ -1,4 +1,4 @@
-import { HISTORY_START, type Feature, type Project } from './types';
+import { HISTORY_START, type BodyMeta, type Feature, type Project } from './types';
 
 export type HistoryIssueCode =
   | 'DUPLICATE_FEATURE_ID'
@@ -14,6 +14,25 @@ export interface HistoryIssue {
   severity: 'error' | 'warning';
   message: string;
   featureId?: string;
+}
+
+export function activeFeatureIds(project: Project): Set<string> {
+  if (project.historyEnd === null) {
+    return new Set(project.features.map((feature) => feature.id));
+  }
+  if (project.historyEnd === HISTORY_START) return new Set();
+  const end = project.features.findIndex((feature) => feature.id === project.historyEnd);
+  if (end < 0) return new Set();
+  return new Set(project.features.slice(0, end + 1).map((feature) => feature.id));
+}
+
+export function isFeatureInHistory(project: Project, featureId: string): boolean {
+  return activeFeatureIds(project).has(featureId);
+}
+
+export function bodiesInHistory(project: Project): BodyMeta[] {
+  const active = activeFeatureIds(project);
+  return project.bodies.filter((body) => active.has(body.createdBy));
 }
 
 function referencedBodyIds(feature: Feature): string[] {

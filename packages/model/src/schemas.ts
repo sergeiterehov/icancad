@@ -33,6 +33,7 @@ const importMeshFeature = z.object({
   ...featureBase,
   type: z.literal('import-mesh'),
   assetId: z.string().min(1),
+  format: z.enum(['stl', 'obj', 'ply', 'glb']).default('stl'),
   transform,
   scale: z.number().positive(),
 });

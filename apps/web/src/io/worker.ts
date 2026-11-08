@@ -1,8 +1,9 @@
-import { parseStl } from '@icancad/io';
+import { parseMesh, type MeshFormat } from '@icancad/io';
 
 interface ParseRequest {
   id: number;
-  type: 'parse-stl';
+  type: 'parse-mesh';
+  format: MeshFormat;
   bytes: Uint8Array;
 }
 
@@ -16,8 +17,8 @@ const scope = self as unknown as IoWorkerScope;
 scope.onmessage = (event) => {
   const request = event.data;
   try {
-    if (request.type === 'parse-stl') {
-      const mesh = parseStl(request.bytes);
+    if (request.type === 'parse-mesh') {
+      const mesh = parseMesh(request.bytes, request.format);
       scope.postMessage({ id: request.id, ok: true, result: mesh }, [
         mesh.positions.buffer,
         mesh.normals.buffer,

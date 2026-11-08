@@ -1,4 +1,4 @@
-import type { ParsedMesh } from '@icancad/io';
+import type { MeshFormat, ParsedMesh } from '@icancad/io';
 
 interface Pending {
   resolve: (mesh: ParsedMesh) => void;
@@ -17,8 +17,7 @@ function getWorker(): Worker {
   });
   worker.onmessage = (event: MessageEvent) => {
     const data = event.data as
-      | { id: number; ok: true; result: ParsedMesh }
-      | { id: number; ok: false; error: string };
+      { id: number; ok: true; result: ParsedMesh } | { id: number; ok: false; error: string };
     const request = pending.get(data.id);
     if (!request) return;
     pending.delete(data.id);
@@ -34,11 +33,11 @@ function getWorker(): Worker {
   return worker;
 }
 
-export function parseStlInWorker(bytes: Uint8Array): Promise<ParsedMesh> {
+export function parseMeshInWorker(bytes: Uint8Array, format: MeshFormat): Promise<ParsedMesh> {
   const id = ++sequence;
   const active = getWorker();
   return new Promise<ParsedMesh>((resolve, reject) => {
     pending.set(id, { resolve, reject });
-    active.postMessage({ id, type: 'parse-stl', bytes }, [bytes.buffer]);
+    active.postMessage({ id, type: 'parse-mesh', format, bytes }, [bytes.buffer]);
   });
 }
