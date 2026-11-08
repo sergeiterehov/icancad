@@ -1,0 +1,164 @@
+{
+  "app": {
+    "name": "ICanCAD",
+    "subtitle": "Browser CAD for 3D printing"
+  },
+  "topbar": {
+    "undo": "Undo",
+    "redo": "Redo",
+    "fit": "Fit view",
+    "import": "Open project",
+    "export": "Export .icad",
+    "language": "Language",
+    "theme": "Theme",
+    "themeDark": "Dark",
+    "themeLight": "Light",
+    "save": "Save",
+    "saving": "Saving…",
+    "saved": "Saved",
+    "saveError": "Save failed",
+    "projectName": "Project name"
+  },
+  "panels": {
+    "model": "Model",
+    "inspector": "Inspector",
+    "timeline": "History",
+    "tools": "Tools"
+  },
+  "tools": {
+    "select": "Select",
+    "sketch": "Sketch",
+    "extrude": "Extrude",
+    "shell": "Shell",
+    "hole": "Hole",
+    "section": "Section",
+    "comingSoon": "Planned for a later milestone"
+  },
+  "tree": {
+    "bodies": "Bodies",
+    "features": "Features",
+    "assets": "Assets",
+    "emptyBodies": "No bodies yet",
+    "emptyFeatures": "No features yet",
+    "hidden": "Hidden",
+    "suppressed": "Suppressed",
+    "error": "Error",
+    "delete": "Delete feature",
+    "show": "Show",
+    "hide": "Hide",
+    "addBody": "Add body"
+  },
+  "inspector": {
+    "project": "Project",
+    "selection": "Selection",
+    "name": "Name",
+    "units": "Units",
+    "bodies": "Bodies",
+    "features": "Features",
+    "size": "Size",
+    "width": "Width (X)",
+    "height": "Height (Y)",
+    "depth": "Depth (Z)",
+    "statistics": "Statistics",
+    "faces": "Faces",
+    "edges": "Edges",
+    "triangles": "Triangles",
+    "vertices": "Vertices",
+    "bounds": "Bounds",
+    "kernel": "Geometry kernel",
+    "status": "Status",
+    "version": "Version",
+    "loadTime": "Load time",
+    "loading": "Loading…",
+    "ready": "Ready",
+    "error": "Error",
+    "settings": "Settings",
+    "language": "Language",
+    "theme": "Theme",
+    "deleteFeature": "Delete feature",
+    "visibility": "Visible",
+    "createdBy": "Created by",
+    "noSelection": "Select a feature or body to edit its properties.",
+    "rolledBack": "History is rolled back",
+    "body": "Body",
+    "operation": "Operation"
+  },
+  "timeline": {
+    "empty": "No operations yet. Add a box or import a mesh.",
+    "rollback": "Roll back to this step",
+    "feature": "Feature",
+    "rollbackHint": "Show the model as it was after this operation. Later operations are kept.",
+    "goTo": "Go to operation #{{index}}"
+  },
+  "status": {
+    "kernelLoading": "Loading OCCT kernel…",
+    "kernelReady": "OCCT {{version}} · {{ms}} ms",
+    "kernelError": "Kernel failed to load",
+    "features": "{{count}} features",
+    "bodies": "{{count}} bodies",
+    "rebuild": "Rebuilding model",
+    "queue": "Queue",
+    "taskRunning": "running",
+    "taskQueued": "waiting",
+    "cancel": "Cancel operation",
+    "ms": "{{ms}} ms",
+    "detailsHint": "Kernel status and task queue"
+  },
+  "empty": {
+    "title": "Geometry pipeline check",
+    "description": "Use + in the Bodies list to create the first body. OCCT runs in a Web Worker, so the interface stays responsive.",
+    "loadingTitle": "Loading geometry kernel",
+    "loadingDescription": "Downloading and compiling OpenCascade (OCCT). This happens once and is cached by the browser.",
+    "retry": "Retry",
+    "errorTitle": "Geometry kernel error"
+  },
+  "toast": {
+    "saved": "Project saved",
+    "imported": "Project opened",
+    "exported": "Project exported",
+    "featureDeleted": "Feature deleted",
+    "invalidProject": "Could not open project file"
+  },
+  "errors": {
+    "KERNEL_LOAD_FAILED": "Failed to load the geometry kernel",
+    "SHAPE_NOT_FOUND": "Shape not found",
+    "INVALID_PARAMS": "Invalid parameters",
+    "NOT_IMPLEMENTED": "This feature is not implemented yet",
+    "OP_FAILED": "Geometry operation failed",
+    "INVALID_PROJECT": "Invalid project file",
+    "UNSUPPORTED_SCHEMA_VERSION": "Unsupported project version",
+    "INVALID_HISTORY": "Operation would break feature dependencies",
+    "UNKNOWN_FEATURE": "Feature not found",
+    "UNKNOWN_BODY": "Body not found",
+    "DUPLICATE_ID": "Duplicate identifier",
+    "INVALID_INDEX": "Invalid position",
+    "INVALID_VALUE": "Invalid value"
+  },
+  "features": {
+    "box": "Box",
+    "sketch": "Sketch",
+    "extrude": "Extrude"
+  },
+  "common": {
+    "close": "Close",
+    "cancel": "Cancel",
+    "apply": "Apply",
+    "delete": "Delete",
+    "rename": "Rename",
+    "ok": "OK"
+  },
+  "context": {
+    "deleteOperation": "Delete operation"
+  },
+  "nav": {
+    "cube": "Orientation cube",
+    "front": "Front",
+    "back": "Back",
+    "left": "Left",
+    "right": "Right",
+    "top": "Top",
+    "bottom": "Bottom",
+    "iso": "Isometric",
+    "hint": "Drag the cube to orbit · MMB orbit · Shift+MMB pan · Wheel zoom"
+  }
+}

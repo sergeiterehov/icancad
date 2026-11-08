@@ -1,0 +1,28 @@
+{
+  "name": "icancad",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.18.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "corepack pnpm --filter @icancad/web dev",
+    "build": "corepack pnpm -r build",
+    "typecheck": "corepack pnpm -r typecheck",
+    "test": "corepack pnpm -r test",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "e2e": "corepack pnpm --filter @icancad/web e2e",
+    "spike:occt": "node packages/kernel/scripts/spike.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.14.0",
+    "globals": "^17.14.0",
+    "prettier": "^3.9.10",
+    "typescript": "6.0.3",
+    "typescript-eslint": "^8.72.1"
+  }
+}
