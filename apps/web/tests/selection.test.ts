@@ -1,13 +1,29 @@
 import { featureBodyId, type Project } from '@icancad/model';
 import { describe, expect, it } from 'vitest';
-import { isDirectlySelected, selectedBodyIds, selectedFeatureIds } from '../src/stores/selection';
+import {
+  isDirectlySelected,
+  linkedBodyIds,
+  selectedBodyIds,
+  selectedFeatureIds,
+} from '../src/stores/selection';
 
 const project = {
   bodies: [
     { id: 'body-1', name: 'One', color: '#fff', visible: true, createdBy: 'feat-1' },
     { id: 'body-2', name: 'Two', color: '#fff', visible: true, createdBy: 'feat-2' },
+    {
+      id: featureBodyId('feat-import'),
+      name: 'Mesh',
+      color: '#fff',
+      visible: true,
+      createdBy: 'feat-import',
+    },
   ],
-  features: [{ id: 'feat-1' }, { id: 'feat-2' }],
+  features: [
+    { id: 'feat-1' },
+    { id: 'feat-2' },
+    { id: 'feat-import', type: 'import-mesh', assetId: 'asset-1' },
+  ],
 } as unknown as Project;
 
 describe('selection helpers', () => {
@@ -30,6 +46,12 @@ describe('selection helpers', () => {
     ];
     expect(selectedFeatureIds(selection, project)).toEqual(['feat-1']);
     expect(selectedBodyIds(selection)).toEqual(['body-1', featureBodyId('feat-1')]);
+  });
+
+  it('links an imported mesh operation to its body', () => {
+    const byFeature = [{ kind: 'feature' as const, id: 'feat-import' }];
+    expect(linkedBodyIds(byFeature, project)).toEqual([featureBodyId('feat-import')]);
+    expect(selectedBodyIds(byFeature)).toEqual([featureBodyId('feat-import')]);
   });
 
   it('reports direct selection separately', () => {

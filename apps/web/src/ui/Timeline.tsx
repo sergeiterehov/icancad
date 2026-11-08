@@ -1,6 +1,15 @@
 import { HISTORY_START, type Feature } from '@icancad/model';
 import clsx from 'clsx';
-import { ArrowBigUp, Box, CornerUpLeft, Layers, PenTool, Scissors, Trash2 } from 'lucide-react';
+import {
+  ArrowBigUp,
+  Box,
+  CornerUpLeft,
+  FileUp,
+  Layers,
+  PenTool,
+  Scissors,
+  Trash2,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
@@ -18,6 +27,8 @@ function FeatureIcon({ type }: { type: Feature['type'] }) {
       return <ArrowBigUp size={16} />;
     case 'boolean':
       return <Scissors size={16} />;
+    case 'import-mesh':
+      return <FileUp size={16} />;
     default:
       return <Layers size={16} />;
   }
@@ -63,9 +74,9 @@ export function Timeline() {
         ? 0
         : project.features.findIndex((feature) => feature.id === project.historyEnd) + 1;
 
-  const hasBodySelection = selection.some((item) => item.kind === 'body');
+  const hasObjectSelection = selection.some((item) => item.kind === 'body');
   const hasFeatureSelection = selection.some((item) => item.kind === 'feature');
-  const dimmingEnabled = hasBodySelection && !hasFeatureSelection;
+  const dimmingEnabled = hasObjectSelection && !hasFeatureSelection;
   const highlightedFeatureIds = selectedFeatureIds(selection, project);
 
   const goTo = (index: number) => {

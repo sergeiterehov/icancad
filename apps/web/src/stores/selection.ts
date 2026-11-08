@@ -16,11 +16,12 @@ export function directBodyIds(selection: SelectionItem[]): string[] {
 export function linkedBodyIds(selection: SelectionItem[], project: Project): string[] {
   const direct = new Set(directBodyIds(selection));
   const ids = new Set<string>();
+  const featureIds = new Set<string>();
   for (const item of selection) {
-    if (item.kind !== 'feature') continue;
-    for (const body of project.bodies) {
-      if (body.createdBy === item.id && !direct.has(body.id)) ids.add(body.id);
-    }
+    if (item.kind === 'feature') featureIds.add(item.id);
+  }
+  for (const body of project.bodies) {
+    if (featureIds.has(body.createdBy) && !direct.has(body.id)) ids.add(body.id);
   }
   return [...ids];
 }

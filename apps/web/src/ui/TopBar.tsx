@@ -1,14 +1,19 @@
+import { exportStlBinary } from '@icancad/io';
 import { Download, FolderOpen, Redo2, Undo2 } from 'lucide-react';
-import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   parseProjectFile,
   projectFileName,
   serializeProjectFile,
+  stlFileName,
 } from '../persistence/projectFile';
-import { setSetting } from '../persistence/db';
+import { loadAsset, saveAsset, setSetting } from '../persistence/db';
 import { queueProjectSave } from '../persistence/saveQueue';
 import { useDocumentStore } from '../stores/documentStore';
+import { useKernelStore } from '../stores/kernelStore';
+import { directBodyIds } from '../stores/selection';
+import { useContextMenuStore } from './ContextMenu';
 import { useUiStore } from '../stores/uiStore';
 import { IconButton } from './Controls';
 import { ToolRail } from './ToolRail';
@@ -23,6 +28,14 @@ export function TopBar() {
   const renameProject = useDocumentStore((state) => state.renameProject);
   const showToast = useUiStore((state) => state.showToast);
   const fileInput = useRef<HTMLInputElement>(null);
+  const meshes = useKernelStore((state) => state.meshes);
+  const selection = useDocumentStore((state) => state.selection);
+  const bodies = useDocumentStore((state) => state.project.bodies);
+  const openMenu = useContextMenuStore((state) => state.open);
+  const selectedBodyCount = directBodyIds(selection).length;
+  const visibleBodies = bodies.filter((body) => body.visible);
+  const projectHasGeometry =
+    selectedBodyCount > 0 ? true : visibleBodies.some((body) => meshes[body.id] !== undefined);
 
   const [nameDraft, setNameDraft] = useState(projectName);
   useEffect(() => setNameDraft(projectName), [projectName]);
@@ -33,16 +46,66 @@ export function TopBar() {
     else setNameDraft(projectName);
   };
 
-  const handleExport = () => {
-    const project = useDocumentStore.getState().project;
-    const blob = serializeProjectFile(project);
+  const download = (blob: Blob, name: string) => {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = projectFileName(project.name);
+    anchor.download = name;
     anchor.click();
     setTimeout(() => URL.revokeObjectURL(url), 1500);
+  };
+
+  const handleExport = async () => {
+    const project = useDocumentStore.getState().project;
+    const assets = new Map<string, Uint8Array>();
+    for (const feature of project.features) {
+      if (feature.type !== 'import-mesh') continue;
+      const blob = await loadAsset(feature.assetId);
+      if (blob) assets.set(feature.assetId, new Uint8Array(await blob.arrayBuffer()));
+    }
+    download(serializeProjectFile(project, assets), projectFileName(project.name));
     showToast('toast.exported');
+  };
+
+  const handleExportStl = () => {
+    const project = useDocumentStore.getState().project;
+    const selected = new Set(directBodyIds(useDocumentStore.getState().selection));
+    const candidates = project.bodies.filter((body) =>
+      selected.size > 0 ? selected.has(body.id) : body.visible,
+    );
+    const collected = candidates
+      .map((body) => meshes[body.id])
+      .filter((mesh) => mesh !== undefined);
+    if (collected.length === 0) {
+      showToast('toast.noGeometry', 'error');
+      return;
+    }
+    download(
+      new Blob([new Uint8Array(exportStlBinary(collected))], { type: 'model/stl' }),
+      stlFileName(project.name),
+    );
+    showToast('toast.stlExported');
+  };
+
+  const openExportMenu = (event: MouseEvent<HTMLButtonElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    openMenu(rect.right - 200, rect.bottom + 6, [
+      {
+        id: 'project',
+        label: t('topbar.exportProject'),
+        onSelect: () => void handleExport(),
+      },
+      { id: 'separator', separator: true },
+      {
+        id: 'stl',
+        label:
+          selectedBodyCount > 0
+            ? t('topbar.exportStlSelected', { count: selectedBodyCount })
+            : t('topbar.exportStl'),
+        onSelect: handleExportStl,
+        disabled: !projectHasGeometry,
+      },
+    ]);
   };
 
   const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -51,7 +114,10 @@ export function TopBar() {
     if (!file) return;
     try {
       const data = new Uint8Array(await file.arrayBuffer());
-      const { project } = parseProjectFile(data);
+      const { project, assets } = parseProjectFile(data);
+      for (const [id, bytes] of assets) {
+        await saveAsset(id, new Blob([new Uint8Array(bytes)]));
+      }
       useDocumentStore.getState().hydrate(project);
       await queueProjectSave(project);
       await setSetting('lastProjectId', project.id);
@@ -102,7 +168,7 @@ export function TopBar() {
         <IconButton label={t('topbar.import')} onClick={() => fileInput.current?.click()}>
           <FolderOpen size={16} />
         </IconButton>
-        <IconButton label={t('topbar.export')} onClick={handleExport}>
+        <IconButton label={t('topbar.export')} onClick={openExportMenu}>
           <Download size={16} />
         </IconButton>
       </div>

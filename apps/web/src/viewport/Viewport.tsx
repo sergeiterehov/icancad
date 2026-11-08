@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { retryKernel } from '../kernel/client';
 import { useDocumentStore } from '../stores/documentStore';
+import { useUiStore } from '../stores/uiStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { directBodyIds, linkedBodyIds } from '../stores/selection';
 import { useThemeStore } from '../stores/themeStore';
@@ -33,6 +34,8 @@ export function Viewport() {
 
   const project = useDocumentStore((state) => state.project);
   const bodies = project.bodies;
+  const sectionPlanes = project.view.sectionPlanes;
+  const sectionEnabled = useUiStore((state) => state.sectionEnabled);
   const selection = useDocumentStore((state) => state.selection);
   const meshes = useKernelStore((state) => state.meshes);
   const status = useKernelStore((state) => state.status);
@@ -166,11 +169,7 @@ export function Viewport() {
       });
     }
 
-    controller.setBodies(
-      sceneBodies,
-      directBodyIds(selection),
-      linkedBodyIds(selection, project),
-    );
+    controller.setBodies(sceneBodies, directBodyIds(selection), linkedBodyIds(selection, project));
     if (previousCount.current === 0 && sceneBodies.length > 0) {
       controller.fit();
     }
@@ -181,6 +180,10 @@ export function Viewport() {
     controllerRef.current?.setTheme(theme);
     navCubeRef.current?.setTheme(theme);
   }, [theme]);
+
+  useEffect(() => {
+    controllerRef.current?.setSection(sectionEnabled ? sectionPlanes : []);
+  }, [sectionEnabled, sectionPlanes]);
 
   useEffect(() => {
     navCubeRef.current?.setLabels(navLabels);

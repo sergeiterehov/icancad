@@ -1,4 +1,9 @@
-import type { HealthResult, KernelStatusEvent, ShapeStats, TessellationResult } from '@icancad/kernel';
+import type {
+  HealthResult,
+  KernelStatusEvent,
+  ShapeStats,
+  TessellationResult,
+} from '@icancad/kernel';
 import { create } from 'zustand';
 import type { KernelTask } from '../kernel/scheduler';
 

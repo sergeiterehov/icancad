@@ -391,6 +391,12 @@ button:disabled {
   letter-spacing: 0;
 }
 
+.tree-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
 .tree-row {
   display: flex;
   align-items: center;
@@ -465,13 +471,6 @@ button:disabled {
 .tree-badge.error {
   background: color-mix(in srgb, var(--danger) 16%, transparent);
   color: var(--danger);
-}
-
-.color-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex: 0 0 auto;
 }
 
 .empty-row {
@@ -975,10 +974,23 @@ button:disabled {
 .splash {
   height: 100%;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 18px;
+  gap: 16px;
   background: var(--bg);
+}
+
+.splash-mark {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.splash-caption {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
 }
 
 .toast {
@@ -1148,6 +1160,12 @@ button:disabled {
   color: var(--text-faint);
 }
 
+.context-menu-separator {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border-strong);
+}
+
 .context-menu-hint {
   margin-left: auto;
   padding-left: 14px;
@@ -1314,4 +1332,100 @@ button:disabled {
   height: 26px;
   padding: 0 10px;
   font-size: 11px;
+}
+
+.section-planes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.section-plane {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 5px;
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.section-plane > .tooltip-anchor {
+  flex: none;
+}
+
+.section-plane .icon-btn {
+  width: 26px;
+  height: 26px;
+}
+
+.section-axis {
+  display: flex;
+  gap: 1px;
+  height: 26px;
+  padding: 1px;
+  border-radius: 5px;
+  background: var(--panel);
+}
+
+.section-axis button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.section-axis button:hover {
+  color: var(--text);
+}
+
+.section-axis button[data-active='true'] {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
+.section-offset {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.section-offset > .tooltip-anchor {
+  display: block;
+  width: 100%;
+}
+
+.section-input {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 5px;
+  background: var(--panel);
+}
+
+.section-input .input {
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.section-input-suffix {
+  flex: none;
+  font-size: 10px;
+  color: var(--text-faint);
 }

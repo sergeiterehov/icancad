@@ -1,7 +1,10 @@
 import type { TessellationResult } from '@icancad/kernel';
+import type { SectionPlane } from '@icancad/model';
 import * as THREE from 'three';
 import type { Theme } from '../stores/themeStore';
 import type { ViewName } from './handle';
+
+const HATCH_SPACING_PX = 6;
 
 export interface SceneBody {
   id: string;
@@ -33,6 +36,12 @@ export class SceneController {
   private readonly bodies = new Map<string, BodyEntry>();
   private readonly resizeObserver: ResizeObserver;
   private grid: THREE.GridHelper;
+  private readonly sectionScene = new THREE.Scene();
+  private readonly capGeometry = new THREE.PlaneGeometry(4000, 4000);
+  private sectionPlanes: SectionPlane[] = [];
+  private sectionClipPlanes: THREE.Plane[] = [];
+  private sectionEntries: { group: THREE.Group; cap: THREE.Mesh; materials: THREE.Material[] }[] =
+    [];
 
   private animationFrame = 0;
   private needsRender = true;
@@ -65,9 +74,11 @@ export class SceneController {
       canvas,
       antialias: true,
       alpha: true,
+      stencil: true,
       powerPreference: 'high-performance',
     });
     this.renderer.setClearColor(0x000000, 0);
+    this.renderer.localClippingEnabled = true;
 
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10000);
     this.camera.up.set(0, 0, 1);
@@ -99,12 +110,14 @@ export class SceneController {
     const seen = new Set<string>();
     const selected = new Set(selectedBodyIds);
     const highlighted = new Set(highlightedBodyIds);
+    let sectionChanged = false;
 
     for (const body of bodies) {
       seen.add(body.id);
       const existing = this.bodies.get(body.id);
       if (existing && existing.meshRef !== body.mesh) {
         this.removeEntry(body.id);
+        sectionChanged = true;
       }
 
       let entry = this.bodies.get(body.id);
@@ -112,22 +125,27 @@ export class SceneController {
         entry = this.createEntry(body);
         this.bodies.set(body.id, entry);
         this.scene.add(entry.group);
+        sectionChanged = true;
       }
 
+      if (entry.group.visible !== body.visible) sectionChanged = true;
       entry.group.visible = body.visible;
       entry.material.color.set(body.color);
       const isSelected = selected.has(body.id);
       const isHighlighted = !isSelected && highlighted.has(body.id);
-      entry.material.emissive.setHex(
-        isSelected ? 0x2a4a8a : isHighlighted ? 0x3a4a63 : 0x000000,
-      );
+      entry.material.emissive.setHex(isSelected ? 0x2a4a8a : isHighlighted ? 0x3a4a63 : 0x000000);
       entry.material.emissiveIntensity = isSelected || isHighlighted ? 1 : 0;
     }
 
     for (const id of [...this.bodies.keys()]) {
-      if (!seen.has(id)) this.removeEntry(id);
+      if (!seen.has(id)) {
+        this.removeEntry(id);
+        sectionChanged = true;
+      }
     }
 
+    this.applyClipping();
+    if (sectionChanged && this.sectionPlanes.length > 0) this.rebuildSection();
     this.invalidate();
   }
 
@@ -147,6 +165,7 @@ export class SceneController {
     (this.grid.material as THREE.Material).dispose();
     this.grid = this.createGrid();
     this.scene.add(this.grid);
+    if (this.sectionPlanes.length > 0) this.rebuildSection();
     this.invalidate();
   }
 
@@ -174,7 +193,7 @@ export class SceneController {
     const size = box.getSize(new THREE.Vector3());
     const radius = Math.max(0.001, size.length() / 2);
     this.target.copy(center);
-    this.distance = (radius * 1.35) / Math.tan(((FOV_DEGREES * Math.PI) / 180) / 2);
+    this.distance = (radius * 1.35) / Math.tan((FOV_DEGREES * Math.PI) / 180 / 2);
     this.updateCamera();
   }
 
@@ -228,6 +247,144 @@ export class SceneController {
     this.updateCamera();
   }
 
+  setSection(planes: SectionPlane[]): void {
+    this.sectionPlanes = planes.filter((plane) => plane.visible);
+    this.sectionClipPlanes = this.sectionPlanes.map((plane) => {
+      const normal = new THREE.Vector3(...plane.normal).normalize();
+      const point = new THREE.Vector3(...plane.origin).addScaledVector(normal, plane.offset);
+      return new THREE.Plane().setFromNormalAndCoplanarPoint(normal, point);
+    });
+    this.applyClipping();
+    this.rebuildSection();
+    this.invalidate();
+  }
+
+  private applyClipping(): void {
+    const planes = this.sectionClipPlanes;
+    for (const entry of this.bodies.values()) {
+      entry.material.clippingPlanes = planes;
+      entry.material.needsUpdate = true;
+      if (entry.edges) {
+        (entry.edges.material as THREE.LineBasicMaterial).clippingPlanes = planes;
+        (entry.edges.material as THREE.LineBasicMaterial).needsUpdate = true;
+      }
+    }
+  }
+
+  private disposeSection(): void {
+    for (const entry of this.sectionEntries) {
+      for (const material of entry.materials) material.dispose();
+    }
+    this.sectionScene.clear();
+    this.sectionEntries = [];
+  }
+
+  private rebuildSection(): void {
+    this.disposeSection();
+    if (this.sectionPlanes.length === 0) return;
+
+    const background = new THREE.Color(this.theme === 'dark' ? 0x0d1015 : 0xffffff);
+    const highlight = new THREE.Color(this.theme === 'dark' ? 0xffffff : 0x000000);
+
+    this.sectionPlanes.forEach((section, index) => {
+      const effectiveNormal = new THREE.Vector3(...section.normal).normalize();
+      const point = new THREE.Vector3(...section.origin).addScaledVector(
+        effectiveNormal,
+        section.offset,
+      );
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(effectiveNormal, point);
+      let bodyIndex = 0;
+      for (const body of this.bodies.values()) {
+        if (!body.group.visible) continue;
+        bodyIndex += 1;
+
+        const back = new THREE.MeshBasicMaterial({
+          colorWrite: false,
+          depthWrite: false,
+          depthTest: false,
+          stencilWrite: true,
+          stencilFunc: THREE.AlwaysStencilFunc,
+          stencilFail: THREE.IncrementWrapStencilOp,
+          stencilZFail: THREE.IncrementWrapStencilOp,
+          stencilZPass: THREE.IncrementWrapStencilOp,
+          side: THREE.BackSide,
+          // The stencil needs a closed solid, so only its own plane may clip it.
+          clippingPlanes: [this.sectionClipPlanes[index]!],
+        });
+        const front = back.clone();
+        front.side = THREE.FrontSide;
+        front.stencilFail = THREE.DecrementWrapStencilOp;
+        front.stencilZFail = THREE.DecrementWrapStencilOp;
+        front.stencilZPass = THREE.DecrementWrapStencilOp;
+
+        const color = body.material.color;
+        const fill = color.clone().lerp(background, 0.55);
+        const line = color.clone().lerp(highlight, this.theme === 'dark' ? 0.2 : 0.25);
+
+        const capMaterial = new THREE.ShaderMaterial({
+          uniforms: {
+            uPixelRatio: { value: this.renderer.getPixelRatio() },
+            uSpacing: { value: HATCH_SPACING_PX },
+            uFill: { value: fill },
+            uLine: { value: line },
+          },
+          vertexShader: `
+            #include <clipping_planes_pars_vertex>
+            void main() {
+              vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+              #include <clipping_planes_vertex>
+              gl_Position = projectionMatrix * mvPosition;
+            }
+          `,
+          fragmentShader: `
+            #include <clipping_planes_pars_fragment>
+            uniform float uPixelRatio;
+            uniform float uSpacing;
+            uniform vec3 uFill;
+            uniform vec3 uLine;
+            void main() {
+              #include <clipping_planes_fragment>
+              float d = (gl_FragCoord.x + gl_FragCoord.y) * 0.70710678 / uPixelRatio;
+              float cell = d / uSpacing;
+              float distanceToLine = abs(fract(cell + 0.5) - 0.5) * uSpacing;
+              float line = 1.0 - smoothstep(0.4, 0.9, distanceToLine);
+              gl_FragColor = vec4(mix(uFill, uLine, line), 1.0);
+            }
+          `,
+          side: THREE.DoubleSide,
+          clipping: true,
+          polygonOffset: true,
+          polygonOffsetFactor: -1,
+          polygonOffsetUnits: -bodyIndex,
+          stencilWrite: true,
+          stencilRef: 0,
+          stencilFunc: THREE.NotEqualStencilFunc,
+          stencilFail: THREE.KeepStencilOp,
+          stencilZFail: THREE.KeepStencilOp,
+          stencilZPass: THREE.KeepStencilOp,
+          clippingPlanes: this.sectionClipPlanes.filter((_, other) => other !== index),
+        });
+
+        const group = new THREE.Group();
+        const backMesh = new THREE.Mesh(body.geometry, back);
+        const frontMesh = new THREE.Mesh(body.geometry, front);
+        backMesh.renderOrder = 0;
+        frontMesh.renderOrder = 1;
+        group.add(backMesh, frontMesh);
+
+        const cap = new THREE.Mesh(this.capGeometry, capMaterial);
+        cap.renderOrder = 2;
+        cap.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), effectiveNormal);
+        cap.position.copy(effectiveNormal).multiplyScalar(-plane.constant);
+        group.add(cap);
+        group.visible = false;
+
+        this.sectionScene.add(group);
+        this.sectionEntries.push({ group, cap, materials: [back, front, capMaterial] });
+      }
+    });
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -236,6 +393,8 @@ export class SceneController {
     this.unbindEvents();
 
     for (const id of [...this.bodies.keys()]) this.removeEntry(id);
+    this.disposeSection();
+    this.capGeometry.dispose();
     this.grid.geometry.dispose();
     (this.grid.material as THREE.Material).dispose();
     this.renderer.dispose();
@@ -308,7 +467,7 @@ export class SceneController {
 
   private updateCamera(): void {
     const aspect = this.width / this.height;
-    const halfHeight = this.distance * Math.tan(((FOV_DEGREES * Math.PI) / 180) / 2);
+    const halfHeight = this.distance * Math.tan((FOV_DEGREES * Math.PI) / 180 / 2);
     this.camera.left = -halfHeight * aspect;
     this.camera.right = halfHeight * aspect;
     this.camera.top = halfHeight;
@@ -453,5 +612,17 @@ export class SceneController {
     if (!this.needsRender) return;
     this.needsRender = false;
     this.renderer.render(this.scene, this.camera);
+
+    if (this.sectionEntries.length > 0) {
+      this.renderer.autoClear = false;
+      for (const entry of this.sectionEntries) {
+        for (const other of this.sectionEntries) other.group.visible = other === entry;
+        this.renderer.clearStencil();
+        this.renderer.render(this.sectionScene, this.camera);
+      }
+      for (const entry of this.sectionEntries) entry.group.visible = false;
+      this.renderer.clearStencil();
+      this.renderer.autoClear = true;
+    }
   };
 }

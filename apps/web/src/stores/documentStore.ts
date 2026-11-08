@@ -7,13 +7,15 @@ import {
   featureBodyId,
   type BodyMeta,
   type Command,
+  type ImportMeshFeature,
   type PrimitiveFeature,
   type Project,
+  type SectionPlane,
 } from '@icancad/model';
 import { create } from 'zustand';
 import { useUiStore } from './uiStore';
 
-export type SelectionKind = 'body' | 'feature' | 'asset';
+export type SelectionKind = 'body' | 'feature';
 
 export interface SelectionItem {
   kind: SelectionKind;
@@ -36,6 +38,8 @@ interface DocumentState {
   select: (item: SelectionItem | null, options?: { additive?: boolean }) => void;
   setSaveState: (state: SaveState) => void;
   addPrimitiveBox: (name: string) => void;
+  addImportedMesh: (name: string, featureId: string) => void;
+  setSectionPlanes: (planes: SectionPlane[]) => void;
   removeFeature: (featureId: string) => void;
   renameProject: (name: string) => void;
   setHistoryEnd: (featureId: string | null) => void;
@@ -50,8 +54,6 @@ function exists(project: Project, item: SelectionItem): boolean {
       return project.bodies.some((body) => body.id === item.id);
     case 'feature':
       return project.features.some((feature) => feature.id === item.id);
-    case 'asset':
-      return project.assets.some((asset) => asset.id === item.id);
   }
 }
 
@@ -161,14 +163,42 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       visible: true,
       createdBy: featureId,
     };
-    if (
-      state.apply(
-        { type: 'feature/add', feature },
-        { type: 'body/add', body },
-      )
-    ) {
+    if (state.apply({ type: 'feature/add', feature }, { type: 'body/add', body })) {
       set({ selection: [{ kind: 'feature', id: featureId }] });
     }
+  },
+
+  addImportedMesh: (name, featureId) => {
+    const state = get();
+    const feature: ImportMeshFeature = {
+      id: featureId,
+      name,
+      suppressed: false,
+      type: 'import-mesh',
+      assetId: featureId,
+      transform: { translation: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
+      scale: 1,
+    };
+    const body: BodyMeta = {
+      id: featureBodyId(featureId),
+      name,
+      color: BODY_COLORS[state.project.bodies.length % BODY_COLORS.length] ?? '#6ea8fe',
+      visible: true,
+      createdBy: featureId,
+    };
+    if (state.apply({ type: 'feature/add', feature }, { type: 'body/add', body })) {
+      set({ selection: [{ kind: 'feature', id: featureId }] });
+    }
+  },
+
+  setSectionPlanes: (planes) => {
+    const project = get().project;
+    set({
+      project: {
+        ...project,
+        view: { ...project.view, sectionPlanes: planes },
+      },
+    });
   },
 
   removeFeature: (featureId) => {

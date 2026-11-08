@@ -53,8 +53,25 @@ export interface ConvertToSolidFeature extends FeatureBase {
 
 export type SketchEntity =
   | { id: string; type: 'point'; construction: boolean; x: number; y: number }
-  | { id: string; type: 'line'; construction: boolean; x1: number; y1: number; x2: number; y2: number }
-  | { id: string; type: 'arc'; construction: boolean; cx: number; cy: number; r: number; startAngle: number; endAngle: number }
+  | {
+      id: string;
+      type: 'line';
+      construction: boolean;
+      x1: number;
+      y1: number;
+      x2: number;
+      y2: number;
+    }
+  | {
+      id: string;
+      type: 'arc';
+      construction: boolean;
+      cx: number;
+      cy: number;
+      r: number;
+      startAngle: number;
+      endAngle: number;
+    }
   | { id: string; type: 'circle'; construction: boolean; cx: number; cy: number; r: number }
   | {
       id: string;
@@ -222,23 +239,13 @@ export interface BodyMeta {
   createdBy: string;
 }
 
-export interface AssetMeta {
-  id: string;
-  name: string;
-  mimeType: string;
-  byteSize: number;
-  sha256?: string;
-}
-
 export interface SectionPlane {
   id: string;
   name: string;
   origin: Vec3;
   normal: Vec3;
   offset: number;
-  flipped: boolean;
   visible: boolean;
-  hatch: { angle: number; spacing: number };
 }
 
 export interface CameraState {
@@ -261,7 +268,6 @@ export interface Project {
   units: 'mm';
   features: Feature[];
   bodies: BodyMeta[];
-  assets: AssetMeta[];
   view: ViewState;
   historyEnd: string | null;
   createdAt: string;

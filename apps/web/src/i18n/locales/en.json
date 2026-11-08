@@ -8,7 +8,7 @@
     "redo": "Redo",
     "fit": "Fit view",
     "import": "Open project",
-    "export": "Export .icad",
+    "export": "Export",
     "language": "Language",
     "theme": "Theme",
     "themeDark": "Dark",
@@ -17,7 +17,10 @@
     "saving": "Saving…",
     "saved": "Saved",
     "saveError": "Save failed",
-    "projectName": "Project name"
+    "projectName": "Project name",
+    "exportStl": "STL",
+    "exportProject": "Project",
+    "exportStlSelected": "STL, {{count}} selected"
   },
   "panels": {
     "model": "Model",
@@ -37,8 +40,6 @@
   "tree": {
     "bodies": "Bodies",
     "features": "Features",
-    "assets": "Assets",
-    "emptyBodies": "No bodies yet",
     "emptyFeatures": "No features yet",
     "hidden": "Hidden",
     "suppressed": "Suppressed",
@@ -46,7 +47,9 @@
     "delete": "Delete feature",
     "show": "Show",
     "hide": "Hide",
-    "addBody": "Add body"
+    "addObject": "Add object",
+    "import": "Import",
+    "emptyObjects": "No objects yet"
   },
   "inspector": {
     "project": "Project",
@@ -117,7 +120,11 @@
     "imported": "Project opened",
     "exported": "Project exported",
     "featureDeleted": "Feature deleted",
-    "invalidProject": "Could not open project file"
+    "invalidProject": "Could not open project file",
+    "meshImported": "Mesh imported",
+    "stlExported": "STL exported",
+    "importFailed": "Could not import mesh",
+    "noGeometry": "Nothing to export"
   },
   "errors": {
     "KERNEL_LOAD_FAILED": "Failed to load the geometry kernel",
@@ -137,7 +144,8 @@
   "features": {
     "box": "Box",
     "sketch": "Sketch",
-    "extrude": "Extrude"
+    "extrude": "Extrude",
+    "importMesh": "Imported mesh"
   },
   "common": {
     "close": "Close",
@@ -160,5 +168,19 @@
     "bottom": "Bottom",
     "iso": "Isometric",
     "hint": "Drag the cube to orbit · MMB orbit · Shift+MMB pan · Wheel zoom"
+  },
+  "section": {
+    "title": "Section",
+    "plane": "Plane {{index}}",
+    "add": "Add plane",
+    "show": "Show plane",
+    "hide": "Hide plane",
+    "axis": "Plane orientation",
+    "axisAlong": "Plane along {{axis}} axis",
+    "remove": "Remove plane",
+    "offset": "Offset"
+  },
+  "splash": {
+    "loading": "Opening the project and restoring operation history…"
   }
 }

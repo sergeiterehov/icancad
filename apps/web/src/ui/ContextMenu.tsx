@@ -3,15 +3,18 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { createPortal } from 'react-dom';
 import { create } from 'zustand';
 
-export interface ContextMenuItem {
-  id: string;
-  label: string;
-  icon?: ReactNode;
-  hint?: ReactNode;
-  danger?: boolean;
-  disabled?: boolean;
-  onSelect: () => void;
-}
+export type ContextMenuItem =
+  | { id: string; separator: true }
+  | {
+      id: string;
+      separator?: false;
+      label: string;
+      icon?: ReactNode;
+      hint?: ReactNode;
+      danger?: boolean;
+      disabled?: boolean;
+      onSelect: () => void;
+    };
 
 interface OpenMenu {
   x: number;
@@ -105,23 +108,27 @@ export function ContextMenuHost() {
       className="context-menu"
       style={position ?? { left: -9999, top: -9999 }}
     >
-      {menu.items.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          role="menuitem"
-          disabled={item.disabled}
-          className={clsx('context-menu-item', item.danger && 'danger')}
-          onClick={() => {
-            close();
-            item.onSelect();
-          }}
-        >
-          {item.icon && <span className="context-menu-icon">{item.icon}</span>}
-          <span className="context-menu-label">{item.label}</span>
-          {item.hint && <span className="context-menu-hint">{item.hint}</span>}
-        </button>
-      ))}
+      {menu.items.map((item) =>
+        item.separator ? (
+          <div key={item.id} className="context-menu-separator" />
+        ) : (
+          <button
+            key={item.id}
+            type="button"
+            role="menuitem"
+            disabled={item.disabled}
+            className={clsx('context-menu-item', item.danger && 'danger')}
+            onClick={() => {
+              close();
+              item.onSelect();
+            }}
+          >
+            {item.icon && <span className="context-menu-icon">{item.icon}</span>}
+            <span className="context-menu-label">{item.label}</span>
+            {item.hint && <span className="context-menu-hint">{item.hint}</span>}
+          </button>
+        ),
+      )}
     </div>,
     document.body,
   );

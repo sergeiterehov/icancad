@@ -277,23 +277,13 @@ const bodyMeta = z.object({
   createdBy: z.string().min(1),
 });
 
-const assetMeta = z.object({
-  id: z.string().min(1),
-  name: z.string().min(1),
-  mimeType: z.string().min(1),
-  byteSize: z.number().nonnegative(),
-  sha256: z.string().optional(),
-});
-
 const sectionPlane = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   origin: vec3,
   normal: vec3,
   offset: z.number(),
-  flipped: z.boolean(),
   visible: z.boolean(),
-  hatch: z.object({ angle: z.number(), spacing: z.number().positive() }),
 });
 
 const viewState = z.object({
@@ -316,7 +306,6 @@ export const projectSchema = z.object({
   units: z.literal('mm'),
   features: z.array(featureSchema),
   bodies: z.array(bodyMeta),
-  assets: z.array(assetMeta),
   view: viewState,
   historyEnd: z.string().nullable(),
   createdAt: z.string(),

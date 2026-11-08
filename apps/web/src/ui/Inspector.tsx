@@ -1,10 +1,11 @@
 import { featureBodyId, type BodyMeta, type Feature, type PrimitiveFeature } from '@icancad/model';
-import { Box, Layers } from 'lucide-react';
+import { Box } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { DimensionField, PanelSection, StatRow, TextField } from './Controls';
 import { formatNumber } from './format';
+import { SectionPanel } from './SectionPanel';
 import { translate } from './translate';
 
 function isPrimitive(feature: Feature | undefined): feature is PrimitiveFeature {
@@ -74,7 +75,14 @@ export function Inspector() {
           if (item.kind === 'body') {
             const match = project.bodies.find((candidate) => candidate.id === item.id);
             return match
-              ? [{ key: `body:${match.id}`, kind: 'body' as const, name: match.name, bodyId: match.id }]
+              ? [
+                  {
+                    key: `body:${match.id}`,
+                    kind: 'body' as const,
+                    name: match.name,
+                    bodyId: match.id,
+                  },
+                ]
               : [];
           }
           if (item.kind === 'feature') {
@@ -121,6 +129,7 @@ export function Inspector() {
       </header>
 
       <div className="panel-body">
+        <SectionPanel />
         {resolved.length > 0 ? (
           <>
             <PanelSection title={t('inspector.selection')} count={resolved.length}>
@@ -128,7 +137,7 @@ export function Inspector() {
                 {resolved.map((item) => (
                   <div key={item.key} className="selection-item">
                     <span className="tree-icon">
-                      {item.kind === 'body' ? <Box size={14} /> : <Layers size={14} />}
+                      <Box size={14} />
                     </span>
                     <span className="tree-name">{item.name}</span>
                     <span className="tree-meta">
@@ -140,7 +149,10 @@ export function Inspector() {
             </PanelSection>
 
             <PanelSection title={t('inspector.statistics')}>
-              <StatRow label={t('inspector.triangles')} value={formatNumber(multiTriangles, locale, 0)} />
+              <StatRow
+                label={t('inspector.triangles')}
+                value={formatNumber(multiTriangles, locale, 0)}
+              />
               <StatRow label={t('inspector.bounds')} value={multiBounds} />
             </PanelSection>
           </>
@@ -150,11 +162,19 @@ export function Inspector() {
               <TextField
                 label={t('inspector.name')}
                 value={feature.name}
-                onCommit={(name) => apply({ type: 'feature/replace', feature: { ...feature, name } })}
+                onCommit={(name) =>
+                  apply({ type: 'feature/replace', feature: { ...feature, name } })
+                }
               />
               <StatRow
                 label={t('inspector.createdBy')}
-                value={feature.type === 'primitive' ? t('features.box') : feature.type}
+                value={
+                  feature.type === 'primitive'
+                    ? t('features.box')
+                    : feature.type === 'import-mesh'
+                      ? t('features.importMesh')
+                      : feature.type
+                }
               />
             </PanelSection>
 

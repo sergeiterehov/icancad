@@ -56,11 +56,19 @@ export function parseProjectFile(data: Uint8Array): ProjectFileContents {
   return { project: parseProject(document), assets: projectsAssets };
 }
 
-export function projectFileName(name: string): string {
+function slugify(name: string): string {
   const slug = name
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9\u0400-\u04ff]+/gi, '-')
     .replace(/^-+|-+$/g, '');
-  return `${slug || 'project'}.icad`;
+  return slug || 'project';
+}
+
+export function stlFileName(name: string): string {
+  return `${slugify(name)}.stl`;
+}
+
+export function projectFileName(name: string): string {
+  return `${slugify(name)}.icad`;
 }

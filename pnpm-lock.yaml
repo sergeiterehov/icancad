@@ -187,6 +187,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@icancad/io':
+        specifier: workspace:*
+        version: link:../../packages/io
       '@icancad/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel
@@ -263,6 +266,15 @@ importers:
       vite:
         specifier: ^8.3.6
         version: 8.3.6(@types/node@26.6.6)(jiti@2.7.0)
+      vitest:
+        specifier: ^5.1.0
+        version: 5.1.0(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(jiti@2.7.0))
+
+  packages/io:
+    devDependencies:
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
       vitest:
         specifier: ^5.1.0
         version: 5.1.0(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(jiti@2.7.0))

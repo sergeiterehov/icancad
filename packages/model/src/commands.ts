@@ -1,6 +1,6 @@
 import { historyErrors } from './history';
 import { touch } from './project';
-import { HISTORY_START, type AssetMeta, type BodyMeta, type Feature, type Project } from './types';
+import { HISTORY_START, type BodyMeta, type Feature, type Project } from './types';
 
 export type Command =
   | { type: 'project/rename'; name: string }
@@ -12,7 +12,6 @@ export type Command =
   | { type: 'body/add'; body: BodyMeta }
   | { type: 'body/update'; bodyId: string; patch: Partial<Omit<BodyMeta, 'id' | 'createdBy'>> }
   | { type: 'body/remove'; bodyId: string }
-  | { type: 'asset/add'; asset: AssetMeta }
   | { type: 'history/set-end'; featureId: string | null };
 
 export type CommandErrorCode =
@@ -33,7 +32,11 @@ export class CommandError extends Error {
   }
 }
 
-function replaceFeature(project: Project, featureId: string, update: (feature: Feature) => Feature): Project {
+function replaceFeature(
+  project: Project,
+  featureId: string,
+  update: (feature: Feature) => Feature,
+): Project {
   let found = false;
   const features = project.features.map((feature) => {
     if (feature.id !== featureId) return feature;
@@ -125,12 +128,6 @@ function applyOne(project: Project, command: Command): Project {
         throw new CommandError('UNKNOWN_BODY', `Unknown body: ${command.bodyId}`);
       }
       return { ...project, bodies: project.bodies.filter((body) => body.id !== command.bodyId) };
-    }
-    case 'asset/add': {
-      if (project.assets.some((asset) => asset.id === command.asset.id)) {
-        throw new CommandError('DUPLICATE_ID', `Duplicate asset id: ${command.asset.id}`);
-      }
-      return { ...project, assets: [...project.assets, command.asset] };
     }
     case 'history/set-end': {
       if (

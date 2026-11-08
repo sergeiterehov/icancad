@@ -13,7 +13,6 @@ export function createProject(name = 'Untitled project'): Project {
     units: 'mm',
     features: [],
     bodies: [],
-    assets: [],
     view: {
       camera: null,
       sectionPlanes: [],
