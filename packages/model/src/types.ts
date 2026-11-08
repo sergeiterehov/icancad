@@ -130,6 +130,7 @@ export type SketchPlaneRef =
 
 export interface SketchFeature extends FeatureBase {
   type: 'sketch';
+  visible: boolean;
   plane: SketchPlaneRef;
   entities: SketchEntity[];
   constraints: SketchConstraint[];

@@ -1,6 +1,13 @@
-import { bodiesInHistory, createId, type BodyMeta, type MeshFormat } from '@icancad/model';
+import {
+  activeFeatureIds,
+  bodiesInHistory,
+  createId,
+  type BodyMeta,
+  type MeshFormat,
+  type SketchFeature,
+} from '@icancad/model';
 import clsx from 'clsx';
-import { Box, Eye, EyeOff, FileUp, Plus, Trash2 } from 'lucide-react';
+import { Box, Eye, EyeOff, FileUp, PenTool, Plus, Trash2 } from 'lucide-react';
 import { useRef, type ChangeEvent, type MouseEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { saveAsset } from '../persistence/db';
@@ -33,19 +40,25 @@ export function LeftPanel() {
   const locale = i18n.resolvedLanguage ?? 'en';
   const project = useDocumentStore((state) => state.project);
   const bodies = bodiesInHistory(project);
+  const activeIds = activeFeatureIds(project);
   const selection = useDocumentStore((state) => state.selection);
   const select = useDocumentStore((state) => state.select);
   const toggleBodyVisibility = useDocumentStore((state) => state.toggleBodyVisibility);
+  const toggleSketchVisibility = useDocumentStore((state) => state.toggleSketchVisibility);
   const removeFeature = useDocumentStore((state) => state.removeFeature);
   const addBox = useDocumentStore((state) => state.addPrimitiveBox);
   const meshes = useKernelStore((state) => state.meshes);
   const kernelReady = useKernelStore((state) => state.status === 'ready');
   const openMenu = useContextMenuStore((state) => state.open);
   const showToast = useUiStore((state) => state.showToast);
+  const setActiveSketch = useUiStore((state) => state.setActiveSketch);
   const meshInput = useRef<HTMLInputElement>(null);
 
   const highlightedBodyIds = linkedBodyIds(selection, project);
-  const isEmpty = bodies.length === 0;
+  const hasSketches = project.features.some(
+    (feature) => feature.type === 'sketch' && activeIds.has(feature.id),
+  );
+  const isEmpty = bodies.length === 0 && !hasSketches;
 
   const openAddMenu = (event: MouseEvent<HTMLButtonElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -143,6 +156,58 @@ export function LeftPanel() {
     );
   };
 
+  const renderSketch = (feature: SketchFeature): ReactNode => {
+    const direct = isDirectlySelected(selection, 'feature', feature.id);
+    return (
+      <div
+        key={feature.id}
+        className={clsx('tree-row', direct && 'selected', !feature.visible && 'muted')}
+        onContextMenu={(event) =>
+          showContextMenu(event, [
+            {
+              id: 'edit',
+              label: t('sketch.edit'),
+              icon: <PenTool size={14} />,
+              onSelect: () => setActiveSketch(feature.id),
+            },
+            {
+              id: 'delete',
+              label: t('context.deleteOperation'),
+              icon: <Trash2 size={14} />,
+              danger: true,
+              onSelect: () => removeFeature(feature.id),
+            },
+          ])
+        }
+      >
+        <button
+          type="button"
+          className="tree-main"
+          onClick={(event) =>
+            select(
+              { kind: 'feature', id: feature.id },
+              { additive: event.metaKey || event.ctrlKey || event.shiftKey },
+            )
+          }
+          onDoubleClick={() => setActiveSketch(feature.id)}
+        >
+          <span className="tree-icon">
+            <PenTool size={14} />
+          </span>
+          <span className="tree-name">{feature.name}</span>
+          <span className="tree-meta">{formatNumber(feature.entities.length, locale, 0)}</span>
+        </button>
+        <IconButton
+          label={feature.visible ? t('tree.hide') : t('tree.show')}
+          className="tiny"
+          onClick={() => toggleSketchVisibility(feature.id)}
+        >
+          {feature.visible ? <Eye size={13} /> : <EyeOff size={13} />}
+        </IconButton>
+      </div>
+    );
+  };
+
   const bodiesByCreator = new Map<string, BodyMeta[]>();
   for (const body of bodies) {
     const list = bodiesByCreator.get(body.createdBy) ?? [];
@@ -153,6 +218,8 @@ export function LeftPanel() {
   const rows: ReactNode[] = [];
 
   for (const feature of project.features) {
+    if (!activeIds.has(feature.id)) continue;
+    if (feature.type === 'sketch') rows.push(renderSketch(feature));
     for (const body of bodiesByCreator.get(feature.id) ?? []) {
       rows.push(renderBody(body));
       placedBodies.add(body.id);

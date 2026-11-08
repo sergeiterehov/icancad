@@ -1,5 +1,7 @@
 import type { SketchConstraint, SketchEntity } from '@icancad/model';
 
+export * from './frame';
+
 export interface SketchDocument {
   entities: SketchEntity[];
   constraints: SketchConstraint[];
@@ -51,7 +53,10 @@ export function tessellateEntity(entity: SketchEntity, segments = 32): Point2[] 
       const points: Point2[] = [];
       for (let i = 0; i < segments; i += 1) {
         const angle = (i / segments) * Math.PI * 2;
-        points.push([entity.cx + Math.cos(angle) * entity.r, entity.cy + Math.sin(angle) * entity.r]);
+        points.push([
+          entity.cx + Math.cos(angle) * entity.r,
+          entity.cy + Math.sin(angle) * entity.r,
+        ]);
       }
       return points;
     }
@@ -60,7 +65,10 @@ export function tessellateEntity(entity: SketchEntity, segments = 32): Point2[] 
       const points: Point2[] = [];
       for (let i = 0; i <= segments; i += 1) {
         const angle = entity.startAngle + (sweep * i) / segments;
-        points.push([entity.cx + Math.cos(angle) * entity.r, entity.cy + Math.sin(angle) * entity.r]);
+        points.push([
+          entity.cx + Math.cos(angle) * entity.r,
+          entity.cy + Math.sin(angle) * entity.r,
+        ]);
       }
       return points;
     }

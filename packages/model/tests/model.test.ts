@@ -50,6 +50,7 @@ function sketchFeature(id = 'feat_sketch'): SketchFeature {
     name: 'Sketch',
     suppressed: false,
     type: 'sketch',
+    visible: true,
     plane: { type: 'datum', plane: 'XY', offset: 0 },
     entities: [],
     constraints: [],

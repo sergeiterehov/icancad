@@ -123,6 +123,7 @@ async function runRebuild(project: Project): Promise<void> {
 
   for (const feature of activeFeatures) {
     if (epoch !== rebuildEpoch) return;
+    if (feature.type === 'sketch') continue;
     if (feature.type === 'import-mesh') {
       try {
         const parsed = await loadImportedMesh(feature.assetId, feature.format ?? 'stl');

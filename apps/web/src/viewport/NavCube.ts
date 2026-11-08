@@ -216,7 +216,11 @@ export class NavCube {
   private buildMaterials(): THREE.Material[] {
     this.disposeMaterials();
     this.materials = MATERIAL_ORDER.map((face) => {
-      const texture = createLabelTexture(this.labels[face], this.theme, face === 'left' || face === 'right');
+      const texture = createLabelTexture(
+        this.labels[face],
+        this.theme,
+        face === 'left' || face === 'right',
+      );
       return new THREE.MeshBasicMaterial({
         map: texture,
         color: 0xffffff,

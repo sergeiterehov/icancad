@@ -13,6 +13,7 @@ import {
   type PrimitiveFeature,
   type Project,
   type SectionPlane,
+  type SketchFeature,
 } from '@icancad/model';
 import { create } from 'zustand';
 import { useUiStore } from './uiStore';
@@ -40,6 +41,8 @@ interface DocumentState {
   select: (item: SelectionItem | null, options?: { additive?: boolean }) => void;
   setSaveState: (state: SaveState) => void;
   addPrimitiveBox: (name: string) => void;
+  addSketch: (name: string, plane: 'XY' | 'XZ' | 'YZ') => string | null;
+  toggleSketchVisibility: (sketchId: string) => void;
   addImportedMesh: (name: string, featureId: string, format: MeshFormat) => void;
   setSectionPlanes: (planes: SectionPlane[]) => void;
   removeFeature: (featureId: string) => void;
@@ -172,6 +175,23 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     }
   },
 
+  addSketch: (name, plane) => {
+    const featureId = createId('feat');
+    const feature: SketchFeature = {
+      id: featureId,
+      name,
+      suppressed: false,
+      type: 'sketch',
+      visible: true,
+      plane: { type: 'datum', plane, offset: 0 },
+      entities: [],
+      constraints: [],
+    };
+    if (!get().apply({ type: 'feature/add', feature })) return null;
+    set({ selection: [{ kind: 'feature', id: featureId }] });
+    return featureId;
+  },
+
   addImportedMesh: (name, featureId, format) => {
     const state = get();
     const feature: ImportMeshFeature = {
@@ -194,6 +214,18 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     if (state.apply({ type: 'feature/add', feature }, { type: 'body/add', body })) {
       set({ selection: [{ kind: 'feature', id: featureId }] });
     }
+  },
+
+  toggleSketchVisibility: (sketchId) => {
+    const feature = get().project.features.find(
+      (candidate): candidate is SketchFeature =>
+        candidate.id === sketchId && candidate.type === 'sketch',
+    );
+    if (!feature) return;
+    get().apply({
+      type: 'feature/replace',
+      feature: { ...feature, visible: !feature.visible },
+    });
   },
 
   setSectionPlanes: (planes) => {

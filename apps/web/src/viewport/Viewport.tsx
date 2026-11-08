@@ -2,6 +2,8 @@ import { Eye, EyeOff, Trash2 } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { retryKernel } from '../kernel/client';
+import { activeFeatureIds, type SketchFeature } from '@icancad/model';
+import { datumFrame } from '@icancad/sketch';
 import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
 import { useKernelStore } from '../stores/kernelStore';
@@ -12,7 +14,8 @@ import { showContextMenu, useContextMenuStore } from '../ui/ContextMenu';
 import { Tooltip } from '../ui/Tooltip';
 import { NavCube, type NavFace } from './NavCube';
 import { SceneController, type SceneBody } from './SceneController';
-import { registerViewport } from './handle';
+import { SketchEditor } from './SketchEditor';
+import { getViewport, registerViewport } from './handle';
 
 const AXIS_HINTS: Record<string, { text: string; color: string }> = {
   right: { text: '+X', color: '#d48282' },
@@ -36,6 +39,8 @@ export function Viewport() {
   const bodies = project.bodies;
   const sectionPlanes = project.view.sectionPlanes;
   const sectionEnabled = useUiStore((state) => state.sectionEnabled);
+  const activeSketchId = useUiStore((state) => state.activeSketchId);
+  const sketchSelectionIds = useUiStore((state) => state.sketchSelectionIds);
   const selection = useDocumentStore((state) => state.selection);
   const meshes = useKernelStore((state) => state.meshes);
   const status = useKernelStore((state) => state.status);
@@ -69,12 +74,13 @@ export function Viewport() {
       canvas,
       container,
       (bodyId, additive) => {
+        if (useUiStore.getState().activeSketchId) return;
         const store = useDocumentStore.getState();
         if (!bodyId) store.select(null);
         else store.select({ kind: 'body', id: bodyId }, { additive });
       },
       (bodyId, x, y) => {
-        if (!bodyId) return;
+        if (!bodyId || useUiStore.getState().activeSketchId) return;
         const store = useDocumentStore.getState();
         const body = store.project.bodies.find((candidate) => candidate.id === bodyId);
         if (!body) return;
@@ -142,6 +148,12 @@ export function Viewport() {
     registerViewport({
       fit: () => controller.fit(),
       setView: (name) => controller.setView(name),
+      setSketches: (sketches) => controller.setSketches(sketches),
+      setSketchOverlay: (preview, draftPoints) => controller.setSketchOverlay(preview, draftPoints),
+      alignSketch: (frame) => controller.alignSketch(frame),
+      getCameraState: () => controller.getCameraState(),
+      setCameraState: (state) => controller.setCameraState(state),
+      pickSketch: (x, y) => controller.pickSketch(x, y),
     });
 
     return () => {
@@ -182,8 +194,30 @@ export function Viewport() {
   }, [theme]);
 
   useEffect(() => {
-    controllerRef.current?.setSection(sectionEnabled ? sectionPlanes : []);
-  }, [sectionEnabled, sectionPlanes]);
+    controllerRef.current?.setSection(sectionEnabled && !activeSketchId ? sectionPlanes : []);
+  }, [activeSketchId, sectionEnabled, sectionPlanes]);
+
+  useEffect(() => {
+    const ids = activeFeatureIds(project);
+    const sketches = project.features
+      .filter(
+        (feature): feature is SketchFeature =>
+          feature.type === 'sketch' &&
+          ids.has(feature.id) &&
+          (feature.visible !== false || feature.id === activeSketchId),
+      )
+      .map((feature) => ({
+        id: feature.id,
+        frame:
+          feature.plane.type === 'datum'
+            ? datumFrame(feature.plane.plane, feature.plane.offset)
+            : (feature.plane.frame ?? datumFrame('XY', 0)),
+        entities: feature.entities,
+        selectionKeys: feature.id === activeSketchId ? sketchSelectionIds : [],
+        active: feature.id === activeSketchId,
+      }));
+    getViewport()?.setSketches(sketches);
+  }, [activeSketchId, project, sketchSelectionIds]);
 
   useEffect(() => {
     navCubeRef.current?.setLabels(navLabels);
@@ -192,7 +226,10 @@ export function Viewport() {
   const meshCount = Object.keys(meshes).length;
   const showLoading = status === 'idle' || status === 'loading';
   const showError = status === 'error';
-  const showEmpty = status === 'ready' && meshCount === 0;
+  const hasActiveSketches = project.features.some(
+    (feature) => feature.type === 'sketch' && activeFeatureIds(project).has(feature.id),
+  );
+  const showEmpty = status === 'ready' && meshCount === 0 && !activeSketchId && !hasActiveSketches;
 
   return (
     <div className="viewport-wrap" ref={containerRef}>
@@ -242,6 +279,8 @@ export function Viewport() {
           <p>{t('empty.description')}</p>
         </div>
       )}
+
+      <SketchEditor />
     </div>
   );
 }

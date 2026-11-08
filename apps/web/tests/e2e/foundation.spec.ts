@@ -361,4 +361,51 @@ test.describe('ICANCad foundation', () => {
       timeout: 120_000,
     });
   });
+  test('creates and edits a sketch on a datum plane', async ({ page }) => {
+    await openApp(page);
+    const cube = page.getByTestId('nav-cube');
+    const azimuthBefore = Number(await cube.getAttribute('data-azimuth'));
+    const polarBefore = Number(await cube.getAttribute('data-polar'));
+
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await expect(page.locator('.tree-row')).toHaveCount(1);
+
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    const canvas = page.getByTestId('viewport-canvas');
+    const box = await canvas.boundingBox();
+    await page.mouse.click(box!.x + 260, box!.y + 320);
+    await page.mouse.click(box!.x + 470, box!.y + 440);
+    await expect(page.locator('.tree-row').first()).toContainText('1');
+
+    await page.getByTestId('viewport').getByRole('button', { name: 'Select', exact: true }).click();
+    const deleteButton = page
+      .getByTestId('viewport')
+      .getByRole('button', { name: 'Delete', exact: true });
+    await expect(deleteButton).toBeDisabled();
+    await page.mouse.click(box!.x + 365, box!.y + 380);
+    await expect(deleteButton).toBeEnabled();
+    await expect(page.getByText('Composition')).toBeVisible();
+    await expect(page.getByText('Constraints').first()).toBeVisible();
+
+    await page.getByRole('button', { name: 'Finish sketch' }).click();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+    await expect(page.locator('.tree-row').first()).toContainText('1');
+    await expect
+      .poll(async () => Math.abs(Number(await cube.getAttribute('data-azimuth')) - azimuthBefore))
+      .toBeLessThan(0.001);
+    await expect
+      .poll(async () => Math.abs(Number(await cube.getAttribute('data-polar')) - polarBefore))
+      .toBeLessThan(0.001);
+
+    const sketchRow = page.locator('.tree-row').first();
+    await sketchRow.getByRole('button', { name: 'Hide', exact: true }).click();
+    await expect(sketchRow.getByRole('button', { name: 'Show', exact: true })).toBeVisible();
+    await sketchRow.getByRole('button', { name: 'Show', exact: true }).click();
+
+    await sketchRow.locator('.tree-main').dblclick();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await expect(sketchRow).toContainText('1');
+  });
 });

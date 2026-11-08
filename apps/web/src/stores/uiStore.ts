@@ -10,9 +10,13 @@ export interface ToastMessage {
 interface UiState {
   toast: ToastMessage | null;
   sectionEnabled: boolean;
+  activeSketchId: string | null;
+  sketchSelectionIds: string[];
   showToast: (key: string, kind?: 'info' | 'error', params?: Record<string, unknown>) => void;
   dismissToast: () => void;
   setSectionEnabled: (enabled: boolean) => void;
+  setActiveSketch: (sketchId: string | null) => void;
+  setSketchSelection: (ids: string[]) => void;
 }
 
 let toastSequence = 0;
@@ -32,10 +36,14 @@ function loadSectionEnabled(): boolean {
 export const useUiStore = create<UiState>((set) => ({
   toast: null,
   sectionEnabled: loadSectionEnabled(),
+  activeSketchId: null,
+  sketchSelectionIds: [],
   showToast: (key, kind = 'info', params) => {
     set({ toast: { id: ++toastSequence, key, kind, params } });
   },
   dismissToast: () => set({ toast: null }),
+  setActiveSketch: (activeSketchId) => set({ activeSketchId, sketchSelectionIds: [] }),
+  setSketchSelection: (sketchSelectionIds) => set({ sketchSelectionIds }),
   setSectionEnabled: (sectionEnabled) => {
     try {
       localStorage.setItem(SECTION_ENABLED_KEY, String(sectionEnabled));

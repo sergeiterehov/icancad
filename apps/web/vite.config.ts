@@ -7,6 +7,9 @@ export default defineConfig({
   worker: {
     format: 'es',
   },
+  resolve: {
+    dedupe: ['three'],
+  },
   optimizeDeps: {
     exclude: ['opencascade.js'],
   },

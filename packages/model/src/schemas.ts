@@ -168,6 +168,7 @@ const sketchPlaneRef = z.union([
 const sketchFeature = z.object({
   ...featureBase,
   type: z.literal('sketch'),
+  visible: z.boolean().default(true),
   plane: sketchPlaneRef,
   entities: z.array(sketchEntity),
   constraints: z.array(sketchConstraint),

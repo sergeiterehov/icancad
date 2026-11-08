@@ -1429,3 +1429,72 @@ button:disabled {
   font-size: 10px;
   color: var(--text-faint);
 }
+
+.sketch-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.sketch-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  z-index: 2;
+  pointer-events: auto;
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  box-shadow: var(--shadow);
+  transform: translateX(-50%);
+}
+
+.sketch-hint {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel-2);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.plane-select {
+  display: flex;
+  gap: 1px;
+  padding: 2px;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+
+.plane-select button {
+  flex: 1 1 0;
+  height: 26px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.plane-select button:hover {
+  color: var(--text);
+}
+
+.plane-select button[data-active='true'] {
+  background: var(--panel-3);
+  color: var(--text);
+}
