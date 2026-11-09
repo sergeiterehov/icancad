@@ -1,4 +1,4 @@
-import type { SketchConstraint, SketchEntity } from '@icancad/model';
+import type { SketchConstraint, SketchConstraintRef, SketchEntity } from '@icancad/model';
 
 export * from './frame';
 
@@ -116,5 +116,130 @@ export function entityEndpoints(entity: SketchEntity): [Point2, Point2] | null {
     }
     default:
       return null;
+  }
+}
+
+export function entityControlPoints(entity: SketchEntity): Point2[] {
+  switch (entity.type) {
+    case 'point':
+      return [[entity.x, entity.y]];
+    case 'line':
+      return [
+        [entity.x1, entity.y1],
+        [entity.x2, entity.y2],
+      ];
+    case 'circle':
+      return [
+        [entity.cx, entity.cy],
+        [entity.cx + entity.r, entity.cy],
+      ];
+    case 'arc':
+      return [
+        [entity.cx, entity.cy],
+        [
+          entity.cx + Math.cos(entity.startAngle) * entity.r,
+          entity.cy + Math.sin(entity.startAngle) * entity.r,
+        ],
+        [
+          entity.cx + Math.cos(entity.endAngle) * entity.r,
+          entity.cy + Math.sin(entity.endAngle) * entity.r,
+        ],
+      ];
+    case 'ellipse': {
+      const angle = (entity.rotation * Math.PI) / 180;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      return [
+        [entity.cx, entity.cy],
+        [entity.cx + cos * entity.rx, entity.cy + sin * entity.rx],
+        [entity.cx - sin * entity.ry, entity.cy + cos * entity.ry],
+      ];
+    }
+    case 'bezier':
+      return entity.points;
+  }
+}
+
+export function entityControlPointRefs(entity: SketchEntity): SketchConstraintRef[] {
+  if (entity.type === 'point') return [{ entityId: entity.id, pointIndex: 0 }];
+  return entityControlPoints(entity).map((_, index) => ({
+    entityId: entity.id,
+    pointIndex: index,
+  }));
+}
+
+export function translateEntity(entity: SketchEntity, dx: number, dy: number): SketchEntity {
+  switch (entity.type) {
+    case 'point':
+      return { ...entity, x: entity.x + dx, y: entity.y + dy };
+    case 'line':
+      return {
+        ...entity,
+        x1: entity.x1 + dx,
+        y1: entity.y1 + dy,
+        x2: entity.x2 + dx,
+        y2: entity.y2 + dy,
+      };
+    case 'circle':
+      return { ...entity, cx: entity.cx + dx, cy: entity.cy + dy };
+    case 'arc':
+      return { ...entity, cx: entity.cx + dx, cy: entity.cy + dy };
+    case 'ellipse':
+      return { ...entity, cx: entity.cx + dx, cy: entity.cy + dy };
+    case 'bezier':
+      return {
+        ...entity,
+        points: entity.points.map((point) => [point[0] + dx, point[1] + dy] as Point2),
+      };
+  }
+}
+
+export function moveEntityControlPoint(
+  entity: SketchEntity,
+  index: number,
+  point: Point2,
+): SketchEntity {
+  switch (entity.type) {
+    case 'point':
+      return { ...entity, x: point[0], y: point[1] };
+    case 'line':
+      return index === 0
+        ? { ...entity, x1: point[0], y1: point[1] }
+        : { ...entity, x2: point[0], y2: point[1] };
+    case 'circle':
+      if (index === 0) return { ...entity, cx: point[0], cy: point[1] };
+      return {
+        ...entity,
+        r: Math.hypot(point[0] - entity.cx, point[1] - entity.cy),
+      };
+    case 'arc': {
+      if (index === 0) return { ...entity, cx: point[0], cy: point[1] };
+      const angle = Math.atan2(point[1] - entity.cy, point[0] - entity.cx);
+      const r = Math.hypot(point[0] - entity.cx, point[1] - entity.cy);
+      return index === 1 ? { ...entity, r, startAngle: angle } : { ...entity, r, endAngle: angle };
+    }
+    case 'ellipse': {
+      if (index === 0) return { ...entity, cx: point[0], cy: point[1] };
+      const dx = point[0] - entity.cx;
+      const dy = point[1] - entity.cy;
+      if (index === 1) {
+        const angle = Math.atan2(dy, dx);
+        return {
+          ...entity,
+          rx: Math.max(Math.hypot(dx, dy), 1e-4),
+          rotation: (angle * 180) / Math.PI,
+        };
+      }
+      const angle = (entity.rotation * Math.PI) / 180;
+      const localY = -Math.sin(angle) * dx + Math.cos(angle) * dy;
+      return { ...entity, ry: Math.max(Math.abs(localY), 1e-4) };
+    }
+    case 'bezier':
+      return {
+        ...entity,
+        points: entity.points.map((candidate, pointIndex) =>
+          pointIndex === index ? ([point[0], point[1]] as Point2) : candidate,
+        ),
+      };
   }
 }

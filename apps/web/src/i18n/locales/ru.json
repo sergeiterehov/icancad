@@ -35,7 +35,10 @@
     "shell": "Оболочка",
     "hole": "Отверстие",
     "section": "Сечение",
-    "comingSoon": "Запланировано на следующий этап"
+    "comingSoon": "Запланировано на следующий этап",
+    "constraints": "Ограничения",
+    "construction": "Конструктивная геометрия",
+    "magnet": "Магнит"
   },
   "tree": {
     "bodies": "Тела",
@@ -229,5 +232,32 @@
     "entityArc": "Дуга",
     "entityEllipse": "Эллипс",
     "entityBezier": "Безье"
+  },
+  "constraint": {
+    "fix": "Фиксация",
+    "coincident": "Совпадение",
+    "horizontal": "Горизонталь",
+    "vertical": "Вертикаль",
+    "parallel": "Параллельность",
+    "perpendicular": "Перпендикулярность",
+    "distance": "Расстояние",
+    "radius": "Радиус",
+    "diameter": "Диаметр",
+    "equal": "Равенство",
+    "pointOnLine": "Точка на прямой",
+    "pointOnCircle": "Точка на окружности",
+    "pointOnEllipse": "Точка на эллипсе",
+    "tangent": "Касание",
+    "symmetric": "Симметрия",
+    "solving": "Решение…",
+    "solved": "Решено",
+    "conflict": "Конфликтующие или избыточные ограничения",
+    "failed": "Решатель не справился",
+    "horizontalDistance": "Расстояние по горизонтали",
+    "verticalDistance": "Расстояние по вертикали",
+    "angle": "Угол",
+    "fullyConstrained": "Полностью определено",
+    "dof": "Степеней свободы: {{count}}",
+    "editValue": "Двойной клик для изменения значения"
   }
 }

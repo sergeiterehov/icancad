@@ -35,6 +35,8 @@ interface DocumentState {
   hydrated: boolean;
   saveState: SaveState;
   apply: (...commands: Command[]) => boolean;
+  preview: (...commands: Command[]) => void;
+  commitPreview: (before: Project) => void;
   undo: () => void;
   redo: () => void;
   hydrate: (project: Project) => void;
@@ -93,6 +95,23 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       useUiStore.getState().showToast(`errors.${code}`, 'error');
       return false;
     }
+  },
+
+  preview: (...commands) => {
+    const state = get();
+    try {
+      const project = applyCommands(state.project, commands);
+      set({ project, selection: sanitizeSelection(project, state.selection) });
+    } catch {
+      // Preview commands are transient; invalid intermediate geometry is ignored.
+    }
+  },
+
+  commitPreview: (before) => {
+    set((state) => ({
+      past: [...state.past, before].slice(-HISTORY_LIMIT),
+      future: [],
+    }));
   },
 
   undo: () => {

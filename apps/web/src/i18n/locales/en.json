@@ -35,7 +35,10 @@
     "shell": "Shell",
     "hole": "Hole",
     "section": "Section",
-    "comingSoon": "Planned for a later milestone"
+    "comingSoon": "Planned for a later milestone",
+    "constraints": "Constraints",
+    "construction": "Construction geometry",
+    "magnet": "Magnet"
   },
   "tree": {
     "bodies": "Bodies",
@@ -229,5 +232,32 @@
     "entityArc": "Arc",
     "entityEllipse": "Ellipse",
     "entityBezier": "Bezier"
+  },
+  "constraint": {
+    "fix": "Fix",
+    "coincident": "Coincident",
+    "horizontal": "Horizontal",
+    "vertical": "Vertical",
+    "parallel": "Parallel",
+    "perpendicular": "Perpendicular",
+    "distance": "Distance",
+    "radius": "Radius",
+    "diameter": "Diameter",
+    "equal": "Equal",
+    "pointOnLine": "Point on line",
+    "pointOnCircle": "Point on circle",
+    "pointOnEllipse": "Point on ellipse",
+    "tangent": "Tangent",
+    "symmetric": "Symmetric",
+    "solving": "Solving…",
+    "solved": "Solved",
+    "conflict": "Conflicting or redundant constraints",
+    "failed": "Solver failed",
+    "horizontalDistance": "Horizontal distance",
+    "verticalDistance": "Vertical distance",
+    "angle": "Angle",
+    "fullyConstrained": "Fully constrained",
+    "dof": "Degrees of freedom: {{count}}",
+    "editValue": "Double-click to edit the value"
   }
 }

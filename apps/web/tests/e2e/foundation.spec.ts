@@ -379,12 +379,11 @@ test.describe('ICANCad foundation', () => {
     await page.mouse.click(box!.x + 470, box!.y + 440);
     await expect(page.locator('.tree-row').first()).toContainText('1');
 
-    await page.getByTestId('viewport').getByRole('button', { name: 'Select', exact: true }).click();
-    const deleteButton = page
-      .getByTestId('viewport')
-      .getByRole('button', { name: 'Delete', exact: true });
+    const topbar = page.locator('.topbar');
+    await topbar.getByRole('button', { name: 'Select', exact: true }).click();
+    const deleteButton = topbar.getByRole('button', { name: 'Delete', exact: true });
     await expect(deleteButton).toBeDisabled();
-    await page.mouse.click(box!.x + 365, box!.y + 380);
+    await page.locator('.sketch-entity-row').click();
     await expect(deleteButton).toBeEnabled();
     await expect(page.getByText('Composition')).toBeVisible();
     await expect(page.getByText('Constraints').first()).toBeVisible();
@@ -407,5 +406,228 @@ test.describe('ICANCad foundation', () => {
     await sketchRow.locator('.tree-main').dblclick();
     await expect(page.locator('.sketch-overlay')).toBeVisible();
     await expect(sketchRow).toContainText('1');
+  });
+  test('solves constraints and drags sketch handles', async ({ page }) => {
+    await openApp(page);
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    const canvas = page.getByTestId('viewport-canvas');
+    const box = await canvas.boundingBox();
+    await page.mouse.click(box!.x + 260, box!.y + 320);
+    await page.mouse.click(box!.x + 470, box!.y + 440);
+    const topbar = page.locator('.topbar');
+    await topbar.getByRole('button', { name: 'Select', exact: true }).click();
+
+    const composition = page.locator('.panel-section', { hasText: 'Composition' });
+    const constraintsSection = page.locator('.panel-section', { hasText: 'Constraints' });
+    await expect(composition).toContainText('50.6 mm');
+
+    await page.mouse.move(box!.x + 470, box!.y + 440);
+    await page.mouse.down();
+    await page.mouse.move(box!.x + 600, box!.y + 440, { steps: 8 });
+    await page.mouse.up();
+    await expect(composition).not.toContainText('50.6 mm');
+
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect(composition).toContainText('50.6 mm');
+
+    await page.mouse.move(box!.x + 365, box!.y + 380);
+    await page.mouse.down();
+    await page.mouse.move(box!.x + 415, box!.y + 330, { steps: 8 });
+    await page.mouse.up();
+    await expect(composition).toContainText('50.6 mm');
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+
+    await page.mouse.click(box!.x + 260, box!.y + 320);
+    await topbar.getByRole('button', { name: 'Constraints', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Fix', exact: true }).click();
+    await expect(constraintsSection).toContainText('Fix');
+
+    await page.mouse.move(box!.x + 260, box!.y + 320);
+    await page.mouse.down();
+    await page.mouse.move(box!.x + 310, box!.y + 360, { steps: 8 });
+    await page.mouse.up();
+    await expect(composition).toContainText('50.6 mm');
+
+    await page.mouse.click(box!.x + 365, box!.y + 380);
+    await topbar.getByRole('button', { name: 'Constraints', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Horizontal', exact: true }).click();
+    await expect(constraintsSection).toContainText('Horizontal');
+
+    await topbar.getByRole('button', { name: 'Constraints', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Distance', exact: true }).click();
+    const annotation = page.locator('.sketch-annotation').last();
+    await expect(annotation).toContainText('mm');
+    await annotation.dblclick();
+    const value = page.locator('.sketch-annotation-input');
+    await value.fill('80');
+    await value.press('Enter');
+    await expect(composition).toContainText('80 mm');
+    await expect(annotation).toContainText('80 mm');
+  });
+  test('switches the toolbar with the editing context', async ({ page }) => {
+    await openApp(page);
+    const topbar = page.locator('.topbar');
+    await expect(topbar.getByRole('button', { name: 'Select', exact: true })).toHaveCount(0);
+    await expect(topbar.getByRole('button', { name: 'Section', exact: true })).toBeVisible();
+
+    await topbar.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(topbar.getByRole('button', { name: 'Line', exact: true })).toBeVisible();
+    await expect(topbar.getByRole('button', { name: 'Delete', exact: true })).toBeVisible();
+    await expect(topbar.getByRole('button', { name: 'Finish sketch', exact: true })).toBeVisible();
+    await expect(topbar.getByRole('button', { name: 'Section', exact: true })).toBeVisible();
+    await expect(page.locator('.sketch-toolbar')).toHaveCount(0);
+    await topbar.getByRole('button', { name: 'Section', exact: true }).click();
+    await expect(page.locator('.section-plane')).toHaveCount(1);
+
+    await topbar.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await expect(topbar.getByRole('button', { name: 'Line', exact: true })).toHaveCount(0);
+    await expect(topbar.getByRole('button', { name: 'Select', exact: true })).toHaveCount(0);
+  });
+  test('prioritizes sketch points over curves when selecting', async ({ page }) => {
+    await openApp(page);
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+
+    const topbar = page.locator('.topbar');
+    const canvas = page.getByTestId('viewport-canvas');
+    const box = await canvas.boundingBox();
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    await page.mouse.click(box!.x + 400, box!.y + 300);
+    await page.mouse.click(box!.x + 500, box!.y + 400);
+    await page.getByRole('button', { name: 'Point', exact: true }).click();
+    await page.mouse.click(box!.x + 400, box!.y + 300);
+
+    await topbar.getByRole('button', { name: 'Select', exact: true }).click();
+    await page.mouse.click(box!.x + 400, box!.y + 300);
+    await topbar.getByRole('button', { name: 'Constraints', exact: true }).click();
+    await expect(page.getByRole('menuitem')).toHaveCount(1);
+    await expect(page.getByRole('menuitem', { name: 'Fix', exact: true })).toBeVisible();
+  });
+  test('adds automatic constraints and toggles construction geometry', async ({ page }) => {
+    await openApp(page);
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+
+    const topbar = page.locator('.topbar');
+    const magnet = topbar.getByRole('button', { name: 'Magnet', exact: true });
+    await expect(magnet).toHaveAttribute('data-active', 'true');
+    const constraints = page.locator('.panel-section', { hasText: 'Constraints' });
+    const canvas = page.getByTestId('viewport-canvas');
+    const box = await canvas.boundingBox();
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    await page.mouse.click(box!.x + 300, box!.y + 300);
+    await page.mouse.click(box!.x + 500, box!.y + 400);
+
+    await page.mouse.click(box!.x + 505, box!.y + 405);
+    await page.mouse.click(box!.x + 620, box!.y + 300);
+    await expect(constraints).toContainText('Coincident');
+
+    await magnet.click();
+    await expect(magnet).not.toHaveAttribute('data-active', 'true');
+    await page.mouse.click(box!.x + 305, box!.y + 305);
+    await page.mouse.click(box!.x + 650, box!.y + 500);
+    await expect(page.locator('.constraint-row')).toHaveCount(1);
+
+    await magnet.click();
+    await page.mouse.click(box!.x + 300, box!.y + 520);
+    await page.mouse.click(box!.x + 500, box!.y + 525);
+    await expect(constraints).toContainText('Horizontal');
+
+    await topbar.getByRole('button', { name: 'Select', exact: true }).click();
+    const firstEntity = page.locator('.sketch-entity-row').first();
+    await firstEntity.click();
+    const construction = topbar.getByRole('button', {
+      name: 'Construction geometry',
+      exact: true,
+    });
+    await construction.click();
+    await expect(firstEntity).toHaveAttribute('data-construction', 'true');
+    await expect(construction).toHaveAttribute('data-active', 'true');
+    await construction.click();
+    await expect(firstEntity).not.toHaveAttribute('data-construction', 'true');
+  });
+  test('dims unrelated constraints and elements', async ({ page }) => {
+    await openApp(page);
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+
+    const canvas = page.getByTestId('viewport-canvas');
+    const box = await canvas.boundingBox();
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    await page.mouse.click(box!.x + 250, box!.y + 300);
+    await page.mouse.click(box!.x + 450, box!.y + 300);
+    await page.mouse.click(box!.x + 250, box!.y + 450);
+    await page.mouse.click(box!.x + 450, box!.y + 500);
+
+    const topbar = page.locator('.topbar');
+    await topbar.getByRole('button', { name: 'Select', exact: true }).click();
+    await page.mouse.click(box!.x + 350, box!.y + 300);
+    await topbar.getByRole('button', { name: 'Constraints', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Distance', exact: true }).click();
+
+    await page.locator('.constraint-row').click();
+    await expect(page.locator('.constraint-row[data-active="true"]')).toHaveCount(1);
+    await expect(page.locator('.sketch-entity-row[data-dimmed="true"]')).toHaveCount(1);
+
+    await page.locator('.sketch-entity-row').nth(1).click();
+    await expect(page.locator('.constraint-row[data-dimmed="true"]')).toHaveCount(2);
+    await expect(page.locator('.sketch-entity-row[data-dimmed="true"]')).toHaveCount(0);
+    expect((await page.locator('.sketch-entity-row').first().innerText()).startsWith('1.')).toBe(
+      false,
+    );
+
+    await page.locator('.sketch-entity-row').nth(0).click();
+    await page.keyboard.down('Shift');
+    await page.locator('.sketch-entity-row').nth(1).click();
+    await page.keyboard.up('Shift');
+    await expect(page.locator('.sketch-entity-row[data-active="true"]')).toHaveCount(2);
+    const overflow = await page.evaluate(() => {
+      const body = document.querySelector('.panel-body');
+      return body ? body.scrollWidth - body.clientWidth : 0;
+    });
+    expect(overflow).toBeLessThanOrEqual(0);
+  });
+  test('creates a midpoint with point symmetry', async ({ page }) => {
+    await openApp(page);
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+
+    const canvas = page.getByTestId('viewport-canvas');
+    const box = await canvas.boundingBox();
+    await page.getByRole('button', { name: 'Point', exact: true }).click();
+    await page.mouse.click(box!.x + 300, box!.y + 300);
+    await page.mouse.click(box!.x + 500, box!.y + 300);
+    await page.mouse.click(box!.x + 400, box!.y + 380);
+
+    const topbar = page.locator('.topbar');
+    await topbar.getByRole('button', { name: 'Select', exact: true }).click();
+    await page.mouse.click(box!.x + 300, box!.y + 300);
+    await page.keyboard.down('Shift');
+    await page.mouse.click(box!.x + 500, box!.y + 300);
+    await page.mouse.click(box!.x + 400, box!.y + 380);
+    await page.keyboard.up('Shift');
+    await topbar.getByRole('button', { name: 'Constraints', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Symmetric', exact: true }).click();
+    await expect(page.locator('.constraint-list')).toContainText('Symmetric');
+
+    const rows = page.locator('.sketch-entity-row');
+    await expect(rows).toHaveCount(3);
+    const points = (await rows.allInnerTexts()).map((text) => {
+      const match = text.match(/(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?) mm/);
+      return match ? [Number(match[1]), Number(match[2])] : null;
+    });
+    expect(points.every(Boolean)).toBe(true);
+    const [first, second, middle] = points as [number[], number[], number[]];
+    expect(middle[0]).toBeCloseTo((first[0]! + second[0]!) / 2, 0);
+    expect(middle[1]).toBeCloseTo((first[1]! + second[1]!) / 2, 0);
   });
 });

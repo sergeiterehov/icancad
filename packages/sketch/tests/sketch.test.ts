@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SketchEntity } from '@icancad/model';
-import { entityEndpoints, tessellateEntity } from '../src/index';
+import { entityEndpoints, tessellateEntity, translateEntity } from '../src/index';
 
 describe('sketch entity tessellation', () => {
   it('tessellates lines and circles', () => {
@@ -53,5 +53,30 @@ describe('sketch entity tessellation', () => {
       [0, 0],
       [10, 0],
     ]);
+  });
+
+  it('translates whole entities for drag moves', () => {
+    const line: SketchEntity = {
+      id: 'l1',
+      type: 'line',
+      construction: false,
+      x1: 0,
+      y1: 0,
+      x2: 10,
+      y2: 5,
+    };
+    expect(translateEntity(line, 4, -2)).toMatchObject({ x1: 4, y1: -2, x2: 14, y2: 3 });
+
+    const arc: SketchEntity = {
+      id: 'a1',
+      type: 'arc',
+      construction: false,
+      cx: 0,
+      cy: 0,
+      r: 10,
+      startAngle: 0,
+      endAngle: Math.PI / 2,
+    };
+    expect(translateEntity(arc, 3, 7)).toMatchObject({ cx: 3, cy: 7, r: 10 });
   });
 });

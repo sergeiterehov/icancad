@@ -14,6 +14,7 @@ import { showContextMenu, useContextMenuStore } from '../ui/ContextMenu';
 import { Tooltip } from '../ui/Tooltip';
 import { NavCube, type NavFace } from './NavCube';
 import { SceneController, type SceneBody } from './SceneController';
+import { SketchAnnotations } from './SketchAnnotations';
 import { SketchEditor } from './SketchEditor';
 import { getViewport, registerViewport } from './handle';
 
@@ -40,6 +41,9 @@ export function Viewport() {
   const sectionPlanes = project.view.sectionPlanes;
   const sectionEnabled = useUiStore((state) => state.sectionEnabled);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
+  const sketchConstraintId = useUiStore((state) => state.sketchConstraintId);
+  const sketchFrozenEntityIds = useUiStore((state) => state.sketchFrozenEntityIds);
+  const sketchAutoHighlightIds = useUiStore((state) => state.sketchAutoHighlightIds);
   const sketchSelectionIds = useUiStore((state) => state.sketchSelectionIds);
   const selection = useDocumentStore((state) => state.selection);
   const meshes = useKernelStore((state) => state.meshes);
@@ -149,11 +153,14 @@ export function Viewport() {
       fit: () => controller.fit(),
       setView: (name) => controller.setView(name),
       setSketches: (sketches) => controller.setSketches(sketches),
-      setSketchOverlay: (preview, draftPoints) => controller.setSketchOverlay(preview, draftPoints),
+      setSketchOverlay: (preview, draftPoints, highlight) =>
+        controller.setSketchOverlay(preview, draftPoints, highlight),
       alignSketch: (frame) => controller.alignSketch(frame),
       getCameraState: () => controller.getCameraState(),
       setCameraState: (state) => controller.setCameraState(state),
       pickSketch: (x, y) => controller.pickSketch(x, y),
+      snapSketch: (x, y, tolerance) => controller.snapSketch(x, y, tolerance),
+      projectSketchPoint: (frame, point) => controller.projectSketchPoint(frame, point),
     });
 
     return () => {
@@ -194,7 +201,7 @@ export function Viewport() {
   }, [theme]);
 
   useEffect(() => {
-    controllerRef.current?.setSection(sectionEnabled && !activeSketchId ? sectionPlanes : []);
+    controllerRef.current?.setSection(sectionEnabled ? sectionPlanes : []);
   }, [activeSketchId, sectionEnabled, sectionPlanes]);
 
   useEffect(() => {
@@ -214,10 +221,32 @@ export function Viewport() {
             : (feature.plane.frame ?? datumFrame('XY', 0)),
         entities: feature.entities,
         selectionKeys: feature.id === activeSketchId ? sketchSelectionIds : [],
+        dimmedEntityIds:
+          feature.id === activeSketchId
+            ? (() => {
+                const constraint = feature.constraints.find(
+                  (candidate) => candidate.id === sketchConstraintId,
+                );
+                if (!constraint) return [];
+                const related = new Set(constraint.refs.map((ref) => ref.entityId));
+                return feature.entities
+                  .filter((entity) => !related.has(entity.id))
+                  .map((entity) => entity.id);
+              })()
+            : [],
+        frozenEntityIds: feature.id === activeSketchId ? sketchFrozenEntityIds : [],
+        highlightIds: feature.id === activeSketchId ? sketchAutoHighlightIds : [],
         active: feature.id === activeSketchId,
       }));
     getViewport()?.setSketches(sketches);
-  }, [activeSketchId, project, sketchSelectionIds]);
+  }, [
+    activeSketchId,
+    project,
+    sketchSelectionIds,
+    sketchConstraintId,
+    sketchFrozenEntityIds,
+    sketchAutoHighlightIds,
+  ]);
 
   useEffect(() => {
     navCubeRef.current?.setLabels(navLabels);
@@ -280,6 +309,7 @@ export function Viewport() {
         </div>
       )}
 
+      <SketchAnnotations />
       <SketchEditor />
     </div>
   );

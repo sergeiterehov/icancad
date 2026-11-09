@@ -140,8 +140,17 @@ const constraintType = z.enum([
 const sketchConstraint = z.object({
   id: z.string().min(1),
   type: constraintType,
-  entityIds: z.array(z.string().min(1)).min(1),
+  refs: z
+    .array(
+      z.object({
+        entityId: z.string().min(1),
+        pointIndex: z.number().int().nonnegative().optional(),
+      }),
+    )
+    .min(1),
   value: z.number().optional(),
+  x: z.number().optional(),
+  y: z.number().optional(),
 });
 
 const sketchPlaneRef = z.union([

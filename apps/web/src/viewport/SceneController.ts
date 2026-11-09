@@ -1,6 +1,7 @@
 import type { TessellationResult } from '@icancad/kernel';
 import type { SectionPlane, SketchEntity, SketchFrame } from '@icancad/model';
 import {
+  entityControlPoints,
   sketchPointToWorld,
   tessellateEntity,
   worldToSketchPoint,
@@ -11,6 +12,7 @@ import type { Theme } from '../stores/themeStore';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
+import type { SketchSnap } from '../sketch/snap';
 import type { SceneSketch, SketchPick, ViewName, ViewportCamera } from './handle';
 
 const HATCH_SPACING_PX = 6;
@@ -64,6 +66,22 @@ function pointSegmentDistance(point: Point2, a: Point2, b: Point2): number {
   return Math.hypot(point[0] - (a[0] + dx * t), point[1] - (a[1] + dy * t));
 }
 
+function closestOnSegment(
+  point: Point2,
+  a: Point2,
+  b: Point2,
+): { point: Point2; distance: number } {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) {
+    return { point: [a[0], a[1]], distance: Math.hypot(point[0] - a[0], point[1] - a[1]) };
+  }
+  const t = clamp(((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / lengthSquared, 0, 1);
+  const closest: Point2 = [a[0] + dx * t, a[1] + dy * t];
+  return { point: closest, distance: Math.hypot(point[0] - closest[0], point[1] - closest[1]) };
+}
+
 export class SceneController {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
@@ -91,7 +109,8 @@ export class SceneController {
   private sketchOverlayState: {
     preview: SketchEntity | null;
     draftPoints: Point2[];
-  } = { preview: null, draftPoints: [] };
+    highlight: boolean;
+  } = { preview: null, draftPoints: [], highlight: false };
 
   private animationFrame = 0;
   private needsRender = true;
@@ -310,6 +329,89 @@ export class SceneController {
     this.invalidate();
   }
 
+  snapSketch(clientX: number, clientY: number, tolerancePx = 10): SketchSnap | null {
+    const active = this.sketchEntries.find((entry) => entry.active);
+    if (!active) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    const pointer = new THREE.Vector2(
+      ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+      -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(pointer, this.camera);
+    const normal = new THREE.Vector3(...active.frame.normal);
+    const origin = new THREE.Vector3(...active.frame.origin);
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, origin);
+    const world = new THREE.Vector3();
+    if (!this.raycaster.ray.intersectPlane(plane, world)) return null;
+    const point = worldToSketchPoint(active.frame, [world.x, world.y, world.z]);
+    const unitsPerPixel = (this.camera.top - this.camera.bottom) / Math.max(1, this.height);
+    const limit = unitsPerPixel * tolerancePx;
+    const sketch = this.sketchData.find((candidate) => candidate.id === active.id);
+
+    let pointSnap: SketchSnap['pointSnap'] = null;
+    let bestPoint = limit;
+    for (const entity of sketch?.entities ?? []) {
+      this.sketchControlPoints(entity).forEach((candidate, index) => {
+        if (entity.type === 'circle' && index === 1) return;
+        const candidateDistance = Math.hypot(point[0] - candidate[0], point[1] - candidate[1]);
+        if (candidateDistance <= bestPoint) {
+          bestPoint = candidateDistance;
+          pointSnap = { entityId: entity.id, pointIndex: index, point: candidate };
+        }
+      });
+    }
+    if (pointSnap) return { point, pointSnap, curveSnap: null };
+
+    let curveSnap: SketchSnap['curveSnap'] = null;
+    let bestCurve = limit;
+    for (const entity of sketch?.entities ?? []) {
+      if (
+        entity.type !== 'line' &&
+        entity.type !== 'circle' &&
+        entity.type !== 'arc' &&
+        entity.type !== 'ellipse'
+      ) {
+        continue;
+      }
+      const closest = this.closestPointOnEntity(entity, point);
+      if (closest && closest.distance <= bestCurve) {
+        bestCurve = closest.distance;
+        curveSnap = { entityId: entity.id, type: entity.type, point: closest.point };
+      }
+    }
+    return { point, pointSnap: null, curveSnap };
+  }
+
+  private closestPointOnEntity(
+    entity: SketchEntity,
+    point: Point2,
+  ): { point: Point2; distance: number } | null {
+    if (entity.type === 'line') {
+      return closestOnSegment(point, [entity.x1, entity.y1], [entity.x2, entity.y2]);
+    }
+    if (entity.type === 'point') return null;
+    const curve = tessellateEntity(entity, 128);
+    if (entity.type === 'circle' || entity.type === 'ellipse') {
+      const first = curve[0];
+      if (first) curve.push(first);
+    }
+    let best: { point: Point2; distance: number } | null = null;
+    for (let index = 0; index < curve.length - 1; index += 1) {
+      const closest = closestOnSegment(point, curve[index]!, curve[index + 1]!);
+      if (!best || closest.distance < best.distance) best = closest;
+    }
+    return best;
+  }
+
+  projectSketchPoint(frame: SketchFrame, point: Point2): { x: number; y: number } | null {
+    const world = this.sketchWorld(frame, point);
+    const projected = world.project(this.camera);
+    return {
+      x: (projected.x * 0.5 + 0.5) * this.width,
+      y: (-projected.y * 0.5 + 0.5) * this.height,
+    };
+  }
+
   private sketchColor(): number {
     return this.theme === 'dark' ? 0x8fb4ff : 0x2f5fc4;
   }
@@ -322,6 +424,22 @@ export class SceneController {
     return 0xff9f43;
   }
 
+  private sketchConstructionColor(): number {
+    return this.theme === 'dark' ? 0x7d8ea8 : 0x6d7a8d;
+  }
+
+  private sketchHighlightColor(): number {
+    return this.theme === 'dark' ? 0xbb86fc : 0x7c3aed;
+  }
+
+  private sketchFrozenLineColor(): number {
+    return this.theme === 'dark' ? 0x3fbf73 : 0x2b8f57;
+  }
+
+  private sketchFrozenPointColor(): number {
+    return this.theme === 'dark' ? 0x9af0b8 : 0x1d6b3e;
+  }
+
   setSketches(sketches: SceneSketch[]): void {
     this.sketchData = sketches;
     this.disposeSketchEntries();
@@ -330,6 +448,17 @@ export class SceneController {
       group.renderOrder = 18;
       if (sketch.active) this.addSketchGrid(group, sketch.frame);
       const selected = new Set(sketch.selectionKeys.filter((key) => !key.includes('#')));
+      const dimmed = new Set(sketch.dimmedEntityIds);
+      const frozen = new Set(sketch.frozenEntityIds);
+      const highlighted = new Set(sketch.highlightIds.filter((key) => !key.includes('#')));
+      const highlightedPoints = new Map<string, Set<number>>();
+      for (const key of sketch.highlightIds) {
+        const [entityId, index] = key.split('#');
+        if (!entityId || index === undefined) continue;
+        const set = highlightedPoints.get(entityId) ?? new Set<number>();
+        set.add(Number(index));
+        highlightedPoints.set(entityId, set);
+      }
       const selectedPoints = new Map<string, Set<number>>();
       for (const key of sketch.selectionKeys) {
         const [entityId, index] = key.split('#');
@@ -345,6 +474,10 @@ export class SceneController {
           sketch.frame,
           selected.has(entity.id),
           selectedPoints.get(entity.id) ?? new Set<number>(),
+          dimmed.has(entity.id),
+          frozen.has(entity.id),
+          highlighted.has(entity.id),
+          highlightedPoints.get(entity.id) ?? new Set<number>(),
         );
       }
       this.scene.add(group);
@@ -360,8 +493,8 @@ export class SceneController {
     this.invalidate();
   }
 
-  setSketchOverlay(preview: SketchEntity | null, draftPoints: Point2[]): void {
-    this.sketchOverlayState = { preview, draftPoints };
+  setSketchOverlay(preview: SketchEntity | null, draftPoints: Point2[], highlight = false): void {
+    this.sketchOverlayState = { preview, draftPoints, highlight };
     this.rebuildSketchOverlay();
     this.invalidate();
   }
@@ -441,20 +574,25 @@ export class SceneController {
         entityId = entity.id;
       }
     }
+    // Control points always win the hit test over curves, including points
+    // that coincide with a curve. Pick the nearest point globally.
+    let pointEntityId: string | null = null;
     let pointIndex: number | null = null;
+    let bestPoint = unitsPerPixel * 4;
     for (const entity of sketch?.entities ?? []) {
-      if (entity.type === 'point') continue;
-      let bestPoint = unitsPerPixel * 4;
       this.sketchControlPoints(entity).forEach((candidate, index) => {
         const distance = Math.hypot(point[0] - candidate[0], point[1] - candidate[1]);
         if (distance <= bestPoint) {
           bestPoint = distance;
-          entityId = entity.id;
+          pointEntityId = entity.id;
           pointIndex = index;
         }
       });
     }
-    return { point, entityId, pointIndex };
+    if (pointEntityId && pointIndex !== null) {
+      return { point, entityId: pointEntityId, pointIndex };
+    }
+    return { point, entityId, pointIndex: null };
   }
 
   private addSketchGrid(group: THREE.Group, frame: SketchFrame): void {
@@ -528,11 +666,30 @@ export class SceneController {
     frame: SketchFrame,
     selected: boolean,
     selectedPoints: ReadonlySet<number>,
+    dimmed: boolean,
+    frozen: boolean,
+    highlighted: boolean,
+    highlightedPoints: ReadonlySet<number>,
   ): void {
-    const color = selected ? this.sketchSelectedColor() : this.sketchColor();
-    const width = selected ? 3 : 2;
+    const color = selected
+      ? this.sketchSelectedColor()
+      : highlighted
+        ? this.sketchHighlightColor()
+        : frozen
+          ? this.sketchFrozenLineColor()
+          : entity.construction
+            ? this.sketchConstructionColor()
+            : this.sketchColor();
+    const width = selected ? 3 : highlighted ? 3 : 2;
     if (entity.type !== 'point') {
-      const line = this.createSketchLine(entity, frame, color, width, 1);
+      const line = this.createSketchLine(
+        entity,
+        frame,
+        color,
+        width,
+        dimmed ? 0.2 : 1,
+        entity.construction,
+      );
       if (line) {
         line.userData.entityId = entity.id;
         group.add(line);
@@ -540,24 +697,30 @@ export class SceneController {
     }
     const controlPoints = this.sketchControlPoints(entity);
     controlPoints.forEach((point, index) => {
-      const highlighted = selected || selectedPoints.has(index);
-      const geometry = new THREE.BufferGeometry().setFromPoints([
-        this.sketchWorld(frame, point),
-      ]);
+      const pointHighlighted = highlighted || highlightedPoints.has(index);
+      const selectedPoint = selected || selectedPoints.has(index);
+      const geometry = new THREE.BufferGeometry().setFromPoints([this.sketchWorld(frame, point)]);
       const points = new THREE.Points(
         geometry,
         new THREE.PointsMaterial({
-          color: highlighted ? this.sketchSelectedColor() : this.sketchPointColor(),
+          color: selectedPoint
+            ? this.sketchSelectedColor()
+            : pointHighlighted
+              ? this.sketchHighlightColor()
+              : frozen
+                ? this.sketchFrozenPointColor()
+                : this.sketchPointColor(),
           map: this.pointTexture,
           alphaTest: 0.5,
           transparent: true,
-          size: highlighted ? 6 : 4,
+          opacity: dimmed ? 0.25 : 1,
+          size: selectedPoint || pointHighlighted ? 6 : 4,
           sizeAttenuation: false,
           depthTest: false,
           depthWrite: false,
         }),
       );
-      points.renderOrder = 23;
+      points.renderOrder = selectedPoint || pointHighlighted ? 31 : 30;
       points.userData.entityId = entity.id;
       points.userData.pointIndex = index;
       group.add(points);
@@ -565,40 +728,7 @@ export class SceneController {
   }
 
   private sketchControlPoints(entity: SketchEntity): Point2[] {
-    switch (entity.type) {
-      case 'point':
-        return [[entity.x, entity.y]];
-      case 'line':
-        return [
-          [entity.x1, entity.y1],
-          [entity.x2, entity.y2],
-        ];
-      case 'circle':
-        return [
-          [entity.cx, entity.cy],
-          [entity.cx + entity.r, entity.cy],
-        ];
-      case 'arc':
-        return [
-          [entity.cx, entity.cy],
-          [
-            entity.cx + Math.cos(entity.startAngle) * entity.r,
-            entity.cy + Math.sin(entity.startAngle) * entity.r,
-          ],
-          [
-            entity.cx + Math.cos(entity.endAngle) * entity.r,
-            entity.cy + Math.sin(entity.endAngle) * entity.r,
-          ],
-        ];
-      case 'ellipse':
-        return [
-          [entity.cx, entity.cy],
-          [entity.cx + entity.rx, entity.cy],
-          [entity.cx, entity.cy + entity.ry],
-        ];
-      case 'bezier':
-        return entity.points;
-    }
+    return entityControlPoints(entity);
   }
 
   private createSketchLine(
@@ -607,6 +737,7 @@ export class SceneController {
     color: number,
     width: number,
     opacity: number,
+    dashed = false,
   ): Line2 | null {
     if (entity.type === 'point') return null;
     const curve = tessellateEntity(entity, 96);
@@ -630,9 +761,14 @@ export class SceneController {
       depthTest: false,
       depthWrite: false,
       resolution: new THREE.Vector2(this.width, this.height),
+      dashed,
+      dashSize: 4,
+      gapSize: 3,
+      dashScale: 1,
     });
     this.sketchLineMaterials.push(material);
     const line = new Line2(geometry, material);
+    if (dashed) line.computeLineDistances();
     line.renderOrder = 22;
     return line;
   }
@@ -646,9 +782,10 @@ export class SceneController {
     const active = this.sketchEntries.find((entry) => entry.active);
     if (!active) return;
     const group = new THREE.Group();
-    const { preview, draftPoints } = this.sketchOverlayState;
+    const { preview, draftPoints, highlight } = this.sketchOverlayState;
+    const previewColor = highlight ? this.sketchHighlightColor() : this.sketchColor();
     if (preview) {
-      const line = this.createSketchLine(preview, active.frame, this.sketchColor(), 2, 0.75);
+      const line = this.createSketchLine(preview, active.frame, previewColor, 2, 0.75);
       if (line) group.add(line);
     }
     if (draftPoints.length > 0) {
@@ -658,7 +795,7 @@ export class SceneController {
       const draft = new THREE.Points(
         geometry,
         new THREE.PointsMaterial({
-          color: this.sketchPointColor(),
+          color: highlight ? this.sketchHighlightColor() : this.sketchPointColor(),
           map: this.pointTexture,
           alphaTest: 0.5,
           transparent: true,

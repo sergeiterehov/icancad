@@ -1,5 +1,6 @@
 import type { SketchEntity, SketchFrame } from '@icancad/model';
 import type { Point2 } from '@icancad/sketch';
+import type { SketchSnap } from '../sketch/snap';
 
 export type ViewName = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom' | 'iso';
 
@@ -8,6 +9,9 @@ export interface SceneSketch {
   frame: SketchFrame;
   entities: SketchEntity[];
   selectionKeys: string[];
+  dimmedEntityIds: string[];
+  frozenEntityIds: string[];
+  highlightIds: string[];
   active: boolean;
 }
 
@@ -28,11 +32,17 @@ export interface ViewportHandle {
   fit: () => void;
   setView: (name: ViewName) => void;
   setSketches: (sketches: SceneSketch[]) => void;
-  setSketchOverlay: (preview: SketchEntity | null, draftPoints: Point2[]) => void;
+  setSketchOverlay: (
+    preview: SketchEntity | null,
+    draftPoints: Point2[],
+    highlight?: boolean,
+  ) => void;
   alignSketch: (frame: SketchFrame) => void;
   getCameraState: () => ViewportCamera;
   setCameraState: (state: ViewportCamera) => void;
   pickSketch: (clientX: number, clientY: number) => SketchPick | null;
+  snapSketch: (clientX: number, clientY: number, tolerancePx?: number) => SketchSnap | null;
+  projectSketchPoint: (frame: SketchFrame, point: Point2) => { x: number; y: number } | null;
 }
 
 let current: ViewportHandle | null = null;

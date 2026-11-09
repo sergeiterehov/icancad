@@ -6,7 +6,8 @@ import {
   type PrimitiveFeature,
   type SketchEntity,
 } from '@icancad/model';
-import { Box } from 'lucide-react';
+import { Box, MoveVertical } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
@@ -14,12 +15,11 @@ import { useUiStore } from '../stores/uiStore';
 import { DimensionField, PanelSection, StatRow, TextField } from './Controls';
 import { formatNumber } from './format';
 import { SectionPanel } from './SectionPanel';
+import { SketchConstraints } from './SketchConstraints';
+import { Tooltip } from './Tooltip';
 import { translate } from './translate';
 
-function sketchEntityLabel(
-  t: (key: string) => string,
-  entity: SketchEntity,
-): string {
+function sketchEntityLabel(t: (key: string) => string, entity: SketchEntity): string {
   switch (entity.type) {
     case 'point':
       return t('sketch.entityPoint');
@@ -53,6 +53,51 @@ function sketchEntityMeta(entity: SketchEntity, locale: string): string {
   }
 }
 
+function SketchOffsetField({
+  label,
+  value,
+  unit,
+  onCommit,
+}: {
+  label: string;
+  value: number;
+  unit: string;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+
+  const commit = () => {
+    const parsed = Number(draft.replace(',', '.'));
+    if (Number.isFinite(parsed) && parsed !== value) onCommit(parsed);
+    else setDraft(String(value));
+  };
+
+  return (
+    <Tooltip content={label}>
+      <label className="sketch-offset-field">
+        <MoveVertical size={13} />
+        <input
+          className="sketch-offset-input"
+          inputMode="decimal"
+          aria-label={label}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') event.currentTarget.blur();
+            if (event.key === 'Escape') {
+              setDraft(String(value));
+              event.currentTarget.blur();
+            }
+          }}
+        />
+        <span className="sketch-offset-unit">{unit}</span>
+      </label>
+    </Tooltip>
+  );
+}
+
 function isPrimitive(feature: Feature | undefined): feature is PrimitiveFeature {
   return feature?.type === 'primitive';
 }
@@ -76,6 +121,9 @@ export function Inspector() {
   const meshStats = useKernelStore((state) => state.meshStats);
   const featureErrors = useKernelStore((state) => state.featureErrors);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
+  const sketchSelectionIds = useUiStore((state) => state.sketchSelectionIds);
+  const sketchConstraintId = useUiStore((state) => state.sketchConstraintId);
+  const setSketchSelection = useUiStore((state) => state.setSketchSelection);
 
   const feature =
     selection.length === 1 && selection[0]?.kind === 'feature'
@@ -98,6 +146,16 @@ export function Inspector() {
     : body
       ? featureErrors[body.createdBy]
       : undefined;
+  const activeConstraint =
+    feature?.type === 'sketch'
+      ? feature.constraints.find((constraint) => constraint.id === sketchConstraintId)
+      : undefined;
+  const selectedSketchEntityIds = new Set(
+    sketchSelectionIds.map((key) => key.split('#')[0]).filter((id): id is string => Boolean(id)),
+  );
+  const sketchConstraintEntityIds = new Set(
+    activeConstraint?.refs.map((ref) => ref.entityId) ?? [],
+  );
 
   const updatePrimitive = (patch: Partial<PrimitiveFeature['params']>) => {
     if (!isPrimitive(feature)) return;
@@ -179,7 +237,7 @@ export function Inspector() {
       </header>
 
       <div className="panel-body">
-        {!activeSketchId && <SectionPanel />}
+        <SectionPanel />
         {resolved.length > 0 ? (
           <>
             <PanelSection title={t('inspector.selection')} count={resolved.length}>
@@ -233,54 +291,50 @@ export function Inspector() {
             {feature.type === 'sketch' && (
               <>
                 <PanelSection title={t('sketch.title')}>
-                  <div className="plane-select" role="group" aria-label={t('sketch.plane')}>
-                    {(['XY', 'XZ', 'YZ'] as const).map((plane) => (
-                      <button
-                        key={plane}
-                        type="button"
-                        data-active={
-                          feature.plane.type === 'datum' && feature.plane.plane === plane
-                            ? 'true'
-                            : undefined
-                        }
-                        onClick={() =>
-                          apply({
-                            type: 'feature/replace',
-                            feature: {
-                              ...feature,
-                              plane: { type: 'datum', plane, offset: sketchOffset },
+                  <div className="sketch-plane-row">
+                    <div className="plane-select" role="group" aria-label={t('sketch.plane')}>
+                      {(['XY', 'XZ', 'YZ'] as const).map((plane) => (
+                        <button
+                          key={plane}
+                          type="button"
+                          data-active={
+                            feature.plane.type === 'datum' && feature.plane.plane === plane
+                              ? 'true'
+                              : undefined
+                          }
+                          onClick={() =>
+                            apply({
+                              type: 'feature/replace',
+                              feature: {
+                                ...feature,
+                                plane: { type: 'datum', plane, offset: sketchOffset },
+                              },
+                            })
+                          }
+                        >
+                          {plane}
+                        </button>
+                      ))}
+                    </div>
+                    <SketchOffsetField
+                      label={t('sketch.offset')}
+                      value={sketchOffset}
+                      unit="mm"
+                      onCommit={(offset) =>
+                        apply({
+                          type: 'feature/replace',
+                          feature: {
+                            ...feature,
+                            plane: {
+                              type: 'datum',
+                              plane: feature.plane.type === 'datum' ? feature.plane.plane : 'XY',
+                              offset,
                             },
-                          })
-                        }
-                      >
-                        {plane}
-                      </button>
-                    ))}
-                  </div>
-                  <TextField
-                    label={`${t('sketch.offset')} · mm`}
-                    value={String(sketchOffset)}
-                    onCommit={(value) => {
-                      const offset = Number(value.replace(',', '.'));
-                      if (!Number.isFinite(offset)) return;
-                      apply({
-                        type: 'feature/replace',
-                        feature: {
-                          ...feature,
-                          plane: {
-                            type: 'datum',
-                            plane: feature.plane.type === 'datum' ? feature.plane.plane : 'XY',
-                            offset,
                           },
-                        },
-                      });
-                    }}
-                  />
-                  <StatRow
-                    label={t('sketch.entities')}
-                    value={formatNumber(feature.entities.length, locale, 0)}
-                  />
-                  <p className="hint">{t('sketch.editHint')}</p>
+                        })
+                      }
+                    />
+                  </div>
                 </PanelSection>
 
                 <PanelSection title={t('sketch.composition')} count={feature.entities.length}>
@@ -288,30 +342,48 @@ export function Inspector() {
                     <p className="hint">{t('sketch.empty')}</p>
                   ) : (
                     <div className="selection-list">
-                      {feature.entities.map((entity, index) => (
-                        <div key={entity.id} className="selection-item">
-                          <span className="tree-name">
-                            {index + 1}. {sketchEntityLabel((key) => t(key as never), entity)}
-                          </span>
-                          <span className="tree-meta">{sketchEntityMeta(entity, locale)}</span>
-                        </div>
-                      ))}
+                      {feature.entities.map((entity) => {
+                        const dimmed =
+                          activeConstraint !== undefined &&
+                          !sketchConstraintEntityIds.has(entity.id);
+                        const active = selectedSketchEntityIds.has(entity.id);
+                        return (
+                          <button
+                            key={entity.id}
+                            type="button"
+                            className="selection-item sketch-entity-row"
+                            data-active={active ? 'true' : undefined}
+                            data-dimmed={dimmed ? 'true' : undefined}
+                            data-construction={entity.construction ? 'true' : undefined}
+                            disabled={activeSketchId !== feature.id}
+                            onClick={(event) => {
+                              const additive = event.metaKey || event.ctrlKey || event.shiftKey;
+                              if (!additive) {
+                                setSketchSelection([entity.id]);
+                                return;
+                              }
+                              const current = sketchSelectionIds.filter(
+                                (key) => !key.includes('#'),
+                              );
+                              setSketchSelection(
+                                current.includes(entity.id)
+                                  ? current.filter((id) => id !== entity.id)
+                                  : [...current, entity.id],
+                              );
+                            }}
+                          >
+                            <span className="tree-name">
+                              {sketchEntityLabel((key) => t(key as never), entity)}
+                            </span>
+                            <span className="tree-meta">{sketchEntityMeta(entity, locale)}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                 </PanelSection>
 
-                {activeSketchId === feature.id && (
-                  <PanelSection title={t('sketch.constraints')} count={feature.constraints.length}>
-                    {feature.constraints.length === 0 ? (
-                      <p className="hint">{t('sketch.constraintsEmpty')}</p>
-                    ) : (
-                      <StatRow
-                        label={t('sketch.constraints')}
-                        value={formatNumber(feature.constraints.length, locale, 0)}
-                      />
-                    )}
-                  </PanelSection>
-                )}
+                {activeSketchId === feature.id && <SketchConstraints feature={feature} />}
               </>
             )}
 

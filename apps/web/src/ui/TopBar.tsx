@@ -16,6 +16,7 @@ import { directBodyIds } from '../stores/selection';
 import { useContextMenuStore } from './ContextMenu';
 import { useUiStore } from '../stores/uiStore';
 import { IconButton } from './Controls';
+import { SketchToolRail } from './SketchToolRail';
 import { ToolRail } from './ToolRail';
 
 export function TopBar() {
@@ -32,6 +33,7 @@ export function TopBar() {
   const selection = useDocumentStore((state) => state.selection);
   const bodies = useDocumentStore((state) => state.project.bodies);
   const openMenu = useContextMenuStore((state) => state.open);
+  const activeSketchId = useUiStore((state) => state.activeSketchId);
   const selectedBodyCount = directBodyIds(selection).length;
   const visibleBodies = bodies.filter((body) => body.visible);
   const projectHasGeometry =
@@ -151,9 +153,7 @@ export function TopBar() {
         />
       </div>
 
-      <div className="topbar-center">
-        <ToolRail />
-      </div>
+      <div className="topbar-center">{activeSketchId ? <SketchToolRail /> : <ToolRail />}</div>
 
       <div className="topbar-right">
         <IconButton label={t('topbar.undo')} disabled={!canUndo} onClick={undo}>

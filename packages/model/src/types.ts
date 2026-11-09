@@ -110,11 +110,18 @@ export type ConstraintType =
   | 'point-on-ellipse'
   | 'fix';
 
+export interface SketchConstraintRef {
+  entityId: string;
+  pointIndex?: number;
+}
+
 export interface SketchConstraint {
   id: string;
   type: ConstraintType;
-  entityIds: string[];
+  refs: SketchConstraintRef[];
   value?: number;
+  x?: number;
+  y?: number;
 }
 
 export interface SketchFrame {
