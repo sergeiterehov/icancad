@@ -1,16 +1,22 @@
-import type { SketchConstraint, SketchConstraintRef, SketchEntity } from '@icancad/model';
+import type {
+  SketchConstraint,
+  SketchConstraintRef,
+  SketchEntity,
+  SketchReference,
+} from '@icancad/model';
 
 export * from './frame';
 
 export interface SketchDocument {
   entities: SketchEntity[];
   constraints: SketchConstraint[];
+  references: SketchReference[];
 }
 
 export type Point2 = [number, number];
 
 export function createEmptySketch(): SketchDocument {
-  return { entities: [], constraints: [] };
+  return { entities: [], constraints: [], references: [] };
 }
 
 function sampleBezier(points: Point2[], segments: number): Point2[] {
@@ -243,3 +249,5 @@ export function moveEntityControlPoint(
       };
   }
 }
+
+export * from './topology';

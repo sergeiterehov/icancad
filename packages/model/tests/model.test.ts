@@ -3,13 +3,15 @@ import {
   applyCommand,
   applyCommands,
   CommandError,
+  bodiesInHistory,
   createProject,
   featureBodyId,
+  historyInsertIndex,
   HISTORY_START,
   parseProject,
   ProjectFileError,
   validateHistory,
-  type BodyMeta,
+  type BodyRef,
   type ExtrudeFeature,
   type PrimitiveFeature,
   type Project,
@@ -34,12 +36,9 @@ function boxFeature(id = 'feat_box'): PrimitiveFeature {
   };
 }
 
-function bodyFor(featureId: string): BodyMeta {
+function bodyFor(featureId: string): BodyRef {
   return {
     id: featureBodyId(featureId),
-    name: 'Body',
-    color: '#6ea8fe',
-    visible: true,
     createdBy: featureId,
   };
 }
@@ -50,10 +49,10 @@ function sketchFeature(id = 'feat_sketch'): SketchFeature {
     name: 'Sketch',
     suppressed: false,
     type: 'sketch',
-    visible: true,
     plane: { type: 'datum', plane: 'XY', offset: 0 },
     entities: [],
     constraints: [],
+    references: [],
   };
 }
 
@@ -130,6 +129,54 @@ describe('project model', () => {
     const atStart = applyCommand(project, { type: 'history/set-end', featureId: HISTORY_START });
     expect(atStart.historyEnd).toBe(HISTORY_START);
     expect(validateHistory(atStart)).toEqual([]);
+  });
+
+  it('inserts new features at the history cursor', () => {
+    const project = applyCommands(createProject(), [
+      { type: 'feature/add', feature: boxFeature() },
+      { type: 'feature/add', feature: boxFeature('feat_box2') },
+    ]);
+    expect(historyInsertIndex(project)).toBe(2);
+
+    const rolled = applyCommand(project, { type: 'history/set-end', featureId: 'feat_box' });
+    expect(historyInsertIndex(rolled)).toBe(1);
+
+    const atStart = applyCommand(rolled, { type: 'history/set-end', featureId: HISTORY_START });
+    expect(historyInsertIndex(atStart)).toBe(0);
+  });
+});
+
+describe('object metadata', () => {
+  it('keeps object properties outside the operation and the object record', () => {
+    const project = applyCommands(createProject(), [
+      { type: 'feature/add', feature: boxFeature() },
+      { type: 'body/add', body: bodyFor('feat_box') },
+      { type: 'metadata/patch', objectId: featureBodyId('feat_box'), patch: { name: 'Cube' } },
+    ]);
+    expect(project.bodies[0]).toEqual({ id: featureBodyId('feat_box'), createdBy: 'feat_box' });
+    expect(project.metadata[featureBodyId('feat_box')]).toEqual({ name: 'Cube' });
+    const [body] = bodiesInHistory(project);
+    expect(body).toMatchObject({ id: featureBodyId('feat_box'), name: 'Cube', visible: true });
+  });
+
+  it('merges patches and survives rollback', () => {
+    const project = applyCommands(createProject(), [
+      { type: 'feature/add', feature: boxFeature() },
+      { type: 'body/add', body: bodyFor('feat_box') },
+      { type: 'metadata/patch', objectId: featureBodyId('feat_box'), patch: { color: '#fff' } },
+      { type: 'metadata/patch', objectId: featureBodyId('feat_box'), patch: { visible: false } },
+    ]);
+    expect(project.metadata[featureBodyId('feat_box')]).toEqual({
+      color: '#fff',
+      visible: false,
+    });
+
+    const rolled = applyCommand(project, { type: 'history/set-end', featureId: HISTORY_START });
+    expect(bodiesInHistory(rolled)).toEqual([]);
+    expect(rolled.metadata[featureBodyId('feat_box')]).toEqual({ color: '#fff', visible: false });
+
+    const forward = applyCommand(rolled, { type: 'history/set-end', featureId: 'feat_box' });
+    expect(bodiesInHistory(forward)[0]).toMatchObject({ visible: false, color: '#fff' });
   });
 });
 

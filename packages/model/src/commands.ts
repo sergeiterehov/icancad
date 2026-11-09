@@ -1,6 +1,6 @@
 import { historyErrors } from './history';
 import { touch } from './project';
-import { HISTORY_START, type BodyMeta, type Feature, type Project } from './types';
+import { HISTORY_START, type BodyRef, type Feature, type ObjectMetadata, type Project } from './types';
 
 export type Command =
   | { type: 'project/rename'; name: string }
@@ -9,8 +9,8 @@ export type Command =
   | { type: 'feature/remove'; featureId: string }
   | { type: 'feature/reorder'; featureId: string; toIndex: number }
   | { type: 'feature/toggle-suppressed'; featureId: string }
-  | { type: 'body/add'; body: BodyMeta }
-  | { type: 'body/update'; bodyId: string; patch: Partial<Omit<BodyMeta, 'id' | 'createdBy'>> }
+  | { type: 'body/add'; body: BodyRef }
+  | { type: 'metadata/patch'; objectId: string; patch: ObjectMetadata }
   | { type: 'body/remove'; bodyId: string }
   | { type: 'history/set-end'; featureId: string | null };
 
@@ -111,17 +111,12 @@ function applyOne(project: Project, command: Command): Project {
       }
       return { ...project, bodies: [...project.bodies, command.body] };
     }
-    case 'body/update': {
-      let found = false;
-      const bodies = project.bodies.map((body) => {
-        if (body.id !== command.bodyId) return body;
-        found = true;
-        return { ...body, ...command.patch };
-      });
-      if (!found) {
-        throw new CommandError('UNKNOWN_BODY', `Unknown body: ${command.bodyId}`);
-      }
-      return { ...project, bodies };
+    case 'metadata/patch': {
+      const current = project.metadata[command.objectId] ?? {};
+      return {
+        ...project,
+        metadata: { ...project.metadata, [command.objectId]: { ...current, ...command.patch } },
+      };
     }
     case 'body/remove': {
       if (!project.bodies.some((body) => body.id === command.bodyId)) {

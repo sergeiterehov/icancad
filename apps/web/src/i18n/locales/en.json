@@ -84,21 +84,24 @@
     "deleteFeature": "Delete feature",
     "visibility": "Visible",
     "createdBy": "Created by",
-    "noSelection": "Select a feature or body to edit its properties.",
+    "noSelection": "Select an operation, body or sketch to edit its properties.",
     "rolledBack": "History is rolled back",
     "body": "Body",
     "operation": "Operation",
     "watertight": "Watertight",
     "volume": "Volume",
     "surfaceArea": "Surface area",
-    "components": "Components"
+    "components": "Components",
+    "sketch": "Sketch",
+    "points": "Points"
   },
   "timeline": {
     "empty": "No operations yet. Add a box or import a mesh.",
     "rollback": "Roll back to this step",
     "feature": "Feature",
     "rollbackHint": "Show the model as it was after this operation. Later operations are kept.",
-    "goTo": "Go to operation #{{index}}"
+    "goTo": "Go to operation #{{index}}",
+    "locked": "Finish the sketch to move along the timeline"
   },
   "status": {
     "kernelLoading": "Loading OCCT kernel…",
@@ -180,6 +183,7 @@
   },
   "section": {
     "title": "Section",
+    "sketchPlane": "Sketch plane",
     "plane": "Plane {{index}}",
     "add": "Add plane",
     "show": "Show plane",
@@ -198,8 +202,12 @@
     "planeXZ": "XZ plane",
     "planeYZ": "YZ plane",
     "plane": "Plane",
+    "placement": "Placement",
     "offset": "Offset",
     "entities": "Entities",
+    "face": "Face {{index}}",
+    "edge": "Edge {{index}}",
+    "point": "Point {{index}}",
     "edit": "Edit sketch",
     "done": "Finish sketch",
     "toolSelect": "Select",
@@ -221,6 +229,7 @@
     "cornerEllipse": "Click the opposite corner",
     "addBezier": "Click points of the curve",
     "empty": "Draw the first sketch entity",
+    "noGeometry": "No geometry yet",
     "selection": "Entity",
     "editHint": "Double-click the sketch in the tree to edit it",
     "composition": "Composition",
@@ -231,7 +240,17 @@
     "entityCircle": "Circle",
     "entityArc": "Arc",
     "entityEllipse": "Ellipse",
-    "entityBezier": "Bezier"
+    "entityBezier": "Bezier",
+    "showMeasures": "Show",
+    "measure_length": "Length",
+    "measure_angle": "Angle",
+    "measure_radius": "Radius",
+    "measure_diameter": "Diameter",
+    "measure_x": "X",
+    "measure_y": "Y",
+    "measure_rx": "Width",
+    "measure_ry": "Height",
+    "liveMeasure": "Live size"
   },
   "constraint": {
     "fix": "Fix",
@@ -258,6 +277,7 @@
     "angle": "Angle",
     "fullyConstrained": "Fully constrained",
     "dof": "Degrees of freedom: {{count}}",
-    "editValue": "Double-click to edit the value"
+    "editValue": "Double-click to edit the value",
+    "problemsHint": "Conflicting or redundant constraints. Click to show only problem constraints."
   }
 }

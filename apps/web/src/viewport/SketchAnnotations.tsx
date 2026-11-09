@@ -3,7 +3,12 @@ import { datumFrame } from '@icancad/sketch';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { applyConstraintValue, ConstraintSolveError } from '../sketch/constraintModel';
-import { dimensionAnnotations, type DimensionAnnotation } from '../sketch/dimensions';
+import {
+  dimensionAnnotations,
+  referenceAnnotations,
+  type DimensionAnnotation,
+  type ReferenceAnnotation,
+} from '../sketch/dimensions';
 import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
 import { getViewport } from './handle';
@@ -60,8 +65,14 @@ export function SketchAnnotations() {
     () => (feature ? dimensionAnnotations(feature, locale) : []),
     [feature, locale],
   );
+  const references = useMemo(
+    () => (feature ? referenceAnnotations(feature, locale, 'mm') : []),
+    [feature, locale],
+  );
   const annotationsRef = useRef(annotations);
   annotationsRef.current = annotations;
+  const referencesRef = useRef(references);
+  referencesRef.current = references;
 
   useEffect(() => {
     if (!frame) {
@@ -76,7 +87,7 @@ export function SketchAnnotations() {
         return;
       }
       const next: Record<string, Position> = {};
-      for (const annotation of annotationsRef.current) {
+      for (const annotation of [...annotationsRef.current, ...referencesRef.current]) {
         const base = viewport.projectSketchPoint(frame, annotation.point);
         if (!base) continue;
         next[annotation.id] = {
@@ -223,6 +234,20 @@ export function SketchAnnotations() {
             ) : (
               <span>{annotation.text}</span>
             )}
+          </div>
+        );
+      })}
+      {references.map((reference: ReferenceAnnotation) => {
+        const position = positions[reference.id];
+        if (!position) return null;
+        return (
+          <div
+            key={reference.id}
+            className="sketch-annotation sketch-reference"
+            data-testid={`sketch-reference-${reference.id}`}
+            style={{ left: position.x, top: position.y }}
+          >
+            <span>{reference.text}</span>
           </div>
         );
       })}

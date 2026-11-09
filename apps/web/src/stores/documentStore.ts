@@ -1,13 +1,18 @@
 import {
   applyCommands,
   BODY_COLORS,
+  HISTORY_START,
   CommandError,
   createId,
   createProject,
+  objectVisible,
+  sketchObjectId,
   featureBodyId,
+  historyInsertIndex,
   isFeatureInHistory,
-  type BodyMeta,
+  type BodyRef,
   type Command,
+  type Feature,
   type ImportMeshFeature,
   type MeshFormat,
   type PrimitiveFeature,
@@ -18,7 +23,7 @@ import {
 import { create } from 'zustand';
 import { useUiStore } from './uiStore';
 
-export type SelectionKind = 'body' | 'feature';
+export type SelectionKind = 'body' | 'feature' | 'sketch';
 
 export interface SelectionItem {
   kind: SelectionKind;
@@ -50,10 +55,24 @@ interface DocumentState {
   removeFeature: (featureId: string) => void;
   renameProject: (name: string) => void;
   setHistoryEnd: (featureId: string | null) => void;
+  rollHistoryTo: (featureId: string | null) => void;
   toggleBodyVisibility: (bodyId: string) => void;
 }
 
 const HISTORY_LIMIT = 100;
+
+// An operation created while the timeline cursor sits in the middle of the list
+// belongs at that position, and the cursor moves onto it so everything after it
+// stays rolled back until the user moves forward again.
+function addFeatureCommands(project: Project, feature: Feature): Command[] {
+  const commands: Command[] = [
+    { type: 'feature/add', feature, index: historyInsertIndex(project) },
+  ];
+  if (project.historyEnd !== null) {
+    commands.push({ type: 'history/set-end', featureId: feature.id });
+  }
+  return commands;
+}
 
 function exists(project: Project, item: SelectionItem): boolean {
   switch (item.kind) {
@@ -63,6 +82,11 @@ function exists(project: Project, item: SelectionItem): boolean {
     }
     case 'feature':
       return isFeatureInHistory(project, item.id);
+    case 'sketch':
+      return project.features.some(
+        (feature) =>
+          feature.id === item.id && feature.type === 'sketch' && isFeatureInHistory(project, item.id),
+      );
   }
 }
 
@@ -182,14 +206,18 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       params: { dx: 20, dy: 20, dz: 20 },
       transform: { translation: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
     };
-    const body: BodyMeta = {
-      id: featureBodyId(featureId),
-      name,
-      color: BODY_COLORS[state.project.bodies.length % BODY_COLORS.length] ?? '#6ea8fe',
-      visible: true,
-      createdBy: featureId,
-    };
-    if (state.apply({ type: 'feature/add', feature }, { type: 'body/add', body })) {
+    const body: BodyRef = { id: featureBodyId(featureId), createdBy: featureId };
+    if (
+      state.apply(...addFeatureCommands(state.project, feature), { type: 'body/add', body }, {
+        type: 'metadata/patch',
+        objectId: body.id,
+        patch: {
+          name,
+          color: BODY_COLORS[state.project.bodies.length % BODY_COLORS.length] ?? '#6ea8fe',
+          visible: true,
+        },
+      })
+    ) {
       set({ selection: [{ kind: 'feature', id: featureId }] });
     }
   },
@@ -201,13 +229,21 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       name,
       suppressed: false,
       type: 'sketch',
-      visible: true,
       plane: { type: 'datum', plane, offset: 0 },
       entities: [],
       constraints: [],
+      references: [],
     };
-    if (!get().apply({ type: 'feature/add', feature })) return null;
-    set({ selection: [{ kind: 'feature', id: featureId }] });
+    if (
+      !get().apply(...addFeatureCommands(get().project, feature), {
+        type: 'metadata/patch',
+        objectId: sketchObjectId(featureId),
+        patch: { name, visible: true },
+      })
+    ) {
+      return null;
+    }
+    set({ selection: [{ kind: 'sketch', id: featureId }] });
     return featureId;
   },
 
@@ -223,27 +259,34 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       transform: { translation: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
       scale: 1,
     };
-    const body: BodyMeta = {
-      id: featureBodyId(featureId),
-      name,
-      color: BODY_COLORS[state.project.bodies.length % BODY_COLORS.length] ?? '#6ea8fe',
-      visible: true,
-      createdBy: featureId,
-    };
-    if (state.apply({ type: 'feature/add', feature }, { type: 'body/add', body })) {
+    const body: BodyRef = { id: featureBodyId(featureId), createdBy: featureId };
+    if (
+      state.apply(...addFeatureCommands(state.project, feature), { type: 'body/add', body }, {
+        type: 'metadata/patch',
+        objectId: body.id,
+        patch: {
+          name,
+          color: BODY_COLORS[state.project.bodies.length % BODY_COLORS.length] ?? '#6ea8fe',
+          visible: true,
+        },
+      })
+    ) {
       set({ selection: [{ kind: 'feature', id: featureId }] });
     }
   },
 
   toggleSketchVisibility: (sketchId) => {
-    const feature = get().project.features.find(
+    const project = get().project;
+    const feature = project.features.find(
       (candidate): candidate is SketchFeature =>
         candidate.id === sketchId && candidate.type === 'sketch',
     );
     if (!feature) return;
+    const objectId = sketchObjectId(sketchId);
     get().apply({
-      type: 'feature/replace',
-      feature: { ...feature, visible: !feature.visible },
+      type: 'metadata/patch',
+      objectId,
+      patch: { visible: !objectVisible(project, objectId) },
     });
   },
 
@@ -270,9 +313,25 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     get().apply({ type: 'history/set-end', featureId });
   },
 
+  // Moves the history cursor without creating an undo step. Used when entering
+  // and leaving a sketch, which is a navigation action rather than an edit.
+  rollHistoryTo: (featureId) => {
+    const project = get().project;
+    const known =
+      featureId === null ||
+      featureId === HISTORY_START ||
+      project.features.some((feature) => feature.id === featureId);
+    set({ project: { ...project, historyEnd: known ? featureId : null } });
+  },
+
   toggleBodyVisibility: (bodyId) => {
-    const body = get().project.bodies.find((candidate) => candidate.id === bodyId);
+    const project = get().project;
+    const body = project.bodies.find((candidate) => candidate.id === bodyId);
     if (!body) return;
-    get().apply({ type: 'body/update', bodyId, patch: { visible: !body.visible } });
+    get().apply({
+      type: 'metadata/patch',
+      objectId: bodyId,
+      patch: { visible: !objectVisible(project, bodyId) },
+    });
   },
 }));

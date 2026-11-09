@@ -2,7 +2,10 @@ import {
   activeFeatureIds,
   bodiesInHistory,
   createId,
-  type BodyMeta,
+  objectName,
+  objectVisible,
+  sketchObjectId,
+  type BodyObject,
   type MeshFormat,
   type SketchFeature,
 } from '@icancad/model';
@@ -98,7 +101,7 @@ export function LeftPanel() {
     }
   };
 
-  const renderBody = (body: BodyMeta): ReactNode => {
+  const renderBody = (body: BodyObject): ReactNode => {
     const mesh = meshes[body.id];
     const direct = isDirectlySelected(selection, 'body', body.id);
     const linked = !direct && highlightedBodyIds.includes(body.id);
@@ -157,11 +160,20 @@ export function LeftPanel() {
   };
 
   const renderSketch = (feature: SketchFeature): ReactNode => {
-    const direct = isDirectlySelected(selection, 'feature', feature.id);
+    const direct = isDirectlySelected(selection, 'sketch', feature.id);
+    const linked =
+      !direct && selection.some((item) => item.kind === 'feature' && item.id === feature.id);
+    const objectId = sketchObjectId(feature.id);
+    const visible = objectVisible(project, objectId);
     return (
       <div
         key={feature.id}
-        className={clsx('tree-row', direct && 'selected', !feature.visible && 'muted')}
+        className={clsx(
+          'tree-row',
+          direct && 'selected',
+          linked && 'linked',
+          !visible && 'muted',
+        )}
         onContextMenu={(event) =>
           showContextMenu(event, [
             {
@@ -185,7 +197,7 @@ export function LeftPanel() {
           className="tree-main"
           onClick={(event) =>
             select(
-              { kind: 'feature', id: feature.id },
+              { kind: 'sketch', id: feature.id },
               { additive: event.metaKey || event.ctrlKey || event.shiftKey },
             )
           }
@@ -194,21 +206,21 @@ export function LeftPanel() {
           <span className="tree-icon">
             <PenTool size={14} />
           </span>
-          <span className="tree-name">{feature.name}</span>
+          <span className="tree-name">{objectName(project, objectId, feature.name)}</span>
           <span className="tree-meta">{formatNumber(feature.entities.length, locale, 0)}</span>
         </button>
         <IconButton
-          label={feature.visible ? t('tree.hide') : t('tree.show')}
+          label={visible ? t('tree.hide') : t('tree.show')}
           className="tiny"
           onClick={() => toggleSketchVisibility(feature.id)}
         >
-          {feature.visible ? <Eye size={13} /> : <EyeOff size={13} />}
+          {visible ? <Eye size={13} /> : <EyeOff size={13} />}
         </IconButton>
       </div>
     );
   };
 
-  const bodiesByCreator = new Map<string, BodyMeta[]>();
+  const bodiesByCreator = new Map<string, BodyObject[]>();
   for (const body of bodies) {
     const list = bodiesByCreator.get(body.createdBy) ?? [];
     list.push(body);

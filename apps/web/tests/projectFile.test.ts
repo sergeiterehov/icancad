@@ -24,11 +24,13 @@ function sampleProject() {
       type: 'body/add',
       body: {
         id: featureBodyId('feat_box'),
-        name: 'Box',
-        color: '#6ea8fe',
-        visible: true,
         createdBy: 'feat_box',
       },
+    },
+    {
+      type: 'metadata/patch',
+      objectId: featureBodyId('feat_box'),
+      patch: { name: 'Box', color: '#6ea8fe', visible: true },
     },
   ]);
 }

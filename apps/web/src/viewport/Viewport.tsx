@@ -2,8 +2,16 @@ import { Eye, EyeOff, Trash2 } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { retryKernel } from '../kernel/client';
-import { activeFeatureIds, type SketchFeature } from '@icancad/model';
+import {
+  activeFeatureIds,
+  bodiesInHistory,
+  objectVisible,
+  resolveBody,
+  sketchObjectId,
+  type SketchFeature,
+} from '@icancad/model';
 import { datumFrame } from '@icancad/sketch';
+import { sketchSectionPlane } from '../sketch/sectionPlane';
 import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
 import { useKernelStore } from '../stores/kernelStore';
@@ -37,10 +45,11 @@ export function Viewport() {
   const previousCount = useRef(0);
 
   const project = useDocumentStore((state) => state.project);
-  const bodies = project.bodies;
+  const bodies = bodiesInHistory(project);
   const sectionPlanes = project.view.sectionPlanes;
   const sectionEnabled = useUiStore((state) => state.sectionEnabled);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
+  const sketchSectionEnabled = useUiStore((state) => state.sketchSectionEnabled);
   const sketchConstraintId = useUiStore((state) => state.sketchConstraintId);
   const sketchFrozenEntityIds = useUiStore((state) => state.sketchFrozenEntityIds);
   const sketchAutoHighlightIds = useUiStore((state) => state.sketchAutoHighlightIds);
@@ -52,6 +61,16 @@ export function Viewport() {
   const error = useKernelStore((state) => state.error);
   const theme = useThemeStore((state) => state.theme);
   const openMenu = useContextMenuStore((state) => state.open);
+
+  const activeSketch = activeSketchId
+    ? project.features.find(
+        (feature): feature is SketchFeature =>
+          feature.type === 'sketch' && feature.id === activeSketchId,
+      )
+    : undefined;
+  const sketchSection =
+    activeSketch && sketchSectionEnabled ? sketchSectionPlane(activeSketch) : null;
+  const sketchSectionKey = sketchSection ? JSON.stringify(sketchSection) : '';
 
   const navLabels: Record<NavFace, string> = {
     front: t('nav.front'),
@@ -86,8 +105,9 @@ export function Viewport() {
       (bodyId, x, y) => {
         if (!bodyId || useUiStore.getState().activeSketchId) return;
         const store = useDocumentStore.getState();
-        const body = store.project.bodies.find((candidate) => candidate.id === bodyId);
-        if (!body) return;
+        const ref = store.project.bodies.find((candidate) => candidate.id === bodyId);
+        if (!ref) return;
+        const body = resolveBody(store.project, ref);
         const labels = translationRef.current;
         showContextMenu({ clientX: x, clientY: y, preventDefault: () => undefined }, [
           {
@@ -105,11 +125,12 @@ export function Viewport() {
           },
         ]);
       },
-      (azimuth, polar) => {
+      (azimuth, polar, distance) => {
         navCubeRef.current?.sync(azimuth, polar);
         if (navCubeCanvasRef.current) {
           navCubeCanvasRef.current.dataset.azimuth = String(azimuth);
           navCubeCanvasRef.current.dataset.polar = String(polar);
+          navCubeCanvasRef.current.dataset.distance = String(distance);
         }
       },
     );
@@ -153,9 +174,9 @@ export function Viewport() {
       fit: () => controller.fit(),
       setView: (name) => controller.setView(name),
       setSketches: (sketches) => controller.setSketches(sketches),
-      setSketchOverlay: (preview, draftPoints, highlight) =>
-        controller.setSketchOverlay(preview, draftPoints, highlight),
-      alignSketch: (frame) => controller.alignSketch(frame),
+      setSketchOverlay: (preview, draftPoints, highlight, marker) =>
+        controller.setSketchOverlay(preview, draftPoints, highlight, marker),
+      alignSketch: (frame, entities) => controller.alignSketch(frame, entities),
       getCameraState: () => controller.getCameraState(),
       setCameraState: (state) => controller.setCameraState(state),
       pickSketch: (x, y) => controller.pickSketch(x, y),
@@ -201,8 +222,11 @@ export function Viewport() {
   }, [theme]);
 
   useEffect(() => {
-    controllerRef.current?.setSection(sectionEnabled ? sectionPlanes : []);
-  }, [activeSketchId, sectionEnabled, sectionPlanes]);
+    // The sketch plane joins the section set while a sketch is being edited; the
+    // serialized key keeps the effect from re-running on every render.
+    const planes = sketchSection ? [sketchSection, ...sectionPlanes] : sectionPlanes;
+    controllerRef.current?.setSection(sectionEnabled ? planes : []);
+  }, [sketchSectionKey, sectionEnabled, sectionPlanes]);
 
   useEffect(() => {
     const ids = activeFeatureIds(project);
@@ -211,7 +235,7 @@ export function Viewport() {
         (feature): feature is SketchFeature =>
           feature.type === 'sketch' &&
           ids.has(feature.id) &&
-          (feature.visible !== false || feature.id === activeSketchId),
+          (objectVisible(project, sketchObjectId(feature.id)) || feature.id === activeSketchId),
       )
       .map((feature) => ({
         id: feature.id,

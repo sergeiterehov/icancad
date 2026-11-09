@@ -1,4 +1,5 @@
 import { exportStlBinary } from '@icancad/io';
+import { bodiesInHistory } from '@icancad/model';
 import { Download, FolderOpen, Redo2, Undo2 } from 'lucide-react';
 import { useEffect, useRef, useState, type ChangeEvent, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -31,7 +32,8 @@ export function TopBar() {
   const fileInput = useRef<HTMLInputElement>(null);
   const meshes = useKernelStore((state) => state.meshes);
   const selection = useDocumentStore((state) => state.selection);
-  const bodies = useDocumentStore((state) => state.project.bodies);
+  const project = useDocumentStore((state) => state.project);
+  const bodies = bodiesInHistory(project);
   const openMenu = useContextMenuStore((state) => state.open);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
   const selectedBodyCount = directBodyIds(selection).length;
@@ -72,7 +74,7 @@ export function TopBar() {
   const handleExportStl = () => {
     const project = useDocumentStore.getState().project;
     const selected = new Set(directBodyIds(useDocumentStore.getState().selection));
-    const candidates = project.bodies.filter((body) =>
+    const candidates = bodiesInHistory(project).filter((body) =>
       selected.size > 0 ? selected.has(body.id) : body.visible,
     );
     const collected = candidates

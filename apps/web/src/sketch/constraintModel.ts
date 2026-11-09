@@ -246,10 +246,13 @@ async function solveWithConstraints(
   } catch {
     throw new ConstraintSolveError('failed');
   }
-  if (result.conflicting.length > 0 || result.redundant.length > 0) {
+  if (result.conflicting.length > 0) {
     throw new ConstraintSolveError('conflict');
   }
   useUiStore.getState().setSketchFrozen(result.frozenEntityIds);
+  useUiStore
+    .getState()
+    .setSketchProblems([...new Set([...result.conflicting, ...result.redundant])]);
   return { ...feature, constraints, entities: result.entities };
 }
 
@@ -266,14 +269,34 @@ export function applyConstraintAction(
 export async function diagnoseSketch(feature: SketchFeature): Promise<void> {
   if (feature.constraints.length === 0) {
     useUiStore.getState().setSketchFrozen([]);
+    useUiStore.getState().setSketchProblems([]);
     return;
   }
   try {
     const result = await solveSketch(feature.entities, feature.constraints, [], { diagnose: true });
     useUiStore.getState().setSketchFrozen(result.frozenEntityIds);
+    useUiStore
+      .getState()
+      .setSketchProblems([...new Set([...result.conflicting, ...result.redundant])]);
   } catch {
     useUiStore.getState().setSketchFrozen([]);
+    useUiStore.getState().setSketchProblems([]);
   }
+}
+
+export function removeSketchEntities(
+  feature: SketchFeature,
+  entityIds: Iterable<string>,
+): SketchFeature {
+  const removed = new Set(entityIds);
+  return {
+    ...feature,
+    entities: feature.entities.filter((entity) => !removed.has(entity.id)),
+    constraints: feature.constraints.filter(
+      (constraint) => !constraint.refs.some((ref) => removed.has(ref.entityId)),
+    ),
+    references: (feature.references ?? []).filter((reference) => !removed.has(reference.entityId)),
+  };
 }
 
 export function applyConstraintValue(

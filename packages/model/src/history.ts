@@ -1,4 +1,5 @@
-import { HISTORY_START, type BodyMeta, type Feature, type Project } from './types';
+import { resolveBody, type BodyObject } from './project';
+import { HISTORY_START, type Feature, type Project } from './types';
 
 export type HistoryIssueCode =
   | 'DUPLICATE_FEATURE_ID'
@@ -30,9 +31,19 @@ export function isFeatureInHistory(project: Project, featureId: string): boolean
   return activeFeatureIds(project).has(featureId);
 }
 
-export function bodiesInHistory(project: Project): BodyMeta[] {
+// New operations are inserted at the timeline cursor, not at the end of the list.
+export function historyInsertIndex(project: Project): number {
+  if (project.historyEnd === null) return project.features.length;
+  if (project.historyEnd === HISTORY_START) return 0;
+  const index = project.features.findIndex((feature) => feature.id === project.historyEnd);
+  return index < 0 ? project.features.length : index + 1;
+}
+
+export function bodiesInHistory(project: Project): BodyObject[] {
   const active = activeFeatureIds(project);
-  return project.bodies.filter((body) => active.has(body.createdBy));
+  return project.bodies
+    .filter((body) => active.has(body.createdBy))
+    .map((body) => resolveBody(project, body));
 }
 
 function referencedBodyIds(feature: Feature): string[] {

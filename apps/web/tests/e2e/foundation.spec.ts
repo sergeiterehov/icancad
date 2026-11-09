@@ -370,6 +370,8 @@ test.describe('ICANCad foundation', () => {
     await page.getByRole('button', { name: 'Sketch', exact: true }).click();
     await page.getByRole('menuitem', { name: 'XY plane' }).click();
     await expect(page.locator('.sketch-overlay')).toBeVisible();
+    // Entering a sketch animates the camera; wait so clicks map to the settled view.
+    await page.waitForTimeout(600);
     await expect(page.locator('.tree-row')).toHaveCount(1);
 
     await page.getByRole('button', { name: 'Line', exact: true }).click();
@@ -407,11 +409,67 @@ test.describe('ICANCad foundation', () => {
     await expect(page.locator('.sketch-overlay')).toBeVisible();
     await expect(sketchRow).toContainText('1');
   });
+  test('separates the sketch object from its construction operation', async ({ page }) => {
+    await openApp(page);
+    const tools = page.getByRole('navigation', { name: 'Tools' });
+    const inspector = page.getByTestId('right');
+    const canvas = page.getByTestId('viewport-canvas');
+
+    await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await page.waitForTimeout(600);
+
+    // A closed rectangle so the sketch owns a face, four edges and four points.
+    const box = await canvas.boundingBox();
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    const corners: [number, number][] = [
+      [300, 250],
+      [500, 250],
+      [500, 400],
+      [300, 400],
+    ];
+    for (let index = 0; index < corners.length; index += 1) {
+      const start = corners[index]!;
+      const end = corners[(index + 1) % corners.length]!;
+      await page.mouse.click(box!.x + start[0], box!.y + start[1]);
+      await page.waitForTimeout(320);
+      await page.mouse.click(box!.x + end[0], box!.y + end[1]);
+      await page.waitForTimeout(320);
+    }
+    await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+
+    // The tree row selects the sketch object: its geometry, not the recipe.
+    await page.locator('.tree-row').first().locator('.tree-main').click();
+    await expect(inspector.getByText('Faces')).toBeVisible();
+    await expect(inspector.getByText('Face 1')).toBeVisible();
+    await expect(inspector.getByText('Edge 1')).toBeVisible();
+    await expect(inspector.getByText('Point 4')).toBeVisible();
+    await expect(inspector.getByText('Composition')).toHaveCount(0);
+    await expect(inspector.getByText('Placement')).toHaveCount(0);
+
+    // The timeline chip selects the operation: placement and composition.
+    await page.locator('.timeline-op').first().click();
+    await expect(inspector.getByText('Placement')).toBeVisible();
+    await expect(inspector.getByText('Composition')).toBeVisible();
+    await expect(inspector.getByText('Faces')).toHaveCount(0);
+
+    // Editing also targets the operation, because the recipe is what changes.
+    await page.locator('.tree-row').first().locator('.tree-main').dblclick();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await expect(inspector.getByText('Composition')).toBeVisible();
+    await expect(inspector.getByText('Constraints').first()).toBeVisible();
+    await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await expect(inspector.getByText('Faces')).toBeVisible();
+  });
   test('solves constraints and drags sketch handles', async ({ page }) => {
     await openApp(page);
     await page.getByRole('button', { name: 'Sketch', exact: true }).click();
     await page.getByRole('menuitem', { name: 'XY plane' }).click();
     await expect(page.locator('.sketch-overlay')).toBeVisible();
+    // Entering a sketch animates the camera; wait so clicks map to the settled view.
+    await page.waitForTimeout(600);
 
     await page.getByRole('button', { name: 'Line', exact: true }).click();
     const canvas = page.getByTestId('viewport-canvas');
@@ -481,7 +539,13 @@ test.describe('ICANCad foundation', () => {
     await expect(topbar.getByRole('button', { name: 'Finish sketch', exact: true })).toBeVisible();
     await expect(topbar.getByRole('button', { name: 'Section', exact: true })).toBeVisible();
     await expect(page.locator('.sketch-toolbar')).toHaveCount(0);
-    await topbar.getByRole('button', { name: 'Section', exact: true }).click();
+
+    // While a sketch is open the sketch plane is already a section entry.
+    const sectionButton = topbar.getByRole('button', { name: 'Section', exact: true });
+    await expect(page.locator('.section-plane')).toHaveCount(1);
+    await sectionButton.click();
+    await expect(page.locator('.section-plane')).toHaveCount(0);
+    await sectionButton.click();
     await expect(page.locator('.section-plane')).toHaveCount(1);
 
     await topbar.getByRole('button', { name: 'Finish sketch', exact: true }).click();
@@ -493,6 +557,8 @@ test.describe('ICANCad foundation', () => {
     await page.getByRole('button', { name: 'Sketch', exact: true }).click();
     await page.getByRole('menuitem', { name: 'XY plane' }).click();
     await expect(page.locator('.sketch-overlay')).toBeVisible();
+    // Entering a sketch animates the camera; wait so clicks map to the settled view.
+    await page.waitForTimeout(600);
 
     const topbar = page.locator('.topbar');
     const canvas = page.getByTestId('viewport-canvas');
@@ -514,6 +580,8 @@ test.describe('ICANCad foundation', () => {
     await page.getByRole('button', { name: 'Sketch', exact: true }).click();
     await page.getByRole('menuitem', { name: 'XY plane' }).click();
     await expect(page.locator('.sketch-overlay')).toBeVisible();
+    // Entering a sketch animates the camera; wait so clicks map to the settled view.
+    await page.waitForTimeout(600);
 
     const topbar = page.locator('.topbar');
     const magnet = topbar.getByRole('button', { name: 'Magnet', exact: true });
@@ -553,11 +621,427 @@ test.describe('ICANCad foundation', () => {
     await construction.click();
     await expect(firstEntity).not.toHaveAttribute('data-construction', 'true');
   });
+  test('removes constraints with deleted geometry', async ({ page }) => {
+    await openApp(page);
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    // Entering a sketch animates the camera; wait so clicks map to the settled view.
+    await page.waitForTimeout(600);
+
+    const canvas = page.getByTestId('viewport-canvas');
+    const box = await canvas.boundingBox();
+    const step = async (x: number, y: number) => {
+      await page.mouse.move(box!.x + x, box!.y + y);
+      await page.mouse.click(box!.x + x, box!.y + y);
+      await page.waitForTimeout(350);
+    };
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    await step(300, 300);
+    await step(700, 300);
+    await step(700, 300);
+    await step(700, 600);
+
+    const constraints = page.locator('.panel-section', { hasText: 'Constraints' });
+    await expect(constraints).toContainText('Coincident');
+    const rowsBefore = await page.locator('.constraint-row').count();
+
+    const topbar = page.locator('.topbar');
+    await topbar.getByRole('button', { name: 'Select', exact: true }).click();
+    await page.locator('.sketch-entity-row').first().click();
+    await topbar.getByRole('button', { name: 'Delete', exact: true }).click();
+
+    await expect(page.locator('.sketch-entity-row')).toHaveCount(1);
+    await expect(constraints).not.toContainText('Coincident');
+    expect(await page.locator('.constraint-row').count()).toBeLessThan(rowsBefore);
+    await expect(page.locator('.constraint-row')).not.toHaveCount(0);
+  });
+  test('snaps to segment midpoints with symmetry and to circles with tangency', async ({
+    page,
+  }) => {
+    await openApp(page);
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    // Entering a sketch animates the camera; wait so clicks map to the settled view.
+    await page.waitForTimeout(600);
+
+    const canvas = page.getByTestId('viewport-canvas');
+    const box = await canvas.boundingBox();
+    const step = async (x: number, y: number) => {
+      await page.mouse.move(box!.x + x, box!.y + y);
+      await page.mouse.click(box!.x + x, box!.y + y);
+      await page.waitForTimeout(350);
+    };
+    const constraints = page.locator('.panel-section', { hasText: 'Constraints' });
+
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    await step(300, 300);
+    await step(700, 300);
+    await expect(constraints).toContainText('Horizontal');
+
+    await step(500, 300);
+    await step(500, 500);
+    await expect(constraints).toContainText('Symmetric');
+
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    await step(300, 500);
+    await step(700, 500);
+    await page.getByRole('button', { name: 'Circle', exact: true }).click();
+    await step(400, 420);
+    await step(400, 500);
+    await expect(constraints).toContainText('Tangent');
+  });
+  test('draws a closed rectangle and drags it without conflicts', async ({ page }) => {
+    await openApp(page);
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    // Entering a sketch animates the camera; wait so clicks map to the settled view.
+    await page.waitForTimeout(600);
+
+    const canvas = page.getByTestId('viewport-canvas');
+    const box = await canvas.boundingBox();
+    const step = async (x: number, y: number) => {
+      await page.mouse.move(box!.x + x, box!.y + y);
+      await page.mouse.click(box!.x + x, box!.y + y);
+      await page.waitForTimeout(320);
+    };
+
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    const corners = [
+      [300, 250],
+      [600, 250],
+      [600, 520],
+      [300, 520],
+    ];
+    for (let index = 0; index < 4; index += 1) {
+      const start = corners[index]!;
+      const end = corners[(index + 1) % 4]!;
+      await step(start[0]!, start[1]!);
+      await step(end[0]!, end[1]!);
+    }
+
+    const constraints = page.locator('.panel-section', { hasText: 'Constraints' });
+    await expect(page.locator('.constraint-row')).toHaveCount(8);
+    await expect(constraints).toContainText('Coincident');
+
+    const composition = page.locator('.panel-section', { hasText: 'Composition' });
+    const before = await composition.innerText();
+
+    const topbar = page.locator('.topbar');
+    await topbar.getByRole('button', { name: 'Select', exact: true }).click();
+    await page.mouse.move(box!.x + 600, box!.y + 250);
+    await page.mouse.down();
+    await page.mouse.move(box!.x + 520, box!.y + 210, { steps: 12 });
+    await page.mouse.up();
+
+    await expect(page.locator('.toast')).toHaveCount(0);
+    await expect(composition).not.toHaveText(before);
+    await expect(page.locator('.constraint-row')).toHaveCount(8);
+
+    await page.mouse.move(box!.x + 300, box!.y + 380);
+    await page.mouse.down();
+    await page.mouse.move(box!.x + 260, box!.y + 380, { steps: 12 });
+    await page.mouse.up();
+    await expect(page.locator('.toast')).toHaveCount(0);
+  });
+  test('flags conflicting constraints and filters them', async ({ page }) => {
+    await openApp(page);
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    // Entering a sketch animates the camera; wait so clicks map to the settled view.
+    await page.waitForTimeout(600);
+
+    const canvas = page.getByTestId('viewport-canvas');
+    const box = await canvas.boundingBox();
+    const step = async (x: number, y: number) => {
+      await page.mouse.move(box!.x + x, box!.y + y);
+      await page.mouse.click(box!.x + x, box!.y + y);
+      await page.waitForTimeout(320);
+    };
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    await step(300, 300);
+    await step(650, 420);
+
+    const topbar = page.locator('.topbar');
+    const constraintsButton = topbar.getByRole('button', { name: 'Constraints', exact: true });
+    await topbar.getByRole('button', { name: 'Select', exact: true }).click();
+    const entityRow = page.locator('.sketch-entity-row').first();
+    await entityRow.click();
+    await constraintsButton.click();
+    await page.getByRole('menuitem', { name: 'Distance', exact: true }).click();
+    await expect(page.locator('.constraint-row')).toHaveCount(1);
+
+    await entityRow.click();
+    await constraintsButton.click();
+    await page.getByRole('menuitem', { name: 'Distance', exact: true }).click();
+    await expect(page.locator('.constraint-row')).toHaveCount(2);
+
+    const warning = page.getByTestId('constraint-problems');
+    await expect(warning).toBeVisible();
+    await expect(page.locator('.constraint-row[data-problem="true"]')).toHaveCount(1);
+
+    await warning.hover();
+    await expect(page.getByRole('tooltip')).toContainText('problem constraints');
+
+    await warning.click();
+    await expect(page.locator('.constraint-row')).toHaveCount(1);
+    await expect(warning).toHaveAttribute('data-active', 'true');
+
+    await warning.click();
+    await expect(page.locator('.constraint-row')).toHaveCount(2);
+
+    await page.locator('.constraint-row[data-problem="true"] button').click();
+    await expect(warning).toHaveCount(0);
+    await expect(page.locator('.constraint-row')).toHaveCount(1);
+  });
+  test('adds reference measurements and shows live size', async ({ page }) => {
+    await openApp(page);
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    // Entering a sketch animates the camera; wait so clicks map to the settled view.
+    await page.waitForTimeout(600);
+
+    const canvas = page.getByTestId('viewport-canvas');
+    const box = await canvas.boundingBox();
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    await page.mouse.move(box!.x + 300, box!.y + 300);
+    await page.mouse.click(box!.x + 300, box!.y + 300);
+    await page.mouse.move(box!.x + 600, box!.y + 420);
+    await expect(page.getByTestId('sketch-live-measure')).toContainText('mm');
+    await page.mouse.click(box!.x + 600, box!.y + 420);
+    await expect(page.getByTestId('sketch-live-measure')).toHaveCount(0);
+
+    const row = page.locator('.sketch-entity-row').first();
+    const composition = page.locator('.panel-section', { hasText: 'Composition' });
+
+    await row.click({ button: 'right' });
+    await expect(page.locator('.context-menu-heading')).toContainText('Show');
+    await page.getByRole('menuitem').nth(0).click();
+    await expect(page.locator('.sketch-reference')).toHaveCount(1);
+
+    await row.click({ button: 'right' });
+    const angleItem = page.getByRole('menuitem').nth(1);
+    await expect(angleItem).toContainText('°');
+    await angleItem.click();
+    await expect(page.locator('.sketch-reference')).toHaveCount(2);
+    await expect(composition).toContainText('°');
+
+    const topbar = page.locator('.topbar');
+    await row.click();
+    await topbar.getByRole('button', { name: 'Constraints', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Distance', exact: true }).click();
+    await expect(page.locator('.constraint-row')).toHaveCount(1);
+
+    // A real dimension wins over the reference of the same measure.
+    await expect(page.locator('.sketch-reference')).toHaveCount(1);
+    await expect(page.locator('.sketch-annotation:not(.sketch-reference)')).toHaveCount(1);
+  });
+  test('undoes geometry together with automatic constraints', async ({ page }) => {
+    await openApp(page);
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    // Entering a sketch animates the camera; wait so clicks map to the settled view.
+    await page.waitForTimeout(600);
+
+    const canvas = page.getByTestId('viewport-canvas');
+    const box = await canvas.boundingBox();
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    await page.mouse.move(box!.x + 300, box!.y + 300);
+    await page.mouse.click(box!.x + 300, box!.y + 300);
+    await page.waitForTimeout(320);
+    await page.mouse.move(box!.x + 600, box!.y + 302);
+    await page.mouse.click(box!.x + 600, box!.y + 302);
+
+    const constraints = page.locator('.panel-section', { hasText: 'Constraints' });
+    await expect(constraints).toContainText('Horizontal');
+    await expect(page.locator('.sketch-entity-row')).toHaveCount(1);
+
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect(page.locator('.sketch-entity-row')).toHaveCount(0);
+    await expect(constraints).toContainText('No constraints yet');
+
+    await page.getByRole('button', { name: 'Redo', exact: true }).click();
+    await expect(page.locator('.sketch-entity-row')).toHaveCount(1);
+    await expect(constraints).toContainText('Horizontal');
+  });
+  test('moves the timeline to the edited sketch and locks it', async ({ page }) => {
+    await openApp(page);
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    // Entering a sketch animates the camera; wait so clicks map to the settled view.
+    await page.waitForTimeout(600);
+
+    const canvas = page.getByTestId('viewport-canvas');
+    const box = await canvas.boundingBox();
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    await page.mouse.move(box!.x + 300, box!.y + 300);
+    await page.mouse.click(box!.x + 300, box!.y + 300);
+    await page.waitForTimeout(300);
+    await page.mouse.move(box!.x + 600, box!.y + 300);
+    await page.mouse.click(box!.x + 600, box!.y + 300);
+    await page.waitForTimeout(800);
+    await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+
+    await addBox(page);
+    const timeline = page.locator('.panel.timeline-panel');
+    await expect(page.locator('.tree-row')).toHaveCount(2);
+    await expect(timeline).not.toHaveAttribute('data-locked', 'true');
+    await expect(page.locator('.timeline-caret').first()).toBeEnabled();
+
+    await page.locator('.tree-row').first().locator('.tree-main').dblclick();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await expect(timeline).toHaveAttribute('data-locked', 'true');
+    await expect(page.locator('.timeline-caret').first()).toBeDisabled();
+    // Only geometry that existed at the sketch moment stays visible.
+    await expect(page.locator('.tree-row')).toHaveCount(1);
+
+    await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await expect(timeline).not.toHaveAttribute('data-locked', 'true');
+    await expect(page.locator('.timeline-caret').first()).toBeEnabled();
+    await expect(page.locator('.tree-row')).toHaveCount(2);
+  });
+  test('fits the camera to the sketch and refits when switching sketches', async ({ page }) => {
+    await openApp(page);
+    const cube = page.getByTestId('nav-cube');
+    const tools = page.getByRole('navigation', { name: 'Tools' });
+    const canvas = page.getByTestId('viewport-canvas');
+    const box = await canvas.boundingBox();
+    const distance = async () => Number(await cube.getAttribute('data-distance'));
+    const drawLine = async (fromRatio: number, toRatio: number) => {
+      await page.getByRole('button', { name: 'Line', exact: true }).click();
+      await page.mouse.click(box!.x + box!.width * fromRatio, box!.y + box!.height * 0.5);
+      await page.waitForTimeout(300);
+      await page.mouse.click(box!.x + box!.width * toRatio, box!.y + box!.height * 0.5);
+      await page.waitForTimeout(800);
+    };
+    const startSketch = async () => {
+      await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'XY plane' }).click();
+      await expect(page.locator('.sketch-overlay')).toBeVisible();
+      await page.waitForTimeout(500);
+    };
+    const finishSketch = async () => {
+      await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+      await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+      await page.waitForTimeout(700);
+    };
+
+    await startSketch();
+    await drawLine(0.3, 0.4);
+    await finishSketch();
+    await startSketch();
+    await drawLine(0.15, 0.8);
+    await finishSketch();
+
+    const modelDistance = await distance();
+    const ops = page.locator('.timeline-op');
+    await expect(ops).toHaveCount(2);
+
+    await ops.nth(0).dblclick();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await expect.poll(distance).toBeLessThan(modelDistance * 0.8);
+    const smallDistance = await distance();
+
+    // Switching sketches refits instead of keeping the previous framing.
+    await ops.nth(1).dblclick();
+    await expect.poll(distance).toBeGreaterThan(smallDistance * 1.5);
+
+    await finishSketch();
+    await expect.poll(distance).toBeCloseTo(modelDistance, 1);
+  });
+  test('inserts new operations at the timeline cursor', async ({ page }) => {
+    await openApp(page);
+    await addBox(page);
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XZ plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    // Entering a sketch animates the camera; wait so clicks map to the settled view.
+    await page.waitForTimeout(600);
+    await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+
+    const ops = page.locator('.timeline-op');
+    await expect(ops).toHaveCount(2);
+
+    // Roll the cursor back to just after the box, then add another box.
+    await page.locator('.timeline-caret').nth(1).click();
+    await expect(page.locator('.timeline-op.muted')).toHaveCount(1);
+    await addBox(page);
+
+    await expect(ops).toHaveCount(3);
+    await expect(ops.nth(1)).toHaveAttribute('aria-label', 'Box');
+    await expect(ops.nth(2)).toHaveAttribute('aria-label', 'Sketch');
+    await expect(ops.nth(2)).toHaveClass(/muted/);
+    // The new operation becomes the current cursor position.
+    await expect(page.locator('.timeline-caret').nth(2)).toHaveAttribute('aria-pressed', 'true');
+  });
+  test('edits a sketch by double clicking it in the timeline', async ({ page }) => {
+    await openApp(page);
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    // Entering a sketch animates the camera; wait so clicks map to the settled view.
+    await page.waitForTimeout(600);
+    await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+
+    await addBox(page);
+    const ops = page.locator('.timeline-op');
+    await expect(ops).toHaveCount(2);
+
+    // Only sketch operations open the editor.
+    await ops.nth(1).dblclick();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+
+    await ops.first().dblclick();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await expect(page.locator('.panel.timeline-panel')).toHaveAttribute('data-locked', 'true');
+  });
+  test('lists the sketch plane as a fixed section while editing a sketch', async ({ page }) => {
+    await openApp(page);
+    await addBox(page);
+
+    await page.getByRole('button', { name: 'Section', exact: true }).click();
+    const planes = page.locator('.section-plane');
+    await expect(planes).toHaveCount(1);
+    await page.getByRole('button', { name: 'Add plane' }).click();
+    await expect(planes).toHaveCount(2);
+
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    // Entering a sketch animates the camera; wait so clicks map to the settled view.
+    await page.waitForTimeout(600);
+    await expect(planes).toHaveCount(3);
+
+    const sketchPlane = planes.first();
+    await expect(sketchPlane).toContainText('Sketch plane');
+    await expect(sketchPlane.getByRole('button')).toHaveCount(1);
+    await expect(sketchPlane.getByRole('textbox')).toHaveCount(0);
+    await expect(sketchPlane.getByRole('button', { name: 'Hide plane' })).toBeVisible();
+
+    await sketchPlane.getByRole('button', { name: 'Hide plane' }).click();
+    await expect(sketchPlane.getByRole('button', { name: 'Show plane' })).toBeVisible();
+    await expect(planes).toHaveCount(3);
+
+    await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+    await expect(planes).toHaveCount(2);
+  });
   test('dims unrelated constraints and elements', async ({ page }) => {
     await openApp(page);
     await page.getByRole('button', { name: 'Sketch', exact: true }).click();
     await page.getByRole('menuitem', { name: 'XY plane' }).click();
     await expect(page.locator('.sketch-overlay')).toBeVisible();
+    // Entering a sketch animates the camera; wait so clicks map to the settled view.
+    await page.waitForTimeout(600);
 
     const canvas = page.getByTestId('viewport-canvas');
     const box = await canvas.boundingBox();
@@ -600,6 +1084,8 @@ test.describe('ICANCad foundation', () => {
     await page.getByRole('button', { name: 'Sketch', exact: true }).click();
     await page.getByRole('menuitem', { name: 'XY plane' }).click();
     await expect(page.locator('.sketch-overlay')).toBeVisible();
+    // Entering a sketch animates the camera; wait so clicks map to the settled view.
+    await page.waitForTimeout(600);
 
     const canvas = page.getByTestId('viewport-canvas');
     const box = await canvas.boundingBox();

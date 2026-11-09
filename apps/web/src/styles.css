@@ -644,6 +644,44 @@ button:disabled {
   opacity: 0.34;
 }
 
+.constraint-row[data-problem='true'][data-dimmed='true'] {
+  opacity: 0.8;
+}
+
+.constraint-row[data-problem='true'] .constraint-label,
+.constraint-row[data-problem='true'] .constraint-value-text {
+  color: var(--warn);
+}
+
+.constraint-row[data-problem='true']::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 4px;
+  height: 4px;
+  margin-right: -2px;
+  border-radius: 999px;
+  background: var(--warn);
+}
+
+.panel-warning {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--warn);
+  cursor: pointer;
+}
+
+.panel-warning:hover,
+.panel-warning[data-active='true'] {
+  background: var(--accent-soft);
+}
+
 .constraint-row[data-active='true'] .constraint-label {
   color: var(--accent);
 }
@@ -881,6 +919,16 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  cursor: pointer;
+}
+
+.timeline-caret:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.timeline-panel[data-locked='true'] .timeline-caret:not(.active) {
+  opacity: 0.18;
 }
 
 .timeline-caret::before {
@@ -1248,6 +1296,15 @@ button:disabled {
   color: var(--text-faint);
 }
 
+.context-menu-heading {
+  padding: 6px 8px 2px;
+  color: var(--text-faint);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .context-menu-separator {
   height: 1px;
   margin: 4px 2px;
@@ -1446,6 +1503,17 @@ button:disabled {
   height: 26px;
 }
 
+.section-plane-name {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: none;
+}
+
 .section-axis {
   display: flex;
   gap: 1px;
@@ -1586,6 +1654,18 @@ button:disabled {
   opacity: 0.3;
 }
 
+.sketch-reference {
+  border-style: dashed;
+  border-color: var(--text-faint);
+  color: var(--text-dim);
+  background: transparent;
+  cursor: default;
+}
+
+.sketch-reference:hover {
+  border-color: var(--text-faint);
+}
+
 .sketch-annotation-input {
   width: 62px;
   height: 18px;
@@ -1598,6 +1678,20 @@ button:disabled {
   text-align: center;
   outline: none;
   user-select: text;
+}
+
+.sketch-live-measure {
+  position: absolute;
+  padding: 3px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(-50%, -180%);
 }
 
 .sketch-hint {

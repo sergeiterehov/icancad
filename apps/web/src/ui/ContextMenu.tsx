@@ -1,18 +1,22 @@
 import clsx from 'clsx';
+import { Check } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { create } from 'zustand';
 
 export type ContextMenuItem =
   | { id: string; separator: true }
+  | { id: string; heading: string }
   | {
       id: string;
       separator?: false;
+      heading?: undefined;
       label: string;
       icon?: ReactNode;
       hint?: ReactNode;
       danger?: boolean;
       disabled?: boolean;
+      checked?: boolean;
       onSelect: () => void;
     };
 
@@ -109,8 +113,12 @@ export function ContextMenuHost() {
       style={position ?? { left: -9999, top: -9999 }}
     >
       {menu.items.map((item) =>
-        item.separator ? (
+        'separator' in item && item.separator ? (
           <div key={item.id} className="context-menu-separator" />
+        ) : 'heading' in item ? (
+          <div key={item.id} className="context-menu-heading">
+            {item.heading}
+          </div>
         ) : (
           <button
             key={item.id}
@@ -123,7 +131,11 @@ export function ContextMenuHost() {
               item.onSelect();
             }}
           >
-            {item.icon && <span className="context-menu-icon">{item.icon}</span>}
+            {item.checked !== undefined ? (
+              <span className="context-menu-icon">{item.checked ? <Check size={14} /> : null}</span>
+            ) : (
+              item.icon && <span className="context-menu-icon">{item.icon}</span>
+            )}
             <span className="context-menu-label">{item.label}</span>
             {item.hint && <span className="context-menu-hint">{item.hint}</span>}
           </button>

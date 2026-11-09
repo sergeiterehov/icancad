@@ -11,10 +11,12 @@ export function SectionTool() {
   const setSectionPlanes = useDocumentStore((state) => state.setSectionPlanes);
   const sectionEnabled = useUiStore((state) => state.sectionEnabled);
   const setSectionEnabled = useUiStore((state) => state.setSectionEnabled);
-  const active = sectionPlanes.length > 0 && sectionEnabled;
+  const activeSketchId = useUiStore((state) => state.activeSketchId);
+  const active = sectionEnabled && (sectionPlanes.length > 0 || activeSketchId !== null);
 
   const toggle = () => {
-    if (sectionPlanes.length === 0) {
+    // While editing a sketch its own plane already provides the section.
+    if (sectionPlanes.length === 0 && !activeSketchId) {
       const plane: SectionPlane = {
         id: createId('section'),
         name: t('section.plane', { index: 1 }),

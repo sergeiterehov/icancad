@@ -11,21 +11,25 @@ export interface ToastMessage {
 interface UiState {
   toast: ToastMessage | null;
   sectionEnabled: boolean;
+  sketchSectionEnabled: boolean;
   activeSketchId: string | null;
   sketchSelectionIds: string[];
   sketchConstraintId: string | null;
   sketchFrozenEntityIds: string[];
   sketchAutoHighlightIds: string[];
+  sketchProblemConstraintIds: string[];
   sketchMagnetEnabled: boolean;
   sketchTool: SketchTool;
   showToast: (key: string, kind?: 'info' | 'error', params?: Record<string, unknown>) => void;
   dismissToast: () => void;
   setSectionEnabled: (enabled: boolean) => void;
+  setSketchSectionEnabled: (enabled: boolean) => void;
   setActiveSketch: (sketchId: string | null) => void;
   setSketchSelection: (ids: string[]) => void;
   selectSketchConstraint: (id: string | null) => void;
   setSketchFrozen: (ids: string[]) => void;
   setSketchAutoHighlight: (ids: string[]) => void;
+  setSketchProblems: (ids: string[]) => void;
   setSketchMagnetEnabled: (enabled: boolean) => void;
   setSketchTool: (tool: SketchTool) => void;
 }
@@ -58,11 +62,13 @@ function loadSectionEnabled(): boolean {
 export const useUiStore = create<UiState>((set) => ({
   toast: null,
   sectionEnabled: loadSectionEnabled(),
+  sketchSectionEnabled: true,
   activeSketchId: null,
   sketchSelectionIds: [],
   sketchConstraintId: null,
   sketchFrozenEntityIds: [],
   sketchAutoHighlightIds: [],
+  sketchProblemConstraintIds: [],
   sketchMagnetEnabled: loadSketchMagnet(),
   sketchTool: 'select',
   showToast: (key, kind = 'info', params) => {
@@ -76,6 +82,7 @@ export const useUiStore = create<UiState>((set) => ({
       sketchConstraintId: null,
       sketchFrozenEntityIds: [],
       sketchAutoHighlightIds: [],
+      sketchProblemConstraintIds: [],
       sketchTool: 'select',
     }),
   setSketchSelection: (sketchSelectionIds) =>
@@ -83,6 +90,15 @@ export const useUiStore = create<UiState>((set) => ({
   selectSketchConstraint: (sketchConstraintId) =>
     set({ sketchConstraintId, sketchSelectionIds: [] }),
   setSketchFrozen: (sketchFrozenEntityIds) => set({ sketchFrozenEntityIds }),
+  setSketchProblems: (sketchProblemConstraintIds) =>
+    set((state) =>
+      state.sketchProblemConstraintIds.length === sketchProblemConstraintIds.length &&
+      state.sketchProblemConstraintIds.every(
+        (id, index) => id === sketchProblemConstraintIds[index],
+      )
+        ? state
+        : { sketchProblemConstraintIds },
+    ),
   setSketchAutoHighlight: (sketchAutoHighlightIds) =>
     set((state) =>
       state.sketchAutoHighlightIds.length === sketchAutoHighlightIds.length &&
@@ -105,6 +121,11 @@ export const useUiStore = create<UiState>((set) => ({
     } catch {
       // Ignore storage failures.
     }
-    set({ sectionEnabled });
+    set((state) => ({
+      sectionEnabled,
+      // Turning sections on shows the sketch plane by default.
+      sketchSectionEnabled: sectionEnabled ? true : state.sketchSectionEnabled,
+    }));
   },
+  setSketchSectionEnabled: (sketchSectionEnabled) => set({ sketchSectionEnabled }),
 }));

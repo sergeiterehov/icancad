@@ -1,6 +1,7 @@
-import type { SketchConstraint, SketchEntity, SketchFeature } from '@icancad/model';
-import type { Point2 } from '@icancad/sketch';
+import type { SketchConstraint, SketchEntity, SketchFeature, SketchMeasure } from '@icancad/model';
+import { tessellateEntity, type Point2 } from '@icancad/sketch';
 import { constraintEntityIds, refPoint } from './constraintModel';
+import { measureInfo } from './measure';
 
 export type NumericConstraintType =
   'distance' | 'horizontal-distance' | 'vertical-distance' | 'angle' | 'radius' | 'diameter';
@@ -123,6 +124,92 @@ function annotationOffset(constraint: SketchConstraint): { x: number; y: number 
     default:
       return { x: 0, y: -22 };
   }
+}
+
+export interface ReferenceAnnotation {
+  id: string;
+  text: string;
+  point: Point2;
+  offset: { x: number; y: number };
+  entityId: string;
+}
+
+const EQUIVALENT_CONSTRAINTS: Partial<Record<SketchMeasure, SketchConstraint['type']>> = {
+  length: 'distance',
+  radius: 'radius',
+  diameter: 'diameter',
+};
+
+function referenceAnchor(entity: SketchEntity, measure: SketchMeasure): Point2 | null {
+  switch (measure) {
+    case 'x':
+    case 'y':
+      return entity.type === 'point' ? [entity.x, entity.y] : null;
+    case 'length':
+      if (entity.type === 'line') return mid([entity.x1, entity.y1], [entity.x2, entity.y2]);
+      if (entity.type === 'bezier') {
+        const curve = tessellateEntity(entity, 32);
+        return curve[Math.floor(curve.length / 2)] ?? null;
+      }
+      return null;
+    case 'angle':
+      if (entity.type === 'line') return mid([entity.x1, entity.y1], [entity.x2, entity.y2]);
+      if (entity.type === 'arc') {
+        const angle = entity.startAngle + (entity.endAngle - entity.startAngle) / 2;
+        return [entity.cx + Math.cos(angle) * entity.r, entity.cy + Math.sin(angle) * entity.r];
+      }
+      return null;
+    case 'radius':
+    case 'diameter':
+      if (entity.type === 'circle') {
+        const angle = Math.PI / 4;
+        return [entity.cx + Math.cos(angle) * entity.r, entity.cy + Math.sin(angle) * entity.r];
+      }
+      if (entity.type === 'arc') {
+        const angle = entity.startAngle + (entity.endAngle - entity.startAngle) / 2;
+        return [entity.cx + Math.cos(angle) * entity.r, entity.cy + Math.sin(angle) * entity.r];
+      }
+      return null;
+    case 'rx':
+      return entity.type === 'ellipse' ? [entity.cx + entity.rx, entity.cy] : null;
+    case 'ry':
+      return entity.type === 'ellipse' ? [entity.cx, entity.cy + entity.ry] : null;
+  }
+}
+
+export function referenceAnnotations(
+  feature: SketchFeature,
+  locale: string,
+  unit: string,
+): ReferenceAnnotation[] {
+  const entities = new Map(feature.entities.map((entity) => [entity.id, entity]));
+  const annotations: ReferenceAnnotation[] = [];
+  for (const reference of feature.references ?? []) {
+    const entity = entities.get(reference.entityId);
+    if (!entity) continue;
+    const equivalent = EQUIVALENT_CONSTRAINTS[reference.measure];
+    if (
+      equivalent &&
+      feature.constraints.some(
+        (constraint) =>
+          constraint.type === equivalent &&
+          constraint.refs.some((ref) => ref.entityId === reference.entityId),
+      )
+    ) {
+      continue;
+    }
+    const info = measureInfo(entity, reference.measure, locale, unit);
+    const point = referenceAnchor(entity, reference.measure);
+    if (!info || !point) continue;
+    annotations.push({
+      id: reference.id,
+      text: info.text,
+      point,
+      offset: annotationOffset({ type: 'distance' } as SketchConstraint),
+      entityId: reference.entityId,
+    });
+  }
+  return annotations;
 }
 
 export function dimensionAnnotations(

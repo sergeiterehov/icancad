@@ -135,12 +135,20 @@ export type SketchPlaneRef =
   | { type: 'datum'; plane: 'XY' | 'XZ' | 'YZ'; offset: number }
   | { type: 'face'; bodyId: string; topoId: string; frame?: SketchFrame };
 
+export type SketchMeasure = 'length' | 'angle' | 'radius' | 'diameter' | 'x' | 'y' | 'rx' | 'ry';
+
+export interface SketchReference {
+  id: string;
+  entityId: string;
+  measure: SketchMeasure;
+}
+
 export interface SketchFeature extends FeatureBase {
   type: 'sketch';
-  visible: boolean;
   plane: SketchPlaneRef;
   entities: SketchEntity[];
   constraints: SketchConstraint[];
+  references: SketchReference[];
 }
 
 export interface ExtrudeFeature extends FeatureBase {
@@ -242,12 +250,17 @@ export type Feature =
   | BooleanFeature
   | TransformFeature;
 
-export interface BodyMeta {
+// An object is a ref produced by an operation; its properties live in
+// `Project.metadata` under the same id (ADR 0007).
+export interface BodyRef {
   id: string;
-  name: string;
-  color: string;
-  visible: boolean;
   createdBy: string;
+}
+
+export interface ObjectMetadata {
+  name?: string;
+  color?: string;
+  visible?: boolean;
 }
 
 export interface SectionPlane {
@@ -269,16 +282,16 @@ export interface CameraState {
 export interface ViewState {
   camera: CameraState | null;
   sectionPlanes: SectionPlane[];
-  hiddenBodyIds: string[];
 }
 
 export interface Project {
-  schemaVersion: 1;
+  schemaVersion: 2;
   id: string;
   name: string;
   units: 'mm';
   features: Feature[];
-  bodies: BodyMeta[];
+  bodies: BodyRef[];
+  metadata: Record<string, ObjectMetadata>;
   view: ViewState;
   historyEnd: string | null;
   createdAt: string;

@@ -1,12 +1,14 @@
 import type { SketchFeature } from '@icancad/model';
-import { Trash2 } from 'lucide-react';
+import { AlertTriangle, Trash2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { constraintEntityIds, constraintLabel, diagnoseSketch } from '../sketch/constraintModel';
 import { isNumericConstraint } from '../sketch/dimensions';
 import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
-import { formatNumber } from './format';
 import { IconButton, PanelSection } from './Controls';
+import { formatNumber } from './format';
+import { Tooltip } from './Tooltip';
 
 function constraintValue(constraint: SketchFeature['constraints'][number], locale: string): string {
   if (!isNumericConstraint(constraint)) return '';
@@ -30,18 +32,50 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
   const selectionKeys = useUiStore((state) => state.sketchSelectionIds);
   const selectedConstraintId = useUiStore((state) => state.sketchConstraintId);
   const selectConstraint = useUiStore((state) => state.selectSketchConstraint);
+  const problemIds = useUiStore((state) => state.sketchProblemConstraintIds);
+  const [onlyProblems, setOnlyProblems] = useState(false);
+
+  const problems = new Set(problemIds);
+  const hasProblems = feature.constraints.some((constraint) => problems.has(constraint.id));
+  const visibleConstraints = onlyProblems
+    ? feature.constraints.filter((constraint) => problems.has(constraint.id))
+    : feature.constraints;
+
+  useEffect(() => {
+    if (!hasProblems && onlyProblems) setOnlyProblems(false);
+  }, [hasProblems, onlyProblems]);
+
   const selectedEntityIds = new Set(
     selectionKeys.map((key) => key.split('#')[0]).filter((id): id is string => Boolean(id)),
   );
   const active = feature.constraints.find((constraint) => constraint.id === selectedConstraintId);
 
   return (
-    <PanelSection title={t('sketch.constraints')} count={feature.constraints.length}>
+    <PanelSection
+      title={t('sketch.constraints')}
+      count={feature.constraints.length}
+      action={
+        hasProblems ? (
+          <Tooltip content={t('constraint.problemsHint')}>
+            <button
+              type="button"
+              className="panel-warning"
+              aria-label={t('constraint.problemsHint')}
+              data-active={onlyProblems ? 'true' : undefined}
+              data-testid="constraint-problems"
+              onClick={() => setOnlyProblems((current) => !current)}
+            >
+              <AlertTriangle size={14} />
+            </button>
+          </Tooltip>
+        ) : undefined
+      }
+    >
       {feature.constraints.length === 0 ? (
         <p className="hint">{t('sketch.constraintsEmpty')}</p>
       ) : (
         <div className="constraint-list">
-          {feature.constraints.map((constraint) => {
+          {visibleConstraints.map((constraint) => {
             const entityIds = constraintEntityIds(constraint);
             const relatedByElement = [...selectedEntityIds].some((id) => entityIds.has(id));
             const dimmed =
@@ -53,6 +87,7 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
                 className="constraint-row"
                 data-active={active?.id === constraint.id ? 'true' : undefined}
                 data-dimmed={dimmed ? 'true' : undefined}
+                data-problem={problems.has(constraint.id) ? 'true' : undefined}
                 role="button"
                 tabIndex={0}
                 onClick={() =>

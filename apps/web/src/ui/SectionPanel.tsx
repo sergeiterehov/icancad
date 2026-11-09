@@ -1,4 +1,4 @@
-import { createId, type SectionPlane } from '@icancad/model';
+import { createId, type SectionPlane, type SketchFeature } from '@icancad/model';
 import { Eye, EyeOff, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -75,11 +75,20 @@ function NumericInput({
 
 export function SectionPanel() {
   const { t } = useTranslation();
-  const planes = useDocumentStore((state) => state.project.view.sectionPlanes);
+  const project = useDocumentStore((state) => state.project);
+  const planes = project.view.sectionPlanes;
   const setSectionPlanes = useDocumentStore((state) => state.setSectionPlanes);
   const enabled = useUiStore((state) => state.sectionEnabled);
+  const activeSketchId = useUiStore((state) => state.activeSketchId);
+  const sketchSectionEnabled = useUiStore((state) => state.sketchSectionEnabled);
+  const setSketchSectionEnabled = useUiStore((state) => state.setSketchSectionEnabled);
 
-  if (!enabled || planes.length === 0) return null;
+  const sketch = project.features.find(
+    (feature): feature is SketchFeature =>
+      feature.type === 'sketch' && feature.id === activeSketchId,
+  );
+
+  if (!enabled || (planes.length === 0 && !sketch)) return null;
 
   const update = (id: string, patch: Partial<SectionPlane>) => {
     setSectionPlanes(planes.map((plane) => (plane.id === id ? { ...plane, ...patch } : plane)));
@@ -103,7 +112,7 @@ export function SectionPanel() {
   return (
     <PanelSection
       title={t('section.title')}
-      count={planes.length}
+      count={planes.length + (sketch ? 1 : 0)}
       action={
         <IconButton label={t('section.add')} onClick={addPlane}>
           <Plus size={14} />
@@ -111,6 +120,18 @@ export function SectionPanel() {
       }
     >
       <div className="section-planes">
+        {sketch && (
+          <div className="section-plane sketch-plane">
+            <IconButton
+              label={sketchSectionEnabled ? t('section.hide') : t('section.show')}
+              active={sketchSectionEnabled}
+              onClick={() => setSketchSectionEnabled(!sketchSectionEnabled)}
+            >
+              {sketchSectionEnabled ? <Eye size={14} /> : <EyeOff size={14} />}
+            </IconButton>
+            <span className="section-plane-name">{t('section.sketchPlane')}</span>
+          </div>
+        )}
         {planes.map((plane) => (
           <div key={plane.id} className="section-plane">
             <IconButton

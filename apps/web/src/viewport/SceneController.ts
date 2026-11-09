@@ -13,6 +13,7 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { SketchSnap } from '../sketch/snap';
+import { CAMERA_FOV_DEGREES, easeInOut, fitDistance, shortestAngle } from './cameraFit';
 import type { SceneSketch, SketchPick, ViewName, ViewportCamera } from './handle';
 
 const HATCH_SPACING_PX = 6;
@@ -34,10 +35,36 @@ interface BodyEntry {
   meshRef: TessellationResult;
 }
 
-const FOV_DEGREES = 35;
+const FOV_DEGREES = CAMERA_FOV_DEGREES;
+const CAMERA_TRANSITION_MS = 500;
+
+interface CameraPose {
+  target: THREE.Vector3;
+  distance: number;
+  azimuth: number;
+  polar: number;
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+// Mirrors the basis three.js derives in `lookAt` for our orbit camera.
+function cameraBasis(
+  azimuth: number,
+  polar: number,
+): { right: THREE.Vector3; up: THREE.Vector3 } {
+  const offset = new THREE.Vector3(
+    Math.sin(polar) * Math.cos(azimuth),
+    Math.sin(polar) * Math.sin(azimuth),
+    Math.cos(polar),
+  );
+  const upHint = Math.abs(Math.cos(polar)) > 0.999
+    ? new THREE.Vector3(0, 1, 0)
+    : new THREE.Vector3(0, 0, 1);
+  const right = new THREE.Vector3().crossVectors(upHint, offset).normalize();
+  const up = new THREE.Vector3().crossVectors(offset, right).normalize();
+  return { right, up };
 }
 
 function createCircleTexture(): THREE.CanvasTexture {
@@ -110,7 +137,8 @@ export class SceneController {
     preview: SketchEntity | null;
     draftPoints: Point2[];
     highlight: boolean;
-  } = { preview: null, draftPoints: [], highlight: false };
+    marker: Point2 | null;
+  } = { preview: null, draftPoints: [], highlight: false, marker: null };
 
   private animationFrame = 0;
   private needsRender = true;
@@ -131,13 +159,20 @@ export class SceneController {
   private pointerDown: { x: number; y: number } | null = null;
   private pointerMoved = false;
   private readonly raycaster = new THREE.Raycaster();
+  private transition: {
+    from: CameraPose;
+    to: CameraPose;
+    azimuthDelta: number;
+    startedAt: number;
+    duration: number;
+  } | null = null;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
     private readonly container: HTMLElement,
     private readonly onPick?: (bodyId: string | null, additive: boolean) => void,
     private readonly onBodyContextMenu?: (bodyId: string | null, x: number, y: number) => void,
-    private readonly onCameraChange?: (azimuth: number, polar: number) => void,
+    private readonly onCameraChange?: (azimuth: number, polar: number, distance: number) => void,
   ) {
     this.renderer = new THREE.WebGLRenderer({
       canvas,
@@ -253,52 +288,60 @@ export class SceneController {
     }
 
     if (!hasGeometry) {
-      this.target.set(0, 0, 0);
-      this.distance = 200;
-      this.updateCamera();
+      this.transitionTo({
+        target: new THREE.Vector3(0, 0, 0),
+        distance: 200,
+        azimuth: this.azimuth,
+        polar: this.polar,
+      });
       return;
     }
 
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const radius = Math.max(0.001, size.length() / 2);
-    this.target.copy(center);
-    this.distance = (radius * 1.35) / Math.tan((FOV_DEGREES * Math.PI) / 180 / 2);
-    this.updateCamera();
+    this.transitionTo({
+      target: center,
+      distance: (radius * 1.35) / Math.tan((FOV_DEGREES * Math.PI) / 180 / 2),
+      azimuth: this.azimuth,
+      polar: this.polar,
+    });
   }
 
   setView(name: ViewName): void {
+    let azimuth = this.azimuth;
+    let polar = this.polar;
     switch (name) {
       case 'front':
-        this.azimuth = -Math.PI / 2;
-        this.polar = Math.PI / 2;
+        azimuth = -Math.PI / 2;
+        polar = Math.PI / 2;
         break;
       case 'back':
-        this.azimuth = Math.PI / 2;
-        this.polar = Math.PI / 2;
+        azimuth = Math.PI / 2;
+        polar = Math.PI / 2;
         break;
       case 'right':
-        this.azimuth = 0;
-        this.polar = Math.PI / 2;
+        azimuth = 0;
+        polar = Math.PI / 2;
         break;
       case 'left':
-        this.azimuth = Math.PI;
-        this.polar = Math.PI / 2;
+        azimuth = Math.PI;
+        polar = Math.PI / 2;
         break;
       case 'top':
-        this.azimuth = -Math.PI / 2;
-        this.polar = 0.001;
+        azimuth = -Math.PI / 2;
+        polar = 0.001;
         break;
       case 'bottom':
-        this.azimuth = -Math.PI / 2;
-        this.polar = Math.PI - 0.001;
+        azimuth = -Math.PI / 2;
+        polar = Math.PI - 0.001;
         break;
       case 'iso':
-        this.azimuth = -Math.PI / 4;
-        this.polar = Math.PI / 3;
+        azimuth = -Math.PI / 4;
+        polar = Math.PI / 3;
         break;
     }
-    this.updateCamera();
+    this.transitionTo({ target: this.target.clone(), distance: this.distance, azimuth, polar });
   }
 
   getOrientation(): { azimuth: number; polar: number } {
@@ -306,12 +349,14 @@ export class SceneController {
   }
 
   setOrientation(azimuth: number, polar: number): void {
+    this.transition = null;
     this.azimuth = azimuth;
     this.polar = clamp(polar, 0.001, Math.PI - 0.001);
     this.updateCamera();
   }
 
   orbitBy(deltaX: number, deltaY: number): void {
+    this.transition = null;
     this.azimuth -= deltaX * 0.008;
     this.polar = clamp(this.polar - deltaY * 0.008, 0.001, Math.PI - 0.001);
     this.updateCamera();
@@ -329,7 +374,12 @@ export class SceneController {
     this.invalidate();
   }
 
-  snapSketch(clientX: number, clientY: number, tolerancePx = 10): SketchSnap | null {
+  snapSketch(
+    clientX: number,
+    clientY: number,
+    tolerancePx = 10,
+    entities?: readonly SketchEntity[],
+  ): SketchSnap | null {
     const active = this.sketchEntries.find((entry) => entry.active);
     if (!active) return null;
     const rect = this.canvas.getBoundingClientRect();
@@ -346,12 +396,15 @@ export class SceneController {
     const point = worldToSketchPoint(active.frame, [world.x, world.y, world.z]);
     const unitsPerPixel = (this.camera.top - this.camera.bottom) / Math.max(1, this.height);
     const limit = unitsPerPixel * tolerancePx;
-    const sketch = this.sketchData.find((candidate) => candidate.id === active.id);
+    const sketchEntities =
+      entities ?? this.sketchData.find((candidate) => candidate.id === active.id)?.entities ?? [];
 
     let pointSnap: SketchSnap['pointSnap'] = null;
     let bestPoint = limit;
-    for (const entity of sketch?.entities ?? []) {
+    for (const entity of sketchEntities) {
       this.sketchControlPoints(entity).forEach((candidate, index) => {
+        // The circle rim handle is derived from center and radius, so it is not
+        // a solver primitive that a coincidence can reference.
         if (entity.type === 'circle' && index === 1) return;
         const candidateDistance = Math.hypot(point[0] - candidate[0], point[1] - candidate[1]);
         if (candidateDistance <= bestPoint) {
@@ -360,11 +413,28 @@ export class SceneController {
         }
       });
     }
-    if (pointSnap) return { point, pointSnap, curveSnap: null };
+    if (pointSnap) {
+      return { point, pointSnap, curveSnap: null, midpointSnap: null };
+    }
+
+    let midpointSnap: SketchSnap['midpointSnap'] = null;
+    let bestMidpoint = limit;
+    for (const entity of sketchEntities) {
+      if (entity.type !== 'line') continue;
+      const midpoint: Point2 = [(entity.x1 + entity.x2) / 2, (entity.y1 + entity.y2) / 2];
+      const candidateDistance = Math.hypot(point[0] - midpoint[0], point[1] - midpoint[1]);
+      if (candidateDistance <= bestMidpoint) {
+        bestMidpoint = candidateDistance;
+        midpointSnap = { entityId: entity.id, point: midpoint };
+      }
+    }
+    if (midpointSnap) {
+      return { point, pointSnap: null, curveSnap: null, midpointSnap };
+    }
 
     let curveSnap: SketchSnap['curveSnap'] = null;
     let bestCurve = limit;
-    for (const entity of sketch?.entities ?? []) {
+    for (const entity of sketchEntities) {
       if (
         entity.type !== 'line' &&
         entity.type !== 'circle' &&
@@ -379,7 +449,7 @@ export class SceneController {
         curveSnap = { entityId: entity.id, type: entity.type, point: closest.point };
       }
     }
-    return { point, pointSnap: null, curveSnap };
+    return { point, pointSnap: null, curveSnap, midpointSnap: null };
   }
 
   private closestPointOnEntity(
@@ -443,6 +513,7 @@ export class SceneController {
   setSketches(sketches: SceneSketch[]): void {
     this.sketchData = sketches;
     this.disposeSketchEntries();
+    const editingSketch = sketches.some((sketch) => sketch.active);
     for (const sketch of sketches) {
       const group = new THREE.Group();
       group.renderOrder = 18;
@@ -478,6 +549,7 @@ export class SceneController {
           frozen.has(entity.id),
           highlighted.has(entity.id),
           highlightedPoints.get(entity.id) ?? new Set<number>(),
+          editingSketch && !sketch.active,
         );
       }
       this.scene.add(group);
@@ -493,8 +565,13 @@ export class SceneController {
     this.invalidate();
   }
 
-  setSketchOverlay(preview: SketchEntity | null, draftPoints: Point2[], highlight = false): void {
-    this.sketchOverlayState = { preview, draftPoints, highlight };
+  setSketchOverlay(
+    preview: SketchEntity | null,
+    draftPoints: Point2[],
+    highlight = false,
+    marker: Point2 | null = null,
+  ): void {
+    this.sketchOverlayState = { preview, draftPoints, highlight, marker };
     this.rebuildSketchOverlay();
     this.invalidate();
   }
@@ -509,30 +586,114 @@ export class SceneController {
   }
 
   setCameraState(state: ViewportCamera): void {
-    this.target.set(...state.target);
-    this.distance = state.distance;
-    this.azimuth = state.azimuth;
-    this.polar = state.polar;
-    this.updateCamera();
+    this.transitionTo({
+      target: new THREE.Vector3(...state.target),
+      distance: state.distance,
+      azimuth: state.azimuth,
+      polar: state.polar,
+    });
   }
 
-  alignSketch(frame: SketchFrame): void {
-    this.target.set(...frame.origin);
+  alignSketch(frame: SketchFrame, entities: readonly SketchEntity[] = []): void {
     const [nx, ny, nz] = frame.normal;
+    let azimuth: number;
+    let polar: number;
     if (Math.abs(nz) >= Math.abs(nx) && Math.abs(nz) >= Math.abs(ny)) {
-      this.azimuth = -Math.PI / 2;
-      this.polar = 0.001;
+      azimuth = -Math.PI / 2;
+      polar = 0.001;
     } else if (Math.abs(ny) >= Math.abs(nx)) {
-      this.azimuth = -Math.PI / 2;
-      this.polar = Math.PI / 2;
+      azimuth = -Math.PI / 2;
+      polar = Math.PI / 2;
     } else {
-      this.azimuth = 0;
-      this.polar = Math.PI / 2;
+      azimuth = 0;
+      polar = Math.PI / 2;
     }
+    this.transitionTo(this.sketchPose(frame, entities, azimuth, polar));
+  }
+
+  // Frames the sketch content with a fixed margin on both sides of the viewport.
+  private sketchPose(
+    frame: SketchFrame,
+    entities: readonly SketchEntity[],
+    azimuth: number,
+    polar: number,
+  ): CameraPose {
+    const origin = new THREE.Vector3(...frame.origin);
+    const pose: CameraPose = { target: origin, distance: this.distance, azimuth, polar };
+    const { right, up } = cameraBasis(azimuth, polar);
+
+    let minU = Infinity;
+    let maxU = -Infinity;
+    let minV = Infinity;
+    let maxV = -Infinity;
+    const offset = new THREE.Vector3();
+    for (const entity of entities) {
+      for (const point of tessellateEntity(entity)) {
+        const world = sketchPointToWorld(frame, point);
+        offset.set(world[0], world[1], world[2]).sub(origin);
+        const u = offset.dot(right);
+        const v = offset.dot(up);
+        minU = Math.min(minU, u);
+        maxU = Math.max(maxU, u);
+        minV = Math.min(minV, v);
+        maxV = Math.max(maxV, v);
+      }
+    }
+    // An empty sketch keeps the current zoom and only centres on its plane.
+    if (!Number.isFinite(minU)) return pose;
+
+    return {
+      target: origin
+        .clone()
+        .addScaledVector(right, (minU + maxU) / 2)
+        .addScaledVector(up, (minV + maxV) / 2),
+      distance: fitDistance(maxU - minU, maxV - minV, this.width, this.height),
+      azimuth,
+      polar,
+    };
+  }
+
+  private transitionTo(pose: CameraPose): void {
+    const from: CameraPose = {
+      target: this.target.clone(),
+      distance: this.distance,
+      azimuth: this.azimuth,
+      polar: this.polar,
+    };
+    this.transition = {
+      from,
+      to: pose,
+      azimuthDelta: shortestAngle(from.azimuth, pose.azimuth),
+      startedAt: performance.now(),
+      duration: CAMERA_TRANSITION_MS,
+    };
+    this.invalidate();
+  }
+
+  private stepTransition(now: number): void {
+    const transition = this.transition;
+    if (!transition) return;
+    const progress = clamp((now - transition.startedAt) / transition.duration, 0, 1);
+    const eased = easeInOut(progress);
+    const { from, to } = transition;
+    this.target.lerpVectors(from.target, to.target, eased);
+    // Zoom interpolates geometrically so the perceived speed stays even.
+    this.distance =
+      from.distance > 0 && to.distance > 0
+        ? from.distance * (to.distance / from.distance) ** eased
+        : from.distance + (to.distance - from.distance) * eased;
+    this.azimuth = from.azimuth + transition.azimuthDelta * eased;
+    this.polar = from.polar + (to.polar - from.polar) * eased;
+    if (progress >= 1) this.transition = null;
     this.updateCamera();
   }
 
-  pickSketch(clientX: number, clientY: number): SketchPick | null {
+
+  pickSketch(
+    clientX: number,
+    clientY: number,
+    entities?: readonly SketchEntity[],
+  ): SketchPick | null {
     const active = this.sketchEntries.find((entry) => entry.active);
     if (!active) return null;
     const rect = this.canvas.getBoundingClientRect();
@@ -548,10 +709,11 @@ export class SceneController {
     if (!this.raycaster.ray.intersectPlane(plane, world)) return null;
     const point = worldToSketchPoint(active.frame, [world.x, world.y, world.z]);
     const unitsPerPixel = (this.camera.top - this.camera.bottom) / Math.max(1, this.height);
-    const sketch = this.sketchData.find((candidate) => candidate.id === active.id);
+    const sketchEntities =
+      entities ?? this.sketchData.find((candidate) => candidate.id === active.id)?.entities ?? [];
     let entityId: string | null = null;
     let best = Number.POSITIVE_INFINITY;
-    for (const entity of sketch?.entities ?? []) {
+    for (const entity of sketchEntities) {
       let distance = Number.POSITIVE_INFINITY;
       if (entity.type === 'point') {
         distance = Math.hypot(point[0] - entity.x, point[1] - entity.y);
@@ -579,7 +741,7 @@ export class SceneController {
     let pointEntityId: string | null = null;
     let pointIndex: number | null = null;
     let bestPoint = unitsPerPixel * 4;
-    for (const entity of sketch?.entities ?? []) {
+    for (const entity of sketchEntities) {
       this.sketchControlPoints(entity).forEach((candidate, index) => {
         const distance = Math.hypot(point[0] - candidate[0], point[1] - candidate[1]);
         if (distance <= bestPoint) {
@@ -670,6 +832,7 @@ export class SceneController {
     frozen: boolean,
     highlighted: boolean,
     highlightedPoints: ReadonlySet<number>,
+    background: boolean,
   ): void {
     const color = selected
       ? this.sketchSelectedColor()
@@ -680,7 +843,9 @@ export class SceneController {
           : entity.construction
             ? this.sketchConstructionColor()
             : this.sketchColor();
-    const width = selected ? 3 : highlighted ? 3 : 2;
+    // Sketches that are not being edited are drawn thinner so they cannot be
+    // mistaken for the sketch in progress.
+    const width = selected ? 3 : highlighted ? 3 : background ? 1 : 2;
     if (entity.type !== 'point') {
       const line = this.createSketchLine(
         entity,
@@ -782,7 +947,7 @@ export class SceneController {
     const active = this.sketchEntries.find((entry) => entry.active);
     if (!active) return;
     const group = new THREE.Group();
-    const { preview, draftPoints, highlight } = this.sketchOverlayState;
+    const { preview, draftPoints, highlight, marker } = this.sketchOverlayState;
     const previewColor = highlight ? this.sketchHighlightColor() : this.sketchColor();
     if (preview) {
       const line = this.createSketchLine(preview, active.frame, previewColor, 2, 0.75);
@@ -807,6 +972,27 @@ export class SceneController {
       );
       draft.renderOrder = 23;
       group.add(draft);
+    }
+    if (marker) {
+      const geometry = new THREE.BufferGeometry().setFromPoints([
+        this.sketchWorld(active.frame, marker),
+      ]);
+      const phantom = new THREE.Points(
+        geometry,
+        new THREE.PointsMaterial({
+          color: this.sketchHighlightColor(),
+          map: this.pointTexture,
+          alphaTest: 0.5,
+          transparent: true,
+          opacity: 0.9,
+          size: 7,
+          sizeAttenuation: false,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      );
+      phantom.renderOrder = 32;
+      group.add(phantom);
     }
     if (group.children.length === 0) return;
     this.scene.add(group);
@@ -1074,7 +1260,7 @@ export class SceneController {
     this.camera.lookAt(this.target);
     this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld();
-    this.onCameraChange?.(this.azimuth, this.polar);
+    this.onCameraChange?.(this.azimuth, this.polar, this.distance);
     this.invalidate();
   }
 
@@ -1097,6 +1283,7 @@ export class SceneController {
   }
 
   private onPointerDown = (event: PointerEvent): void => {
+    this.transition = null;
     if (event.button === 0) {
       this.pointerDown = { x: event.clientX, y: event.clientY };
       this.pointerMoved = false;
@@ -1177,6 +1364,7 @@ export class SceneController {
 
   private onWheel = (event: WheelEvent): void => {
     event.preventDefault();
+    this.transition = null;
     const factor = Math.exp(event.deltaY * 0.0012);
     this.distance = clamp(this.distance * factor, 0.05, 10_000_000);
     this.updateCamera();
@@ -1195,6 +1383,7 @@ export class SceneController {
   private animate = (): void => {
     if (this.disposed) return;
     this.animationFrame = requestAnimationFrame(this.animate);
+    if (this.transition) this.stepTransition(performance.now());
     if (!this.needsRender) return;
     this.needsRender = false;
     this.renderer.render(this.scene, this.camera);

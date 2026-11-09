@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { Project } from './types';
 
-export const PROJECT_SCHEMA_VERSION = 1;
+export const PROJECT_SCHEMA_VERSION = 2;
 
 const vec3 = z.tuple([z.number(), z.number(), z.number()]);
 
@@ -174,13 +174,19 @@ const sketchPlaneRef = z.union([
   }),
 ]);
 
+const sketchReference = z.object({
+  id: z.string().min(1),
+  entityId: z.string().min(1),
+  measure: z.enum(['length', 'angle', 'radius', 'diameter', 'x', 'y', 'rx', 'ry']),
+});
+
 const sketchFeature = z.object({
   ...featureBase,
   type: z.literal('sketch'),
-  visible: z.boolean().default(true),
   plane: sketchPlaneRef,
   entities: z.array(sketchEntity),
   constraints: z.array(sketchConstraint),
+  references: z.array(sketchReference).default([]),
 });
 
 const extrudeFeature = z.object({
@@ -280,12 +286,15 @@ export const featureSchema = z.discriminatedUnion('type', [
   transformFeature,
 ]);
 
-const bodyMeta = z.object({
+const bodyRef = z.object({
   id: z.string().min(1),
-  name: z.string().min(1),
-  color: z.string().min(1),
-  visible: z.boolean(),
   createdBy: z.string().min(1),
+});
+
+const objectMetadata = z.object({
+  name: z.string().min(1).optional(),
+  color: z.string().min(1).optional(),
+  visible: z.boolean().optional(),
 });
 
 const sectionPlane = z.object({
@@ -307,7 +316,6 @@ const viewState = z.object({
     })
     .nullable(),
   sectionPlanes: z.array(sectionPlane),
-  hiddenBodyIds: z.array(z.string()),
 });
 
 export const projectSchema = z.object({
@@ -316,7 +324,8 @@ export const projectSchema = z.object({
   name: z.string().min(1),
   units: z.literal('mm'),
   features: z.array(featureSchema),
-  bodies: z.array(bodyMeta),
+  bodies: z.array(bodyRef),
+  metadata: z.record(z.string(), objectMetadata),
   view: viewState,
   historyEnd: z.string().nullable(),
   createdAt: z.string(),

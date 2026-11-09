@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useDocumentStore } from '../stores/documentStore';
+import { useUiStore } from '../stores/uiStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { isDirectlySelected, selectedFeatureIds } from '../stores/selection';
 import { showContextMenu } from './ContextMenu';
@@ -37,21 +38,24 @@ function FeatureIcon({ type }: { type: Feature['type'] }) {
 function RollbackCaret({
   index,
   active,
+  disabled,
   onSelect,
 }: {
   index: number;
   active: boolean;
+  disabled?: boolean;
   onSelect: () => void;
 }) {
   const { t } = useTranslation();
   const label = t('timeline.goTo', { index });
   return (
-    <Tooltip content={label}>
+    <Tooltip content={disabled ? t('timeline.locked') : label}>
       <button
         type="button"
         className={clsx('timeline-caret', active && 'active')}
         aria-label={label}
         aria-pressed={active}
+        disabled={disabled}
         onClick={onSelect}
       />
     </Tooltip>
@@ -66,6 +70,9 @@ export function Timeline() {
   const setHistoryEnd = useDocumentStore((state) => state.setHistoryEnd);
   const removeFeature = useDocumentStore((state) => state.removeFeature);
   const featureErrors = useKernelStore((state) => state.featureErrors);
+  const activeSketchId = useUiStore((state) => state.activeSketchId);
+  const setActiveSketch = useUiStore((state) => state.setActiveSketch);
+  const locked = activeSketchId !== null;
 
   const position =
     project.historyEnd === null
@@ -74,7 +81,7 @@ export function Timeline() {
         ? 0
         : project.features.findIndex((feature) => feature.id === project.historyEnd) + 1;
 
-  const hasObjectSelection = selection.some((item) => item.kind === 'body');
+  const hasObjectSelection = selection.some((item) => item.kind !== 'feature');
   const hasFeatureSelection = selection.some((item) => item.kind === 'feature');
   const dimmingEnabled = hasObjectSelection && !hasFeatureSelection;
   const highlightedFeatureIds = selectedFeatureIds(selection, project);
@@ -86,7 +93,7 @@ export function Timeline() {
   };
 
   return (
-    <div className="panel timeline-panel">
+    <div className="panel timeline-panel" data-locked={locked ? 'true' : undefined}>
       <div className="timeline-body">
         {project.features.length === 0 ? (
           <p className="empty-row">{t('timeline.empty')}</p>
@@ -102,6 +109,7 @@ export function Timeline() {
                   <RollbackCaret
                     index={index}
                     active={position === index}
+                    disabled={locked}
                     onSelect={() => goTo(index)}
                   />
                   <Tooltip content={feature.name}>
@@ -120,7 +128,7 @@ export function Timeline() {
                             id: 'rollback',
                             label: t('timeline.rollback'),
                             icon: <CornerUpLeft size={14} />,
-                            disabled: position === index + 1,
+                            disabled: locked || position === index + 1,
                             onSelect: () => goTo(index + 1),
                           },
                           {
@@ -138,6 +146,9 @@ export function Timeline() {
                           { additive: event.metaKey || event.ctrlKey || event.shiftKey },
                         )
                       }
+                      onDoubleClick={() => {
+                        if (feature.type === 'sketch') setActiveSketch(feature.id);
+                      }}
                     >
                       <FeatureIcon type={feature.type} />
                       {featureErrors[feature.id] && <span className="tree-badge error">!</span>}
@@ -149,6 +160,7 @@ export function Timeline() {
             <RollbackCaret
               index={project.features.length}
               active={position === project.features.length}
+              disabled={locked}
               onSelect={() => goTo(project.features.length)}
             />
           </div>

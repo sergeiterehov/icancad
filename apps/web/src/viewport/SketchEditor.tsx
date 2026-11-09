@@ -1,7 +1,14 @@
-import { createId, type Project, type SketchEntity, type SketchFeature } from '@icancad/model';
+import {
+  createId,
+  type Project,
+  type SketchConstraintRef,
+  type SketchEntity,
+  type SketchFeature,
+} from '@icancad/model';
 import {
   datumFrame,
   entityControlPointRefs,
+  entityControlPoints,
   moveEntityControlPoint,
   translateEntity,
   type Point2,
@@ -10,11 +17,15 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { solveSketch } from '../sketch/client';
 import { autoConstraintsForEntity, isNearAxis, snapHighlightIds } from '../sketch/autoConstraints';
-import { diagnoseSketch } from '../sketch/constraintModel';
-import type { SketchSnap } from '../sketch/snap';
+import { diagnoseSketch, removeSketchEntities } from '../sketch/constraintModel';
+import { solveDrag } from '../sketch/dragSolve';
+import { liveMeasures, measureInfo } from '../sketch/measure';
+import { referenceMenuItems } from '../sketch/referenceMenu';
+import type { SketchSnap, SketchSnapInput, SketchSnapMode } from '../sketch/snap';
 import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
-import { getViewport } from './handle';
+import { useContextMenuStore } from '../ui/ContextMenu';
+import { getViewport, type ViewportCamera } from './handle';
 
 function distance(a: Point2, b: Point2): number {
   return Math.hypot(b[0] - a[0], b[1] - a[1]);
@@ -26,7 +37,31 @@ function gridPoint(point: Point2): Point2 {
 
 interface DraftPoint {
   point: Point2;
-  snap: SketchSnap | null;
+  input: SketchSnapInput;
+}
+
+function snapModeFor(tool: string, draftLength: number): SketchSnapMode {
+  if (tool === 'circle') return draftLength === 0 ? 'free' : 'curve-only';
+  if (tool === 'arc') return draftLength === 0 ? 'free' : draftLength === 1 ? 'curve-only' : 'free';
+  if (tool === 'ellipse') return draftLength === 0 ? 'free' : 'none';
+  return 'free';
+}
+
+function snapTargetPoint(snap: SketchSnap | null, mode: SketchSnapMode): Point2 | null {
+  if (!snap || mode === 'none') return null;
+  if (mode === 'curve-only') return snap.curveSnap?.point ?? null;
+  return snap.pointSnap?.point ?? snap.midpointSnap?.point ?? snap.curveSnap?.point ?? null;
+}
+
+function currentSketchEntities(sketchId: string | null): readonly SketchEntity[] {
+  if (!sketchId) return [];
+  const feature = useDocumentStore
+    .getState()
+    .project.features.find(
+      (candidate): candidate is SketchFeature =>
+        candidate.id === sketchId && candidate.type === 'sketch',
+    );
+  return feature?.entities ?? [];
 }
 
 interface DragState {
@@ -43,8 +78,34 @@ interface DragState {
   version: number;
 }
 
+function dragPinSets(drag: DragState): SketchConstraintRef[][] {
+  if (drag.mode === 'point') {
+    return [[{ entityId: drag.entityId, pointIndex: drag.pointIndex ?? 0 }]];
+  }
+  const refs = entityControlPointRefs(drag.originalEntity);
+  if (refs.length <= 1) return [refs];
+  let nearest = refs[0]!;
+  let best = Number.POSITIVE_INFINITY;
+  for (const ref of refs) {
+    const point = refPointOnEntity(drag.originalEntity, ref.pointIndex ?? 0);
+    if (!point) continue;
+    const distanceToGrab = Math.hypot(point[0] - drag.startPoint[0], point[1] - drag.startPoint[1]);
+    if (distanceToGrab < best) {
+      best = distanceToGrab;
+      nearest = ref;
+    }
+  }
+  return [refs, [nearest], []];
+}
+
+function refPointOnEntity(entity: SketchEntity, index: number): Point2 | null {
+  return entityControlPoints(entity)[index] ?? null;
+}
+
 export function SketchEditor() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage ?? 'en';
+  const openContextMenu = useContextMenuStore((state) => state.open);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
   const setActiveSketch = useUiStore((state) => state.setActiveSketch);
   const selectionIds = useUiStore((state) => state.sketchSelectionIds);
@@ -53,6 +114,7 @@ export function SketchEditor() {
   const selectSketchConstraint = useUiStore((state) => state.selectSketchConstraint);
   const setSketchFrozen = useUiStore((state) => state.setSketchFrozen);
   const setSketchAutoHighlight = useUiStore((state) => state.setSketchAutoHighlight);
+  const setSketchProblems = useUiStore((state) => state.setSketchProblems);
   const magnetEnabled = useUiStore((state) => state.sketchMagnetEnabled);
   const tool = useUiStore((state) => state.sketchTool);
   const project = useDocumentStore((state) => state.project);
@@ -95,6 +157,43 @@ export function SketchEditor() {
     if (activeSketchId && !sketch) setActiveSketch(null);
   }, [activeSketchId, sketch, setActiveSketch]);
 
+  // Editing a sketch happens at its own place in the timeline: the cursor moves
+  // to the sketch so only geometry that existed then is visible.
+  const historyEndBeforeSketch = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (!activeSketchId) return;
+    const store = useDocumentStore.getState();
+    historyEndBeforeSketch.current = store.project.historyEnd;
+    store.rollHistoryTo(activeSketchId);
+    return () => {
+      const previous = historyEndBeforeSketch.current;
+      historyEndBeforeSketch.current = undefined;
+      if (previous === undefined) return;
+      useDocumentStore.getState().rollHistoryTo(previous);
+    };
+  }, [activeSketchId]);
+
+  // Re-solve once on entry so sketches saved with a violated constraint get
+  // repaired before the user starts dragging.
+  useEffect(() => {
+    if (!activeSketchId) return;
+    const feature = currentSketch();
+    if (!feature || feature.constraints.length === 0) return;
+    void solveSketch(feature.entities, feature.constraints, [])
+      .then((result) => {
+        if (result.conflicting.length > 0) return;
+        const current = currentSketch();
+        if (!current) return;
+        const solvedById = new Map(result.entities.map((candidate) => [candidate.id, candidate]));
+        const entities = current.entities.map(
+          (candidate) => solvedById.get(candidate.id) ?? candidate,
+        );
+        if (JSON.stringify(entities) === JSON.stringify(current.entities)) return;
+        preview({ type: 'feature/replace', feature: { ...current, entities } });
+      })
+      .catch(() => undefined);
+  }, [activeSketchId]);
+
   useEffect(() => {
     if (!sketch) {
       setSketchFrozen([]);
@@ -106,14 +205,41 @@ export function SketchEditor() {
     return () => clearTimeout(timer);
   }, [activeSketchId, sketch?.constraints, sketch?.entities]);
 
+  // The view before the first sketch is remembered across sketch switches and
+  // restored once editing finishes.
+  const cameraBeforeSketch = useRef<ViewportCamera | null>(null);
+  const editedSketch = useRef<string | null>(null);
   useEffect(() => {
     if (!activeSketchId || !frame) return;
+    const feature = useDocumentStore
+      .getState()
+      .project.features.find(
+        (candidate): candidate is SketchFeature =>
+          candidate.id === activeSketchId && candidate.type === 'sketch',
+      );
     const viewport = getViewport();
-    const camera = viewport?.getCameraState() ?? null;
-    viewport?.alignSketch(frame);
-    return () => {
-      if (camera) viewport?.setCameraState(camera);
-    };
+    cameraBeforeSketch.current ??= viewport?.getCameraState() ?? null;
+    viewport?.alignSketch(frame, feature?.entities ?? []);
+    // While the sketch is open the inspector shows the operation being edited:
+    // its placement, composition and constraints.
+    editedSketch.current = activeSketchId;
+    useDocumentStore.getState().select({ kind: 'feature', id: activeSketchId });
+  }, [activeSketchId]);
+
+  useEffect(() => {
+    if (activeSketchId) return;
+    const saved = cameraBeforeSketch.current;
+    cameraBeforeSketch.current = null;
+    if (saved) getViewport()?.setCameraState(saved);
+    // Finishing hands the inspector back to the finished sketch object.
+    const finished = editedSketch.current;
+    editedSketch.current = null;
+    if (
+      finished &&
+      useDocumentStore.getState().project.features.some((item) => item.id === finished)
+    ) {
+      useDocumentStore.getState().select({ kind: 'sketch', id: finished });
+    }
   }, [activeSketchId]);
 
   useEffect(() => {
@@ -121,6 +247,8 @@ export function SketchEditor() {
     return () => getViewport()?.setSketchOverlay(null, []);
   }, [activeSketchId]);
 
+  // Geometry is inserted without a history entry, so the entity and its
+  // automatic constraints end up as a single undoable operation.
   const mergeEntity = (entity: SketchEntity) => {
     const latest = useDocumentStore
       .getState()
@@ -132,24 +260,24 @@ export function SketchEditor() {
     const entities = latest.entities.some((candidate) => candidate.id === entity.id)
       ? latest.entities.map((candidate) => (candidate.id === entity.id ? entity : candidate))
       : [...latest.entities, entity];
-    apply({ type: 'feature/replace', feature: { ...latest, entities } });
+    preview({ type: 'feature/replace', feature: { ...latest, entities } });
   };
 
-  const commitNewEntityNow = async (entity: SketchEntity, snaps: (SketchSnap | null)[]) => {
-    if (!sketch) return;
-    const latest = useDocumentStore
+  const currentSketch = (): SketchFeature | undefined =>
+    useDocumentStore
       .getState()
       .project.features.find(
         (feature): feature is SketchFeature =>
-          feature.id === sketch.id && feature.type === 'sketch',
+          feature.id === sketch?.id && feature.type === 'sketch',
       );
-    if (!latest) return;
-    const entities = [...latest.entities, entity];
-    const auto = magnetEnabled
-      ? autoConstraintsForEntity(entity, snaps)
-      : { constraints: [], snapConstraints: [], highlightIds: [] };
+
+  const applyAutoConstraintsNow = async (entity: SketchEntity, inputs: SketchSnapInput[]) => {
+    if (!sketch || !magnetEnabled) {
+      applyAutoHighlight([]);
+      return;
+    }
+    const auto = autoConstraintsForEntity(entity, inputs);
     if (auto.constraints.length === 0) {
-      mergeEntity(entity);
       applyAutoHighlight([]);
       return;
     }
@@ -160,27 +288,34 @@ export function SketchEditor() {
         : [auto.constraints, auto.snapConstraints];
     for (const constraints of attempts) {
       if (constraints.length === 0) continue;
+      const latest = currentSketch();
+      if (!latest) return;
       try {
-        const result = await solveSketch(entities, [...latest.constraints, ...constraints], [], {
-          diagnose: true,
-        });
+        const result = await solveSketch(
+          latest.entities,
+          [...latest.constraints, ...constraints],
+          [],
+          { diagnose: true },
+        );
         if (result.conflicting.length > 0 || result.redundant.length > 0) continue;
-        const solved = result.entities.find((candidate) => candidate.id === entity.id);
-        if (!solved) continue;
-        const current = useDocumentStore
-          .getState()
-          .project.features.find(
-            (feature): feature is SketchFeature =>
-              feature.id === sketch.id && feature.type === 'sketch',
-          );
+        if (!result.entities.some((candidate) => candidate.id === entity.id)) continue;
+        const current = currentSketch();
         if (!current) return;
-        const currentEntities = current.entities.some((candidate) => candidate.id === entity.id)
-          ? current.entities.map((candidate) => (candidate.id === entity.id ? solved : candidate))
-          : [...current.entities, solved];
+        // The solver may also move existing geometry to satisfy the new
+        // constraint, so the whole solution has to be merged back.
+        const solvedById = new Map(result.entities.map((candidate) => [candidate.id, candidate]));
+        const currentEntities = current.entities.map(
+          (candidate) => solvedById.get(candidate.id) ?? candidate,
+        );
+        for (const candidate of result.entities) {
+          if (!currentEntities.some((existing) => existing.id === candidate.id)) {
+            currentEntities.push(candidate);
+          }
+        }
         const appliedConstraints = constraints.filter(
           (constraint) => !current.constraints.some((candidate) => candidate.id === constraint.id),
         );
-        apply({
+        preview({
           type: 'feature/replace',
           feature: {
             ...current,
@@ -189,20 +324,23 @@ export function SketchEditor() {
           },
         });
         setSketchFrozen(result.frozenEntityIds);
+        setSketchProblems([...new Set([...result.conflicting, ...result.redundant])]);
         applyAutoHighlight(auto.highlightIds);
         return;
       } catch {
         // Try the next fallback below.
       }
     }
-    mergeEntity(entity);
     applyAutoHighlight([]);
   };
 
-  const commitNewEntity = (entity: SketchEntity, snaps: (SketchSnap | null)[]) => {
+  const commitNewEntity = (entity: SketchEntity, inputs: SketchSnapInput[]) => {
+    const before = useDocumentStore.getState().project;
+    mergeEntity(entity);
     commitQueue.current = commitQueue.current
-      .then(() => commitNewEntityNow(entity, snaps))
-      .catch(() => undefined);
+      .then(() => applyAutoConstraintsNow(entity, inputs))
+      .then(() => commitPreview(before))
+      .catch(() => commitPreview(before));
   };
 
   const finishBezier = () => {
@@ -215,14 +353,14 @@ export function SketchEditor() {
       };
       void commitNewEntity(
         entity,
-        draft.map(({ snap }) => snap),
+        draft.map(({ input }) => input),
       );
     }
     setDraft([]);
     setHoverSnap(null);
   };
 
-  const addPoint = (point: Point2, snap: SketchSnap | null) => {
+  const addPoint = (point: Point2, input: SketchSnapInput) => {
     if (tool === 'point') {
       const entity: SketchEntity = {
         id: createId('entity'),
@@ -231,15 +369,15 @@ export function SketchEditor() {
         x: point[0],
         y: point[1],
       };
-      void commitNewEntity(entity, [snap]);
+      void commitNewEntity(entity, [input]);
       return;
     }
     if (tool === 'bezier') {
-      setDraft([...draft, { point, snap }]);
+      setDraft([...draft, { point, input }]);
       return;
     }
     if (tool === 'line') {
-      if (draft.length === 0) setDraft([{ point, snap }]);
+      if (draft.length === 0) setDraft([{ point, input }]);
       else {
         const entity: SketchEntity = {
           id: createId('entity'),
@@ -250,14 +388,14 @@ export function SketchEditor() {
           x2: point[0],
           y2: point[1],
         };
-        void commitNewEntity(entity, [draft[0]!.snap, snap]);
+        void commitNewEntity(entity, [draft[0]!.input, input]);
         setDraft([]);
         setHoverSnap(null);
       }
       return;
     }
     if (tool === 'circle') {
-      if (draft.length === 0) setDraft([{ point, snap }]);
+      if (draft.length === 0) setDraft([{ point, input }]);
       else {
         const radius = distance(draft[0]!.point, point);
         if (radius > 0.01) {
@@ -269,7 +407,7 @@ export function SketchEditor() {
             cy: draft[0]!.point[1],
             r: radius,
           };
-          void commitNewEntity(entity, [draft[0]!.snap, null]);
+          void commitNewEntity(entity, [draft[0]!.input, input]);
         }
         setDraft([]);
         setHoverSnap(null);
@@ -277,7 +415,7 @@ export function SketchEditor() {
       return;
     }
     if (tool === 'arc') {
-      if (draft.length < 2) setDraft([...draft, { point, snap }]);
+      if (draft.length < 2) setDraft([...draft, { point, input }]);
       else {
         const [origin, start] = draft;
         const radius = distance(origin!.point, start!.point);
@@ -295,7 +433,7 @@ export function SketchEditor() {
             ),
             endAngle: Math.atan2(point[1] - origin!.point[1], point[0] - origin!.point[0]),
           };
-          void commitNewEntity(entity, [origin!.snap, start!.snap, snap]);
+          void commitNewEntity(entity, [origin!.input, start!.input, input]);
         }
         setDraft([]);
         setHoverSnap(null);
@@ -303,7 +441,7 @@ export function SketchEditor() {
       return;
     }
     if (tool === 'ellipse') {
-      if (draft.length === 0) setDraft([{ point, snap }]);
+      if (draft.length === 0) setDraft([{ point, input }]);
       else {
         const rx = Math.abs(point[0] - draft[0]!.point[0]);
         const ry = Math.abs(point[1] - draft[0]!.point[1]);
@@ -318,7 +456,7 @@ export function SketchEditor() {
             ry,
             rotation: 0,
           };
-          void commitNewEntity(entity, [draft[0]!.snap, null]);
+          void commitNewEntity(entity, [draft[0]!.input, input]);
         }
         setDraft([]);
         setHoverSnap(null);
@@ -337,7 +475,11 @@ export function SketchEditor() {
       pointerDown.current = { x: event.clientX, y: event.clientY };
       if (tool !== 'select' || !sketch) return;
       const additive = event.metaKey || event.ctrlKey || event.shiftKey;
-      const pick = getViewport()?.pickSketch(event.clientX, event.clientY);
+      const pick = getViewport()?.pickSketch(
+        event.clientX,
+        event.clientY,
+        currentSketchEntities(activeSketchId),
+      );
       if (!pick?.entityId) return;
       const entity = sketch.entities.find((candidate) => candidate.id === pick.entityId);
       if (!entity) return;
@@ -393,15 +535,16 @@ export function SketchEditor() {
         const entities = current.entities.map((entity) =>
           entity.id === activeDrag.entityId ? moved : entity,
         );
-        const pinned =
-          activeDrag.mode === 'point'
-            ? [{ entityId: activeDrag.entityId, pointIndex: activeDrag.pointIndex ?? 0 }]
-            : entityControlPointRefs(activeDrag.originalEntity);
         const next = { ...current, entities };
         preview({ type: 'feature/replace', feature: next });
         const version = ++activeDrag.version;
-        void solveSketch(entities, current.constraints, pinned)
+        void solveDrag({
+          entities,
+          constraints: current.constraints,
+          pinSets: dragPinSets(activeDrag),
+        })
           .then((result) => {
+            if (!result) return;
             if (drag.current !== activeDrag || activeDrag.version !== version) return;
             const latest = useDocumentStore
               .getState()
@@ -415,17 +558,21 @@ export function SketchEditor() {
           .catch(() => undefined);
         return;
       }
-      const snap = getViewport()?.snapSketch(event.clientX, event.clientY);
+      const mode = snapModeFor(tool, draft.length);
+      const snap = getViewport()?.snapSketch(
+        event.clientX,
+        event.clientY,
+        10,
+        currentSketchEntities(activeSketchId),
+      );
       if (!snap) {
         setHover(null);
         setHoverSnap(null);
         return;
       }
-      const point = magnetEnabled
-        ? (snap.pointSnap?.point ?? snap.curveSnap?.point ?? gridPoint(snap.point))
-        : gridPoint(snap.point);
-      setHover(point);
-      setHoverSnap(magnetEnabled ? snap : null);
+      const target = magnetEnabled ? snapTargetPoint(snap, mode) : null;
+      setHover(target ?? gridPoint(snap.point));
+      setHoverSnap(magnetEnabled && target ? snap : null);
     };
     const finishDrag = () => {
       const activeDrag = drag.current;
@@ -441,15 +588,15 @@ export function SketchEditor() {
         preview({ type: 'feature/replace', feature: activeDrag.original });
         return;
       }
-      const pinned =
-        activeDrag.mode === 'point'
-          ? [{ entityId: activeDrag.entityId, pointIndex: activeDrag.pointIndex ?? 0 }]
-          : entityControlPointRefs(activeDrag.originalEntity);
       const version = ++activeDrag.version;
-      void solveSketch(latest.entities, latest.constraints, pinned, { diagnose: true })
+      void solveDrag({
+        entities: latest.entities,
+        constraints: latest.constraints,
+        pinSets: dragPinSets(activeDrag),
+      })
         .then((result) => {
           if (activeDrag.version !== version) return;
-          if (result.conflicting.length > 0 || result.redundant.length > 0) {
+          if (!result) {
             preview({ type: 'feature/replace', feature: activeDrag.original });
             useUiStore.getState().showToast('constraint.conflict', 'error');
             return;
@@ -459,6 +606,7 @@ export function SketchEditor() {
             feature: { ...activeDrag.original, entities: result.entities },
           });
           setSketchFrozen(result.frozenEntityIds);
+          setSketchProblems([...new Set([...result.conflicting, ...result.redundant])]);
           commitPreview(activeDrag.before);
         })
         .catch(() => {
@@ -471,7 +619,11 @@ export function SketchEditor() {
       pointerDown.current = null;
       if (down && Math.hypot(event.clientX - down.x, event.clientY - down.y) > 4) return;
       if (tool === 'select') {
-        const pick = getViewport()?.pickSketch(event.clientX, event.clientY);
+        const pick = getViewport()?.pickSketch(
+          event.clientX,
+          event.clientY,
+          currentSketchEntities(activeSketchId),
+        );
         if (!pick) return;
         const key = pick.entityId
           ? pick.pointIndex !== null
@@ -492,21 +644,50 @@ export function SketchEditor() {
         }
         return;
       }
-      const snap = getViewport()?.snapSketch(event.clientX, event.clientY);
+      const mode = snapModeFor(tool, draft.length);
+      const snap = getViewport()?.snapSketch(
+        event.clientX,
+        event.clientY,
+        10,
+        currentSketchEntities(activeSketchId),
+      );
       if (!snap) return;
-      const point = magnetEnabled
-        ? (snap.pointSnap?.point ?? snap.curveSnap?.point ?? gridPoint(snap.point))
-        : gridPoint(snap.point);
-      addPoint(point, magnetEnabled ? snap : null);
+      const target = magnetEnabled ? snapTargetPoint(snap, mode) : null;
+      addPoint(target ?? gridPoint(snap.point), {
+        snap: magnetEnabled && target ? snap : null,
+        mode: magnetEnabled && target ? mode : 'none',
+      });
     };
     const onDoubleClick = () => {
       if (tool === 'bezier') finishBezier();
+    };
+
+    const onContextMenu = (event: globalThis.MouseEvent) => {
+      if (tool !== 'select') return;
+      const current = currentSketch();
+      if (!current) return;
+      const pick = getViewport()?.pickSketch(event.clientX, event.clientY, current.entities);
+      if (!pick?.entityId) return;
+      event.preventDefault();
+      const entityId = pick.entityId;
+      openContextMenu(
+        event.clientX,
+        event.clientY,
+        referenceMenuItems(
+          current,
+          entityId,
+          (key) => t(key as never),
+          locale,
+          (next) => apply({ type: 'feature/replace', feature: next }),
+        ),
+      );
     };
 
     canvas.addEventListener('pointerdown', onPointerDown);
     canvas.addEventListener('pointermove', onPointerMove);
     canvas.addEventListener('click', onClick);
     canvas.addEventListener('dblclick', onDoubleClick);
+    canvas.addEventListener('contextmenu', onContextMenu);
     window.addEventListener('pointerup', finishDrag);
     return () => {
       canvas.style.cursor = '';
@@ -514,6 +695,7 @@ export function SketchEditor() {
       canvas.removeEventListener('pointermove', onPointerMove);
       canvas.removeEventListener('click', onClick);
       canvas.removeEventListener('dblclick', onDoubleClick);
+      canvas.removeEventListener('contextmenu', onContextMenu);
       window.removeEventListener('pointerup', finishDrag);
     };
   }, [
@@ -526,6 +708,8 @@ export function SketchEditor() {
     preview,
     commitPreview,
     magnetEnabled,
+    locale,
+    openContextMenu,
   ]);
 
   const previewEntity = (): SketchEntity | null => {
@@ -594,7 +778,7 @@ export function SketchEditor() {
 
   const previewAuto =
     magnetEnabled &&
-    (draft.some(({ snap }) => Boolean(snap?.pointSnap ?? snap?.curveSnap)) ||
+    (draft.some(({ input }) => Boolean(input.snap)) ||
       Boolean(hoverSnap?.pointSnap ?? hoverSnap?.curveSnap) ||
       (tool === 'line' &&
         draft[0] !== undefined &&
@@ -611,12 +795,15 @@ export function SketchEditor() {
 
   useEffect(() => {
     if (!activeSketchId) return;
+    const midpointMarker =
+      magnetEnabled && hoverSnap?.midpointSnap ? hoverSnap.midpointSnap.point : null;
     getViewport()?.setSketchOverlay(
       previewEntity(),
       draft.map(({ point }) => point),
       previewAuto,
+      midpointMarker,
     );
-  }, [activeSketchId, tool, draft, hover, previewAuto]);
+  }, [activeSketchId, tool, draft, hover, previewAuto, hoverSnap, magnetEnabled]);
 
   useEffect(() => {
     if (!magnetEnabled || tool === 'select') {
@@ -650,10 +837,7 @@ export function SketchEditor() {
         }
         const entityIds = selectionIds.filter((key) => !key.includes('#'));
         if (entityIds.length > 0 && sketch) {
-          const next = {
-            ...sketch,
-            entities: sketch.entities.filter((entity) => !entityIds.includes(entity.id)),
-          };
+          const next = removeSketchEntities(sketch, entityIds);
           apply({ type: 'feature/replace', feature: next });
           setSketchSelection([]);
           void diagnoseSketch(next);
@@ -692,11 +876,58 @@ export function SketchEditor() {
                 : t('sketch.addBezier')
               : '';
 
+  const liveMeasure = (() => {
+    const preview = previewEntity();
+    if (!preview || !frame) return null;
+    const infos = liveMeasures(preview)
+      .map((measure) => measureInfo(preview, measure, locale, 'mm'))
+      .filter((info): info is NonNullable<typeof info> => info !== null);
+    if (infos.length === 0) return null;
+    const anchor = liveAnchor(preview);
+    const projected = anchor ? getViewport()?.projectSketchPoint(frame, anchor) : null;
+    return {
+      text: infos.map((info) => info.text).join(' · '),
+      x: projected?.x ?? null,
+      y: projected?.y ?? null,
+    };
+  })();
+
   return (
     <div className="sketch-overlay">
+      {liveMeasure && liveMeasure.x !== null && liveMeasure.y !== null && (
+        <div
+          className="sketch-live-measure"
+          data-testid="sketch-live-measure"
+          style={{ left: liveMeasure.x, top: liveMeasure.y }}
+        >
+          {liveMeasure.text}
+        </div>
+      )}
       <div className="sketch-hint">
         {hint || (sketch.entities.length === 0 ? t('sketch.empty') : '')}
       </div>
     </div>
   );
+}
+
+function liveAnchor(entity: SketchEntity): Point2 | null {
+  switch (entity.type) {
+    case 'line':
+      return [(entity.x1 + entity.x2) / 2, (entity.y1 + entity.y2) / 2];
+    case 'circle':
+      return [entity.cx + entity.r * 0.7071, entity.cy + entity.r * 0.7071];
+    case 'arc':
+      return [
+        entity.cx + Math.cos(entity.startAngle) * entity.r,
+        entity.cy + Math.sin(entity.startAngle) * entity.r,
+      ];
+    case 'ellipse':
+      return [entity.cx + entity.rx, entity.cy + entity.ry];
+    case 'bezier': {
+      const last = entity.points[entity.points.length - 1];
+      return last ?? null;
+    }
+    default:
+      return null;
+  }
 }

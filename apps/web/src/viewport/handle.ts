@@ -36,12 +36,22 @@ export interface ViewportHandle {
     preview: SketchEntity | null,
     draftPoints: Point2[],
     highlight?: boolean,
+    marker?: Point2 | null,
   ) => void;
-  alignSketch: (frame: SketchFrame) => void;
+  alignSketch: (frame: SketchFrame, entities?: readonly SketchEntity[]) => void;
   getCameraState: () => ViewportCamera;
   setCameraState: (state: ViewportCamera) => void;
-  pickSketch: (clientX: number, clientY: number) => SketchPick | null;
-  snapSketch: (clientX: number, clientY: number, tolerancePx?: number) => SketchSnap | null;
+  pickSketch: (
+    clientX: number,
+    clientY: number,
+    entities?: readonly SketchEntity[],
+  ) => SketchPick | null;
+  snapSketch: (
+    clientX: number,
+    clientY: number,
+    tolerancePx?: number,
+    entities?: readonly SketchEntity[],
+  ) => SketchSnap | null;
   projectSketchPoint: (frame: SketchFrame, point: Point2) => { x: number; y: number } | null;
 }
 

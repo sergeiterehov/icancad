@@ -11,10 +11,10 @@ function sketch(
     type: 'sketch',
     name: 'Sketch',
     suppressed: false,
-    visible: true,
     plane: { type: 'datum', plane: 'XY', offset: 0 },
     entities,
     constraints,
+    references: [],
   };
 }
 

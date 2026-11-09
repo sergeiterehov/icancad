@@ -21,6 +21,7 @@ import {
   constraintLabel,
   ConstraintSolveError,
   diagnoseSketch,
+  removeSketchEntities,
   type ConstraintAction,
 } from '../sketch/constraintModel';
 import type { SketchTool } from '../sketch/tool';
@@ -161,10 +162,7 @@ export function SketchToolRail() {
         disabled={entitySelection.length === 0}
         onClick={() => {
           if (!feature) return;
-          const next = {
-            ...feature,
-            entities: feature.entities.filter((entity) => !entitySelection.includes(entity.id)),
-          };
+          const next = removeSketchEntities(feature, entitySelection);
           apply({ type: 'feature/replace', feature: next });
           setSketchSelection([]);
           void diagnoseSketch(next);
@@ -172,6 +170,8 @@ export function SketchToolRail() {
       >
         <Trash2 size={17} />
       </IconButton>
+      <div className="tool-separator" />
+
       <IconButton label={t('sketch.done')} onClick={() => setActiveSketch(null)}>
         <Check size={17} />
       </IconButton>
