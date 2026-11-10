@@ -360,6 +360,33 @@ test.describe('ICANCad foundation', () => {
       timeout: 120_000,
     });
   });
+  test('animates navigation cube edge views', async ({ page }) => {
+    await openApp(page);
+    const cube = page.getByTestId('nav-cube');
+    const box = await cube.boundingBox();
+    let edge: { x: number; y: number } | null = null;
+    for (let row = 1; row < 12 && !edge; row += 1) {
+      for (let column = 1; column < 12 && !edge; column += 1) {
+        const x = box!.x + (box!.width * column) / 12;
+        const y = box!.y + (box!.height * row) / 12;
+        await page.mouse.move(x, y);
+        const target = await cube.getAttribute('data-target');
+        const polar = Number(await cube.getAttribute('data-target-polar'));
+        if (target === 'edge' && Math.abs(polar - Math.PI / 4) < 0.01) edge = { x, y };
+      }
+    }
+    expect(edge).not.toBeNull();
+
+    // An edge is a programmatic view change, so it must ease in instead of
+    // snapping the camera on click.
+    await page.mouse.click(edge!.x, edge!.y);
+    const during = Number(await cube.getAttribute('data-polar'));
+    expect(Math.abs(during - Math.PI / 4)).toBeGreaterThan(0.1);
+    await expect
+      .poll(async () => Number(await cube.getAttribute('data-polar')))
+      .toBeCloseTo(Math.PI / 4, 2);
+  });
+
   test('creates and edits a sketch on a datum plane', async ({ page }) => {
     await openApp(page);
     const cube = page.getByTestId('nav-cube');
@@ -400,6 +427,21 @@ test.describe('ICANCad foundation', () => {
       .toBeLessThan(0.001);
 
     const sketchRow = page.locator('.tree-row').first();
+    const sketchNameField = page
+      .getByTestId('inspector')
+      .getByRole('textbox', { name: 'Name' });
+    await sketchRow.locator('.tree-main').click();
+    await sketchNameField.fill('Profile');
+    await sketchNameField.press('Enter');
+    await expect(sketchRow).toContainText('Profile');
+    await expect(page.locator('.timeline-op').first()).toHaveAttribute('aria-label', 'Profile');
+
+    await page.locator('.timeline-op').first().click();
+    await sketchNameField.fill('Outline');
+    await sketchNameField.press('Enter');
+    await expect(sketchRow).toContainText('Outline');
+    await expect(page.locator('.timeline-op').first()).toHaveAttribute('aria-label', 'Outline');
+
     await sketchRow.getByRole('button', { name: 'Hide', exact: true }).click();
     await expect(sketchRow.getByRole('button', { name: 'Show', exact: true })).toBeVisible();
     await sketchRow.getByRole('button', { name: 'Show', exact: true }).click();

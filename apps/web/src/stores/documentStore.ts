@@ -327,7 +327,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       !get().apply(...addFeatureCommands(get().project, feature), {
         type: 'metadata/patch',
         objectId: sketchObjectId(featureId),
-        patch: { name, visible: true },
+        patch: { visible: true },
       })
     ) {
       return null;

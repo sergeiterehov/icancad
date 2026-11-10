@@ -1,7 +1,37 @@
 import { buildParsedMesh } from './mesh';
 import type { MeshData, ParsedMesh, Vec3 } from './types';
 
-const ASCII_VERTEX = /vertex\s+(-?[\d.eE+]+)\s+(-?[\d.eE+]+)\s+(-?[\d.eE+]+)/g;
+const ASCII_VERTEX =
+  /vertex\s+(-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s+(-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s+(-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/gi;
+
+// ASCII STL is almost entirely printable text, while a binary file contains
+// float bytes. Checking the head avoids reading a binary header that happens to
+// contain the word "solid" or "facet".
+function looksLikeAsciiStl(bytes: Uint8Array): boolean {
+  const sample = bytes.subarray(0, Math.min(2048, bytes.byteLength));
+  if (sample.byteLength === 0) return false;
+  let printable = 0;
+  for (const byte of sample) {
+    if (byte === 9 || byte === 10 || byte === 13 || (byte >= 32 && byte <= 126)) {
+      printable += 1;
+    }
+  }
+  if (printable / sample.byteLength < 0.92) return false;
+  return /facet\s+normal|outer\s+loop|vertex\s+/i.test(new TextDecoder().decode(sample));
+}
+
+// Returns the triangle count for a binary STL, tolerating exporters that append
+// padding, leave the count at zero, or truncate the declared count.
+function binaryTriangleCount(bytes: Uint8Array): number | null {
+  if (bytes.byteLength < 84 || looksLikeAsciiStl(bytes)) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const declared = view.getUint32(80, true);
+  const expected = 84 + declared * 50;
+  if (declared > 0 && expected <= bytes.byteLength) return declared;
+  const inferred = Math.floor((bytes.byteLength - 84) / 50);
+  if (inferred > 0) return inferred;
+  return null;
+}
 
 function computeNormal(positions: Float32Array, offset: number): [number, number, number] {
   const ax = positions[offset]!;
@@ -28,15 +58,14 @@ function computeNormal(positions: Float32Array, offset: number): [number, number
 }
 
 export function isBinaryStl(bytes: Uint8Array): boolean {
-  if (bytes.byteLength < 84) return false;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const triangles = view.getUint32(80, true);
-  return 84 + triangles * 50 === bytes.byteLength;
+  return binaryTriangleCount(bytes) !== null;
 }
 
-function parseBinaryStl(bytes: Uint8Array): { positions: Float32Array; normals: Float32Array } {
+function parseBinaryStl(
+  bytes: Uint8Array,
+  triangles: number,
+): { positions: Float32Array; normals: Float32Array } {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const triangles = view.getUint32(80, true);
   const positions = new Float32Array(triangles * 9);
   const normals = new Float32Array(triangles * 9);
   let offset = 84;
@@ -80,6 +109,7 @@ function parseAsciiStl(bytes: Uint8Array): { positions: Float32Array; normals: F
   }
 
   const triangles = Math.floor(values.length / 9);
+  if (triangles === 0) throw new Error('NO_TRIANGLES');
   const positions = new Float32Array(triangles * 9);
   const normals = new Float32Array(triangles * 9);
   for (let triangle = 0; triangle < triangles; triangle += 1) {
@@ -98,7 +128,9 @@ function parseAsciiStl(bytes: Uint8Array): { positions: Float32Array; normals: F
 }
 
 export function parseStl(bytes: Uint8Array): ParsedMesh {
-  const { positions, normals } = isBinaryStl(bytes) ? parseBinaryStl(bytes) : parseAsciiStl(bytes);
+  const triangles = binaryTriangleCount(bytes);
+  const { positions, normals } =
+    triangles !== null ? parseBinaryStl(bytes, triangles) : parseAsciiStl(bytes);
   const indices = new Uint32Array(positions.length / 3);
   for (let index = 0; index < indices.length; index += 1) indices[index] = index;
   return buildParsedMesh(positions, indices, normals);

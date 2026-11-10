@@ -2,7 +2,6 @@ import {
   activeFeatureIds,
   bodiesInHistory,
   createId,
-  objectName,
   objectVisible,
   sketchObjectId,
   type BodyObject,
@@ -207,7 +206,7 @@ export function LeftPanel() {
           <span className="tree-icon">
             <PencilRuler size={14} />
           </span>
-          <span className="tree-name">{objectName(project, objectId, feature.name)}</span>
+          <span className="tree-name">{feature.name}</span>
           <span className="tree-meta">{formatNumber(feature.entities.length, locale, 0)}</span>
         </button>
         <IconButton

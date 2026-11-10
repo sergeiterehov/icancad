@@ -451,10 +451,12 @@ export class SceneController {
   }
 
   setOrientation(azimuth: number, polar: number): void {
-    this.transition = null;
-    this.azimuth = azimuth;
-    this.polar = clamp(polar, 0.001, Math.PI - 0.001);
-    this.updateCamera();
+    this.transitionTo({
+      target: this.target.clone(),
+      distance: this.distance,
+      azimuth,
+      polar: clamp(polar, 0.001, Math.PI - 0.001),
+    });
   }
 
   orbitBy(deltaX: number, deltaY: number): void {

@@ -548,7 +548,7 @@ export function Inspector() {
           candidate.id === extrudeFeature.sketchId && candidate.type === 'sketch',
       );
       if (sketch) {
-        const name = objectName(project, sketchObjectId(sketch.id), sketch.name);
+        const name = sketch.name;
         if (extrudeFeature.scope !== 'selected') {
           const key = `s:${sketch.id}#*`;
           entries.set(key, {
@@ -751,7 +751,7 @@ export function Inspector() {
   })();
 
   return (
-    <div className="panel">
+    <div className="panel" data-testid="inspector">
       <header className="panel-header">
         <span>{t('panels.inspector')}</span>
       </header>
@@ -793,8 +793,10 @@ export function Inspector() {
             <PanelSection title={t('inspector.selection')}>
               <TextField
                 label={t('inspector.name')}
-                value={objectName(project, sketchObjectId(sketchObject.id), sketchObject.name)}
-                onCommit={(name) => renameObject(sketchObjectId(sketchObject.id), name)}
+                value={sketchObject.name}
+                onCommit={(name) =>
+                  apply({ type: 'feature/replace', feature: { ...sketchObject, name } })
+                }
               />
               <StatRow
                 label={t('inspector.visibility')}

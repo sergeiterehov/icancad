@@ -303,6 +303,15 @@ export class NavCube {
     if (key === this.hovered) return;
     this.hovered = key;
 
+    this.canvas.dataset.target = target
+      ? target.view
+        ? 'face'
+        : target.faces.length === 3
+          ? 'corner'
+          : 'edge'
+      : '';
+    this.canvas.dataset.targetPolar = target?.polar !== undefined ? String(target.polar) : '';
+
     this.materials.forEach((material) => material.color.setHex(0xffffff));
 
     if (target?.dir) {
