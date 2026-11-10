@@ -10,7 +10,9 @@ export function isDirectlySelected(
 }
 
 export function directBodyIds(selection: SelectionItem[]): string[] {
-  return selection.filter((item) => item.kind === 'body').map((item) => item.id);
+  return selection
+    .filter((item) => item.kind === 'body' || item.kind === 'mesh')
+    .map((item) => item.id);
 }
 
 export function linkedBodyIds(selection: SelectionItem[], project: Project): string[] {
@@ -26,13 +28,22 @@ export function linkedBodyIds(selection: SelectionItem[], project: Project): str
   return [...ids];
 }
 
-export function selectedBodyIds(selection: SelectionItem[]): string[] {
+export function selectedBodyIds(selection: SelectionItem[], project: Project): string[] {
   const ids = new Set<string>();
   for (const item of selection) {
-    if (item.kind === 'body') ids.add(item.id);
-    else if (item.kind === 'feature') ids.add(featureBodyId(item.id));
+    if (item.kind === 'body') {
+      const body = project.bodies.find((candidate) => candidate.id === item.id);
+      if (body && body.kind !== 'mesh') ids.add(item.id);
+    } else if (item.kind === 'feature') {
+      const feature = project.features.find((candidate) => candidate.id === item.id);
+      if (feature && feature.type !== 'import-mesh') ids.add(featureBodyId(item.id));
+    }
   }
   return [...ids];
+}
+
+export function selectedMeshIds(selection: SelectionItem[]): string[] {
+  return selection.filter((item) => item.kind === 'mesh').map((item) => item.id);
 }
 
 export function selectedSketchIds(selection: SelectionItem[]): string[] {
@@ -50,7 +61,7 @@ export function selectedFeatureIds(selection: SelectionItem[], project: Project)
       ids.add(item.id);
     } else if (item.kind === 'face') {
       ids.add(item.id.split('#')[0] ?? item.id);
-    } else if (item.kind === 'body') {
+    } else if (item.kind === 'body' || item.kind === 'mesh') {
       const body = project.bodies.find((candidate) => candidate.id === item.id);
       if (body) ids.add(body.createdBy);
     }

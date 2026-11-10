@@ -147,11 +147,30 @@ test.describe('ICANCad foundation', () => {
       buffer: cubeStl(20),
     });
 
-    await expect(
-      page.getByTestId('left').getByRole('button', { name: 'cube', exact: true }),
-    ).toBeVisible();
+    const meshRow = page.getByTestId('left').getByRole('button', { name: /^cube/ });
+    await expect(meshRow).toBeVisible();
     await expect(page.getByText('20 × 20 × 20 mm')).toBeVisible();
     await expect(page.getByText('Watertight')).toBeVisible();
+
+    // An imported STL is a mesh object, not a solid body: it cannot be picked
+    // as an extrude target.
+    await meshRow.click();
+    await expect(page.getByTestId('inspector').getByText('Mesh', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Extrude', exact: true }).click();
+    const inspector = page.getByTestId('inspector');
+    const bodiesSection = inspector
+      .locator('.panel-section')
+      .filter({ hasText: 'Apply to bodies' });
+    await expect(bodiesSection).toBeVisible();
+    await bodiesSection.getByRole('button', { name: 'Pick bodies in the view' }).click();
+    const canvas = page.getByTestId('viewport-canvas');
+    const canvasBox = await canvas.boundingBox();
+    await page.mouse.click(
+      canvasBox!.x + canvasBox!.width / 2,
+      canvasBox!.y + canvasBox!.height / 2,
+    );
+    await expect(bodiesSection.locator('.selection-item')).toHaveCount(0);
+    await bodiesSection.getByRole('button', { name: 'Finish picking' }).click();
 
     const downloadPromise = page.waitForEvent('download');
     await page.getByRole('button', { name: 'Export', exact: true }).click();
@@ -161,7 +180,7 @@ test.describe('ICANCad foundation', () => {
 
     await expect(page.getByTestId('save-state')).toHaveAttribute('data-state', 'saved');
     await page.reload();
-    const restored = page.getByTestId('left').getByRole('button', { name: 'cube', exact: true });
+    const restored = page.getByTestId('left').getByRole('button', { name: /^cube/ });
     await expect(restored).toBeVisible({ timeout: 120_000 });
     await restored.click();
     await expect(page.getByText('20 × 20 × 20 mm')).toBeVisible();

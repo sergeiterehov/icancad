@@ -17,6 +17,7 @@ const project = {
       color: '#fff',
       visible: true,
       createdBy: 'feat-import',
+      kind: 'mesh',
     },
   ],
   features: [
@@ -31,13 +32,13 @@ describe('selection helpers', () => {
   it('links a selected body to its operation', () => {
     const selection = [{ kind: 'body' as const, id: 'body-2' }];
     expect(selectedFeatureIds(selection, project)).toEqual(['feat-2']);
-    expect(selectedBodyIds(selection)).toEqual(['body-2']);
+    expect(selectedBodyIds(selection, project)).toEqual(['body-2']);
   });
 
   it('links a selected operation to its body', () => {
     const selection = [{ kind: 'feature' as const, id: 'feat-1' }];
     expect(selectedFeatureIds(selection, project)).toEqual(['feat-1']);
-    expect(selectedBodyIds(selection)).toEqual([featureBodyId('feat-1')]);
+    expect(selectedBodyIds(selection, project)).toEqual([featureBodyId('feat-1')]);
   });
 
   it('merges bodies and operations without duplicates', () => {
@@ -46,20 +47,26 @@ describe('selection helpers', () => {
       { kind: 'feature' as const, id: 'feat-1' },
     ];
     expect(selectedFeatureIds(selection, project)).toEqual(['feat-1']);
-    expect(selectedBodyIds(selection)).toEqual(['body-1', featureBodyId('feat-1')]);
+    expect(selectedBodyIds(selection, project)).toEqual(['body-1', featureBodyId('feat-1')]);
   });
 
-  it('links an imported mesh operation to its body', () => {
+  it('links an imported mesh operation to its mesh object, not to a body', () => {
     const byFeature = [{ kind: 'feature' as const, id: 'feat-import' }];
     expect(linkedBodyIds(byFeature, project)).toEqual([featureBodyId('feat-import')]);
-    expect(selectedBodyIds(byFeature)).toEqual([featureBodyId('feat-import')]);
+    expect(selectedBodyIds(byFeature, project)).toEqual([]);
+
+    const mesh = [{ kind: 'mesh' as const, id: featureBodyId('feat-import') }];
+    expect(selectedFeatureIds(mesh, project)).toEqual(['feat-import']);
+    expect(selectedBodyIds(mesh, project)).toEqual([]);
+    expect(isDirectlySelected(mesh, 'mesh', featureBodyId('feat-import'))).toBe(true);
+    expect(isDirectlySelected(mesh, 'body', featureBodyId('feat-import'))).toBe(false);
   });
 
   it('keeps the sketch object separate from its operation', () => {
     const selection = [{ kind: 'sketch' as const, id: 'feat-sketch' }];
     expect(selectedFeatureIds(selection, project)).toEqual(['feat-sketch']);
     // A sketch has no body, so nothing is highlighted or measured for it.
-    expect(selectedBodyIds(selection)).toEqual([]);
+    expect(selectedBodyIds(selection, project)).toEqual([]);
     expect(linkedBodyIds(selection, project)).toEqual([]);
     expect(isDirectlySelected(selection, 'sketch', 'feat-sketch')).toBe(true);
     expect(isDirectlySelected(selection, 'feature', 'feat-sketch')).toBe(false);

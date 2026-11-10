@@ -8,8 +8,10 @@ import {
   featureBodyId,
   historyInsertIndex,
   HISTORY_START,
+  isMeshObject,
   parseProject,
   ProjectFileError,
+  solidBodiesInHistory,
   validateHistory,
   type BodyRef,
   type ExtrudeFeature,
@@ -195,6 +197,51 @@ describe('object metadata', () => {
 
     const forward = applyCommand(rolled, { type: 'history/set-end', featureId: 'feat_box' });
     expect(bodiesInHistory(forward)[0]).toMatchObject({ visible: false, color: '#fff' });
+  });
+
+  it('keeps imported meshes out of solid body lists', () => {
+    const project = applyCommands(createProject(), [
+      {
+        type: 'feature/add',
+        feature: {
+          id: 'feat_import',
+          name: 'Imported mesh',
+          suppressed: false,
+          type: 'import-mesh',
+          assetId: 'asset-1',
+          format: 'stl',
+          transform,
+          scale: 1,
+        },
+      },
+      { type: 'body/add', body: { ...bodyFor('feat_import'), kind: 'mesh' } },
+    ]);
+    const [body] = bodiesInHistory(project);
+    expect(body?.kind).toBe('mesh');
+    expect(isMeshObject(body!)).toBe(true);
+    expect(solidBodiesInHistory(project)).toEqual([]);
+  });
+
+  it('recognises imported meshes saved without a kind', () => {
+    const project = applyCommands(createProject(), [
+      {
+        type: 'feature/add',
+        feature: {
+          id: 'feat_import',
+          name: 'Imported mesh',
+          suppressed: false,
+          type: 'import-mesh',
+          assetId: 'asset-1',
+          format: 'stl',
+          transform,
+          scale: 1,
+        },
+      },
+      { type: 'body/add', body: bodyFor('feat_import') },
+    ]);
+    const parsed = parseProject(JSON.parse(JSON.stringify(project)));
+    expect(parsed.bodies[0]?.kind).toBe('mesh');
+    expect(solidBodiesInHistory(parsed)).toEqual([]);
   });
 });
 

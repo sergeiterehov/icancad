@@ -7,6 +7,7 @@ import {
   objectVisible,
   resolveBody,
   sketchObjectId,
+  solidBodiesInHistory,
   type Feature,
   type PrimitiveFeature,
   type SketchEntity,
@@ -23,6 +24,7 @@ import {
   Hexagon,
   Infinity as InfinityIcon,
   MoveVertical,
+  PawPrint,
   PencilRuler,
   Pencil,
   Spline,
@@ -272,7 +274,7 @@ function isPrimitive(feature: Feature | undefined): feature is PrimitiveFeature 
 
 interface ResolvedItem {
   key: string;
-  kind: 'body' | 'feature' | 'sketch';
+  kind: 'body' | 'mesh' | 'feature' | 'sketch';
   name: string;
   bodyId: string | null;
 }
@@ -463,7 +465,8 @@ export function Inspector() {
       ? project.features.find((candidate) => candidate.id === selection[0]?.id)
       : undefined;
   const bodyRef =
-    selection.length === 1 && selection[0]?.kind === 'body'
+    selection.length === 1 &&
+    (selection[0]?.kind === 'body' || selection[0]?.kind === 'mesh')
       ? project.bodies.find((candidate) => candidate.id === selection[0]?.id)
       : undefined;
   const body = bodyRef ? resolveBody(project, bodyRef) : undefined;
@@ -611,13 +614,20 @@ export function Inspector() {
   })();
 
   // Bodies the operation is combined with. An empty list means every body, so
-  // the list only narrows the targets down.
-  const targetBodies = extrudeFeature
+  // the list only narrows the targets down. Imported meshes are objects of a
+  // different kind and can never be solid-body targets.
+  const otherObjects = extrudeFeature
     ? bodiesInHistory(project).filter((body) => body.createdBy !== extrudeFeature.id)
+    : [];
+  const targetBodies = otherObjects.filter((body) => body.kind !== 'mesh');
+  const meshTargets = extrudeFeature
+    ? otherObjects.filter(
+        (body) => body.kind === 'mesh' && extrudeFeature.bodyIds.includes(body.id),
+      )
     : [];
   const unknownTargets = extrudeFeature
     ? extrudeFeature.bodyIds.filter(
-        (bodyId) => !targetBodies.some((body) => body.id === bodyId),
+        (bodyId) => !otherObjects.some((body) => body.id === bodyId),
       )
     : [];
 
@@ -652,6 +662,13 @@ export function Inspector() {
                 : {}),
             };
           }),
+        ...meshTargets.map((body) => ({
+          key: body.id,
+          icon: <PawPrint size={14} style={{ color: body.color }} />,
+          name: body.name,
+          error: translate(t, 'errors.BODY_NOT_SOLID', 'BODY_NOT_SOLID'),
+          onRemove: () => toggleExtrudeBodyTarget(extrudeFeature.id, body.id),
+        })),
         ...unknownTargets.map((bodyId) => ({
           key: bodyId,
           icon: <Box size={14} />,
@@ -693,6 +710,19 @@ export function Inspector() {
                     key: `body:${match.id}`,
                     kind: 'body' as const,
                     name: objectName(project, match.id, 'Body'),
+                    bodyId: match.id,
+                  },
+                ]
+              : [];
+          }
+          if (item.kind === 'mesh') {
+            const match = project.bodies.find((candidate) => candidate.id === item.id);
+            return match
+              ? [
+                  {
+                    key: `mesh:${match.id}`,
+                    kind: 'mesh' as const,
+                    name: objectName(project, match.id, 'Mesh'),
                     bodyId: match.id,
                   },
                 ]
@@ -765,15 +795,17 @@ export function Inspector() {
                 {resolved.map((item) => (
                   <div key={item.key} className="selection-item">
                     <span className="tree-icon">
-                      <Box size={14} />
+                      {item.kind === 'mesh' ? <PawPrint size={14} /> : <Box size={14} />}
                     </span>
                     <span className="tree-name">{item.name}</span>
                     <span className="tree-meta">
-                      {item.kind === 'body'
-                        ? t('inspector.body')
-                        : item.kind === 'sketch'
-                          ? t('inspector.sketch')
-                          : t('inspector.operation')}
+                      {item.kind === 'mesh'
+                        ? t('inspector.mesh')
+                        : item.kind === 'body'
+                          ? t('inspector.body')
+                          : item.kind === 'sketch'
+                            ? t('inspector.sketch')
+                            : t('inspector.operation')}
                     </span>
                   </div>
                 ))}
@@ -1149,7 +1181,9 @@ export function Inspector() {
             )}
           </>
         ) : body ? (
-          <PanelSection title={t('inspector.selection')}>
+          <PanelSection
+            title={body.kind === 'mesh' ? t('inspector.mesh') : t('inspector.selection')}
+          >
             <TextField
               label={t('inspector.name')}
               value={body.name}
@@ -1162,7 +1196,11 @@ export function Inspector() {
             <TextField label={t('inspector.name')} value={project.name} onCommit={renameProject} />
             <StatRow label={t('inspector.units')} value={project.units} />
             <StatRow label={t('inspector.features')} value={project.features.length} />
-            <StatRow label={t('inspector.bodies')} value={bodiesInHistory(project).length} />
+            <StatRow label={t('inspector.bodies')} value={solidBodiesInHistory(project).length} />
+            <StatRow
+              label={t('inspector.meshes')}
+              value={bodiesInHistory(project).filter((body) => body.kind === 'mesh').length}
+            />
             {project.historyEnd && <p className="hint">{t('inspector.rolledBack')}</p>}
           </PanelSection>
         )}

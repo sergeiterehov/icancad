@@ -24,5 +24,5 @@ Sketch faces (ADR 0006) existed only as an inspector list: nothing turned them i
 
 - The timeline is now able to produce solids that other operations can consume, which unblocks shell, hole and rib in M3.
 - Rendering a body no longer requires it to come from a primitive: the rebuild pipeline keeps a body-id → shape-id map and tessellates the final shape of each body.
-- Booleans between an extrude and an imported mesh body are not possible (a mesh has no B-rep); those targets are skipped until mesh → solid conversion lands in M3.
+- Booleans between an extrude and an imported mesh are not possible (a mesh has no B-rep). Meshes are separate mesh objects, so the body picker never offers them and implicit "all bodies" targets skip them; only legacy references report `BODY_NOT_SOLID` until mesh → solid conversion lands in M3.
 - Exact ellipses and beziers in profiles remain a follow-up; until then extruded ellipses have faceted walls.

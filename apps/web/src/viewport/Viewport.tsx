@@ -112,7 +112,7 @@ export function Viewport() {
         const picking = ui.pickingExtrude;
         if (picking) {
           if (!pick) return;
-          if (pick.kind === 'body') return;
+          if (pick.kind === 'body' || pick.kind === 'mesh') return;
           if (pick.kind === 'face') {
             store.select({ kind: 'face', id: `${pick.sketchId}#${pick.faceId}` });
           } else if (pick.kind === 'body-face') {
@@ -132,6 +132,10 @@ export function Viewport() {
         }
         if (!pick) {
           store.select(null);
+          return;
+        }
+        if (pick.kind === 'mesh') {
+          store.select({ kind: 'mesh', id: pick.id }, { additive });
           return;
         }
         if (pick.kind === 'body' || pick.kind === 'body-face') {
@@ -246,6 +250,7 @@ export function Viewport() {
       if (!mesh) continue;
       sceneBodies.push({
         id: body.id,
+        kind: body.kind,
         mesh,
         color: body.color,
         visible: body.visible,

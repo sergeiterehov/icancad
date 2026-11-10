@@ -21,6 +21,7 @@ const HATCH_SPACING_PX = 6;
 
 export interface SceneBody {
   id: string;
+  kind: 'solid' | 'mesh';
   mesh: TessellationResult;
   color: string;
   visible: boolean;
@@ -28,6 +29,7 @@ export interface SceneBody {
 
 interface BodyEntry {
   group: THREE.Group;
+  kind: 'solid' | 'mesh';
   mesh: THREE.Mesh;
   geometry: THREE.BufferGeometry;
   material: THREE.MeshStandardMaterial;
@@ -303,6 +305,7 @@ export class SceneController {
 
       if (entry.group.visible !== body.visible) sectionChanged = true;
       entry.group.visible = body.visible;
+      entry.kind = body.kind;
       entry.material.color.set(body.color);
     }
 
@@ -1388,7 +1391,7 @@ export class SceneController {
       group.add(edges);
     }
 
-    return { group, mesh, geometry, material, edges, edgeGeometry, meshRef: body.mesh };
+    return { group, kind: body.kind, mesh, geometry, material, edges, edgeGeometry, meshRef: body.mesh };
   }
 
   private removeEntry(id: string): void {
@@ -1581,7 +1584,7 @@ export class SceneController {
       if (bodyId && faces) {
         const entry = this.bodies.get(bodyId);
         const faceId = entry?.meshRef.faceIds[bodyHit.faceIndex ?? -1];
-        if (entry && faceId !== undefined) {
+        if (entry && entry.kind === 'solid' && faceId !== undefined) {
           const normal = bodyHit.face?.normal;
           return {
             kind: 'body-face',
@@ -1593,7 +1596,12 @@ export class SceneController {
           };
         }
       }
-      if (bodyId) return { kind: 'body', id: bodyId };
+      if (bodyId) {
+        const entry = this.bodies.get(bodyId);
+        return entry?.kind === 'mesh'
+          ? { kind: 'mesh', id: bodyId }
+          : { kind: 'body', id: bodyId };
+      }
     }
     if (faceHit) {
       const face = faceHit.object.userData.sketchFace as
@@ -1607,6 +1615,11 @@ export class SceneController {
   private pickBodyAt(clientX: number, clientY: number): string | null {
     const pick = this.pickSceneAt(clientX, clientY);
     return pick?.kind === 'body' ? pick.id : null;
+  }
+
+  private pickObjectIdAt(clientX: number, clientY: number): string | null {
+    const pick = this.pickSceneAt(clientX, clientY);
+    return pick?.kind === 'body' || pick?.kind === 'mesh' ? pick.id : null;
   }
 
   private scheduleHover(clientX: number, clientY: number): void {
@@ -1700,7 +1713,7 @@ export class SceneController {
 
   private onContextMenu = (event: MouseEvent): void => {
     event.preventDefault();
-    const bodyId = this.pickBodyAt(event.clientX, event.clientY);
+    const bodyId = this.pickObjectIdAt(event.clientX, event.clientY);
     this.onBodyContextMenu?.(bodyId, event.clientX, event.clientY);
   };
 

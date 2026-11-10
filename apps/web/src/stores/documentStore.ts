@@ -11,6 +11,7 @@ import {
   featureBodyId,
   historyInsertIndex,
   isFeatureInHistory,
+  isMeshObject,
   type BodyRef,
   type Command,
   type Feature,
@@ -27,7 +28,7 @@ import { create } from 'zustand';
 import { i18n } from '../i18n';
 import { useUiStore } from './uiStore';
 
-export type SelectionKind = 'body' | 'feature' | 'sketch' | 'face';
+export type SelectionKind = 'body' | 'mesh' | 'feature' | 'sketch' | 'face';
 
 export interface SelectionItem {
   kind: SelectionKind;
@@ -132,9 +133,11 @@ function nextBodyNumber(project: Project): number {
 
 function exists(project: Project, item: SelectionItem): boolean {
   switch (item.kind) {
-    case 'body': {
+    case 'body':
+    case 'mesh': {
       const body = project.bodies.find((candidate) => candidate.id === item.id);
-      return body ? isFeatureInHistory(project, body.createdBy) : false;
+      if (!body || !isFeatureInHistory(project, body.createdBy)) return false;
+      return item.kind === (isMeshObject(body) ? 'mesh' : 'body');
     }
     case 'feature':
       return isFeatureInHistory(project, item.id);
@@ -515,14 +518,18 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       transform: { translation: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
       scale: 1,
     };
-    const body: BodyRef = { id: featureBodyId(featureId), createdBy: featureId };
+    const body: BodyRef = { id: featureBodyId(featureId), createdBy: featureId, kind: 'mesh' };
     if (
       state.apply(...addFeatureCommands(state.project, feature), { type: 'body/add', body }, {
         type: 'metadata/patch',
         objectId: body.id,
         patch: {
           name,
-          color: BODY_COLORS[state.project.bodies.length % BODY_COLORS.length] ?? '#6ea8fe',
+          color:
+            BODY_COLORS[
+              state.project.bodies.filter((candidate) => !isMeshObject(candidate)).length %
+                BODY_COLORS.length
+            ] ?? '#6ea8fe',
           visible: true,
         },
       })
@@ -620,7 +627,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     // Numbers and colours continue the project-wide sequence instead of
     // restarting for every operation.
     let nextNumber = nextBodyNumber(project);
-    let existingCount = project.bodies.length;
+    let existingCount = project.bodies.filter((body) => !isMeshObject(body)).length;
     for (const [featureId, bodyIds] of created) {
       const feature = project.features.find((candidate) => candidate.id === featureId);
       if (!feature) continue;

@@ -308,6 +308,7 @@ export const featureSchema = z.discriminatedUnion('type', [
 const bodyRef = z.object({
   id: z.string().min(1),
   createdBy: z.string().min(1),
+  kind: z.enum(['solid', 'mesh']).optional(),
 });
 
 const objectMetadata = z.object({
@@ -383,5 +384,20 @@ export function parseProject(input: unknown): Project {
       cause: parsed.error,
     });
   }
-  return parsed.data as Project;
+  // Projects written before mesh objects had their own kind stored imported
+  // meshes as bodies without a `kind`. Recognise them from their operation so
+  // they never become solid-body targets after loading.
+  const project = parsed.data as Project;
+  const importedFeatureIds = new Set(
+    project.features
+      .filter((feature) => feature.type === 'import-mesh')
+      .map((feature) => feature.id),
+  );
+  return {
+    ...project,
+    bodies: project.bodies.map((body) => ({
+      ...body,
+      kind: importedFeatureIds.has(body.createdBy) ? 'mesh' : (body.kind ?? 'solid'),
+    })),
+  };
 }

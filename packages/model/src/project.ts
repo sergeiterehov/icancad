@@ -39,9 +39,18 @@ export function touch(project: Project): Project {
 }
 
 export interface BodyObject extends BodyRef {
+  kind: 'solid' | 'mesh';
   name: string;
   color: string;
   visible: boolean;
+}
+
+export function isMeshObject(body: BodyRef): boolean {
+  return body.kind === 'mesh';
+}
+
+export function isSolidBody(body: BodyRef): boolean {
+  return !isMeshObject(body);
 }
 
 export function sketchObjectId(featureId: string): string {
@@ -67,7 +76,8 @@ export function objectColor(project: Project, objectId: string, fallback: string
 export function resolveBody(project: Project, body: BodyRef): BodyObject {
   return {
     ...body,
-    name: objectName(project, body.id, 'Body'),
+    kind: body.kind ?? 'solid',
+    name: objectName(project, body.id, isMeshObject(body) ? 'Mesh' : 'Body'),
     color: objectColor(project, body.id, BODY_COLORS[0] ?? '#6ea8fe'),
     visible: objectVisible(project, body.id),
   };

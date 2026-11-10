@@ -34,6 +34,7 @@ export interface ViewportCamera {
 /** What a click in the viewport landed on. */
 export type ScenePick =
   | { kind: 'body'; id: string }
+  | { kind: 'mesh'; id: string }
   | { kind: 'face'; sketchId: string; faceId: string }
   | {
       kind: 'body-face';

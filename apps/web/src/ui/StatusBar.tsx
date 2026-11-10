@@ -1,4 +1,4 @@
-import { bodiesInHistory } from '@icancad/model';
+import { bodiesInHistory, solidBodiesInHistory } from '@icancad/model';
 import clsx from 'clsx';
 import { Check, Globe, Moon, Sun, X } from 'lucide-react';
 import {
@@ -35,7 +35,10 @@ export function StatusBar() {
   const version = useKernelStore((state) => state.version);
   const loadMs = useKernelStore((state) => state.loadMs);
   const featureCount = useDocumentStore((state) => state.project.features.length);
-  const bodyCount = useDocumentStore((state) => bodiesInHistory(state.project).length);
+  const bodyCount = useDocumentStore((state) => solidBodiesInHistory(state.project).length);
+  const meshCount = useDocumentStore(
+    (state) => bodiesInHistory(state.project).filter((body) => body.kind === 'mesh').length,
+  );
   const saveState = useDocumentStore((state) => state.saveState);
   const theme = useThemeStore((state) => state.theme);
   const toggleTheme = useThemeStore((state) => state.toggle);
@@ -214,6 +217,10 @@ export function StatusBar() {
               <div className="kernel-row">
                 <span>{t('inspector.bodies')}</span>
                 <span className="kernel-row-value">{bodyCount}</span>
+              </div>
+              <div className="kernel-row">
+                <span>{t('inspector.meshes')}</span>
+                <span className="kernel-row-value">{meshCount}</span>
               </div>
             </div>
 

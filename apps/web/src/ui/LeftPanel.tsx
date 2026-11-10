@@ -9,7 +9,7 @@ import {
   type SketchFeature,
 } from '@icancad/model';
 import clsx from 'clsx';
-import { Box, Eye, EyeOff, FileUp, PencilRuler, Plus, Trash2 } from 'lucide-react';
+import { Box, Eye, EyeOff, FileUp, PawPrint, PencilRuler, Plus, Trash2 } from 'lucide-react';
 import { useRef, type ChangeEvent, type MouseEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { saveAsset } from '../persistence/db';
@@ -103,7 +103,8 @@ export function LeftPanel() {
 
   const renderBody = (body: BodyObject): ReactNode => {
     const mesh = meshes[body.id];
-    const direct = isDirectlySelected(selection, 'body', body.id);
+    const kind = body.kind === 'mesh' ? 'mesh' : 'body';
+    const direct = isDirectlySelected(selection, kind, body.id);
     const linked = !direct && highlightedBodyIds.includes(body.id);
     return (
       <div
@@ -137,13 +138,13 @@ export function LeftPanel() {
           className="tree-main"
           onClick={(event) =>
             select(
-              { kind: 'body', id: body.id },
+              { kind, id: body.id },
               { additive: event.metaKey || event.ctrlKey || event.shiftKey },
             )
           }
         >
           <span className="tree-icon" style={{ color: body.color }}>
-            <Box size={14} />
+            {body.kind === 'mesh' ? <PawPrint size={14} /> : <Box size={14} />}
           </span>
           <span className="tree-name">{body.name}</span>
           {mesh && <span className="tree-meta">{formatNumber(mesh.triangleCount, locale, 0)}</span>}

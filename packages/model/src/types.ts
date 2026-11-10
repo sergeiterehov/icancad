@@ -286,10 +286,13 @@ export type Feature =
   | TransformFeature;
 
 // An object is a ref produced by an operation; its properties live in
-// `Project.metadata` under the same id (ADR 0007).
+// `Project.metadata` under the same id (ADR 0007). Imported meshes are objects
+// of their own kind: they render and select like bodies but have no B-rep, so
+// they can never be used as solid body targets.
 export interface BodyRef {
   id: string;
   createdBy: string;
+  kind?: 'solid' | 'mesh';
 }
 
 export interface ObjectMetadata {

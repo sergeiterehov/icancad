@@ -46,6 +46,11 @@ export function bodiesInHistory(project: Project): BodyObject[] {
     .map((body) => resolveBody(project, body));
 }
 
+/** Only B-rep bodies; imported meshes are separate objects and not valid targets. */
+export function solidBodiesInHistory(project: Project): BodyObject[] {
+  return bodiesInHistory(project).filter((body) => body.kind === 'solid');
+}
+
 function isBodyDeleted(project: Project, bodyId: string, active: Set<string>): boolean {
   return project.features.some(
     (feature) =>
