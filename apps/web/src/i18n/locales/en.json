@@ -38,7 +38,8 @@
     "comingSoon": "Planned for a later milestone",
     "constraints": "Constraints",
     "construction": "Construction geometry",
-    "magnet": "Magnet"
+    "magnet": "Magnet",
+    "extrudeNeedsSketch": "Select a sketch to extrude"
   },
   "tree": {
     "bodies": "Bodies",
@@ -149,7 +150,12 @@
     "UNKNOWN_BODY": "Body not found",
     "DUPLICATE_ID": "Duplicate identifier",
     "INVALID_INDEX": "Invalid position",
-    "INVALID_VALUE": "Invalid value"
+    "INVALID_VALUE": "Invalid value",
+    "MISSING_SKETCH": "The sketch of this operation is missing",
+    "NO_PROFILE": "The sketch has no closed contour to extrude",
+    "NO_TARGET_BODY": "No body to apply this operation to",
+    "MISSING_ASSET": "Imported mesh data is missing",
+    "IMPORT_FAILED": "Failed to import the mesh"
   },
   "features": {
     "box": "Box",
@@ -168,7 +174,8 @@
     "no": "No"
   },
   "context": {
-    "deleteOperation": "Delete operation"
+    "deleteOperation": "Delete operation",
+    "deleteObject": "Delete object"
   },
   "nav": {
     "cube": "Orientation cube",
@@ -279,5 +286,41 @@
     "dof": "Degrees of freedom: {{count}}",
     "editValue": "Double-click to edit the value",
     "problemsHint": "Conflicting or redundant constraints. Click to show only problem constraints."
+  },
+  "extrude": {
+    "distance": "Distance",
+    "end": "Extent",
+    "end_blind": "Blind",
+    "end_symmetric": "Symmetric",
+    "end_through_all": "Through all",
+    "end_two_sided": "Two-sided",
+    "face": "Face",
+    "faceCount": "{{count}} faces",
+    "faceCount_few": "{{count}} faces",
+    "faceCount_many": "{{count}} faces",
+    "faceCount_one": "{{count}} face",
+    "faceCount_other": "{{count}} faces",
+    "finishPick": "Finish picking",
+    "method": "Method",
+    "missingSketch": "Missing sketch",
+    "noObjects": "No objects yet: pick faces in the view",
+    "objects": "Objects",
+    "op_add": "Add",
+    "op_intersect": "Intersect",
+    "op_new": "New body",
+    "op_subtract": "Cut",
+    "operation": "Operation",
+    "pickHint": "Click faces in the view to add or remove them",
+    "pickObjects": "Pick objects in the view",
+    "removeObject": "Remove from extrude",
+    "secondDirection": "Second direction",
+    "secondEnd": "Second direction extent",
+    "throughAllUnavailable": "Through all works only for cut and intersect",
+    "wholeSketch": "Whole sketch"
+  },
+  "delete": {
+    "title": "Delete operation?",
+    "text": "\"{{name}}\" is used by other operations. They will be deleted too:",
+    "confirm": "Delete all"
   }
 }

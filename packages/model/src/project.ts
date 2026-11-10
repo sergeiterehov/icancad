@@ -28,6 +28,12 @@ export function featureBodyId(featureId: string, index = 0): string {
   return `${featureId}:solid-${index}`;
 }
 
+// An extrude turns every region it uses into its own body, so the body id is
+// derived from the region id: stable while the region itself is unchanged.
+export function extrudeBodyId(featureId: string, regionId: string): string {
+  return `${featureId}:region-${regionId}`;
+}
+
 export function touch(project: Project): Project {
   return { ...project, updatedAt: new Date().toISOString() };
 }

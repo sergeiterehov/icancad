@@ -84,7 +84,198 @@ describe('OCCT kernel engine', () => {
     );
   });
 
+  it('extrudes a rectangular region with a hole into a solid', () => {
+    const result = engine.makePrism({
+      shapeId: 'prism-1',
+      origin: [0, 0, 0],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 1, 0],
+      regions: [
+        {
+          outer: {
+            curves: [
+              { type: 'line', x1: 0, y1: 0, x2: 20, y2: 0 },
+              { type: 'line', x1: 20, y1: 0, x2: 20, y2: 10 },
+              { type: 'line', x1: 20, y1: 10, x2: 0, y2: 10 },
+              { type: 'line', x1: 0, y1: 10, x2: 0, y2: 0 },
+            ],
+          },
+          holes: [{ curves: [{ type: 'circle', cx: 10, cy: 5, r: 2 }] }],
+        },
+      ],
+      distances: [5],
+    });
+    expect(result.stats.faces).toBeGreaterThanOrEqual(6);
+
+    const mesh = engine.tessellate('prism-1');
+    const volume = meshSignedVolume(mesh);
+    const expected = (20 * 10 - Math.PI * 4) * 5;
+    expect(volume).toBeGreaterThan(expected * 0.97);
+    expect(volume).toBeLessThan(expected * 1.03);
+    expect(mesh.bbox.max[2]).toBeCloseTo(5, 5);
+  });
+
+  it('extrudes arcs and builds symmetric solids', () => {
+    const result = engine.makePrism({
+      shapeId: 'prism-arc',
+      origin: [0, 0, 0],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 1, 0],
+      regions: [
+        {
+          outer: {
+            curves: [
+              { type: 'line', x1: 0, y1: 0, x2: 20, y2: 0 },
+              { type: 'arc', cx: 10, cy: 0, r: 10, startAngle: 0, endAngle: Math.PI },
+            ],
+          },
+          holes: [],
+        },
+      ],
+      distances: [2, -2],
+    });
+    expect(result.stats.faces).toBeGreaterThanOrEqual(3);
+    const mesh = engine.tessellate('prism-arc');
+    expect(mesh.bbox.min[2]).toBeCloseTo(-2, 5);
+    expect(mesh.bbox.max[2]).toBeCloseTo(2, 5);
+  });
+
+  it('extrudes a profile with a clockwise (reversed) arc', () => {
+    const result = engine.makePrism({
+      shapeId: 'prism-reversed',
+      origin: [0, 0, 0],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 1, 0],
+      regions: [
+        {
+          outer: {
+            curves: [
+              { type: 'line', x1: 0, y1: 0, x2: 10, y2: 0 },
+              { type: 'arc', cx: 0, cy: 0, r: 10, startAngle: -Math.PI / 2, endAngle: 0, reversed: true },
+              { type: 'line', x1: 0, y1: -10, x2: 0, y2: 0 },
+            ],
+          },
+          holes: [],
+        },
+      ],
+      distances: [6],
+    });
+    expect(result.stats.faces).toBeGreaterThanOrEqual(3);
+    const mesh = engine.tessellate('prism-reversed');
+    expect(mesh.bbox.max[2]).toBeCloseTo(6, 5);
+    expect(meshSignedVolume(mesh)).toBeGreaterThan(0);
+  });
+
+  it('extrudes a contour whose arcs come from a real sketch drawing', () => {
+    const result = engine.makePrism({
+      shapeId: 'prism-drawing',
+      origin: [0, 0, 0],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 1, 0],
+      regions: [
+        {
+          outer: {
+            curves: [
+              { type: 'line', x1: -54.19636757449335, y1: -47.860781122154016, x2: 6.960966347011371, y2: -47.860781122154016 },
+              { type: 'arc', cx: 6.960966577512058, cy: -13.647069516322679, r: 34.213711605831335, startAngle: -1.5707963335319817, endAngle: 3.2696327140518344e-8 },
+              { type: 'line', x1: 41.174678183343396, y1: -13.647068397659972, x2: 41.174678183343396, y2: 43.48162904284042 },
+              { type: 'line', x1: 41.174678183343396, y1: 43.48162904284042, x2: -54.19636757449335, y2: -47.860781122154016 },
+            ],
+          },
+          holes: [],
+        },
+      ],
+      distances: [3],
+    });
+    expect(result.stats.faces).toBe(6);
+    const mesh = engine.tessellate('prism-drawing');
+    expect(mesh.bbox.max[2]).toBeCloseTo(3, 5);
+    expect(meshSignedVolume(mesh)).toBeGreaterThan(0);
+  });
+
+  it('extrudes the same region in every datum plane', () => {
+    const frames: Record<string, { origin: [number, number, number]; xAxis: [number, number, number]; yAxis: [number, number, number] }> = {
+      xy: { origin: [0, 0, 0], xAxis: [1, 0, 0], yAxis: [0, 1, 0] },
+      xz: { origin: [0, 0, 0], xAxis: [1, 0, 0], yAxis: [0, 0, 1] },
+      yz: { origin: [0, 0, 0], xAxis: [0, 1, 0], yAxis: [0, 0, 1] },
+    };
+    for (const [name, frame] of Object.entries(frames)) {
+      const shapeId = `prism-${name}`;
+      engine.makePrism({
+        shapeId,
+        ...frame,
+        regions: [{ outer: { curves: [{ type: 'circle', cx: 0, cy: 0, r: 10 }] }, holes: [] }],
+        distances: [4],
+      });
+      const mesh = engine.tessellate(shapeId);
+      const spans = [0, 1, 2].map((axis) => mesh.bbox.max[axis]! - mesh.bbox.min[axis]!);
+      // Two axes hold the circle, the third one holds the extrusion.
+      const thin = spans.reduce((total, span) => total + (span < 5 ? 1 : 0), 0);
+      expect(thin).toBe(1);
+      expect(Math.max(...spans)).toBeCloseTo(20, 1);
+      expect(meshSignedVolume(mesh)).toBeGreaterThan(0);
+    }
+  });
+
+  it('cuts one solid with another', () => {
+    engine.makePrism({
+      shapeId: 'plate',
+      origin: [0, 0, 0],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 1, 0],
+      regions: [
+        {
+          outer: {
+            curves: [
+              { type: 'line', x1: 0, y1: 0, x2: 20, y2: 0 },
+              { type: 'line', x1: 20, y1: 0, x2: 20, y2: 20 },
+              { type: 'line', x1: 20, y1: 20, x2: 0, y2: 20 },
+              { type: 'line', x1: 0, y1: 20, x2: 0, y2: 0 },
+            ],
+          },
+          holes: [],
+        },
+      ],
+      distances: [5],
+    });
+    engine.makeBox({ shapeId: 'cutter', dx: 5, dy: 5, dz: 5 });
+    const cut = engine.booleanShape({
+      shapeId: 'cut-result',
+      baseShapeId: 'plate',
+      toolShapeId: 'cutter',
+      op: 'cut',
+    });
+    expect(cut.stats.faces).toBeGreaterThan(6);
+    const mesh = engine.tessellate('cut-result');
+    expect(meshSignedVolume(mesh)).toBeCloseTo(20 * 20 * 5 - 5 * 5 * 5, -1);
+  });
+
+  it('rejects open sketch contours', () => {
+    expect(() =>
+      engine.makePrism({
+        shapeId: 'open',
+        origin: [0, 0, 0],
+        xAxis: [1, 0, 0],
+        yAxis: [0, 1, 0],
+        regions: [
+          {
+            outer: {
+              curves: [
+                { type: 'line', x1: 0, y1: 0, x2: 10, y2: 0 },
+                { type: 'line', x1: 10, y1: 0, x2: 10, y2: 10 },
+              ],
+            },
+            holes: [],
+          },
+        ],
+        distances: [5],
+      }),
+    ).toThrowError(KernelOpError);
+  });
+
   it('disposes shapes', () => {
+    engine.clear();
+    engine.makeBox({ shapeId: 'box-1', dx: 20, dy: 10, dz: 5 });
     expect(engine.dispose('box-1')).toBe(true);
     expect(engine.dispose('box-1')).toBe(false);
     expect(engine.shapeCount).toBe(0);

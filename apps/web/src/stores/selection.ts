@@ -39,11 +39,17 @@ export function selectedSketchIds(selection: SelectionItem[]): string[] {
   return selection.filter((item) => item.kind === 'sketch').map((item) => item.id);
 }
 
+export function selectedFaceIds(selection: SelectionItem[]): string[] {
+  return selection.filter((item) => item.kind === 'face').map((item) => item.id);
+}
+
 export function selectedFeatureIds(selection: SelectionItem[], project: Project): string[] {
   const ids = new Set<string>();
   for (const item of selection) {
     if (item.kind === 'feature' || item.kind === 'sketch') {
       ids.add(item.id);
+    } else if (item.kind === 'face') {
+      ids.add(item.id.split('#')[0] ?? item.id);
     } else if (item.kind === 'body') {
       const body = project.bodies.find((candidate) => candidate.id === item.id);
       if (body) ids.add(body.createdBy);

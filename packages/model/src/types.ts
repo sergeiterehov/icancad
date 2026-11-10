@@ -22,6 +22,7 @@ export type FeatureType =
   | 'fillet'
   | 'chamfer'
   | 'boolean'
+  | 'delete-body'
   | 'transform';
 
 export interface FeatureBase {
@@ -151,13 +152,22 @@ export interface SketchFeature extends FeatureBase {
   references: SketchReference[];
 }
 
+export type ExtrudeEnd = 'blind' | 'symmetric' | 'through-all';
+
+export interface ExtrudeSecondDirection {
+  end: 'blind' | 'through-all';
+  distance: number;
+}
+
 export interface ExtrudeFeature extends FeatureBase {
   type: 'extrude';
-  sketchId: string;
+  /** Absent until the operation is given objects to extrude. */
+  sketchId?: string;
   regions: string[];
-  end: 'blind' | 'symmetric' | 'two-sided' | 'through-all';
+  end: ExtrudeEnd;
   distance: number;
-  distance2?: number;
+  /** Optional extrusion to the opposite side of the sketch plane. */
+  secondDirection?: ExtrudeSecondDirection;
   op: 'new' | 'add' | 'subtract' | 'intersect';
   scope: 'all' | 'selected';
   bodyIds: string[];
@@ -230,6 +240,13 @@ export interface BooleanFeature extends FeatureBase {
   bodyIds: string[];
 }
 
+// Removing an object is an operation too: the body disappears from this point in
+// the history, while its creating operation and its metadata stay untouched.
+export interface DeleteBodyFeature extends FeatureBase {
+  type: 'delete-body';
+  bodyId: string;
+}
+
 export interface TransformFeature extends FeatureBase {
   type: 'transform';
   bodyId: string;
@@ -248,6 +265,7 @@ export type Feature =
   | FilletFeature
   | ChamferFeature
   | BooleanFeature
+  | DeleteBodyFeature
   | TransformFeature;
 
 // An object is a ref produced by an operation; its properties live in
@@ -261,6 +279,8 @@ export interface ObjectMetadata {
   name?: string;
   color?: string;
   visible?: boolean;
+  /** Number in a body name, kept so numbering never repeats (ADR 0009). */
+  bodyIndex?: number;
 }
 
 export interface SectionPlane {

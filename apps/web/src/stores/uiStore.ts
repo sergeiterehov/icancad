@@ -1,6 +1,12 @@
 import { create } from 'zustand';
 import type { SketchTool } from '../sketch/tool';
 
+export interface DeleteRequest {
+  featureId: string;
+  name: string;
+  dependents: { id: string; name: string }[];
+}
+
 export interface ToastMessage {
   id: number;
   key: string;
@@ -10,6 +16,9 @@ export interface ToastMessage {
 
 interface UiState {
   toast: ToastMessage | null;
+  deleteRequest: DeleteRequest | null;
+  /** Operation waiting for objects to be picked in the 3D view. */
+  pickingExtrude: string | null;
   sectionEnabled: boolean;
   sketchSectionEnabled: boolean;
   activeSketchId: string | null;
@@ -20,6 +29,9 @@ interface UiState {
   sketchProblemConstraintIds: string[];
   sketchMagnetEnabled: boolean;
   sketchTool: SketchTool;
+  requestDelete: (request: DeleteRequest) => void;
+  setPickingExtrude: (featureId: string | null) => void;
+  cancelDelete: () => void;
   showToast: (key: string, kind?: 'info' | 'error', params?: Record<string, unknown>) => void;
   dismissToast: () => void;
   setSectionEnabled: (enabled: boolean) => void;
@@ -61,6 +73,8 @@ function loadSectionEnabled(): boolean {
 
 export const useUiStore = create<UiState>((set) => ({
   toast: null,
+  deleteRequest: null,
+  pickingExtrude: null,
   sectionEnabled: loadSectionEnabled(),
   sketchSectionEnabled: true,
   activeSketchId: null,
@@ -75,6 +89,9 @@ export const useUiStore = create<UiState>((set) => ({
     set({ toast: { id: ++toastSequence, key, kind, params } });
   },
   dismissToast: () => set({ toast: null }),
+  requestDelete: (deleteRequest) => set({ deleteRequest }),
+  setPickingExtrude: (pickingExtrude) => set({ pickingExtrude }),
+  cancelDelete: () => set({ deleteRequest: null }),
   setActiveSketch: (activeSketchId) =>
     set({
       activeSketchId,

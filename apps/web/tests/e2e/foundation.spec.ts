@@ -224,7 +224,7 @@ test.describe('ICANCad foundation', () => {
 
     await bodyRows.first().click({ button: 'right' });
     await expect(page.getByRole('menu')).toBeVisible();
-    await expect(page.getByRole('menuitem', { name: 'Delete operation' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Delete object' })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.getByRole('menu')).toBeHidden();
 
@@ -408,6 +408,59 @@ test.describe('ICANCad foundation', () => {
     await sketchRow.locator('.tree-main').dblclick();
     await expect(page.locator('.sketch-overlay')).toBeVisible();
     await expect(sketchRow).toContainText('1');
+  });
+  test('extrudes a sketch and turns the result into a body', async ({ page }) => {
+    await openApp(page);
+    const tools = page.getByRole('navigation', { name: 'Tools' });
+    const canvas = page.getByTestId('viewport-canvas');
+
+    await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await page.waitForTimeout(600);
+
+    const box = await canvas.boundingBox();
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    const corners: [number, number][] = [
+      [300, 250],
+      [520, 250],
+      [520, 420],
+      [300, 420],
+    ];
+    for (let index = 0; index < corners.length; index += 1) {
+      const start = corners[index]!;
+      const end = corners[(index + 1) % corners.length]!;
+      await page.mouse.click(box!.x + start[0], box!.y + start[1]);
+      await page.waitForTimeout(320);
+      await page.mouse.click(box!.x + end[0], box!.y + end[1]);
+      await page.waitForTimeout(320);
+    }
+    await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+
+    await page.locator('.tree-row').first().locator('.tree-main').click();
+    await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
+
+    const rows = page.locator('.tree-row');
+    await expect(rows).toHaveCount(2);
+    // A new body is an object of its own, not a copy of the operation name.
+    await expect(rows.nth(1)).toContainText('Body');
+    const inspector = page.getByTestId('right');
+    await expect(inspector.getByText('Bounds')).toBeVisible();
+    await expect.poll(async () => inspector.innerText()).toContain('× 10 mm');
+
+    // The distance is a parameter of the operation, so the body follows it.
+    const distance = inspector.getByRole('textbox').nth(1);
+    await distance.fill('25');
+    await distance.press('Enter');
+    await expect.poll(async () => inspector.innerText()).toContain('× 25 mm');
+
+    // Turning the operation into a cut removes the body it used to create.
+    await inspector.getByRole('button', { name: 'Cut', exact: true }).click();
+    await expect(rows).toHaveCount(1);
+
+    await inspector.getByRole('button', { name: 'New body', exact: true }).click();
+    await expect(rows).toHaveCount(2);
   });
   test('separates the sketch object from its construction operation', async ({ page }) => {
     await openApp(page);
@@ -1115,5 +1168,206 @@ test.describe('ICANCad foundation', () => {
     const [first, second, middle] = points as [number[], number[], number[]];
     expect(middle[0]).toBeCloseTo((first[0]! + second[0]!) / 2, 0);
     expect(middle[1]).toBeCloseTo((first[1]! + second[1]!) / 2, 0);
+  });
+
+  for (const [plane, expected] of [
+    ['XZ', /50 × 10 × 49\.9/],
+    ['YZ', /10 × 50 × 49\.9/],
+  ] as const) {
+    test(`extrudes on the ${plane} datum plane`, async ({ page }) => {
+      await openApp(page);
+      const tools = page.getByRole('navigation', { name: 'Tools' });
+      const inspector = page.getByTestId('right');
+      const canvas = page.getByTestId('viewport-canvas');
+
+      await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+      await page.getByRole('menuitem', { name: `${plane} plane` }).click();
+      await expect(page.locator('.sketch-overlay')).toBeVisible();
+      await page.waitForTimeout(600);
+      const box = await canvas.boundingBox();
+      await page.getByRole('button', { name: 'Circle', exact: true }).click();
+      await page.mouse.click(box!.x + 400, box!.y + 300);
+      await page.waitForTimeout(320);
+      await page.mouse.click(box!.x + 520, box!.y + 300);
+      await page.waitForTimeout(320);
+      await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+      await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+
+      // The face comes from the tree, which keeps the test off the exact
+      // projection of a plane that is edge-on to the camera.
+      await page.locator('.tree-row').first().locator('.tree-main').click();
+      await inspector.getByText('Face 1').click();
+      await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
+      await expect.poll(async () => inspector.innerText()).toMatch(expected);
+    });
+  }
+
+  test('creates an empty extrude and fills it by picking faces in the view', async ({ page }) => {
+    await openApp(page);
+    const tools = page.getByRole('navigation', { name: 'Tools' });
+    const inspector = page.getByTestId('right');
+    const canvas = page.getByTestId('viewport-canvas');
+
+    await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await page.waitForTimeout(600);
+    const box = await canvas.boundingBox();
+    for (const radius of [140, 70]) {
+      await page.getByRole('button', { name: 'Circle', exact: true }).click();
+      await page.mouse.click(box!.x + 400, box!.y + 300);
+      await page.waitForTimeout(320);
+      await page.mouse.click(box!.x + 400 + radius, box!.y + 300);
+      await page.waitForTimeout(320);
+    }
+    await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await canvas.click({ position: { x: 20, y: 20 } });
+
+    // The tool works without a selection: objects are added afterwards.
+    await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
+    await expect(inspector.getByText('No objects yet: pick faces in the view')).toBeVisible();
+
+    await inspector.getByRole('button', { name: 'Pick objects in the view' }).click();
+    await page.waitForTimeout(300);
+    // The ring, then the inner disk.
+    await page.mouse.click(box!.x + 300, box!.y + 300);
+    await page.waitForTimeout(800);
+    await page.mouse.click(box!.x + 400, box!.y + 300);
+    await page.waitForTimeout(900);
+    const rows = inspector.locator('.selection-item');
+    await expect(rows).toHaveCount(2);
+    await expect(rows.first()).toContainText('Face 1');
+    await expect(rows.nth(1)).toContainText('Face 2');
+    await expect.poll(async () => inspector.innerText()).toContain('× 10 mm');
+
+    // Clicking a picked face again removes it, and the row has its own action.
+    await page.mouse.click(box!.x + 400, box!.y + 300);
+    await page.waitForTimeout(900);
+    await expect(rows).toHaveCount(1);
+    await rows.first().hover();
+    await rows.first().getByRole('button').click();
+    await page.waitForTimeout(600);
+    await expect(rows).toHaveCount(0);
+    await inspector.getByRole('button', { name: 'Finish picking' }).click();
+    await expect(inspector.getByText('No objects yet: pick faces in the view')).toBeVisible();
+  });
+
+  for (const [title, centers, expected] of [
+    [
+      'disjoint circles become separate bodies',
+      [
+        [320, 260],
+        [560, 380],
+      ],
+      ['Body 1', 'Body 2'],
+    ],
+    [
+      'concentric circles stay one body',
+      [
+        [440, 300],
+        [440, 300],
+      ],
+      ['Body'],
+    ],
+  ] as const) {
+    test(title, async ({ page }) => {
+      await openApp(page);
+      const tools = page.getByRole('navigation', { name: 'Tools' });
+      const canvas = page.getByTestId('viewport-canvas');
+      await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'XY plane' }).click();
+      await expect(page.locator('.sketch-overlay')).toBeVisible();
+      await page.waitForTimeout(600);
+      const box = await canvas.boundingBox();
+      for (const [x, y] of centers) {
+        await page.getByRole('button', { name: 'Circle', exact: true }).click();
+        await page.mouse.click(box!.x + x, box!.y + y);
+        await page.waitForTimeout(320);
+        await page.mouse.click(box!.x + x + (title.startsWith('disjoint') ? 60 : 90), box!.y + y);
+        await page.waitForTimeout(320);
+      }
+      await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+      await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+
+      await page.locator('.tree-row').first().locator('.tree-main').click();
+      await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
+
+      const rows = page.locator('.tree-row');
+      await expect(rows).toHaveCount(expected.length + 1);
+      for (const [index, name] of expected.entries()) {
+        await expect(rows.nth(index + 1)).toContainText(name);
+      }
+    });
+  }
+
+  test('numbers and colours bodies across operations', async ({ page }) => {
+    await openApp(page);
+    const tools = page.getByRole('navigation', { name: 'Tools' });
+    const inspector = page.getByTestId('right');
+    await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await page.waitForTimeout(600);
+    const canvas = page.getByTestId('viewport-canvas');
+    const box = await canvas.boundingBox();
+    await page.getByRole('button', { name: 'Circle', exact: true }).click();
+    await page.mouse.click(box!.x + 400, box!.y + 300);
+    await page.waitForTimeout(320);
+    await page.mouse.click(box!.x + 480, box!.y + 300);
+    await page.waitForTimeout(320);
+    await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+
+    const rows = page.locator('.tree-row');
+    await page.locator('.tree-row').first().locator('.tree-main').click();
+    await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(1)).toContainText('Body 1');
+
+    // A second operation that creates a body continues the numbering instead of
+    // starting from one again.
+    await page.locator('.tree-row').first().locator('.tree-main').click();
+    await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
+    await inspector.getByRole('button', { name: 'New body', exact: true }).click();
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(2)).toContainText('Body 2');
+
+    const iconColor = async (index: number) =>
+      rows
+        .nth(index)
+        .locator('.tree-icon')
+        .evaluate((element) => getComputedStyle(element).color);
+    expect(await iconColor(1)).not.toBe(await iconColor(2));
+  });
+
+  test('moves the view with the sketch when its plane changes', async ({ page }) => {
+    await openApp(page);
+    const tools = page.getByRole('navigation', { name: 'Tools' });
+    const canvas = page.getByTestId('viewport-canvas');
+    await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await page.waitForTimeout(600);
+    const box = await canvas.boundingBox();
+    await page.getByRole('button', { name: 'Circle', exact: true }).click();
+    await page.mouse.click(box!.x + 400, box!.y + 300);
+    await page.waitForTimeout(320);
+    await page.mouse.click(box!.x + 520, box!.y + 300);
+    await page.waitForTimeout(320);
+
+    // The camera follows the sketch: XZ is the front view, so the polar angle
+    // moves to the horizon instead of staying top-down.
+    const navCube = page.getByTestId('nav-cube');
+    await expect
+      .poll(async () => Number(await navCube.getAttribute('data-polar')))
+      .toBeLessThan(0.01);
+    await page
+      .getByRole('group', { name: 'Plane', exact: true })
+      .getByRole('button', { name: 'XZ', exact: true })
+      .click();
+    await page.waitForTimeout(1400);
+    await expect
+      .poll(async () => Number(await navCube.getAttribute('data-polar')))
+      .toBeGreaterThan(1.5);
   });
 });

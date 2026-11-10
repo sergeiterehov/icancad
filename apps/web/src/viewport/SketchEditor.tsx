@@ -4,6 +4,7 @@ import {
   type SketchConstraintRef,
   type SketchEntity,
   type SketchFeature,
+  type SketchFrame,
 } from '@icancad/model';
 import {
   datumFrame,
@@ -101,6 +102,9 @@ function dragPinSets(drag: DragState): SketchConstraintRef[][] {
 function refPointOnEntity(entity: SketchEntity, index: number): Point2 | null {
   return entityControlPoints(entity)[index] ?? null;
 }
+
+const frameKeyOf = (value: SketchFrame) =>
+  [...value.origin, ...value.xAxis, ...value.yAxis].join(',');
 
 export function SketchEditor() {
   const { t, i18n } = useTranslation();
@@ -209,6 +213,7 @@ export function SketchEditor() {
   // restored once editing finishes.
   const cameraBeforeSketch = useRef<ViewportCamera | null>(null);
   const editedSketch = useRef<string | null>(null);
+  const alignedFrame = useRef('');
   useEffect(() => {
     if (!activeSketchId || !frame) return;
     const feature = useDocumentStore
@@ -220,11 +225,22 @@ export function SketchEditor() {
     const viewport = getViewport();
     cameraBeforeSketch.current ??= viewport?.getCameraState() ?? null;
     viewport?.alignSketch(frame, feature?.entities ?? []);
+    alignedFrame.current = frameKeyOf(frame);
     // While the sketch is open the inspector shows the operation being edited:
     // its placement, composition and constraints.
     editedSketch.current = activeSketchId;
     useDocumentStore.getState().select({ kind: 'feature', id: activeSketchId });
   }, [activeSketchId]);
+
+  // Changing the plane of the sketch being edited moves it in space, so the view
+  // follows it instead of leaving the sketch edge-on.
+  useEffect(() => {
+    if (!activeSketchId || !frame) return;
+    const key = frameKeyOf(frame);
+    if (alignedFrame.current === key) return;
+    alignedFrame.current = key;
+    getViewport()?.alignSketch(frame, sketch?.entities ?? []);
+  }, [activeSketchId, frame, sketch?.entities]);
 
   useEffect(() => {
     if (activeSketchId) return;

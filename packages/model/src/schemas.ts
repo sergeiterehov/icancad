@@ -192,11 +192,13 @@ const sketchFeature = z.object({
 const extrudeFeature = z.object({
   ...featureBase,
   type: z.literal('extrude'),
-  sketchId: z.string().min(1),
+  sketchId: z.string().min(1).optional(),
   regions: z.array(z.string()),
-  end: z.enum(['blind', 'symmetric', 'two-sided', 'through-all']),
+  end: z.enum(['blind', 'symmetric', 'through-all']),
   distance: z.number(),
-  distance2: z.number().optional(),
+  secondDirection: z
+    .object({ end: z.enum(['blind', 'through-all']), distance: z.number() })
+    .optional(),
   op: z.enum(['new', 'add', 'subtract', 'intersect']),
   scope: z.enum(['all', 'selected']),
   bodyIds: z.array(z.string()),
@@ -264,6 +266,12 @@ const booleanFeature = z.object({
   bodyIds: z.array(z.string().min(1)).min(2),
 });
 
+const deleteBodyFeature = z.object({
+  ...featureBase,
+  type: z.literal('delete-body'),
+  bodyId: z.string().min(1),
+});
+
 const transformFeature = z.object({
   ...featureBase,
   type: z.literal('transform'),
@@ -283,6 +291,7 @@ export const featureSchema = z.discriminatedUnion('type', [
   filletFeature,
   chamferFeature,
   booleanFeature,
+  deleteBodyFeature,
   transformFeature,
 ]);
 
@@ -295,6 +304,7 @@ const objectMetadata = z.object({
   name: z.string().min(1).optional(),
   color: z.string().min(1).optional(),
   visible: z.boolean().optional(),
+  bodyIndex: z.number().int().optional(),
 });
 
 const sectionPlane = z.object({

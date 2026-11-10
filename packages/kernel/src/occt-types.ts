@@ -42,7 +42,37 @@ export interface OcctExplorer {
 export interface OcctShape {
   readonly __occtShape?: unique symbol;
   IsSame(other: OcctShape): boolean;
+  IsNull(): boolean;
   Orientation_1(): unknown;
+  Reversed(): OcctShape;
+}
+
+export interface OcctPoint3 {
+  X(): number;
+  Y(): number;
+  Z(): number;
+}
+
+export interface OcctWireMaker {
+  Add_1(edge: OcctShape): void;
+  Wire(): OcctShape;
+  IsDone(): boolean;
+}
+
+export interface OcctFaceMaker {
+  Add(wire: OcctShape): void;
+  Face(): OcctShape;
+  IsDone(): boolean;
+}
+
+export interface OcctPrismMaker {
+  Shape(): OcctShape;
+  IsDone(): boolean;
+}
+
+export interface OcctBooleanMaker {
+  Build(): void;
+  Shape(): OcctShape;
 }
 
 export interface OcctShapeMaker {
@@ -72,9 +102,33 @@ export interface OcctBindings {
   };
   TopoDS: {
     Face_1(shape: OcctShape): OcctShape;
+    Edge_1(shape: OcctShape): OcctShape;
   };
   BRep_Tool: {
     Triangulation(face: OcctShape, location: OcctLocation): OcctTriangulationHandle | null;
   };
   TopLoc_Location_1: new () => OcctLocation;
+  gp_Pnt_3: new (x: number, y: number, z: number) => OcctPoint3;
+  gp_Dir_4: new (x: number, y: number, z: number) => unknown;
+  gp_Vec_4: new (x: number, y: number, z: number) => unknown;
+  gp_Ax2_2: new (origin: OcctPoint3, direction: unknown, xDirection: unknown) => unknown;
+  gp_Circ_2: new (axis: unknown, radius: number) => unknown;
+  BRepBuilderAPI_MakeEdge_3: new (from: OcctPoint3, to: OcctPoint3) => { Edge(): OcctShape };
+  BRepBuilderAPI_MakeEdge_8: new (circle: unknown) => { Edge(): OcctShape };
+  BRepBuilderAPI_MakeEdge_9: new (
+    circle: unknown,
+    startAngle: number,
+    endAngle: number,
+  ) => { Edge(): OcctShape };
+  BRepBuilderAPI_MakeWire_2: new (edge: OcctShape) => OcctWireMaker;
+  BRepBuilderAPI_MakeFace_15: new (wire: OcctShape, onlyPlane: boolean) => OcctFaceMaker;
+  BRepPrimAPI_MakePrism_1: new (
+    shape: OcctShape,
+    vector: unknown,
+    copy: boolean,
+    canonize: boolean,
+  ) => OcctPrismMaker;
+  BRepAlgoAPI_Fuse_3: new (a: OcctShape, b: OcctShape) => OcctBooleanMaker;
+  BRepAlgoAPI_Cut_3: new (a: OcctShape, b: OcctShape) => OcctBooleanMaker;
+  BRepAlgoAPI_Common_3: new (a: OcctShape, b: OcctShape) => OcctBooleanMaker;
 }

@@ -30,6 +30,8 @@ function FeatureIcon({ type }: { type: Feature['type'] }) {
       return <Scissors size={16} />;
     case 'import-mesh':
       return <FileUp size={16} />;
+    case 'delete-body':
+      return <Trash2 size={16} />;
     default:
       return <Layers size={16} />;
   }

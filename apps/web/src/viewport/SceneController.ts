@@ -14,7 +14,7 @@ import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { SketchSnap } from '../sketch/snap';
 import { CAMERA_FOV_DEGREES, easeInOut, fitDistance, shortestAngle } from './cameraFit';
-import type { SceneSketch, SketchPick, ViewName, ViewportCamera } from './handle';
+import type { ScenePick, SceneSketch, SketchPick, ViewName, ViewportCamera } from './handle';
 
 const HATCH_SPACING_PX = 6;
 
@@ -130,6 +130,7 @@ export class SceneController {
     hitObjects: THREE.Object3D[];
     active: boolean;
   }[] = [];
+  private readonly facePickMeshes: THREE.Mesh[] = [];
   private sketchOverlay: THREE.Group | null = null;
   private sketchLineMaterials: LineMaterial[] = [];
   private readonly pointTexture = createCircleTexture();
@@ -170,7 +171,7 @@ export class SceneController {
   constructor(
     private readonly canvas: HTMLCanvasElement,
     private readonly container: HTMLElement,
-    private readonly onPick?: (bodyId: string | null, additive: boolean) => void,
+    private readonly onPick?: (pick: ScenePick | null, additive: boolean) => void,
     private readonly onBodyContextMenu?: (bodyId: string | null, x: number, y: number) => void,
     private readonly onCameraChange?: (azimuth: number, polar: number, distance: number) => void,
   ) {
@@ -552,6 +553,7 @@ export class SceneController {
           editingSketch && !sketch.active,
         );
       }
+      this.addSketchFacePickers(group, sketch);
       this.scene.add(group);
       this.sketchEntries.push({
         id: sketch.id,
@@ -1006,6 +1008,7 @@ export class SceneController {
     }
     this.sketchEntries = [];
     this.sketchLineMaterials = [];
+    this.facePickMeshes.length = 0;
     if (this.sketchOverlay) {
       this.scene.remove(this.sketchOverlay);
       this.disposeObject(this.sketchOverlay);
@@ -1342,24 +1345,80 @@ export class SceneController {
       this.pointerDown = null;
       this.pointerMoved = false;
       if (shouldPick) {
-        const bodyId = this.pickBodyAt(event.clientX, event.clientY);
-        this.onPick?.(bodyId, event.metaKey || event.ctrlKey || event.shiftKey);
+        const pick = this.pickSceneAt(event.clientX, event.clientY);
+        this.onPick?.(pick, event.metaKey || event.ctrlKey || event.shiftKey);
       }
     }
   };
 
-  private pickBodyAt(clientX: number, clientY: number): string | null {
+  private pointerToRay(clientX: number, clientY: number): THREE.Raycaster {
     const rect = this.canvas.getBoundingClientRect();
     const pointer = new THREE.Vector2(
       ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
       -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1,
     );
     this.raycaster.setFromCamera(pointer, this.camera);
-    const meshes = [...this.bodies.values()]
+    return this.raycaster;
+  }
+
+  private pickSceneAt(clientX: number, clientY: number): ScenePick | null {
+    const raycaster = this.pointerToRay(clientX, clientY);
+    const bodyMeshes = [...this.bodies.values()]
       .filter((entry) => entry.group.visible)
       .map((entry) => entry.mesh);
-    const hit = this.raycaster.intersectObjects(meshes, false)[0];
-    return hit ? ((hit.object.userData.bodyId as string | undefined) ?? null) : null;
+    const faceHit = raycaster.intersectObjects(this.facePickMeshes, false)[0];
+    const bodyHit = raycaster.intersectObjects(bodyMeshes, false)[0];
+    // While faces are being picked they win over the solids they produced, so a
+    // face stays clickable after it has been extruded.
+    const picking = this.sketchData.some((sketch) => sketch.facesPicking);
+    const hit = picking && faceHit ? faceHit : (faceHit && (!bodyHit || faceHit.distance <= bodyHit.distance) ? faceHit : bodyHit);
+    if (!hit) return null;
+    const face = hit.object.userData.sketchFace as
+      | { sketchId: string; faceId: string }
+      | undefined;
+    if (face) return { kind: 'face', sketchId: face.sketchId, faceId: face.faceId };
+    const bodyId = hit.object.userData.bodyId as string | undefined;
+    return bodyId ? { kind: 'body', id: bodyId } : null;
+  }
+
+  private pickBodyAt(clientX: number, clientY: number): string | null {
+    const pick = this.pickSceneAt(clientX, clientY);
+    return pick?.kind === 'body' ? pick.id : null;
+  }
+
+  // Sketch faces are invisible picking surfaces: they let the 3D view select a
+  // region of a sketch the same way the tree does.
+  private addSketchFacePickers(group: THREE.Group, sketch: SceneSketch): void {
+    if (sketch.faces.length === 0) return;
+    const material = new THREE.MeshBasicMaterial({
+      color: this.sketchHighlightColor(),
+      transparent: true,
+      opacity: sketch.facesPicking ? 0.12 : 0,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const [ox, oy, oz] = sketch.frame.origin;
+    const [xx, xy, xz] = sketch.frame.xAxis;
+    const [yx, yy, yz] = sketch.frame.yAxis;
+    const [nx, ny, nz] = sketch.frame.normal;
+    const basis = new THREE.Matrix4().makeBasis(
+      new THREE.Vector3(xx, xy, xz),
+      new THREE.Vector3(yx, yy, yz),
+      new THREE.Vector3(nx, ny, nz),
+    );
+    for (const face of sketch.faces) {
+      const shape = new THREE.Shape(face.outline.map((point) => new THREE.Vector2(point[0], point[1])));
+      for (const hole of face.holes) {
+        shape.holes.push(new THREE.Path(hole.map((point) => new THREE.Vector2(point[0], point[1]))));
+      }
+      const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), material);
+      mesh.matrixAutoUpdate = false;
+      mesh.matrix.copy(basis).setPosition(ox, oy, oz);
+      mesh.updateMatrixWorld(true);
+      mesh.userData.sketchFace = { sketchId: sketch.id, faceId: face.id };
+      group.add(mesh);
+      this.facePickMeshes.push(mesh);
+    }
   }
 
   private onWheel = (event: WheelEvent): void => {

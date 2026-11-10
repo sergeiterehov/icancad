@@ -13,11 +13,13 @@ export function datumFrame(plane: DatumPlane, offset = 0): SketchFrame {
         normal: [0, 0, 1],
       };
     case 'XZ':
+      // The normal is the cross product of the axes so extrusions along it match
+      // the view the sketch is drawn from.
       return {
         origin: [0, offset, 0],
         xAxis: [1, 0, 0],
         yAxis: [0, 0, 1],
-        normal: [0, 1, 0],
+        normal: [0, -1, 0],
       };
     case 'YZ':
       return {

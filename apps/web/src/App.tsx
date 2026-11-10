@@ -7,6 +7,7 @@ import {
   useRebuildScene,
 } from './hooks/usePersistence';
 import { useDocumentStore } from './stores/documentStore';
+import { ConfirmDialog } from './ui/ConfirmDialog';
 import { ContextMenuHost } from './ui/ContextMenu';
 import { Inspector } from './ui/Inspector';
 import { LeftPanel } from './ui/LeftPanel';
@@ -61,6 +62,7 @@ export default function App() {
       <StatusBar />
       <ContextMenuHost />
       <Toast />
+      <ConfirmDialog />
     </div>
   );
 }

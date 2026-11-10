@@ -4,10 +4,19 @@ import type { SketchSnap } from '../sketch/snap';
 
 export type ViewName = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom' | 'iso';
 
+export interface SceneSketchFace {
+  id: string;
+  outline: Point2[];
+  holes: Point2[][];
+}
+
 export interface SceneSketch {
   id: string;
   frame: SketchFrame;
   entities: SketchEntity[];
+  faces: SceneSketchFace[];
+  /** Faces are offered for picking, so they are shown faintly. */
+  facesPicking?: boolean;
   selectionKeys: string[];
   dimmedEntityIds: string[];
   frozenEntityIds: string[];
@@ -21,6 +30,11 @@ export interface ViewportCamera {
   azimuth: number;
   polar: number;
 }
+
+/** What a click in the viewport landed on. */
+export type ScenePick =
+  | { kind: 'body'; id: string }
+  | { kind: 'face'; sketchId: string; faceId: string };
 
 export interface SketchPick {
   point: Point2;

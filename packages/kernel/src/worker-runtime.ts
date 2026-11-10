@@ -41,6 +41,16 @@ export function startKernelWorker(options: KernelWorkerOptions = {}): void {
           postSuccess(scope, request.id, engine.makeBox(request.params));
           break;
         }
+        case 'make-prism': {
+          await engine.init();
+          postSuccess(scope, request.id, engine.makePrism(request.params));
+          break;
+        }
+        case 'boolean': {
+          await engine.init();
+          postSuccess(scope, request.id, engine.booleanShape(request.params));
+          break;
+        }
         case 'tessellate': {
           await engine.init();
           const result = engine.tessellate(request.shapeId, request.quality);
@@ -51,6 +61,11 @@ export function startKernelWorker(options: KernelWorkerOptions = {}): void {
             result.faceIds.buffer,
           ];
           postSuccess(scope, request.id, result, transfer);
+          break;
+        }
+        case 'topology': {
+          await engine.init();
+          postSuccess(scope, request.id, engine.shapeStats(request.shapeId));
           break;
         }
         case 'dispose': {

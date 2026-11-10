@@ -49,6 +49,7 @@ export function LeftPanel() {
   const toggleBodyVisibility = useDocumentStore((state) => state.toggleBodyVisibility);
   const toggleSketchVisibility = useDocumentStore((state) => state.toggleSketchVisibility);
   const removeFeature = useDocumentStore((state) => state.removeFeature);
+  const deleteBody = useDocumentStore((state) => state.deleteBody);
   const addBox = useDocumentStore((state) => state.addPrimitiveBox);
   const meshes = useKernelStore((state) => state.meshes);
   const kernelReady = useKernelStore((state) => state.status === 'ready');
@@ -124,10 +125,10 @@ export function LeftPanel() {
             },
             {
               id: 'delete',
-              label: t('context.deleteOperation'),
+              label: t('context.deleteObject'),
               icon: <Trash2 size={14} />,
               danger: true,
-              onSelect: () => removeFeature(body.createdBy),
+              onSelect: () => deleteBody(body.id, t('context.deleteObject')),
             },
           ])
         }
@@ -184,7 +185,7 @@ export function LeftPanel() {
             },
             {
               id: 'delete',
-              label: t('context.deleteOperation'),
+              label: t('context.deleteObject'),
               icon: <Trash2 size={14} />,
               danger: true,
               onSelect: () => removeFeature(feature.id),

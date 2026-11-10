@@ -1,3 +1,4 @@
+import type { TessellationResult } from '@icancad/kernel';
 import { sketchTopology, tessellateEntity } from '@icancad/sketch';
 import {
   bodiesInHistory,
@@ -9,15 +10,38 @@ import {
   type Feature,
   type PrimitiveFeature,
   type SketchEntity,
+  type ExtrudeFeature,
   type SketchFeature,
 } from '@icancad/model';
-import { Box, MoveVertical } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import {
+  ArrowDown,
+  ArrowUp,
+  Box,
+  Check,
+  ChevronsUpDown,
+  Infinity as InfinityIcon,
+  MoveVertical,
+  PenTool,
+  Pencil,
+  Plus,
+  Scissors,
+  Square,
+  X,
+} from 'lucide-react';
+import { useEffect, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { useUiStore } from '../stores/uiStore';
-import { DimensionField, PanelSection, StatRow, TextField } from './Controls';
+import {
+  DimensionField,
+  IconButton,
+  PanelSection,
+  Segmented,
+  SegmentedTab,
+  StatRow,
+  TextField,
+} from './Controls';
 import { formatNumber } from './format';
 import { useContextMenuStore } from './ContextMenu';
 import { SectionPanel } from './SectionPanel';
@@ -131,6 +155,54 @@ interface ResolvedItem {
   bodyId: string | null;
 }
 
+// Boolean intersection, drawn as the overlap of two circles.
+function IntersectIcon({ size = 12 }: { size?: number }) {
+  const clip = useId();
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true">
+      <defs>
+        <clipPath id={clip}>
+          <circle cx="6.1" cy="8" r="4.4" />
+        </clipPath>
+      </defs>
+      <circle cx="6.1" cy="8" r="4.4" fill="none" stroke="currentColor" strokeWidth={1.4} />
+      <circle cx="9.9" cy="8" r="4.4" fill="none" stroke="currentColor" strokeWidth={1.4} />
+      <circle cx="9.9" cy="8" r="4.4" fill="currentColor" clipPath={`url(#${clip})`} />
+    </svg>
+  );
+}
+
+const EXTRUDE_OPS = [
+  { id: 'new' as const, label: 'extrude.op_new', icon: <Box size={12} /> },
+  { id: 'add' as const, label: 'extrude.op_add', icon: <Plus size={12} /> },
+  { id: 'subtract' as const, label: 'extrude.op_subtract', icon: <Scissors size={12} /> },
+  { id: 'intersect' as const, label: 'extrude.op_intersect', icon: <IntersectIcon /> },
+];
+
+const EXTRUDE_ENDS = [
+  { id: 'blind' as const, label: 'extrude.end_blind', icon: <ArrowUp size={12} /> },
+  { id: 'symmetric' as const, label: 'extrude.end_symmetric', icon: <ChevronsUpDown size={12} /> },
+  {
+    id: 'through-all' as const,
+    label: 'extrude.end_through_all',
+    icon: <InfinityIcon size={12} />,
+  },
+];
+
+const EXTRUDE_SECOND_ENDS = [
+  { id: 'blind' as const, label: 'extrude.end_blind', icon: <ArrowUp size={12} /> },
+  {
+    id: 'through-all' as const,
+    label: 'extrude.end_through_all',
+    icon: <InfinityIcon size={12} />,
+  },
+];
+
+// Making a new body or adding material has no meaningful "through everything".
+function throughAllAllowed(op: ExtrudeFeature['op']): boolean {
+  return op === 'subtract' || op === 'intersect';
+}
+
 function sketchExtent(feature: SketchFeature, locale: string): string {
   let minX = Infinity;
   let maxX = -Infinity;
@@ -218,8 +290,7 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
                   {sketchEntityLabel((key) => t(key as never), entity)}
                 </span>
                 <span className="tree-meta">
-                  {referenceSummary(feature, entity.id, locale) ??
-                    sketchEntityMeta(entity, locale)}
+                  {referenceSummary(feature, entity.id, locale) ?? sketchEntityMeta(entity, locale)}
                 </span>
               </button>
             );
@@ -230,6 +301,24 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
   );
 }
 
+// Bounds of several bodies as one box, so an operation reports the space it uses.
+function mergeBounds(parts: TessellationResult[]): TessellationResult {
+  const first = parts[0]!;
+  const min: [number, number, number] = [first.bbox.min[0], first.bbox.min[1], first.bbox.min[2]];
+  const max: [number, number, number] = [first.bbox.max[0], first.bbox.max[1], first.bbox.max[2]];
+  let triangleCount = first.triangleCount;
+  let vertexCount = first.vertexCount;
+  for (const part of parts.slice(1)) {
+    triangleCount += part.triangleCount;
+    vertexCount += part.vertexCount;
+    for (let axis = 0; axis < 3; axis += 1) {
+      min[axis] = Math.min(min[axis]!, part.bbox.min[axis]!);
+      max[axis] = Math.max(max[axis]!, part.bbox.max[axis]!);
+    }
+  }
+  return { ...first, triangleCount, vertexCount, bbox: { min, max } };
+}
+
 export function Inspector() {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? 'en';
@@ -237,6 +326,12 @@ export function Inspector() {
   const project = useDocumentStore((state) => state.project);
   const apply = useDocumentStore((state) => state.apply);
   const renameProject = useDocumentStore((state) => state.renameProject);
+  const select = useDocumentStore((state) => state.select);
+  const setExtrudeOp = useDocumentStore((state) => state.setExtrudeOp);
+  const setExtrudeInput = useDocumentStore((state) => state.setExtrudeInput);
+  const toggleExtrudeFace = useDocumentStore((state) => state.toggleExtrudeFace);
+  const picking = useUiStore((state) => state.pickingExtrude);
+  const setPickingExtrude = useUiStore((state) => state.setPickingExtrude);
   const meshes = useKernelStore((state) => state.meshes);
   const shapeStats = useKernelStore((state) => state.shapeStats);
   const meshStats = useKernelStore((state) => state.meshStats);
@@ -254,27 +349,102 @@ export function Inspector() {
   const body = bodyRef ? resolveBody(project, bodyRef) : undefined;
   // A sketch is an object of its own: the tree selects the object, the timeline
   // chip selects the operation that created it.
-  const sketchObject =
+  // Faces belong to their sketch, so selecting them keeps the object panel open.
+  const selectedSketchId =
     selection.length === 1 && selection[0]?.kind === 'sketch'
-      ? project.features.find(
-          (candidate): candidate is SketchFeature =>
-            candidate.id === selection[0]?.id && candidate.type === 'sketch',
-        )
-      : undefined;
+      ? selection[0].id
+      : selection.length > 0 && selection.every((item) => item.kind === 'face')
+        ? selection[0]!.id.split('#')[0]
+        : undefined;
+  const sketchObject = selectedSketchId
+    ? project.features.find(
+        (candidate): candidate is SketchFeature =>
+          candidate.id === selectedSketchId && candidate.type === 'sketch',
+      )
+    : undefined;
 
   const sketchGeometry = sketchObject ? sketchTopology(sketchObject.entities) : undefined;
   const sketchOffset =
     feature?.type === 'sketch' && feature.plane.type === 'datum' ? feature.plane.offset : 0;
-  const selectedBodyId = body?.id ?? (feature ? featureBodyId(feature.id) : null);
-  const mesh = selectedBodyId ? meshes[selectedBodyId] : undefined;
-  const statsFeatureId = feature?.id ?? body?.createdBy;
-  const stats = statsFeatureId ? shapeStats[statsFeatureId] : undefined;
-  const importedStats = statsFeatureId ? meshStats[statsFeatureId] : undefined;
+  // One operation can own several bodies, so an operation shows the bounds of
+  // all of them together.
+  const ownedBodies = feature
+    ? project.bodies.filter((candidate) => candidate.createdBy === feature.id)
+    : [];
+  const ownedMeshes = ownedBodies
+    .map((candidate) => meshes[candidate.id])
+    .filter((candidate): candidate is TessellationResult => Boolean(candidate));
+  const mesh = body
+    ? meshes[body.id]
+    : ownedMeshes.length > 0
+      ? mergeBounds(ownedMeshes)
+      : undefined;
+  const statsKey = body?.id ?? feature?.id;
+  const stats = statsKey ? shapeStats[statsKey] : undefined;
+  const importedStats = statsKey ? meshStats[statsKey] : undefined;
   const featureError = feature
     ? featureErrors[feature.id]
     : body
       ? featureErrors[body.createdBy]
       : undefined;
+  // Picking belongs to one operation: selecting anything else ends it.
+  useEffect(() => {
+    if (picking && picking !== feature?.id) setPickingExtrude(null);
+  }, [picking, feature?.id, setPickingExtrude]);
+
+  const extrudeFeature = feature?.type === 'extrude' ? feature : undefined;
+  const setExtrudeEnd = (featureId: string, end: ExtrudeFeature['end']) =>
+    apply({ type: 'feature/replace', feature: { ...extrudeFeature!, id: featureId, end } });
+  const setExtrudeDistance = (featureId: string, distance: number) =>
+    apply({ type: 'feature/replace', feature: { ...extrudeFeature!, id: featureId, distance } });
+  const setExtrudeSecondDirection = (
+    featureId: string,
+    secondDirection: ExtrudeFeature['secondDirection'],
+  ) =>
+    apply({
+      type: 'feature/replace',
+      feature: { ...extrudeFeature!, id: featureId, secondDirection },
+    });
+
+  // What an extrude works on: the whole sketch, or the faces picked from it.
+  const extrudeObjects: {
+    key: string;
+    kind: 'sketch' | 'face';
+    name: string;
+    meta: string;
+    remove: () => void;
+  }[] = (() => {
+    if (!extrudeFeature?.sketchId) return [];
+    const sketch = project.features.find(
+      (candidate): candidate is SketchFeature =>
+        candidate.id === extrudeFeature.sketchId && candidate.type === 'sketch',
+    );
+    if (!sketch) return [];
+    const name = objectName(project, sketchObjectId(sketch.id), sketch.name);
+    if (extrudeFeature.scope !== 'selected') {
+      return [
+        {
+          key: sketch.id,
+          kind: 'sketch' as const,
+          name,
+          meta: t('extrude.wholeSketch'),
+          remove: () => setExtrudeInput(extrudeFeature.id, null),
+        },
+      ];
+    }
+    const faces = sketchTopology(sketch.entities).faces;
+    return extrudeFeature.regions.map((regionId) => {
+      const index = faces.findIndex((face) => face.id === regionId);
+      return {
+        key: regionId,
+        kind: 'face' as const,
+        name: index >= 0 ? t('sketch.face', { index: index + 1 }) : t('extrude.face'),
+        meta: name,
+        remove: () => toggleExtrudeFace(extrudeFeature.id, sketch.id, regionId),
+      };
+    });
+  })();
+
   const updatePrimitive = (patch: Partial<PrimitiveFeature['params']>) => {
     if (!isPrimitive(feature)) return;
     apply({
@@ -418,14 +588,29 @@ export function Inspector() {
             {sketchGeometry.faces.length > 0 && (
               <PanelSection title={t('inspector.faces')} count={sketchGeometry.faces.length}>
                 <div className="selection-list">
-                  {sketchGeometry.faces.map((face, index) => (
-                    <div key={face.id} className="selection-item">
-                      <span className="tree-name">{t('sketch.face', { index: index + 1 })}</span>
-                      <span className="tree-meta">
-                        {formatNumber(face.area, locale, 1)} mm²
-                      </span>
-                    </div>
-                  ))}
+                  {sketchGeometry.faces.map((face, index) => {
+                    const faceKey = `${sketchObject.id}#${face.id}`;
+                    const active = selection.some(
+                      (item) => item.kind === 'face' && item.id === faceKey,
+                    );
+                    return (
+                      <button
+                        key={face.id}
+                        type="button"
+                        className="selection-item"
+                        data-active={active ? 'true' : undefined}
+                        onClick={(event) =>
+                          select(
+                            { kind: 'face', id: faceKey },
+                            { additive: event.metaKey || event.ctrlKey || event.shiftKey },
+                          )
+                        }
+                      >
+                        <span className="tree-name">{t('sketch.face', { index: index + 1 })}</span>
+                        <span className="tree-meta">{formatNumber(face.area, locale, 1)} mm²</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </PanelSection>
             )}
@@ -438,9 +623,7 @@ export function Inspector() {
                   {sketchGeometry.edges.map((edge, index) => (
                     <div key={edge.id} className="selection-item">
                       <span className="tree-name">{t('sketch.edge', { index: index + 1 })}</span>
-                      <span className="tree-meta">
-                        {formatNumber(edge.length, locale, 1)} mm
-                      </span>
+                      <span className="tree-meta">{formatNumber(edge.length, locale, 1)} mm</span>
                     </div>
                   ))}
                 </div>
@@ -468,7 +651,11 @@ export function Inspector() {
 
             {featureErrors[sketchObject.id] && (
               <div className="error-box">
-                {translate(t, `errors.${featureErrors[sketchObject.id]}`, featureErrors[sketchObject.id])}
+                {translate(
+                  t,
+                  `errors.${featureErrors[sketchObject.id]}`,
+                  featureErrors[sketchObject.id],
+                )}
               </div>
             )}
           </>
@@ -491,7 +678,9 @@ export function Inspector() {
                       ? t('features.importMesh')
                       : feature.type === 'sketch'
                         ? t('features.sketch')
-                        : feature.type
+                        : feature.type === 'extrude'
+                          ? t('features.extrude')
+                          : feature.type
                 }
               />
             </PanelSection>
@@ -499,16 +688,12 @@ export function Inspector() {
             {feature.type === 'sketch' && (
               <PanelSection title={t('sketch.placement')}>
                 <div className="sketch-plane-row">
-                  <div className="plane-select" role="group" aria-label={t('sketch.plane')}>
+                  <Segmented ariaLabel={t('sketch.plane')}>
                     {(['XY', 'XZ', 'YZ'] as const).map((plane) => (
-                      <button
+                      <SegmentedTab
                         key={plane}
-                        type="button"
-                        data-active={
-                          feature.plane.type === 'datum' && feature.plane.plane === plane
-                            ? 'true'
-                            : undefined
-                        }
+                        label={plane}
+                        active={feature.plane.type === 'datum' && feature.plane.plane === plane}
                         onClick={() =>
                           apply({
                             type: 'feature/replace',
@@ -518,11 +703,9 @@ export function Inspector() {
                             },
                           })
                         }
-                      >
-                        {plane}
-                      </button>
+                      />
                     ))}
-                  </div>
+                  </Segmented>
                   <SketchOffsetField
                     label={t('sketch.offset')}
                     value={sketchOffset}
@@ -549,6 +732,157 @@ export function Inspector() {
               <>
                 <SketchComposition feature={feature} />
                 {activeSketchId === feature.id && <SketchConstraints feature={feature} />}
+              </>
+            )}
+
+            {feature.type === 'extrude' && (
+              <>
+                <PanelSection title={t('extrude.operation')}>
+                  <Segmented ariaLabel={t('extrude.operation')}>
+                    {EXTRUDE_OPS.map((op) => (
+                      <SegmentedTab
+                        key={op.id}
+                        label={t(op.label as never)}
+                        icon={op.icon}
+                        active={feature.op === op.id}
+                        onClick={() => setExtrudeOp(feature.id, op.id)}
+                      />
+                    ))}
+                  </Segmented>
+                </PanelSection>
+
+                <PanelSection title={t('extrude.method')}>
+                  <div className="section-stack">
+                    <Segmented ariaLabel={t('extrude.end')}>
+                      {EXTRUDE_ENDS.map((end) => {
+                        const disabled = end.id === 'through-all' && !throughAllAllowed(feature.op);
+                        return (
+                          <SegmentedTab
+                            key={end.id}
+                            label={t(end.label as never)}
+                            icon={end.icon}
+                            tooltip={disabled ? t('extrude.throughAllUnavailable') : undefined}
+                            active={feature.end === end.id}
+                            disabled={disabled}
+                            onClick={() => setExtrudeEnd(feature.id, end.id)}
+                          />
+                        );
+                      })}
+                    </Segmented>
+                    {feature.end !== 'through-all' && (
+                      <div className="dimension-row">
+                        <DimensionField
+                          axis="↑"
+                          label={t('extrude.distance')}
+                          suffix="mm"
+                          value={feature.distance}
+                          onCommit={(distance) => setExtrudeDistance(feature.id, distance)}
+                        />
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      className="switch-row"
+                      data-active={feature.secondDirection !== undefined ? 'true' : undefined}
+                      onClick={() =>
+                        setExtrudeSecondDirection(
+                          feature.id,
+                          feature.secondDirection
+                            ? undefined
+                            : { end: 'blind', distance: Math.abs(feature.distance) },
+                        )
+                      }
+                    >
+                      <span className="segmented-tab-icon" aria-hidden="true">
+                        <ArrowDown size={15} />
+                      </span>
+                      <span className="switch-row-label">{t('extrude.secondDirection')}</span>
+                      <span className="switch-row-state" aria-hidden="true" />
+                    </button>
+
+                    {feature.secondDirection && (
+                      <div className="extrude-second-body">
+                        <Segmented ariaLabel={t('extrude.secondEnd')}>
+                          {EXTRUDE_SECOND_ENDS.map((end) => (
+                            <SegmentedTab
+                              key={end.id}
+                              label={t(end.label as never)}
+                              icon={end.icon}
+                              active={feature.secondDirection?.end === end.id}
+                              onClick={() =>
+                                setExtrudeSecondDirection(feature.id, {
+                                  end: end.id,
+                                  distance: feature.secondDirection?.distance ?? 10,
+                                })
+                              }
+                            />
+                          ))}
+                        </Segmented>
+                        {feature.secondDirection.end !== 'through-all' && (
+                          <div className="dimension-row">
+                            <DimensionField
+                              axis="↓"
+                              label={t('extrude.distance')}
+                              suffix="mm"
+                              value={feature.secondDirection.distance}
+                              onCommit={(distance) =>
+                                setExtrudeSecondDirection(feature.id, {
+                                  end: feature.secondDirection?.end ?? 'blind',
+                                  distance,
+                                })
+                              }
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </PanelSection>
+
+                <PanelSection
+                  title={t('extrude.objects')}
+                  count={extrudeObjects.length}
+                  action={
+                    <IconButton
+                      label={
+                        picking === feature.id ? t('extrude.finishPick') : t('extrude.pickObjects')
+                      }
+                      tooltip={
+                        picking === feature.id ? t('extrude.finishPick') : t('extrude.pickObjects')
+                      }
+                      active={picking === feature.id}
+                      onClick={() => setPickingExtrude(picking === feature.id ? null : feature.id)}
+                    >
+                      {picking === feature.id ? <Check size={14} /> : <Pencil size={14} />}
+                    </IconButton>
+                  }
+                >
+                  {extrudeObjects.length === 0 ? (
+                    <p className="panel-hint">
+                      {picking === feature.id ? t('extrude.pickHint') : t('extrude.noObjects')}
+                    </p>
+                  ) : (
+                    <div className="selection-list">
+                      {extrudeObjects.map((entry) => (
+                        <div className="selection-item" key={entry.key}>
+                          <span className="tree-icon">
+                            {entry.kind === 'sketch' ? <PenTool size={14} /> : <Square size={14} />}
+                          </span>
+                          <span className="tree-name">{entry.name}</span>
+                          <span className="tree-meta">{entry.meta}</span>
+                          <IconButton
+                            label={t('extrude.removeObject')}
+                            tooltip={t('extrude.removeObject')}
+                            onClick={() => entry.remove()}
+                          >
+                            <X size={13} />
+                          </IconButton>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </PanelSection>
               </>
             )}
 

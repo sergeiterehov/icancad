@@ -42,6 +42,62 @@ export interface MakeBoxResult {
   stats: ShapeStats;
 }
 
+export interface ProfileLine {
+  type: 'line';
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+export interface ProfileArc {
+  type: 'arc';
+  cx: number;
+  cy: number;
+  r: number;
+  /** Radians, counter-clockwise from `startAngle` to `endAngle`. */
+  startAngle: number;
+  endAngle: number;
+  /** The contour walks this curve from end to start. */
+  reversed?: boolean;
+}
+
+export interface ProfileCircle {
+  type: 'circle';
+  cx: number;
+  cy: number;
+  r: number;
+  reversed?: boolean;
+}
+
+export type ProfileCurve = ProfileLine | ProfileArc | ProfileCircle;
+
+export interface ProfileLoop {
+  curves: ProfileCurve[];
+}
+
+export interface ProfileRegion {
+  outer: ProfileLoop;
+  holes: ProfileLoop[];
+}
+
+export interface MakePrismParams {
+  shapeId: string;
+  origin: Vec3;
+  xAxis: Vec3;
+  yAxis: Vec3;
+  regions: ProfileRegion[];
+  /** Signed extrusion distances along the plane normal; one or two of them. */
+  distances: number[];
+}
+
+export interface BooleanParams {
+  shapeId: string;
+  baseShapeId: string;
+  toolShapeId: string;
+  op: 'fuse' | 'cut' | 'common';
+}
+
 export type KernelStatusPhase = 'loading-occt' | 'ready' | 'error';
 
 export interface KernelStatusEvent {
@@ -62,7 +118,10 @@ export type KernelErrorCode =
 export type KernelRequestPayload =
   | { type: 'health' }
   | { type: 'make-box'; params: BoxParams }
+  | { type: 'make-prism'; params: MakePrismParams }
+  | { type: 'boolean'; params: BooleanParams }
   | { type: 'tessellate'; shapeId: string; quality?: TessellationQuality }
+  | { type: 'topology'; shapeId: string }
   | { type: 'dispose'; shapeId: string };
 
 export type KernelRequest = KernelRequestPayload & { id: number };

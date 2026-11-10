@@ -1,9 +1,13 @@
 import type {
+  BooleanParams,
   BoxParams,
   HealthResult,
   KernelErrorCode,
   KernelStatusEvent,
   MakeBoxResult,
+  MakePrismParams,
+  ProfileCurve,
+  ProfileLoop,
   ShapeStats,
   TessellationQuality,
   TessellationResult,
@@ -97,6 +101,48 @@ export class KernelEngine {
       }
     }
     const shape = new oc.BRepPrimAPI_MakeBox_1(dx, dy, dz).Shape();
+    this.shapes.set(shapeId, shape);
+    return { shapeId, stats: this.countTopology(shape) };
+  }
+
+  makePrism(params: MakePrismParams): MakeBoxResult {
+    this.requireOc();
+    const { shapeId, regions } = params;
+    if (!shapeId) throw new KernelOpError('INVALID_PARAMS', 'shapeId is required');
+    if (regions.length === 0) {
+      throw new KernelOpError('INVALID_PARAMS', 'A prism needs at least one region');
+    }
+    if (
+      params.distances.length === 0 ||
+      params.distances.some((value) => !Number.isFinite(value) || Math.abs(value) <= 1e-6)
+    ) {
+      throw new KernelOpError('INVALID_PARAMS', 'Extrude distance must be a positive number');
+    }
+
+    const vectors = this.prismVectors(params);
+    let shape: OcctShape | null = null;
+    for (const region of regions) {
+      // Holes are removed with booleans: wire orientation inside a face is easy to
+      // get wrong, while cutting the hole prisms is exact and orientation-free.
+      let solid: OcctShape | null = this.extrudeLoop(region.outer, vectors, params);
+      for (const hole of region.holes) {
+        const holeSolid = this.extrudeLoop(hole, vectors, params);
+        solid = this.boolean(solid, holeSolid, 'cut');
+      }
+      shape = shape ? this.boolean(shape, solid, 'fuse') : solid;
+    }
+    if (!shape) throw new KernelOpError('OP_FAILED', 'Extrude produced no geometry');
+
+    this.shapes.set(shapeId, shape);
+    return { shapeId, stats: this.countTopology(shape) };
+  }
+
+  booleanShape(params: BooleanParams): MakeBoxResult {
+    const { shapeId, baseShapeId, toolShapeId, op } = params;
+    if (!shapeId) throw new KernelOpError('INVALID_PARAMS', 'shapeId is required');
+    const base = this.getShape(baseShapeId);
+    const tool = this.getShape(toolShapeId);
+    const shape = this.boolean(base, tool, op);
     this.shapes.set(shapeId, shape);
     return { shapeId, stats: this.countTopology(shape) };
   }
@@ -220,12 +266,127 @@ export class KernelEngine {
     };
   }
 
+  shapeStats(shapeId: string): ShapeStats {
+    return this.countTopology(this.getShape(shapeId));
+  }
+
   dispose(shapeId: string): boolean {
     return this.shapes.delete(shapeId);
   }
 
   clear(): void {
     this.shapes.clear();
+  }
+
+  private prismVectors(params: MakePrismParams): unknown[] {
+    const oc = this.requireOc();
+    const [nx, ny, nz] = profilePlane(params).normal;
+    return params.distances.map(
+      (distance) => new oc.gp_Vec_4(nx * distance, ny * distance, nz * distance),
+    );
+  }
+
+  private extrudeLoop(
+    loop: ProfileLoop,
+    vectors: unknown[],
+    params: MakePrismParams,
+  ): OcctShape {
+    const oc = this.requireOc();
+    const plane = profilePlane(params);
+    const wire = this.buildWire(loop, plane);
+    const maker = new oc.BRepBuilderAPI_MakeFace_15(wire, false);
+    if (!maker.IsDone()) {
+      throw new KernelOpError('INVALID_PARAMS', 'Sketch region contour is not closed');
+    }
+    const face = maker.Face();
+    let solid: OcctShape | null = null;
+    for (const vector of vectors) {
+      const prism = new oc.BRepPrimAPI_MakePrism_1(face, vector, false, true);
+      if (!prism.IsDone()) {
+        throw new KernelOpError('OP_FAILED', 'Extrude failed for a sketch region');
+      }
+      solid = solid ? this.boolean(solid, prism.Shape(), 'fuse') : prism.Shape();
+    }
+    if (!solid) throw new KernelOpError('OP_FAILED', 'Extrude produced no geometry');
+    return solid;
+  }
+
+  private buildWire(loop: ProfileLoop, plane: ProfilePlane): OcctShape {
+    const oc = this.requireOc();
+    if (loop.curves.length === 0) {
+      throw new KernelOpError('INVALID_PARAMS', 'Sketch region contour is empty');
+    }
+    this.assertClosedLoop(loop);
+    const edges = loop.curves.map((curve) => this.buildEdge(curve, plane));
+    const maker = new oc.BRepBuilderAPI_MakeWire_2(edges[0]!);
+    for (const edge of edges.slice(1)) {
+      maker.Add_1(edge);
+    }
+    if (!maker.IsDone()) {
+      throw new KernelOpError('INVALID_PARAMS', 'Sketch region contour has open ends');
+    }
+    return maker.Wire();
+  }
+
+  private assertClosedLoop(loop: ProfileLoop): void {
+    const first = loop.curves[0]!;
+    if (loop.curves.length === 1 && first.type === 'circle') return;
+    if (loop.curves.some((curve) => curve.type === 'circle')) {
+      throw new KernelOpError('INVALID_PARAMS', 'A full circle must be the whole contour');
+    }
+    const tolerance = 1e-6;
+    let previousEnd = curveEnd(first);
+    for (const curve of loop.curves.slice(1)) {
+      const start = curveStart(curve);
+      if (Math.hypot(start[0] - previousEnd[0], start[1] - previousEnd[1]) > tolerance) {
+        throw new KernelOpError('INVALID_PARAMS', 'Sketch region contour has open ends');
+      }
+      previousEnd = curveEnd(curve);
+    }
+    const firstStart = curveStart(first);
+    if (Math.hypot(firstStart[0] - previousEnd[0], firstStart[1] - previousEnd[1]) > tolerance) {
+      throw new KernelOpError('INVALID_PARAMS', 'Sketch region contour is not closed');
+    }
+  }
+
+  private buildEdge(curve: ProfileCurve, plane: ProfilePlane): OcctShape {
+    const oc = this.requireOc();
+    if (curve.type === 'line') {
+      const from = planePoint(oc, plane, curve.x1, curve.y1);
+      const to = planePoint(oc, plane, curve.x2, curve.y2);
+      return new oc.BRepBuilderAPI_MakeEdge_3(from, to).Edge();
+    }
+    // Orienting the circle with the plane axes keeps sketch angles unchanged.
+    const centre = planePoint(oc, plane, curve.cx, curve.cy);
+    const axis = new oc.gp_Ax2_2(
+      centre,
+      new oc.gp_Dir_4(plane.normal[0], plane.normal[1], plane.normal[2]),
+      new oc.gp_Dir_4(plane.xAxis[0], plane.xAxis[1], plane.xAxis[2]),
+    );
+    const circle = new oc.gp_Circ_2(axis, curve.r);
+    const edge =
+      curve.type === 'circle'
+        ? new oc.BRepBuilderAPI_MakeEdge_8(circle).Edge()
+        : new oc.BRepBuilderAPI_MakeEdge_9(circle, curve.startAngle, curve.endAngle).Edge();
+    if (!curve.reversed) return edge;
+    // Reversed() returns a generic shape, but the wire builder needs an edge.
+    return oc.TopoDS.Edge_1(edge.Reversed());
+  }
+
+  private boolean(base: OcctShape, tool: OcctShape, op: BooleanParams['op']): OcctShape {
+    const oc = this.requireOc();
+    const maker =
+      op === 'fuse'
+        ? new oc.BRepAlgoAPI_Fuse_3(base, tool)
+        : op === 'cut'
+          ? new oc.BRepAlgoAPI_Cut_3(base, tool)
+          : new oc.BRepAlgoAPI_Common_3(base, tool);
+    maker.Build();
+    const shape = maker.Shape();
+    if (shape.IsNull()) {
+      throw new KernelOpError('OP_FAILED', `Boolean ${op} produced an empty shape`);
+    }
+    return shape;
   }
 
   private countTopology(shape: OcctShape): ShapeStats {
@@ -281,3 +442,49 @@ function updateBounds(
   if (z > max[2]) max[2] = z;
 }
 
+
+interface ProfilePlane {
+  origin: [number, number, number];
+  xAxis: [number, number, number];
+  yAxis: [number, number, number];
+  normal: [number, number, number];
+}
+
+function unitVector(vector: readonly number[]): [number, number, number] {
+  const length = Math.hypot(vector[0] ?? 0, vector[1] ?? 0, vector[2] ?? 0) || 1;
+  return [(vector[0] ?? 0) / length, (vector[1] ?? 0) / length, (vector[2] ?? 0) / length];
+}
+
+// The sketch plane as an orthonormal frame; profile curves live in its 2D space.
+function profilePlane(params: MakePrismParams): ProfilePlane {
+  const xAxis = unitVector(params.xAxis);
+  const yAxis = unitVector(params.yAxis);
+  const normal = unitVector([
+    xAxis[1] * yAxis[2] - xAxis[2] * yAxis[1],
+    xAxis[2] * yAxis[0] - xAxis[0] * yAxis[2],
+    xAxis[0] * yAxis[1] - xAxis[1] * yAxis[0],
+  ]);
+  return { origin: [...params.origin] as [number, number, number], xAxis, yAxis, normal };
+}
+
+function planePoint(oc: OcctBindings, plane: ProfilePlane, x: number, y: number) {
+  const [ox, oy, oz] = plane.origin;
+  const [xx, xy, xz] = plane.xAxis;
+  const [yx, yy, yz] = plane.yAxis;
+  return new oc.gp_Pnt_3(ox + xx * x + yx * y, oy + xy * x + yy * y, oz + xz * x + yz * y);
+}
+
+
+function curveStart(curve: ProfileCurve): [number, number] {
+  if (curve.type === 'line') return [curve.x1, curve.y1];
+  if (curve.type === 'circle') return [curve.cx + curve.r, curve.cy];
+  const angle = curve.reversed ? curve.endAngle : curve.startAngle;
+  return [curve.cx + Math.cos(angle) * curve.r, curve.cy + Math.sin(angle) * curve.r];
+}
+
+function curveEnd(curve: ProfileCurve): [number, number] {
+  if (curve.type === 'line') return [curve.x2, curve.y2];
+  if (curve.type === 'circle') return [curve.cx + curve.r, curve.cy];
+  const angle = curve.reversed ? curve.startAngle : curve.endAngle;
+  return [curve.cx + Math.cos(angle) * curve.r, curve.cy + Math.sin(angle) * curve.r];
+}

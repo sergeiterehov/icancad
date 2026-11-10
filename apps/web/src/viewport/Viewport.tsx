@@ -10,7 +10,7 @@ import {
   sketchObjectId,
   type SketchFeature,
 } from '@icancad/model';
-import { datumFrame } from '@icancad/sketch';
+import { datumFrame, sketchTopology } from '@icancad/sketch';
 import { sketchSectionPlane } from '../sketch/sectionPlane';
 import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
@@ -49,6 +49,7 @@ export function Viewport() {
   const sectionPlanes = project.view.sectionPlanes;
   const sectionEnabled = useUiStore((state) => state.sectionEnabled);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
+  const pickingExtrude = useUiStore((state) => state.pickingExtrude);
   const sketchSectionEnabled = useUiStore((state) => state.sketchSectionEnabled);
   const sketchConstraintId = useUiStore((state) => state.sketchConstraintId);
   const sketchFrozenEntityIds = useUiStore((state) => state.sketchFrozenEntityIds);
@@ -96,11 +97,29 @@ export function Viewport() {
     const controller = new SceneController(
       canvas,
       container,
-      (bodyId, additive) => {
+      (pick, additive) => {
         if (useUiStore.getState().activeSketchId) return;
         const store = useDocumentStore.getState();
-        if (!bodyId) store.select(null);
-        else store.select({ kind: 'body', id: bodyId }, { additive });
+        const ui = useUiStore.getState();
+        const picking = ui.pickingExtrude;
+        if (picking) {
+          if (!pick) return;
+          if (pick.kind === 'body') return;
+          store.toggleExtrudeFace(picking, pick.sketchId, pick.faceId);
+          return;
+        }
+        if (!pick) {
+          store.select(null);
+          return;
+        }
+        if (pick.kind === 'body') {
+          store.select({ kind: 'body', id: pick.id }, { additive });
+          return;
+        }
+        store.select(
+          { kind: 'face', id: `${pick.sketchId}#${pick.faceId}` },
+          { additive },
+        );
       },
       (bodyId, x, y) => {
         if (!bodyId || useUiStore.getState().activeSketchId) return;
@@ -118,10 +137,10 @@ export function Viewport() {
           },
           {
             id: 'delete',
-            label: labels('context.deleteOperation'),
+            label: labels('context.deleteObject'),
             icon: <Trash2 size={14} />,
             danger: true,
-            onSelect: () => store.removeFeature(body.createdBy),
+            onSelect: () => store.deleteBody(body.id, labels('context.deleteObject')),
           },
         ]);
       },
@@ -239,6 +258,12 @@ export function Viewport() {
       )
       .map((feature) => ({
         id: feature.id,
+        faces: sketchTopology(feature.entities).faces.map((face) => ({
+          id: face.id,
+          outline: face.outline,
+          holes: face.holeOutlines,
+        })),
+        facesPicking: Boolean(pickingExtrude),
         frame:
           feature.plane.type === 'datum'
             ? datumFrame(feature.plane.plane, feature.plane.offset)
@@ -270,6 +295,7 @@ export function Viewport() {
     sketchConstraintId,
     sketchFrozenEntityIds,
     sketchAutoHighlightIds,
+    pickingExtrude,
   ]);
 
   useEffect(() => {

@@ -7,12 +7,36 @@ import { useUiStore } from '../stores/uiStore';
 import { IconButton } from './Controls';
 import { SectionTool } from './SectionTool';
 
+// Extrude works on a whole sketch or on the faces selected inside one sketch.
+function extrudeInput(
+  selection: ReturnType<typeof useDocumentStore.getState>['selection'],
+  project: ReturnType<typeof useDocumentStore.getState>['project'],
+): { sketchId: string; regions: string[] } | null {
+  if (selection.length === 0) return null;
+  if (selection.every((item) => item.kind === 'sketch')) {
+    return selection.length === 1 ? { sketchId: selection[0]!.id, regions: [] } : null;
+  }
+  if (selection.every((item) => item.kind === 'face')) {
+    const [sketchId] = selection[0]!.id.split('#');
+    if (!sketchId) return null;
+    if (selection.some((item) => item.id.split('#')[0] !== sketchId)) return null;
+    const regions = selection.map((item) => item.id.split('#')[1] ?? '').filter(Boolean);
+    return regions.length > 0 ? { sketchId, regions } : null;
+  }
+  void project;
+  return null;
+}
+
 export function ToolRail() {
   const { t } = useTranslation();
   const planned = t('tools.comingSoon');
   const activeSketchId = useUiStore((state) => state.activeSketchId);
   const setActiveSketch = useUiStore((state) => state.setActiveSketch);
   const addSketch = useDocumentStore((state) => state.addSketch);
+  const addExtrude = useDocumentStore((state) => state.addExtrude);
+  const project = useDocumentStore((state) => state.project);
+  const selection = useDocumentStore((state) => state.selection);
+  const sketchSelection = extrudeInput(selection, project);
   const openMenu = useContextMenuStore((state) => state.open);
 
   const openSketchMenu = (event: MouseEvent<HTMLButtonElement>) => {
@@ -41,7 +65,11 @@ export function ToolRail() {
       >
         <PenTool size={17} />
       </IconButton>
-      <IconButton label={t('tools.extrude')} tooltip={planned} disabled>
+      <IconButton
+        label={t('tools.extrude')}
+        tooltip={t('tools.extrude')}
+        onClick={() => addExtrude(t('features.extrude'), sketchSelection ?? undefined)}
+      >
         <ArrowBigUp size={17} />
       </IconButton>
       <IconButton label={t('tools.shell')} tooltip={planned} disabled>

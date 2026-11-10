@@ -19,6 +19,12 @@ export interface SketchTopologyEdge {
   points: Point2[];
 }
 
+export interface SketchTopologyLoopCurve {
+  entityId: string;
+  /** True when the loop walks the entity against its natural direction. */
+  reversed: boolean;
+}
+
 export interface SketchTopologyFace {
   id: string;
   area: number;
@@ -27,6 +33,12 @@ export interface SketchTopologyFace {
   /** Entity ids of the inner contours (holes). */
   holes: string[][];
   outline: Point2[];
+  /** Point contours of the holes, for filling and picking the face. */
+  holeOutlines: Point2[][];
+  /** Ordered contours: the first loop is the outer boundary, the rest are holes. */
+  loops: SketchTopologyLoopCurve[][];
+  /** How many other contours enclose this face; 0 means an outermost face. */
+  depth: number;
 }
 
 export interface SketchTopology {
@@ -224,7 +236,13 @@ export function sketchTopology(entities: readonly SketchEntity[]): SketchTopolog
       : stableNodeId(resolveNode(polyline[polyline.length - 1]!));
   }
 
-  return { points, edges, faces: findFaces(nodes, segments, polygonArea, pointInPolygon) };
+  const polylines = new Map<string, Point2[]>();
+  for (const edge of edges) polylines.set(edge.id, edge.points);
+  return {
+    points,
+    edges,
+    faces: findFaces(nodes, segments, polygonArea, pointInPolygon, polylines),
+  };
 }
 
 function findFaces(
@@ -232,6 +250,7 @@ function findFaces(
   segments: Segment[],
   area: (points: readonly Point2[]) => number,
   contains: (point: Point2, polygon: readonly Point2[]) => boolean,
+  polylines: Map<string, Point2[]>,
 ): SketchTopologyFace[] {
   // Drop dangling segments so open chains never take part in face detection.
   const live = segments.map(() => true);
@@ -302,7 +321,11 @@ function findFaces(
   });
 
   const visited = new Set<number>();
-  const loops: { points: Point2[]; entityIds: string[] }[] = [];
+  const loops: {
+    points: Point2[];
+    entityIds: string[];
+    curves: SketchTopologyLoopCurve[];
+  }[] = [];
   halfEdges.forEach((_, start) => {
     if (visited.has(start)) return;
     const cycle: number[] = [];
@@ -324,7 +347,28 @@ function findFaces(
       if (entityIds[entityIds.length - 1] !== entityId) entityIds.push(entityId);
     }
     if (entityIds.length > 1 && entityIds[0] === entityIds[entityIds.length - 1]) entityIds.pop();
-    loops.push({ points, entityIds });
+
+    const curves: SketchTopologyLoopCurve[] = [];
+    let index = 0;
+    while (index < cycle.length) {
+      const entityId = segments[halfEdges[cycle[index]!]!.segment]!.entityId;
+      const startHalf = halfEdges[cycle[index]!]!;
+      let end = index;
+      while (
+        end + 1 < cycle.length &&
+        segments[halfEdges[cycle[end + 1]!]!.segment]!.entityId === entityId
+      ) {
+        end += 1;
+      }
+      const endHalf = halfEdges[cycle[end]!]!;
+      const polyline = polylines.get(entityId) ?? [];
+      const from = nodes[startHalf.from]!;
+      const to = nodes[endHalf.to]!;
+      const reversed = directionOfRun(polyline, from, to) === 'reversed';
+      curves.push({ entityId, reversed });
+      index = end + 1;
+    }
+    loops.push({ points, entityIds, curves });
   });
 
   const faces: SketchTopologyFace[] = [];
@@ -342,13 +386,52 @@ function findFaces(
           ),
       )
       .map((candidate) => candidate.entityIds);
+    const holeContours = loops
+      .filter((candidate) => candidate !== loop && contains(candidate.points[0]!, loop.points))
+      .filter(
+        (candidate) =>
+          !loops.some(
+            (other) =>
+              other !== loop &&
+              other !== candidate &&
+              contains(candidate.points[0]!, other.points) &&
+              contains(other.points[0]!, loop.points),
+          ),
+      );
+    // A hole must be walked opposite to the outer contour.
+    const holeLoops = holeContours.map((candidate) =>
+      [...candidate.curves]
+        .reverse()
+        .map((curve) => ({ entityId: curve.entityId, reversed: !curve.reversed })),
+    );
     faces.push({
       id: `face_${hash([...loop.entityIds.sort(), '|', ...holes.flat().sort()])}`,
       area: area(loop.points),
       boundary: loop.entityIds,
       holes,
       outline: loop.points,
+      holeOutlines: holeContours.map((candidate) => candidate.points),
+      loops: [loop.curves, ...holeLoops],
+      depth: loops.filter(
+        (candidate) => candidate !== loop && contains(loop.points[0]!, candidate.points),
+      ).length,
     });
   }
   return faces;
+}
+
+function directionOfRun(polyline: Point2[], from: Node, to: Node): 'forward' | 'reversed' {
+  const keyFrom = nodeKey([from.x, from.y]);
+  const keyTo = nodeKey([to.x, to.y]);
+  const count = polyline.length;
+  const pairs: [number, number][] = [];
+  for (let index = 0; index < count - 1; index += 1) pairs.push([index, index + 1]);
+  pairs.push([count - 1, 0]);
+  for (const [a, b] of pairs) {
+    const keyA = nodeKey(polyline[a]!);
+    const keyB = nodeKey(polyline[b]!);
+    if (keyA === keyFrom && keyB === keyTo) return 'forward';
+    if (keyA === keyTo && keyB === keyFrom) return 'reversed';
+  }
+  return 'forward';
 }

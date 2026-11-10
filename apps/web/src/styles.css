@@ -1203,6 +1203,25 @@ button:disabled {
   color: var(--text-dim);
 }
 
+button.selection-item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+button.selection-item:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+button.selection-item[data-active='true'] {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
 .selection-item .tree-name {
   min-width: 0;
   overflow: hidden;
@@ -1213,6 +1232,18 @@ button:disabled {
 
 .selection-item .tree-meta {
   flex: 0 0 auto;
+}
+
+/* The remove action only shows on hover so rows stay calm. */
+.selection-item .icon-btn {
+  width: 20px;
+  height: 20px;
+  opacity: 0;
+}
+
+.selection-item:hover .icon-btn,
+.selection-item .icon-btn:focus-visible {
+  opacity: 1;
 }
 
 .sketch-entity-row {
@@ -1336,6 +1367,12 @@ button:disabled {
   filter: drop-shadow(0 3px 7px rgba(12, 18, 28, 0.18));
 }
 
+.section-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .dimension-row {
   display: flex;
   gap: 6px;
@@ -1348,14 +1385,18 @@ button:disabled {
 
 .dimension-field {
   width: 100%;
-  height: 28px;
+  height: 30px;
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 0 7px;
-  border: 1px solid transparent;
+  padding: 0 9px;
+  border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--panel-2);
+}
+
+.dimension-field:hover {
+  border-color: var(--border-strong);
 }
 
 .dimension-field:focus-within {
@@ -1715,10 +1756,155 @@ button:disabled {
   min-width: 0;
 }
 
-.sketch-plane-row .plane-select {
+.sketch-plane-row .segmented {
   flex: 1 1 auto;
   min-width: 0;
-  margin-bottom: 0;
+}
+
+.icon-row .icon-btn {
+  flex: 1 1 0;
+  width: auto;
+  height: 26px;
+}
+
+.segmented {
+  display: flex;
+  gap: 1px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+
+.segmented-tab {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+  height: 26px;
+  padding: 0 3px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.segmented-tab:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.segmented-tab[data-active='true'] {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
+.segmented-tab:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.segmented-tab-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  height: 13px;
+}
+
+.segmented-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  height: 30px;
+  margin-top: 0;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.switch-row:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.switch-row[data-active='true'] {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.switch-row-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.extrude-second-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.switch-row-state {
+  position: relative;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 13px;
+  border-radius: 999px;
+  background: var(--panel-3);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.switch-row-state::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  content: '';
+  transition:
+    transform 120ms ease,
+    background 120ms ease;
+}
+
+.switch-row[data-active='true'] .switch-row-state {
+  background: var(--accent);
+  box-shadow: none;
+}
+
+.switch-row[data-active='true'] .switch-row-state::after {
+  background: #fff;
+  transform: translateX(9px);
+}
+
+.panel-hint {
+  margin: 2px 0 0;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.45;
 }
 
 .sketch-offset-field {
@@ -1758,32 +1944,56 @@ button:disabled {
   color: var(--text-faint);
 }
 
-.plane-select {
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
   display: flex;
-  gap: 1px;
-  padding: 2px;
-  margin-bottom: 8px;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 45%);
+}
+
+.dialog {
+  width: min(380px, calc(100vw - 40px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 45%);
+}
+
+.dialog-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dialog-text {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.dialog-list {
+  max-height: 180px;
+  margin: 0;
+  padding: 8px 10px 8px 24px;
+  overflow: auto;
   border-radius: 6px;
   background: var(--panel-2);
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.7;
 }
 
-.plane-select button {
-  flex: 1 1 0;
-  height: 26px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-faint);
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.plane-select button:hover {
-  color: var(--text);
-}
-
-.plane-select button[data-active='true'] {
-  background: var(--panel-3);
-  color: var(--text);
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }

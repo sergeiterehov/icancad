@@ -42,8 +42,37 @@ export function historyInsertIndex(project: Project): number {
 export function bodiesInHistory(project: Project): BodyObject[] {
   const active = activeFeatureIds(project);
   return project.bodies
-    .filter((body) => active.has(body.createdBy))
+    .filter((body) => active.has(body.createdBy) && !isBodyDeleted(project, body.id, active))
     .map((body) => resolveBody(project, body));
+}
+
+function isBodyDeleted(project: Project, bodyId: string, active: Set<string>): boolean {
+  return project.features.some(
+    (feature) =>
+      active.has(feature.id) && feature.type === 'delete-body' && feature.bodyId === bodyId,
+  );
+}
+
+/** Features that would break if the given feature disappeared, transitively. */
+export function dependentFeatures(
+  project: Project,
+  featureId: string,
+): { id: string; name: string }[] {
+  const removed = new Set([featureId]);
+  const found: { id: string; name: string }[] = [];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const feature of project.features) {
+      if (removed.has(feature.id)) continue;
+      if (getFeatureDependencies(feature, project).some((id) => removed.has(id))) {
+        removed.add(feature.id);
+        found.push({ id: feature.id, name: feature.name });
+        changed = true;
+      }
+    }
+  }
+  return found;
 }
 
 function referencedBodyIds(feature: Feature): string[] {
@@ -67,16 +96,22 @@ function referencedBodyIds(feature: Feature): string[] {
       return [feature.bodyId];
     case 'boolean':
       return feature.bodyIds;
+    case 'delete-body':
+      return [feature.bodyId];
   }
 }
 
 export function getFeatureDependencies(feature: Feature, project: Project): string[] {
   const dependencies = new Set<string>();
-  if (feature.type === 'extrude') {
+  if (feature.type === 'extrude' && feature.sketchId) {
     dependencies.add(feature.sketchId);
   }
   if (feature.type === 'rib') {
     dependencies.add(feature.sketchId);
+  }
+  if (feature.type === 'delete-body') {
+    const body = project.bodies.find((candidate) => candidate.id === feature.bodyId);
+    if (body) dependencies.add(body.createdBy);
   }
   for (const bodyId of referencedBodyIds(feature)) {
     const body = project.bodies.find((candidate) => candidate.id === bodyId);
@@ -128,7 +163,7 @@ export function validateHistory(project: Project): HistoryIssue[] {
   for (const feature of project.features) {
     const index = featureIndices.get(feature.id) ?? -1;
 
-    if (feature.type === 'extrude' && !featureIndices.has(feature.sketchId)) {
+    if (feature.type === 'extrude' && feature.sketchId && !featureIndices.has(feature.sketchId)) {
       issues.push({
         code: 'MISSING_DEPENDENCY',
         severity: 'error',

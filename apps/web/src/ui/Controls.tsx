@@ -30,6 +30,51 @@ export function IconButton({
   );
 }
 
+export function Segmented({ ariaLabel, children }: { ariaLabel: string; children: ReactNode }) {
+  return (
+    <div className="segmented" role="group" aria-label={ariaLabel}>
+      {children}
+    </div>
+  );
+}
+
+// A tab is one option of a segmented switch. Labels never wrap: the row is a
+// single line like the sketch plane selector.
+export function SegmentedTab({
+  label,
+  icon,
+  active,
+  disabled,
+  tooltip,
+  onClick,
+}: {
+  label: string;
+  icon?: ReactNode;
+  active?: boolean;
+  disabled?: boolean;
+  tooltip?: string;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="segmented-tab"
+      data-active={active ? 'true' : undefined}
+      disabled={disabled}
+      aria-pressed={active}
+      title={tooltip}
+      onClick={onClick}
+    >
+      {icon ? (
+        <span className="segmented-tab-icon" aria-hidden="true">
+          {icon}
+        </span>
+      ) : null}
+      <span className="segmented-tab-label">{label}</span>
+    </button>
+  );
+}
+
 export function Button({
   variant = 'secondary',
   className,
