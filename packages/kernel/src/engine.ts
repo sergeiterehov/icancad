@@ -5,6 +5,7 @@ import type {
   KernelErrorCode,
   KernelStatusEvent,
   MakeBoxResult,
+  MakeFacePrismParams,
   MakePrismParams,
   ProfileCurve,
   ProfileLoop,
@@ -133,6 +134,62 @@ export class KernelEngine {
     }
     if (!shape) throw new KernelOpError('OP_FAILED', 'Extrude produced no geometry');
 
+    // Regions that touch are fused into one solid, but OCCT keeps their shared
+    // boundaries as extra coplanar faces. Merge them so the top of a union is
+    // one face, as a user expects when picking it again.
+    shape = this.unify(shape);
+    this.shapes.set(shapeId, shape);
+    return { shapeId, stats: this.countTopology(shape) };
+  }
+
+  // Extrudes one face of an existing solid. This is what the Objects panel
+  // uses for a face picked on a body: the face itself is swept along its normal,
+  // so arcs and holes keep their exact geometry.
+  makeFacePrism(params: MakeFacePrismParams): MakeBoxResult {
+    const oc = this.requireOc();
+    const { shapeId, sourceShapeId, faceId, normal, distances } = params;
+    if (!shapeId) throw new KernelOpError('INVALID_PARAMS', 'shapeId is required');
+    if (!Number.isInteger(faceId) || faceId < 0) {
+      throw new KernelOpError('INVALID_PARAMS', 'Face id must be a non-negative integer');
+    }
+    const normalLength = Math.hypot(normal[0], normal[1], normal[2]);
+    if (!Number.isFinite(normalLength) || normalLength <= 1e-9) {
+      throw new KernelOpError('INVALID_PARAMS', 'Face normal must be a unit vector');
+    }
+    if (
+      distances.length === 0 ||
+      distances.some((value) => !Number.isFinite(value) || Math.abs(value) <= 1e-6)
+    ) {
+      throw new KernelOpError('INVALID_PARAMS', 'Extrude distance must be a positive number');
+    }
+
+    const face = this.findFace(this.getShape(sourceShapeId), faceId);
+    if (!face) {
+      throw new KernelOpError('INVALID_PARAMS', `Face ${faceId} does not exist on the body`);
+    }
+    // Only a flat face can be swept into a closed prism; a cylindrical or
+    // spherical side would sweep into a self-intersecting shell.
+    if (new oc.BRepAdaptor_Surface_2(face, true).GetType() !== oc.GeomAbs_SurfaceType.GeomAbs_Plane) {
+      throw new KernelOpError('FACE_NOT_PLANAR', `Face ${faceId} is not planar`);
+    }
+    const [nx, ny, nz] = normal.map((value) => value / normalLength) as [
+      number,
+      number,
+      number,
+    ];
+
+    let shape: OcctShape | null = null;
+    for (const distance of distances) {
+      const vector = new oc.gp_Vec_4(nx * distance, ny * distance, nz * distance);
+      const prism = new oc.BRepPrimAPI_MakePrism_1(face, vector, false, true);
+      if (!prism.IsDone()) {
+        throw new KernelOpError('OP_FAILED', 'Extrude failed for a body face');
+      }
+      shape = shape ? this.boolean(shape, prism.Shape(), 'fuse') : prism.Shape();
+    }
+    if (!shape) throw new KernelOpError('OP_FAILED', 'Extrude produced no geometry');
+
+    shape = this.unify(shape);
     this.shapes.set(shapeId, shape);
     return { shapeId, stats: this.countTopology(shape) };
   }
@@ -142,7 +199,8 @@ export class KernelEngine {
     if (!shapeId) throw new KernelOpError('INVALID_PARAMS', 'shapeId is required');
     const base = this.getShape(baseShapeId);
     const tool = this.getShape(toolShapeId);
-    const shape = this.boolean(base, tool, op);
+    const fused = this.boolean(base, tool, op);
+    const shape = op === 'fuse' ? this.unify(fused) : fused;
     this.shapes.set(shapeId, shape);
     return { shapeId, stats: this.countTopology(shape) };
   }
@@ -373,6 +431,16 @@ export class KernelEngine {
     return oc.TopoDS.Edge_1(edge.Reversed());
   }
 
+  // Coplanar faces produced by a fuse are one geometric face to the user, so
+  // they must be one topological face for picking and for downstream features.
+  private unify(shape: OcctShape): OcctShape {
+    const oc = this.requireOc();
+    const unify = new oc.ShapeUpgrade_UnifySameDomain_2(shape, true, true, false);
+    unify.Build();
+    const result = unify.Shape();
+    return result.IsNull() ? shape : result;
+  }
+
   private boolean(base: OcctShape, tool: OcctShape, op: BooleanParams['op']): OcctShape {
     const oc = this.requireOc();
     const maker =
@@ -394,6 +462,7 @@ export class KernelEngine {
     return {
       faces: this.countSubShapes(shape, oc.TopAbs_ShapeEnum.TopAbs_FACE),
       edges: this.countSubShapes(shape, oc.TopAbs_ShapeEnum.TopAbs_EDGE),
+      solids: this.countSubShapes(shape, oc.TopAbs_ShapeEnum.TopAbs_SOLID),
     };
   }
 
@@ -409,6 +478,24 @@ export class KernelEngine {
       explorer.Next();
     }
     return unique.length;
+  }
+
+  // Tessellation numbers faces in explorer order, so the same walk finds the
+  // face the viewport reported in `TessellationResult.faceIds`.
+  private findFace(shape: OcctShape, faceId: number): OcctShape | null {
+    const oc = this.requireOc();
+    const explorer = new oc.TopExp_Explorer_2(
+      shape,
+      oc.TopAbs_ShapeEnum.TopAbs_FACE,
+      oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+    );
+    let index = 0;
+    while (explorer.More()) {
+      if (index === faceId) return oc.TopoDS.Face_1(explorer.Current());
+      index += 1;
+      explorer.Next();
+    }
+    return null;
   }
 
   private getShape(shapeId: string): OcctShape {

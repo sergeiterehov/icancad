@@ -50,6 +50,7 @@ export function Viewport() {
   const sectionEnabled = useUiStore((state) => state.sectionEnabled);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
   const pickingExtrude = useUiStore((state) => state.pickingExtrude);
+  const pickingExtrudeBodies = useUiStore((state) => state.pickingExtrudeBodies);
   const sketchSectionEnabled = useUiStore((state) => state.sketchSectionEnabled);
   const sketchConstraintId = useUiStore((state) => state.sketchConstraintId);
   const sketchFrozenEntityIds = useUiStore((state) => state.sketchFrozenEntityIds);
@@ -57,6 +58,7 @@ export function Viewport() {
   const sketchSelectionIds = useUiStore((state) => state.sketchSelectionIds);
   const selection = useDocumentStore((state) => state.selection);
   const meshes = useKernelStore((state) => state.meshes);
+  const featureBodyErrors = useKernelStore((state) => state.featureBodyErrors);
   const status = useKernelStore((state) => state.status);
   const ratio = useKernelStore((state) => state.ratio);
   const error = useKernelStore((state) => state.error);
@@ -101,19 +103,41 @@ export function Viewport() {
         if (useUiStore.getState().activeSketchId) return;
         const store = useDocumentStore.getState();
         const ui = useUiStore.getState();
+        if (ui.pickingExtrudeBodies) {
+          if (pick?.kind === 'body') {
+            store.select({ kind: 'body', id: pick.id });
+          }
+          return;
+        }
         const picking = ui.pickingExtrude;
         if (picking) {
           if (!pick) return;
           if (pick.kind === 'body') return;
-          store.toggleExtrudeFace(picking, pick.sketchId, pick.faceId);
+          if (pick.kind === 'face') {
+            store.select({ kind: 'face', id: `${pick.sketchId}#${pick.faceId}` });
+          } else if (pick.kind === 'body-face') {
+            if (!pick.planar) {
+              ui.showToast('errors.FACE_NOT_PLANAR', 'error');
+              return;
+            }
+            store.toggleExtrudeBodyFace(
+              picking,
+              pick.bodyId,
+              pick.faceId,
+              pick.normal,
+              pick.origin,
+            );
+          }
           return;
         }
         if (!pick) {
           store.select(null);
           return;
         }
-        if (pick.kind === 'body') {
-          store.select({ kind: 'body', id: pick.id }, { additive });
+        if (pick.kind === 'body' || pick.kind === 'body-face') {
+          store.select({ kind: 'body', id: pick.kind === 'body' ? pick.id : pick.bodyId }, {
+            additive,
+          });
           return;
         }
         store.select(
@@ -228,12 +252,60 @@ export function Viewport() {
       });
     }
 
-    controller.setBodies(sceneBodies, directBodyIds(selection), linkedBodyIds(selection, project));
+    const selectedFeature =
+      selection.length === 1 && selection[0]?.kind === 'feature'
+        ? project.features.find((feature) => feature.id === selection[0]?.id)
+        : undefined;
+    const extrude = selectedFeature?.type === 'extrude' ? selectedFeature : undefined;
+    const errorBodyIds = extrude ? Object.keys(featureBodyErrors[extrude.id] ?? {}) : [];
+    const targetBodyIds = extrude && extrude.op !== 'new' ? extrude.bodyIds : [];
+    controller.setBodies(
+      sceneBodies,
+      directBodyIds(selection),
+      [...new Set([...linkedBodyIds(selection, project), ...targetBodyIds])],
+      errorBodyIds,
+    );
     if (previousCount.current === 0 && sceneBodies.length > 0) {
       controller.fit();
     }
     previousCount.current = sceneBodies.length;
-  }, [bodies, meshes, project, selection]);
+  }, [bodies, meshes, project, selection, featureBodyErrors]);
+
+  // Faces of the edited operation are highlighted in 3D, and the one under the
+  // cursor is highlighted while objects are being picked.
+  useEffect(() => {
+    const controller = controllerRef.current;
+    if (!controller) return;
+    const selectedFeature =
+      selection.length === 1 && selection[0]?.kind === 'feature'
+        ? project.features.find((feature) => feature.id === selection[0]?.id)
+        : undefined;
+    const extrude = selectedFeature?.type === 'extrude' ? selectedFeature : undefined;
+    const errors = extrude ? (featureBodyErrors[extrude.id] ?? {}) : {};
+    const selected: string[] = [];
+    const invalid: string[] = [];
+    // Faces picked in the tree or inspector stay highlighted even without an
+    // active operation.
+    for (const item of selection) {
+      if (item.kind === 'face') selected.push(`s:${item.id}`);
+    }
+    if (extrude) {
+      if (extrude.scope === 'selected' && extrude.sketchId) {
+        for (const region of extrude.regions) selected.push(`s:${extrude.sketchId}#${region}`);
+      }
+      for (const ref of extrude.faceRefs ?? []) {
+        const key = `b:${ref.bodyId}#${ref.faceId}`;
+        if (errors[ref.bodyId]) invalid.push(key);
+        else selected.push(key);
+      }
+    }
+    controller.setFaceHighlights({
+      selected,
+      invalid,
+      picking: Boolean(pickingExtrude),
+      bodyPicking: Boolean(pickingExtrudeBodies),
+    });
+  }, [selection, project, featureBodyErrors, pickingExtrude, pickingExtrudeBodies]);
 
   useEffect(() => {
     controllerRef.current?.setTheme(theme);

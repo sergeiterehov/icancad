@@ -46,6 +46,11 @@ export function startKernelWorker(options: KernelWorkerOptions = {}): void {
           postSuccess(scope, request.id, engine.makePrism(request.params));
           break;
         }
+        case 'make-face-prism': {
+          await engine.init();
+          postSuccess(scope, request.id, engine.makeFacePrism(request.params));
+          break;
+        }
         case 'boolean': {
           await engine.init();
           postSuccess(scope, request.id, engine.booleanShape(request.params));

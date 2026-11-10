@@ -3,3 +3,4 @@ packages:
   - packages/*
 minimumReleaseAgeExclude:
   - react-resizable-panels@4.20.0
+  - lucide-react@1.71.0

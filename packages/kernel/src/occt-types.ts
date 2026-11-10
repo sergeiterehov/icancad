@@ -92,6 +92,7 @@ export interface OcctBindings {
   TopAbs_ShapeEnum: {
     TopAbs_FACE: number;
     TopAbs_EDGE: number;
+    TopAbs_SOLID: number;
     TopAbs_SHAPE: number;
   };
   TopAbs_Orientation: {
@@ -100,6 +101,13 @@ export interface OcctBindings {
     TopAbs_INTERNAL: unknown;
     TopAbs_EXTERNAL: unknown;
   };
+  GeomAbs_SurfaceType: {
+    GeomAbs_Plane: unknown;
+  };
+  BRepAdaptor_Surface_2: new (
+    face: OcctShape,
+    restriction: boolean,
+  ) => { GetType(): unknown };
   TopoDS: {
     Face_1(shape: OcctShape): OcctShape;
     Edge_1(shape: OcctShape): OcctShape;
@@ -131,4 +139,10 @@ export interface OcctBindings {
   BRepAlgoAPI_Fuse_3: new (a: OcctShape, b: OcctShape) => OcctBooleanMaker;
   BRepAlgoAPI_Cut_3: new (a: OcctShape, b: OcctShape) => OcctBooleanMaker;
   BRepAlgoAPI_Common_3: new (a: OcctShape, b: OcctShape) => OcctBooleanMaker;
+  ShapeUpgrade_UnifySameDomain_2: new (
+    shape: OcctShape,
+    unifyEdges: boolean,
+    unifyFaces: boolean,
+    concatBSplines: boolean,
+  ) => { Build(): void; Shape(): OcctShape };
 }

@@ -6,7 +6,8 @@ import { constraintEntityIds, constraintLabel, diagnoseSketch } from '../sketch/
 import { isNumericConstraint } from '../sketch/dimensions';
 import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
-import { IconButton, PanelSection } from './Controls';
+import { useContextMenuStore } from './ContextMenu';
+import { PanelSection } from './Controls';
 import { formatNumber } from './format';
 import { Tooltip } from './Tooltip';
 
@@ -33,6 +34,7 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
   const selectedConstraintId = useUiStore((state) => state.sketchConstraintId);
   const selectConstraint = useUiStore((state) => state.selectSketchConstraint);
   const problemIds = useUiStore((state) => state.sketchProblemConstraintIds);
+  const openMenu = useContextMenuStore((state) => state.open);
   const [onlyProblems, setOnlyProblems] = useState(false);
 
   const problems = new Set(problemIds);
@@ -49,6 +51,16 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
     selectionKeys.map((key) => key.split('#')[0]).filter((id): id is string => Boolean(id)),
   );
   const active = feature.constraints.find((constraint) => constraint.id === selectedConstraintId);
+
+  const removeConstraint = (id: string) => {
+    const next = {
+      ...feature,
+      constraints: feature.constraints.filter((candidate) => candidate.id !== id),
+    };
+    apply({ type: 'feature/replace', feature: next });
+    if (selectedConstraintId === id) selectConstraint(null);
+    void diagnoseSketch(next);
+  };
 
   return (
     <PanelSection
@@ -98,6 +110,19 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
                   event.preventDefault();
                   selectConstraint(active?.id === constraint.id ? null : constraint.id);
                 }}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  selectConstraint(constraint.id);
+                  openMenu(event.clientX, event.clientY, [
+                    {
+                      id: 'delete',
+                      label: t('common.delete'),
+                      icon: <Trash2 size={14} />,
+                      danger: true,
+                      onSelect: () => removeConstraint(constraint.id),
+                    },
+                  ]);
+                }}
               >
                 <span className="constraint-label">
                   {constraintLabel((key) => t(key as never), constraint.type)}
@@ -107,24 +132,6 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
                     {constraintValue(constraint, locale)}
                   </span>
                 )}
-                <IconButton
-                  label={t('common.delete')}
-                  className="tiny"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    const next = {
-                      ...feature,
-                      constraints: feature.constraints.filter(
-                        (candidate) => candidate.id !== constraint.id,
-                      ),
-                    };
-                    apply({ type: 'feature/replace', feature: next });
-                    if (selectedConstraintId === constraint.id) selectConstraint(null);
-                    void diagnoseSketch(next);
-                  }}
-                >
-                  <Trash2 size={13} />
-                </IconButton>
               </div>
             );
           })}

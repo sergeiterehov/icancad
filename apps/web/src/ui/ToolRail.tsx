@@ -1,4 +1,4 @@
-import { ArrowBigUp, CircleDot, Layers, PenTool, Square } from 'lucide-react';
+import { LayersArrowUp, PencilRuler, Square } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDocumentStore } from '../stores/documentStore';
@@ -29,7 +29,6 @@ function extrudeInput(
 
 export function ToolRail() {
   const { t } = useTranslation();
-  const planned = t('tools.comingSoon');
   const activeSketchId = useUiStore((state) => state.activeSketchId);
   const setActiveSketch = useUiStore((state) => state.setActiveSketch);
   const addSketch = useDocumentStore((state) => state.addSketch);
@@ -63,20 +62,14 @@ export function ToolRail() {
         active={Boolean(activeSketchId)}
         onClick={openSketchMenu}
       >
-        <PenTool size={17} />
+        <PencilRuler size={17} />
       </IconButton>
       <IconButton
         label={t('tools.extrude')}
         tooltip={t('tools.extrude')}
         onClick={() => addExtrude(t('features.extrude'), sketchSelection ?? undefined)}
       >
-        <ArrowBigUp size={17} />
-      </IconButton>
-      <IconButton label={t('tools.shell')} tooltip={planned} disabled>
-        <Layers size={17} />
-      </IconButton>
-      <IconButton label={t('tools.hole')} tooltip={planned} disabled>
-        <CircleDot size={17} />
+        <LayersArrowUp size={17} />
       </IconButton>
 
       <div className="tool-separator" />

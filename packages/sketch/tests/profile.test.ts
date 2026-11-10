@@ -64,6 +64,26 @@ describe('sketch profiles', () => {
     expect(disk?.area).toBeCloseTo(Math.PI * 9, 0);
   });
 
+  it('keeps intersecting circle boundaries as exact arcs', () => {
+    const a: SketchEntity = { id: 'a', type: 'circle', construction: false, cx: 0, cy: 0, r: 10 };
+    const b: SketchEntity = {
+      id: 'b',
+      type: 'circle',
+      construction: false,
+      cx: 12,
+      cy: 0,
+      r: 10,
+    };
+    const regions = sketchProfiles([a, b]);
+    expect(regions).toHaveLength(3);
+    for (const region of regions) {
+      // One exact arc from each circle, not a chain of chords.
+      expect(region.outer.curves).toHaveLength(2);
+      for (const curve of region.outer.curves) expect(curve.type).toBe('arc');
+      expectClosedChain(region.outer.curves);
+    }
+  });
+
   it('ignores construction geometry and open contours', () => {
     expect(sketchProfiles([line('open1', 0, 0, 10, 0), line('open2', 10, 0, 10, 10)])).toEqual([]);
     const construction = [

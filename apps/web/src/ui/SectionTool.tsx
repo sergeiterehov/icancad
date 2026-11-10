@@ -1,5 +1,5 @@
 import { createId, type SectionPlane } from '@icancad/model';
-import { Layers } from 'lucide-react';
+import { SquareCenterlineDashedVertical } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
@@ -34,7 +34,7 @@ export function SectionTool() {
 
   return (
     <IconButton label={t('tools.section')} active={active} onClick={toggle}>
-      <Layers size={17} />
+      <SquareCenterlineDashedVertical size={17} />
     </IconButton>
   );
 }

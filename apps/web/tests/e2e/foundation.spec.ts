@@ -151,7 +151,7 @@ test.describe('ICANCad foundation', () => {
       page.getByTestId('left').getByRole('button', { name: 'cube', exact: true }),
     ).toBeVisible();
     await expect(page.getByText('20 × 20 × 20 mm')).toBeVisible();
-    await expect(page.getByText('Imported mesh')).toBeVisible();
+    await expect(page.getByText('Watertight')).toBeVisible();
 
     const downloadPromise = page.waitForEvent('download');
     await page.getByRole('button', { name: 'Export', exact: true }).click();
@@ -338,7 +338,6 @@ test.describe('ICANCad foundation', () => {
     ).toBeVisible();
     await expect(page.getByTestId('left').locator('.tree-row')).toHaveCount(1);
     await expect(page.getByText('20 × 20 × 20 mm')).toBeVisible();
-    await expect(page.getByText('Imported mesh')).toBeVisible();
     await expect(page.getByText('Watertight')).toBeVisible();
     await expect(page.getByText('Volume')).toBeVisible();
     await expect(page.getByText('Components')).toBeVisible();
@@ -387,7 +386,7 @@ test.describe('ICANCad foundation', () => {
     await expect(deleteButton).toBeDisabled();
     await page.locator('.sketch-entity-row').click();
     await expect(deleteButton).toBeEnabled();
-    await expect(page.getByText('Composition')).toBeVisible();
+    await expect(page.getByText('Geometry')).toBeVisible();
     await expect(page.getByText('Constraints').first()).toBeVisible();
 
     await page.getByRole('button', { name: 'Finish sketch' }).click();
@@ -446,16 +445,21 @@ test.describe('ICANCad foundation', () => {
     // A new body is an object of its own, not a copy of the operation name.
     await expect(rows.nth(1)).toContainText('Body');
     const inspector = page.getByTestId('right');
+    // Statistics describe the body, not the operation.
+    await rows.nth(1).locator('.tree-main').click();
     await expect(inspector.getByText('Bounds')).toBeVisible();
     await expect.poll(async () => inspector.innerText()).toContain('× 10 mm');
 
     // The distance is a parameter of the operation, so the body follows it.
+    await page.locator('.timeline-op').last().click();
     const distance = inspector.getByRole('textbox').nth(1);
     await distance.fill('25');
     await distance.press('Enter');
+    await rows.nth(1).locator('.tree-main').click();
     await expect.poll(async () => inspector.innerText()).toContain('× 25 mm');
 
     // Turning the operation into a cut removes the body it used to create.
+    await page.locator('.timeline-op').last().click();
     await inspector.getByRole('button', { name: 'Cut', exact: true }).click();
     await expect(rows).toHaveCount(1);
 
@@ -499,19 +503,19 @@ test.describe('ICANCad foundation', () => {
     await expect(inspector.getByText('Face 1')).toBeVisible();
     await expect(inspector.getByText('Edge 1')).toBeVisible();
     await expect(inspector.getByText('Point 4')).toBeVisible();
-    await expect(inspector.getByText('Composition')).toHaveCount(0);
+    await expect(inspector.getByText('Geometry')).toHaveCount(0);
     await expect(inspector.getByText('Placement')).toHaveCount(0);
 
-    // The timeline chip selects the operation: placement and composition.
+    // The timeline chip selects the operation: placement and geometry.
     await page.locator('.timeline-op').first().click();
     await expect(inspector.getByText('Placement')).toBeVisible();
-    await expect(inspector.getByText('Composition')).toBeVisible();
+    await expect(inspector.getByText('Geometry')).toBeVisible();
     await expect(inspector.getByText('Faces')).toHaveCount(0);
 
     // Editing also targets the operation, because the recipe is what changes.
     await page.locator('.tree-row').first().locator('.tree-main').dblclick();
     await expect(page.locator('.sketch-overlay')).toBeVisible();
-    await expect(inspector.getByText('Composition')).toBeVisible();
+    await expect(inspector.getByText('Geometry')).toBeVisible();
     await expect(inspector.getByText('Constraints').first()).toBeVisible();
     await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
     await expect(inspector.getByText('Faces')).toBeVisible();
@@ -532,7 +536,7 @@ test.describe('ICANCad foundation', () => {
     const topbar = page.locator('.topbar');
     await topbar.getByRole('button', { name: 'Select', exact: true }).click();
 
-    const composition = page.locator('.panel-section', { hasText: 'Composition' });
+    const composition = page.locator('.panel-section', { hasText: 'Geometry' });
     const constraintsSection = page.locator('.panel-section', { hasText: 'Constraints' });
     await expect(composition).toContainText('50.6 mm');
 
@@ -649,12 +653,15 @@ test.describe('ICANCad foundation', () => {
     await page.mouse.click(box!.x + 505, box!.y + 405);
     await page.mouse.click(box!.x + 620, box!.y + 300);
     await expect(constraints).toContainText('Coincident');
+    // The line tool chains segments; Escape ends the chain but stays in Line.
+    await page.keyboard.press('Escape');
 
     await magnet.click();
     await expect(magnet).not.toHaveAttribute('data-active', 'true');
     await page.mouse.click(box!.x + 305, box!.y + 305);
     await page.mouse.click(box!.x + 650, box!.y + 500);
     await expect(page.locator('.constraint-row')).toHaveCount(1);
+    await page.keyboard.press('Escape');
 
     await magnet.click();
     await page.mouse.click(box!.x + 300, box!.y + 520);
@@ -732,6 +739,7 @@ test.describe('ICANCad foundation', () => {
     await step(300, 300);
     await step(700, 300);
     await expect(constraints).toContainText('Horizontal');
+    await page.keyboard.press('Escape');
 
     await step(500, 300);
     await step(500, 500);
@@ -779,7 +787,7 @@ test.describe('ICANCad foundation', () => {
     await expect(page.locator('.constraint-row')).toHaveCount(8);
     await expect(constraints).toContainText('Coincident');
 
-    const composition = page.locator('.panel-section', { hasText: 'Composition' });
+    const composition = page.locator('.panel-section', { hasText: 'Geometry' });
     const before = await composition.innerText();
 
     const topbar = page.locator('.topbar');
@@ -799,6 +807,46 @@ test.describe('ICANCad foundation', () => {
     await page.mouse.up();
     await expect(page.locator('.toast')).toHaveCount(0);
   });
+  test('chains line segments into a polyline and steps back with Escape', async ({ page }) => {
+    await openApp(page);
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await page.waitForTimeout(600);
+
+    const topbar = page.locator('.topbar');
+    const canvas = page.getByTestId('viewport-canvas');
+    const box = await canvas.boundingBox();
+    const line = topbar.getByRole('button', { name: 'Line', exact: true });
+    const select = topbar.getByRole('button', { name: 'Select', exact: true });
+
+    await line.click();
+    for (const [x, y] of [
+      [300, 300],
+      [450, 300],
+      [600, 400],
+    ] as const) {
+      await page.mouse.click(box!.x + x, box!.y + y);
+      await page.waitForTimeout(320);
+    }
+
+    // The second click continues the chain: two lines and a shared vertex.
+    const composition = page.locator('.panel-section', { hasText: 'Geometry' });
+    await expect(composition.locator('.panel-count')).toHaveText('2');
+    await expect(page.locator('.panel-section', { hasText: 'Constraints' })).toContainText(
+      'Coincident',
+    );
+
+    // First Escape only drops the in-progress point.
+    await page.keyboard.press('Escape');
+    await expect(line).toHaveAttribute('data-active', 'true');
+    // Second Escape returns to Select, the third finishes the sketch.
+    await page.keyboard.press('Escape');
+    await expect(select).toHaveAttribute('data-active', 'true');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+  });
+
   test('flags conflicting constraints and filters them', async ({ page }) => {
     await openApp(page);
     await page.getByRole('button', { name: 'Sketch', exact: true }).click();
@@ -846,7 +894,8 @@ test.describe('ICANCad foundation', () => {
     await warning.click();
     await expect(page.locator('.constraint-row')).toHaveCount(2);
 
-    await page.locator('.constraint-row[data-problem="true"] button').click();
+    await page.locator('.constraint-row[data-problem="true"]').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Delete', exact: true }).click();
     await expect(warning).toHaveCount(0);
     await expect(page.locator('.constraint-row')).toHaveCount(1);
   });
@@ -869,7 +918,7 @@ test.describe('ICANCad foundation', () => {
     await expect(page.getByTestId('sketch-live-measure')).toHaveCount(0);
 
     const row = page.locator('.sketch-entity-row').first();
-    const composition = page.locator('.panel-section', { hasText: 'Composition' });
+    const composition = page.locator('.panel-section', { hasText: 'Geometry' });
 
     await row.click({ button: 'right' });
     await expect(page.locator('.context-menu-heading')).toContainText('Show');
@@ -1101,6 +1150,7 @@ test.describe('ICANCad foundation', () => {
     await page.getByRole('button', { name: 'Line', exact: true }).click();
     await page.mouse.click(box!.x + 250, box!.y + 300);
     await page.mouse.click(box!.x + 450, box!.y + 300);
+    await page.keyboard.press('Escape');
     await page.mouse.click(box!.x + 250, box!.y + 450);
     await page.mouse.click(box!.x + 450, box!.y + 500);
 
@@ -1198,6 +1248,13 @@ test.describe('ICANCad foundation', () => {
       await page.locator('.tree-row').first().locator('.tree-main').click();
       await inspector.getByText('Face 1').click();
       await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
+      // Bounds are shown for the created body, not for the operation.
+      await page
+        .locator('.tree-row')
+        .filter({ hasText: 'Body' })
+        .last()
+        .locator('.tree-main')
+        .click();
       await expect.poll(async () => inspector.innerText()).toMatch(expected);
     });
   }
@@ -1225,9 +1282,9 @@ test.describe('ICANCad foundation', () => {
 
     // The tool works without a selection: objects are added afterwards.
     await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
-    await expect(inspector.getByText('No objects yet: pick faces in the view')).toBeVisible();
+    await expect(inspector.getByText('No faces yet: pick them in the view')).toBeVisible();
 
-    await inspector.getByRole('button', { name: 'Pick objects in the view' }).click();
+    await inspector.getByRole('button', { name: 'Pick faces in the view' }).click();
     await page.waitForTimeout(300);
     // The ring, then the inner disk.
     await page.mouse.click(box!.x + 300, box!.y + 300);
@@ -1238,7 +1295,9 @@ test.describe('ICANCad foundation', () => {
     await expect(rows).toHaveCount(2);
     await expect(rows.first()).toContainText('Face 1');
     await expect(rows.nth(1)).toContainText('Face 2');
-    await expect.poll(async () => inspector.innerText()).toContain('× 10 mm');
+    // The ring and the disk share the inner circle, so they fuse into one
+    // body; the tree also holds the sketch.
+    await expect(page.locator('.tree-row')).toHaveCount(2);
 
     // Clicking a picked face again removes it, and the row has its own action.
     await page.mouse.click(box!.x + 400, box!.y + 300);
@@ -1249,7 +1308,344 @@ test.describe('ICANCad foundation', () => {
     await page.waitForTimeout(600);
     await expect(rows).toHaveCount(0);
     await inspector.getByRole('button', { name: 'Finish picking' }).click();
-    await expect(inspector.getByText('No objects yet: pick faces in the view')).toBeVisible();
+    await expect(inspector.getByText('No faces yet: pick them in the view')).toBeVisible();
+  });
+
+  test('adds faces of different bodies without a target list', async ({ page }) => {
+    await openApp(page);
+    const tools = page.getByRole('navigation', { name: 'Tools' });
+    const inspector = page.getByTestId('right');
+    const canvas = page.getByTestId('viewport-canvas');
+
+    await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await page.waitForTimeout(600);
+    const box = await canvas.boundingBox();
+    const centers: [number, number][] = [
+      [320, 260],
+      [560, 380],
+    ];
+    for (const [x, y] of centers) {
+      await page.getByRole('button', { name: 'Circle', exact: true }).click();
+      await page.mouse.click(box!.x + x, box!.y + y);
+      await page.waitForTimeout(320);
+      await page.mouse.click(box!.x + x + 60, box!.y + y);
+      await page.waitForTimeout(320);
+    }
+    await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+
+    // Two disjoint circles create two bodies.
+    await page.locator('.tree-row').first().locator('.tree-main').click();
+    await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
+    await expect(page.locator('.tree-row')).toHaveCount(3);
+
+    // Select both sketch faces in the sketch object panel and start an add from
+    // them. This avoids screen-coordinate picking after the camera refits.
+    await page.locator('.tree-row').first().locator('.tree-main').click();
+    const sketchFaces = inspector
+      .locator('.panel-section')
+      .filter({ hasText: 'Faces' })
+      .locator('.selection-item');
+    await expect(sketchFaces).toHaveCount(2);
+    await sketchFaces.nth(0).click();
+    await sketchFaces.nth(1).click({ modifiers: ['Shift'] });
+    await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
+
+    // With "all bodies" each face adds material to its own body.
+    const facesSection = inspector.locator('.panel-section').filter({ hasText: 'Faces' });
+    await expect(facesSection.locator('.selection-item')).toHaveCount(2);
+    await expect(inspector.locator('.operation-error')).toHaveCount(0);
+    await expect(page.locator('.timeline-op.error')).toHaveCount(0);
+    await expect(page.locator('.tree-row')).toHaveCount(3);
+
+    // Choosing only one body explicitly makes the other face's extrusion an
+    // independent body, so that face must be reported.
+    const bodiesSection = inspector
+      .locator('.panel-section')
+      .filter({ hasText: 'Apply to bodies' });
+    await bodiesSection.getByRole('button', { name: 'Pick bodies in the view' }).click();
+    await page
+      .getByTestId('left')
+      .locator('.tree-row')
+      .filter({ hasText: 'Body' })
+      .first()
+      .locator('.tree-main')
+      .click();
+
+    await expect(inspector.locator('.operation-error')).toContainText(
+      'Add cannot create a disconnected body',
+    );
+    await expect(facesSection.locator('.selection-item')).toHaveCount(2);
+    await expect(facesSection.locator('.error-badge')).toHaveCount(1);
+    await expect(bodiesSection.locator('.selection-item')).toHaveCount(1);
+  });
+
+  test('splits intersecting circles into adjacent faces and groups bodies by shared edges', async ({
+    page,
+  }) => {
+    await openApp(page);
+    const tools = page.getByRole('navigation', { name: 'Tools' });
+    const inspector = page.getByTestId('right');
+    const canvas = page.getByTestId('viewport-canvas');
+
+    await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await page.waitForTimeout(600);
+    const box = await canvas.boundingBox();
+    for (const [x, y] of [
+      [380, 300],
+      [460, 300],
+    ] as const) {
+      await page.getByRole('button', { name: 'Circle', exact: true }).click();
+      await page.mouse.click(box!.x + x, box!.y + y);
+      await page.waitForTimeout(320);
+      await page.mouse.click(box!.x + x + 80, box!.y + y);
+      await page.waitForTimeout(320);
+    }
+    await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+
+    await page.locator('.tree-row').first().locator('.tree-main').click();
+    const sketchFaces = inspector
+      .locator('.panel-section')
+      .filter({ hasText: 'Faces' })
+      .locator('.selection-item');
+    await expect(sketchFaces).toHaveCount(3);
+    const names = await sketchFaces.locator('.tree-name').allInnerTexts();
+    expect(names.sort()).toEqual(['Face 1', 'Face 2', 'Face 3']);
+
+    // Even-odd regions: two equal crescents and the smaller lens between them.
+    const areaTexts = await sketchFaces.locator('.tree-meta').allInnerTexts();
+    const areas = areaTexts.map((text) =>
+      Number.parseFloat(text.replace(',', '.').replace(/[^\d.]/g, '')),
+    );
+    const lensIndex = areas.indexOf(Math.min(...areas));
+    const lensName = `Face ${lensIndex + 1}`;
+    const sortedAreas = [...areas].sort((left, right) => left - right);
+    expect(sortedAreas[0]).toBeLessThan(sortedAreas[1]!);
+    expect(sortedAreas[0]).toBeLessThan(sortedAreas[2]!);
+
+    // Each region is picked on its own: same boundary circles, distinct ids.
+    await sketchFaces.nth(0).click();
+    await expect(sketchFaces.nth(0)).toHaveAttribute('data-active', 'true');
+    await expect(sketchFaces.nth(1)).not.toHaveAttribute('data-active', 'true');
+
+    // All three regions share edges, so they fuse into one body.
+    await sketchFaces.nth(1).click({ modifiers: ['Shift'] });
+    await sketchFaces.nth(2).click({ modifiers: ['Shift'] });
+    await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
+    await expect(page.locator('.tree-row')).toHaveCount(2);
+    const bodyRows = page.getByTestId('left').locator('.tree-row').filter({ hasText: 'Body' });
+    await expect(bodyRows).toHaveCount(1);
+    await expect(page.locator('.timeline-op.error')).toHaveCount(0);
+    // The fused body has a single top and a single bottom face, not the three
+    // sketch regions that produced it, so it can be extruded again as one face.
+    await bodyRows.first().locator('.tree-main').click();
+    await expect(
+      inspector.locator('.stat-row').filter({ hasText: 'Faces' }).locator('.stat-value'),
+    ).toHaveText('4');
+    const colorBefore = await bodyRows
+      .first()
+      .locator('.tree-icon')
+      .evaluate((element) => getComputedStyle(element).color);
+
+    // Remove the lens: the two outer crescents no longer share an edge and
+    // become two independent bodies.
+    await page.locator('.timeline-op').last().click();
+    await inspector.getByRole('button', { name: 'Pick faces in the view' }).click();
+    const extrusionFaces = inspector
+      .locator('.panel-section')
+      .filter({ hasText: 'Faces' })
+      .locator('.selection-item');
+    await expect(extrusionFaces).toHaveCount(3);
+    const lensRow = extrusionFaces.filter({ hasText: lensName }).first();
+    await lensRow.hover();
+    await lensRow.getByRole('button', { name: 'Remove from extrude' }).click();
+    await expect(bodyRows).toHaveCount(2);
+    await expect(page.locator('.tree-row')).toHaveCount(3);
+    await expect(bodyRows.first()).toContainText('Body 1');
+    const colorAfter = await bodyRows
+      .first()
+      .locator('.tree-icon')
+      .evaluate((element) => getComputedStyle(element).color);
+    expect(colorAfter).toBe(colorBefore);
+
+    // Clicking the sketch in the tree while picking selects the whole sketch,
+    // which brings all three adjacencies back into one body.
+    await page.locator('.tree-row').first().locator('.tree-main').click();
+    await expect(inspector.getByText('Whole sketch')).toBeVisible();
+    await expect(
+      inspector.locator('.panel-section').filter({ hasText: 'Faces' }).locator('.selection-item'),
+    ).toHaveCount(1);
+    await expect(bodyRows).toHaveCount(1);
+    await expect(page.locator('.tree-row')).toHaveCount(2);
+  });
+
+  test('picks a body face, flips the direction and limits target bodies', async ({ page }) => {
+    await openApp(page);
+    const tools = page.getByRole('navigation', { name: 'Tools' });
+    const inspector = page.getByTestId('right');
+    const canvas = page.getByTestId('viewport-canvas');
+
+    await addBox(page);
+    await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
+    await expect(inspector.getByText('No faces yet: pick them in the view')).toBeVisible();
+
+    await inspector.getByRole('button', { name: 'Pick faces in the view' }).click();
+    await page.waitForTimeout(300);
+    const box = await canvas.boundingBox();
+    await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    const objects = inspector
+      .locator('.panel-section')
+      .filter({ hasText: 'Faces' })
+      .locator('.selection-item');
+    await expect(objects).toHaveCount(1);
+    await expect(objects.first()).toContainText(/Face \d+/);
+    await expect(
+      objects.first().getByRole('button', { name: 'Remove from extrude' }),
+    ).toBeVisible();
+
+    // Leaving picking makes the list read-only again.
+    await inspector.getByRole('button', { name: 'Finish picking' }).click();
+    await expect(
+      objects.first().getByRole('button', { name: 'Remove from extrude' }),
+    ).toHaveCount(0);
+
+    // A body target list sits before the faces list; empty means every body.
+    const bodiesSection = inspector
+      .locator('.panel-section')
+      .filter({ hasText: 'Apply to bodies' });
+    await expect(bodiesSection).toBeVisible();
+    await expect(inspector.getByText('No bodies selected')).toBeVisible();
+    await expect(bodiesSection.locator('.selection-item')).toHaveCount(0);
+    await expect.poll(async () => inspector.innerText()).not.toContain('no solid geometry');
+
+    await bodiesSection.getByRole('button', { name: 'Pick bodies in the view' }).click();
+    // Picking happens in 3D and must not replace the selected operation.
+    await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    const targets = bodiesSection.locator('.selection-item');
+    await expect(targets).toHaveCount(1);
+    await expect(targets.first()).toContainText('Box');
+    await expect(inspector.getByText('Operation', { exact: true })).toBeVisible();
+
+    // Selection from the timeline is routed to the picker instead of replacing
+    // the selected operation.
+    await page.locator('.timeline-op').first().click();
+    await expect(inspector.getByText('Operation', { exact: true })).toBeVisible();
+
+    // Body rows are read-only outside body picking too.
+    await bodiesSection.getByRole('button', { name: 'Finish picking' }).click();
+    await expect(
+      bodiesSection.getByRole('button', { name: 'Remove from extrude' }),
+    ).toHaveCount(0);
+
+    const reverse = inspector.getByRole('button', { name: 'Reverse direction' });
+    await reverse.click();
+    await expect(reverse).toHaveAttribute('data-active', 'true');
+
+    // Add forbids through-all, so the option is absent rather than disabled.
+    await expect(inspector.getByRole('button', { name: 'Through all', exact: true })).toHaveCount(
+      0,
+    );
+    const second = inspector.getByRole('switch', { name: 'Second direction' });
+    await second.click();
+    await expect(second).toHaveAttribute('aria-checked', 'true');
+    await expect(inspector.getByRole('button', { name: 'Through all', exact: true })).toHaveCount(
+      0,
+    );
+
+    // Symmetric already goes both ways, so direction controls disappear but the
+    // distance stays editable.
+    await inspector.getByRole('button', { name: 'Symmetric', exact: true }).click();
+    await expect(inspector.getByRole('textbox', { name: 'Distance' })).toBeVisible();
+    await expect(inspector.getByRole('button', { name: 'Reverse direction' })).toHaveCount(0);
+    await expect(inspector.getByText('Second direction')).toHaveCount(0);
+  });
+
+  test('rejects an add that would create a disconnected body', async ({ page }) => {
+    await openApp(page);
+    const tools = page.getByRole('navigation', { name: 'Tools' });
+    const inspector = page.getByTestId('right');
+    const canvas = page.getByTestId('viewport-canvas');
+    await addBox(page);
+
+    await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await page.waitForTimeout(600);
+    const box = await canvas.boundingBox();
+    await page.getByRole('button', { name: 'Circle', exact: true }).click();
+    await page.mouse.click(box!.x + 400, box!.y + 300);
+    await page.waitForTimeout(320);
+    await page.mouse.click(box!.x + 460, box!.y + 300);
+    await page.waitForTimeout(320);
+    await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+
+    // Move the sketch well above the box so the extrusion cannot touch it.
+    await page.locator('.timeline-op').last().click();
+    const offset = inspector.getByRole('textbox', { name: 'Offset' });
+    await offset.fill('40');
+    await offset.press('Enter');
+    await page.waitForTimeout(300);
+
+    await page.locator('.tree-row').last().locator('.tree-main').click();
+    await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
+    // With "all bodies" an extrusion that touches nothing is skipped, so only
+    // "no target" remains.
+    await expect(inspector.getByText('No body to apply this operation to')).toBeVisible();
+    await expect(inspector.getByText('Error', { exact: true })).toBeVisible();
+
+    // No bodies were selected explicitly, so the list stays empty and only the
+    // informational sentence is shown.
+    const bodiesSection = inspector
+      .locator('.panel-section')
+      .filter({ hasText: 'Apply to bodies' });
+    await expect(bodiesSection.locator('.selection-item')).toHaveCount(0);
+    await expect(inspector.getByText('No bodies selected')).toBeVisible();
+
+    // Picking the far body explicitly makes the disconnected union an error
+    // again, because an explicitly chosen body must take the operation.
+    await bodiesSection.getByRole('button', { name: 'Pick bodies in the view' }).click();
+    await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    await expect(inspector.getByText('Add cannot create a disconnected body')).toBeVisible();
+    await expect(inspector.locator('.operation-error')).toContainText(
+      'Add cannot create a disconnected body',
+    );
+    await expect(bodiesSection.locator('.selection-item')).toHaveCount(1);
+    await expect(bodiesSection.locator('.error-badge')).toHaveCount(1);
+    await expect(page.locator('.tree-row')).toHaveCount(2);
+
+    // The failed operation is red without a separate badge, and the timeline
+    // cannot move past it.
+    const errorOp = page.locator('.timeline-op.error');
+    await expect(errorOp).toHaveCount(1);
+    await expect(errorOp).toHaveClass(/selected/);
+    await expect(errorOp.locator('.tree-badge')).toHaveCount(0);
+
+    const carets = page.locator('.timeline-caret');
+    const blocked = carets.nth(3);
+    await expect(blocked).toHaveClass(/error/);
+    await expect(blocked).toHaveClass(/active/);
+    await expect(blocked).toBeDisabled();
+    await expect(carets.nth(2)).not.toHaveClass(/error/);
+
+    // An operation after the failure gets a plain inactive cursor, not red.
+    await page.getByRole('button', { name: 'Add object' }).click();
+    await page.getByRole('menuitem', { name: 'Box' }).click();
+    await expect(page.locator('.timeline-op')).toHaveCount(4);
+    const past = page.locator('.timeline-caret').nth(4);
+    await expect(past).not.toHaveClass(/error/);
+    await expect(past).not.toHaveClass(/active/);
+    await expect(past).toBeDisabled();
+
+    // Moving back to just before the failed operation is allowed.
+    await carets.nth(2).click();
+    await expect(carets.nth(2)).toHaveClass(/active/);
+    await expect(page.locator('.timeline-caret.error')).toHaveCount(0);
   });
 
   for (const [title, centers, expected] of [

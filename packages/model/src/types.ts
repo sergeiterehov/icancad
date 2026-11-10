@@ -159,13 +159,30 @@ export interface ExtrudeSecondDirection {
   distance: number;
 }
 
+// A face of a solid body used as an extrude input. The face id is the OCCT
+// traversal index, which is stable for as long as the body rebuilds the same
+// way (persistent naming arrives in M5). The normal is captured at pick time so
+// the operation keeps its direction when the body is rebuilt.
+export interface BodyFaceRef {
+  bodyId: string;
+  faceId: string;
+  normal: Vec3;
+  origin: Vec3;
+}
+
 export interface ExtrudeFeature extends FeatureBase {
   type: 'extrude';
   /** Absent until the operation is given objects to extrude. */
   sketchId?: string;
   regions: string[];
+  /** Faces of solid bodies, used in addition to (or instead of) sketch faces. */
+  faceRefs: BodyFaceRef[];
+  /** Picked objects in selection order: `s:<sketchId>#<regionId>` or `b:<bodyId>#<faceId>`. */
+  objectOrder: string[];
   end: ExtrudeEnd;
   distance: number;
+  /** Extrude along the opposite side of the sketch plane or face normal. */
+  reversed: boolean;
   /** Optional extrusion to the opposite side of the sketch plane. */
   secondDirection?: ExtrudeSecondDirection;
   op: 'new' | 'add' | 'subtract' | 'intersect';

@@ -34,7 +34,16 @@ export interface ViewportCamera {
 /** What a click in the viewport landed on. */
 export type ScenePick =
   | { kind: 'body'; id: string }
-  | { kind: 'face'; sketchId: string; faceId: string };
+  | { kind: 'face'; sketchId: string; faceId: string }
+  | {
+      kind: 'body-face';
+      bodyId: string;
+      faceId: string;
+      normal: [number, number, number];
+      origin: [number, number, number];
+      /** False for cylinders, spheres and other curved faces. */
+      planar: boolean;
+    };
 
 export interface SketchPick {
   point: Point2;

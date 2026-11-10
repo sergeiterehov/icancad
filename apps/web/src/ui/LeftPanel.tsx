@@ -10,7 +10,7 @@ import {
   type SketchFeature,
 } from '@icancad/model';
 import clsx from 'clsx';
-import { Box, Eye, EyeOff, FileUp, PenTool, Plus, Trash2 } from 'lucide-react';
+import { Box, Eye, EyeOff, FileUp, PencilRuler, Plus, Trash2 } from 'lucide-react';
 import { useRef, type ChangeEvent, type MouseEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { saveAsset } from '../persistence/db';
@@ -180,7 +180,7 @@ export function LeftPanel() {
             {
               id: 'edit',
               label: t('sketch.edit'),
-              icon: <PenTool size={14} />,
+              icon: <PencilRuler size={14} />,
               onSelect: () => setActiveSketch(feature.id),
             },
             {
@@ -205,7 +205,7 @@ export function LeftPanel() {
           onDoubleClick={() => setActiveSketch(feature.id)}
         >
           <span className="tree-icon">
-            <PenTool size={14} />
+            <PencilRuler size={14} />
           </span>
           <span className="tree-name">{objectName(project, objectId, feature.name)}</span>
           <span className="tree-meta">{formatNumber(feature.entities.length, locale, 0)}</span>

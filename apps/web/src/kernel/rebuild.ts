@@ -4,6 +4,7 @@ import {
   HISTORY_START,
   extrudeBodyId,
   featureBodyId,
+  type BodyFaceRef,
   type ExtrudeFeature,
   type ImportMeshFeature,
   type Project,
@@ -129,6 +130,10 @@ async function runRebuild(project: Project): Promise<void> {
   const meshes: Record<string, TessellationResult> = {};
   const meshStats: Record<string, MeshStats> = {};
   const featureErrors: Record<string, string> = {};
+  /** Per-operation errors of individual body targets, shown on the body itself. */
+  const featureBodyErrors: Record<string, Record<string, string>> = {};
+  /** Per-operation errors of picked face objects, keyed by `s:`/`b:` ref. */
+  const featureObjectErrors: Record<string, Record<string, string>> = {};
   const shapeIds: string[] = [];
   /** Body id -> shape that currently represents it in the kernel. */
   const bodyShapes = new Map<string, string>();
@@ -136,6 +141,8 @@ async function runRebuild(project: Project): Promise<void> {
   const bodyOwner = new Map<string, string>();
   const createdBodies = new Map<string, string[]>();
   const sketches = new Map<string, SketchFeature>();
+  /** The first failed operation: nothing after it is built. */
+  let blockedFeatureId: string | null = null;
 
   for (const feature of activeFeatures) {
     if (epoch !== rebuildEpoch) return;
@@ -153,6 +160,8 @@ async function runRebuild(project: Project): Promise<void> {
       } catch (error) {
         const message = error instanceof Error ? error.message : 'IMPORT_FAILED';
         featureErrors[feature.id] = message === 'MISSING_ASSET' ? 'MISSING_ASSET' : 'IMPORT_FAILED';
+        blockedFeatureId = feature.id;
+        break;
       }
       continue;
     }
@@ -173,6 +182,8 @@ async function runRebuild(project: Project): Promise<void> {
         meshes[bodyId] = mesh;
       } catch (error) {
         featureErrors[feature.id] = kernelErrorCode(error);
+        blockedFeatureId = feature.id;
+        break;
       }
       continue;
     }
@@ -195,16 +206,29 @@ async function runRebuild(project: Project): Promise<void> {
           shapeIds,
           meshes,
           createdBodies,
+          featureErrors,
+          featureBodyErrors,
+          featureObjectErrors,
           client,
           epoch,
         });
+        // A per-body failure does not throw, but it still blocks the timeline:
+        // later operations must not be built on a failed state.
+        if (featureErrors[feature.id]) {
+          blockedFeatureId = feature.id;
+          break;
+        }
       } catch (error) {
         featureErrors[feature.id] = kernelErrorCode(error);
+        blockedFeatureId = feature.id;
+        break;
       }
       continue;
     }
 
     featureErrors[feature.id] = 'NOT_IMPLEMENTED';
+    blockedFeatureId = feature.id;
+    break;
   }
 
   if (epoch !== rebuildEpoch) return;
@@ -217,16 +241,27 @@ async function runRebuild(project: Project): Promise<void> {
     if (!shapeId) continue;
     const stats = await client.request<ShapeStats>({ type: 'topology', shapeId });
     shapeStats[bodyId] = stats;
-    const total = shapeStats[ownerId] ?? { faces: 0, edges: 0 };
+    const total = shapeStats[ownerId] ?? { faces: 0, edges: 0, solids: 0 };
     shapeStats[ownerId] = {
       faces: total.faces + stats.faces,
       edges: total.edges + stats.edges,
+      solids: total.solids + stats.solids,
     };
   }
   if (epoch !== rebuildEpoch) return;
 
-  useKernelStore.getState().setScene(meshes, shapeStats, meshStats, shapeIds, featureErrors);
-  useDocumentStore.getState().syncCreatedBodies(createdBodies);
+  useKernelStore
+    .getState()
+    .setScene(
+      meshes,
+      shapeStats,
+      meshStats,
+      shapeIds,
+      featureErrors,
+      featureBodyErrors,
+      featureObjectErrors,
+    );
+  useDocumentStore.getState().syncCreatedBodies(createdBodies, blockedFeatureId);
 
   for (const shapeId of kernel.shapeIds) {
     if (!shapeIds.includes(shapeId)) {
@@ -236,8 +271,11 @@ async function runRebuild(project: Project): Promise<void> {
 }
 
 function kernelErrorCode(error: unknown): string {
-  const name = error instanceof Error ? error.name : '';
-  return name && name !== 'Error' ? name : 'OP_FAILED';
+  if (!(error instanceof Error)) return 'OP_FAILED';
+  if (error.name && error.name !== 'Error') return error.name;
+  // Local checks throw `new Error('CODE')`; kernel failures carry their code in
+  // the error name.
+  return /^[A-Z][A-Z0-9_]+$/.test(error.message) ? error.message : 'OP_FAILED';
 }
 
 interface ExtrudeContext {
@@ -248,128 +286,425 @@ interface ExtrudeContext {
   meshes: Record<string, TessellationResult>;
   /** Bodies each creating operation is expected to own, keyed by operation. */
   createdBodies: Map<string, string[]>;
+  featureErrors: Record<string, string>;
+  featureBodyErrors: Record<string, Record<string, string>>;
+  featureObjectErrors: Record<string, Record<string, string>>;
   client: ReturnType<typeof getKernelClient>;
   epoch: number;
 }
 
 async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): Promise<void> {
-  const { sketches, bodyShapes, bodyOwner, shapeIds, meshes, createdBodies, client, epoch } = context;
+  const {
+    sketches,
+    bodyShapes,
+    bodyOwner,
+    shapeIds,
+    meshes,
+    createdBodies,
+    featureErrors,
+    featureBodyErrors,
+    featureObjectErrors,
+    client,
+    epoch,
+  } = context;
+
+  const faceRefs = feature.faceRefs ?? [];
   // An operation without objects builds nothing yet, which is not an error.
-  if (!feature.sketchId) return;
-  const sketch = sketches.get(feature.sketchId);
-  if (!sketch) throw new Error('MISSING_SKETCH');
+  if (!feature.sketchId && faceRefs.length === 0) return;
 
-  const profiles = sketchProfiles(sketch.entities);
-  // Extruding the whole sketch means its outermost faces: nested faces are
-  // already holes of their parent region.
-  const selected =
-    feature.scope === 'all'
-      ? profiles.filter((profile) => profile.depth === 0)
-      : profiles.filter((profile) => feature.regions.includes(profile.id));
-  if (selected.length === 0) throw new Error('NO_PROFILE');
-
-  const frame = sketchFrameOf(sketch);
-  const distances: number[] = [];
-  const forward =
-    feature.end === 'through-all'
-      ? throughAllDistance(frame, meshes, 1)
-      : feature.end === 'symmetric'
-        ? Math.abs(feature.distance) / 2
-        : Math.abs(feature.distance);
-  distances.push(forward);
-  if (feature.end === 'symmetric') distances.push(-forward);
-  if (feature.secondDirection) {
-    const back =
-      feature.secondDirection.end === 'through-all'
-        ? throughAllDistance(frame, meshes, -1)
-        : Math.abs(feature.secondDirection.distance);
-    distances.push(-back);
+  let sketch: SketchFeature | undefined;
+  let selected: ProfileRegion[] = [];
+  if (feature.sketchId) {
+    sketch = sketches.get(feature.sketchId);
+    if (!sketch) throw new Error('MISSING_SKETCH');
+    const profiles = sketchProfiles(sketch.entities);
+    // Extruding the whole sketch means its outermost faces: nested faces are
+    // already holes of their parent region.
+    selected =
+      feature.scope === 'all'
+        ? profiles.filter((profile) => profile.depth === 0)
+        : profiles.filter((profile) => feature.regions.includes(profile.id));
+    if (selected.length === 0) throw new Error('NO_PROFILE');
   }
 
-  const makePrism = (shapeId: string, profiles: ProfileRegion[]) =>
-    client.request({
-      type: 'make-prism',
-      params: {
-        shapeId,
-        origin: frame.origin,
-        xAxis: frame.xAxis,
-        yAxis: frame.yAxis,
-        regions: profiles.map((profile) => ({ outer: profile.outer, holes: profile.holes })),
-        distances,
-      },
-    });
+  const frame = sketch ? sketchFrameOf(sketch) : null;
+  const markBodyError = (bodyId: string, code: string) => {
+    const errors = featureBodyErrors[feature.id] ?? {};
+    errors[bodyId] = code;
+    featureBodyErrors[feature.id] = errors;
+  };
+  const bodyErrorCode = (bodyId: string) =>
+    bodyOwner.has(bodyId) ? 'BODY_NOT_SOLID' : 'UNKNOWN_BODY';
 
-  // Creating bodies keeps every region separate: two circles that do not touch
-  // are two bodies, not one body holding two solids.
+  // A new body operation may produce several bodies. Every region and every
+  // picked face becomes an independent solid, exactly as the user picked them.
+  // Body ids use a stable slot, so replacing the first face of the operation
+  // keeps that body's name and colour.
   if (feature.op === 'new') {
+    interface NewBodyPart {
+      key: string;
+      profile?: ProfileRegion;
+      ref?: BodyFaceRef;
+    }
+    const profileByRegion = new Map(selected.map((profile) => [profile.id, profile]));
+    const refByKey = new Map(
+      faceRefs.map((ref) => [`b:${ref.bodyId}#${ref.faceId}`, ref]),
+    );
+    const parts: NewBodyPart[] = [];
+    const usedProfiles = new Set<string>();
+    const usedRefs = new Set<string>();
+    const addPart = (key: string) => {
+      if (key.startsWith('s:')) {
+        const regionId = key.slice(2).split('#')[1];
+        const profile = regionId ? profileByRegion.get(regionId) : undefined;
+        if (!profile || usedProfiles.has(profile.id)) return;
+        usedProfiles.add(profile.id);
+        parts.push({ key, profile });
+        return;
+      }
+      if (key.startsWith('b:')) {
+        const ref = refByKey.get(key);
+        if (!ref || usedRefs.has(key)) return;
+        usedRefs.add(key);
+        parts.push({ key, ref });
+      }
+    };
+    for (const key of feature.objectOrder ?? []) addPart(key);
+    if (sketch) {
+      for (const profile of selected) addPart(`s:${sketch.id}#${profile.id}`);
+    }
+    for (const ref of faceRefs) addPart(`b:${ref.bodyId}#${ref.faceId}`);
+
+    // Faces touching along an edge belong to the same solid: extruding two
+    // crescents and the lens between them must make one body, while the two
+    // crescents alone make two. Group transitively before building.
+    const groupByProfile = new Map<string, ProfileRegion[]>();
+    for (const profile of selected) {
+      if (groupByProfile.has(profile.id)) continue;
+      const group: ProfileRegion[] = [profile];
+      groupByProfile.set(profile.id, group);
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const candidate of selected) {
+          if (groupByProfile.has(candidate.id)) continue;
+          const touches = group.some((entry) =>
+            entry.edges.some((edge) => candidate.edges.includes(edge)),
+          );
+          if (!touches) continue;
+          group.push(candidate);
+          groupByProfile.set(candidate.id, group);
+          changed = true;
+        }
+      }
+    }
+
     const bodies: string[] = [];
-    for (const [index, profile] of selected.entries()) {
-      const shapeId = `${feature.id}:prism-${profile.id}`;
-      await makePrism(shapeId, [profile]);
-      if (epoch !== rebuildEpoch) return;
-      shapeIds.push(shapeId);
-      const bodyId = extrudeBodyId(feature.id, profile.id);
-      bodyShapes.set(bodyId, shapeId);
-      bodyOwner.set(bodyId, feature.id);
-      const mesh = await client.request<TessellationResult>({
-        type: 'tessellate',
-        shapeId,
+    const emittedGroups = new Set<ProfileRegion[]>();
+    let slot = 0;
+    for (const part of parts) {
+      if (part.profile) {
+        const group = groupByProfile.get(part.profile.id) ?? [part.profile];
+        if (emittedGroups.has(group)) continue;
+        emittedGroups.add(group);
+        const bodyId = extrudeBodyId(feature.id, `body-${slot}`);
+        const shapeId = `${feature.id}:prism-${slot}`;
+        await client.request({
+          type: 'make-prism',
+          params: {
+            shapeId,
+            origin: frame!.origin,
+            xAxis: frame!.xAxis,
+            yAxis: frame!.yAxis,
+            regions: group.map((profile) => ({
+              outer: profile.outer,
+              holes: profile.holes,
+            })),
+            distances: extrudeDistances(feature, frame!.origin, frame!.normal, meshes),
+          },
+        });
+        if (epoch !== rebuildEpoch) return;
+        shapeIds.push(shapeId);
+        bodyShapes.set(bodyId, shapeId);
+        bodyOwner.set(bodyId, feature.id);
+        const mesh = await client.request<TessellationResult>({ type: 'tessellate', shapeId });
+        if (epoch !== rebuildEpoch) return;
+        meshes[bodyId] = mesh;
+        bodies.push(bodyId);
+        slot += 1;
+        continue;
+      }
+
+      const ref = part.ref!;
+      const sourceShapeId = bodyShapes.get(ref.bodyId);
+      if (!sourceShapeId) {
+        markBodyError(ref.bodyId, bodyErrorCode(ref.bodyId));
+        continue;
+      }
+      const bodyId = extrudeBodyId(feature.id, `body-${slot}`);
+      const shapeId = `${feature.id}:face-${slot}`;
+      await client.request({
+        type: 'make-face-prism',
+        params: {
+          shapeId,
+          sourceShapeId,
+          faceId: Number(ref.faceId),
+          normal: ref.normal,
+          distances: extrudeDistances(feature, ref.origin, ref.normal, meshes),
+        },
       });
       if (epoch !== rebuildEpoch) return;
+      shapeIds.push(shapeId);
+      bodyShapes.set(bodyId, shapeId);
+      bodyOwner.set(bodyId, feature.id);
+      const mesh = await client.request<TessellationResult>({ type: 'tessellate', shapeId });
+      if (epoch !== rebuildEpoch) return;
       meshes[bodyId] = mesh;
-      bodies[index] = bodyId;
+      bodies.push(bodyId);
+      slot += 1;
+    }
+    const bodyErrors = Object.values(featureBodyErrors[feature.id] ?? {});
+    if (bodyErrors.length > 0) {
+      featureErrors[feature.id] = bodyErrors[0]!;
     }
     createdBodies.set(feature.id, bodies);
     return;
   }
 
-  const toolShapeId = `tool:${feature.id}`;
-  await makePrism(toolShapeId, selected);
-  if (epoch !== rebuildEpoch) return;
-  shapeIds.push(toolShapeId);
+  // Every object produces its own tool solid. Keeping them separate lets an
+  // "add" apply only the parts that actually touch a given body; cut/intersect
+  // fuse them back into one tool below. The object key matches the Faces list,
+  // so a part that cannot be applied can be reported on its own row.
+  const toolParts: { shapeId: string; key: string }[] = [];
+  for (const [index, profile] of selected.entries()) {
+    const shapeId = `tool:${feature.id}:sketch-${index}`;
+    await client.request({
+      type: 'make-prism',
+      params: {
+        shapeId,
+        origin: frame!.origin,
+        xAxis: frame!.xAxis,
+        yAxis: frame!.yAxis,
+        regions: [{ outer: profile.outer, holes: profile.holes }],
+        distances: extrudeDistances(feature, frame!.origin, frame!.normal, meshes),
+      },
+    });
+    if (epoch !== rebuildEpoch) return;
+    shapeIds.push(shapeId);
+    toolParts.push({ shapeId, key: `s:${sketch!.id}#${profile.id}` });
+  }
+  for (const [index, ref] of faceRefs.entries()) {
+    const sourceShapeId = bodyShapes.get(ref.bodyId);
+    if (!sourceShapeId) {
+      markBodyError(ref.bodyId, bodyErrorCode(ref.bodyId));
+      continue;
+    }
+    const shapeId = `tool:${feature.id}:face-${index}`;
+    await client.request({
+      type: 'make-face-prism',
+      params: {
+        shapeId,
+        sourceShapeId,
+        faceId: Number(ref.faceId),
+        normal: ref.normal,
+        distances: extrudeDistances(feature, ref.origin, ref.normal, meshes),
+      },
+    });
+    if (epoch !== rebuildEpoch) return;
+    shapeIds.push(shapeId);
+    toolParts.push({ shapeId, key: `b:${ref.bodyId}#${ref.faceId}` });
+  }
+  if (toolParts.length === 0) throw new Error('NO_PROFILE');
 
-  const applyTo = (bodyId: string) => {
-    const baseShapeId = bodyShapes.get(bodyId);
-    if (!baseShapeId) return null;
-    const resultShapeId = `${bodyId}:${feature.id}`;
-    return { baseShapeId, resultShapeId };
-  };
+  // Add handles parts individually (see the target loop); the other operations
+  // share one fused tool.
+  let toolShapeId = toolParts[0]!.shapeId;
+  if (feature.op !== 'add') {
+    for (const [index, part] of toolParts.slice(1).entries()) {
+      const fusedId = `tool:${feature.id}:fused-${index}`;
+      await client.request({
+        type: 'boolean',
+        params: {
+          shapeId: fusedId,
+          baseShapeId: toolShapeId,
+          toolShapeId: part.shapeId,
+          op: 'fuse',
+        },
+      });
+      if (epoch !== rebuildEpoch) return;
+      shapeIds.push(fusedId);
+      toolShapeId = fusedId;
+    }
+  }
 
   // `scope` describes the regions being extruded, so bodies to combine with are
   // chosen separately: the ones listed on the feature, or every other body.
-  const targets =
-    feature.bodyIds.length > 0
-      ? feature.bodyIds
-      : [...bodyShapes.keys()].filter((bodyId) => bodyOwner.get(bodyId) !== feature.id);
+  const explicitTargets = feature.bodyIds.length > 0;
+  const targets = explicitTargets
+    ? feature.bodyIds
+    : [...bodyShapes.keys()].filter((bodyId) => bodyOwner.get(bodyId) !== feature.id);
   if (targets.length === 0) throw new Error('NO_TARGET_BODY');
 
+  let applied = 0;
+  /** Parts that actually affected at least one explicitly chosen body. */
+  const appliedParts = new Set<string>();
   for (const bodyId of targets) {
-    const shapes = applyTo(bodyId);
-    if (!shapes) continue;
-    const booleanOp = feature.op === 'add' ? 'fuse' : feature.op === 'subtract' ? 'cut' : 'common';
+    const baseShapeId = bodyShapes.get(bodyId);
+    if (!baseShapeId) {
+      // Only an explicitly selected body is an error; with "all bodies" a mesh
+      // or an empty body simply cannot participate.
+      if (explicitTargets) markBodyError(bodyId, bodyErrorCode(bodyId));
+      continue;
+    }
+
+    // Adding applies each tool part separately. A part that would create an
+    // independent solid is skipped, so two faces on two bodies both receive
+    // their own material instead of rejecting each other's disjoint parts.
+    if (feature.op === 'add') {
+      const initial = await client.request<ShapeStats>({
+        type: 'topology',
+        shapeId: baseShapeId,
+      });
+      if (epoch !== rebuildEpoch) return;
+      let currentShapeId = baseShapeId;
+      let solidCount = initial.solids;
+      let touched = false;
+
+      for (const [index, part] of toolParts.entries()) {
+        const resultShapeId = `${bodyId}:${feature.id}:part-${index}`;
+        await client.request({
+          type: 'boolean',
+          params: {
+            shapeId: resultShapeId,
+            baseShapeId: currentShapeId,
+            toolShapeId: part.shapeId,
+            op: 'fuse',
+          },
+        });
+        if (epoch !== rebuildEpoch) return;
+        const after = await client.request<ShapeStats>({
+          type: 'topology',
+          shapeId: resultShapeId,
+        });
+        if (epoch !== rebuildEpoch) return;
+        if (after.solids > solidCount) {
+          void client.request({ type: 'dispose', shapeId: resultShapeId }).catch(() => undefined);
+          continue;
+        }
+        shapeIds.push(resultShapeId);
+        currentShapeId = resultShapeId;
+        solidCount = after.solids;
+        touched = true;
+        if (explicitTargets) appliedParts.add(part.key);
+      }
+
+      if (!touched) {
+        // An explicitly chosen body that no part touches cannot take the add.
+        if (explicitTargets) markBodyError(bodyId, 'DISJOINT_UNION');
+        continue;
+      }
+
+      bodyShapes.set(bodyId, currentShapeId);
+      const mesh = await client.request<TessellationResult>({
+        type: 'tessellate',
+        shapeId: currentShapeId,
+      });
+      if (epoch !== rebuildEpoch) return;
+      meshes[bodyId] = mesh;
+      applied += 1;
+      continue;
+    }
+
+    const resultShapeId = `${bodyId}:${feature.id}`;
+    const booleanOp = feature.op === 'subtract' ? 'cut' : 'common';
     await client.request({
       type: 'boolean',
       params: {
-        shapeId: shapes.resultShapeId,
-        baseShapeId: shapes.baseShapeId,
+        shapeId: resultShapeId,
+        baseShapeId,
         toolShapeId,
         op: booleanOp,
       },
     });
     if (epoch !== rebuildEpoch) return;
-    shapeIds.push(shapes.resultShapeId);
-    bodyShapes.set(bodyId, shapes.resultShapeId);
+    shapeIds.push(resultShapeId);
+    bodyShapes.set(bodyId, resultShapeId);
     const mesh = await client.request<TessellationResult>({
       type: 'tessellate',
-      shapeId: shapes.resultShapeId,
+      shapeId: resultShapeId,
     });
     if (epoch !== rebuildEpoch) return;
     meshes[bodyId] = mesh;
+    applied += 1;
+  }
+
+  // A picked face that affects none of the explicitly chosen bodies would form
+  // an independent body, so it is reported on its own Faces row.
+  if (explicitTargets && feature.op === 'add') {
+    const objectErrors = featureObjectErrors[feature.id] ?? {};
+    for (const part of toolParts) {
+      if (!appliedParts.has(part.key)) objectErrors[part.key] = 'DISJOINT_UNION';
+    }
+    if (Object.keys(objectErrors).length > 0) featureObjectErrors[feature.id] = objectErrors;
+  }
+
+  const bodyErrors = Object.values(featureBodyErrors[feature.id] ?? {});
+  const objectErrors = Object.values(featureObjectErrors[feature.id] ?? {});
+  if (applied === 0 || bodyErrors.length > 0 || objectErrors.length > 0) {
+    // The operation block explains the first failure; every failing body and
+    // object also carries its own icon. If every implicit target was skipped,
+    // there is simply nothing to apply the extrusion to.
+    featureErrors[feature.id] = bodyErrors[0] ?? objectErrors[0] ?? 'NO_TARGET_BODY';
   }
 }
 
+// Distances are signed along the normal. Flipping mirrors the primary direction,
+// and the second direction always goes to the opposite side of it.
+function throughAllAllowed(op: ExtrudeFeature['op']): boolean {
+  return op === 'subtract' || op === 'intersect';
+}
+
+function extrudeDistances(
+  feature: ExtrudeFeature,
+  origin: readonly [number, number, number],
+  normal: readonly [number, number, number],
+  meshes: Record<string, TessellationResult>,
+): number[] {
+  const sign = feature.reversed ? -1 : 1;
+  const distances: number[] = [];
+  if (feature.end === 'symmetric') {
+    const half = Math.abs(feature.distance);
+    distances.push(-half, half);
+    return distances;
+  }
+  // Older files can hold a through-all extent that the current operation does
+  // not allow; it is treated as a blind extent because its control is hidden.
+  const primaryEnd =
+    feature.end === 'through-all' && !throughAllAllowed(feature.op) ? 'blind' : feature.end;
+  if (primaryEnd === 'through-all') {
+    distances.push(sign * throughAllDistance({ origin, normal }, meshes, sign));
+  } else {
+    distances.push(sign * Math.abs(feature.distance));
+  }
+  if (feature.secondDirection) {
+    const secondEnd =
+      feature.secondDirection.end === 'through-all' && !throughAllAllowed(feature.op)
+        ? 'blind'
+        : feature.secondDirection.end;
+    const back =
+      secondEnd === 'through-all'
+        ? throughAllDistance({ origin, normal }, meshes, -sign)
+        : Math.abs(feature.secondDirection.distance);
+    distances.push(-sign * back);
+  }
+  return distances;
+}
+
 function throughAllDistance(
-  frame: { origin: [number, number, number]; normal: [number, number, number] },
+  frame: {
+    origin: readonly [number, number, number];
+    normal: readonly [number, number, number];
+  },
   meshes: Record<string, TessellationResult>,
   direction: number,
 ): number {

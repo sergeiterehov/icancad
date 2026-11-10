@@ -1,19 +1,18 @@
 import type { SketchFeature } from '@icancad/model';
 import {
   Check,
-  Circle,
   CircleDot,
-  CircleSlashed,
-  Disc,
-  Lock,
+  Ellipse,
+  LineSquiggle,
+  LineStyle,
+  LoaderCircle,
   Magnet,
-  Minus,
   MousePointer2,
-  PenTool,
   Ruler,
   Trash2,
+  Waypoints,
 } from 'lucide-react';
-import { useState, type MouseEvent } from 'react';
+import { useState, type ComponentType, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   applyConstraintAction,
@@ -29,11 +28,12 @@ import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
 import { useContextMenuStore } from './ContextMenu';
 import { IconButton } from './Controls';
+import { PointIcon } from './featureIcons';
 import { SectionTool } from './SectionTool';
 
 const TOOLS: {
   tool: SketchTool;
-  icon: typeof Circle;
+  icon: ComponentType<{ size?: number }>;
   label:
     | 'sketch.toolSelect'
     | 'sketch.toolPoint'
@@ -44,12 +44,12 @@ const TOOLS: {
     | 'sketch.toolBezier';
 }[] = [
   { tool: 'select', icon: MousePointer2, label: 'sketch.toolSelect' },
-  { tool: 'point', icon: CircleDot, label: 'sketch.toolPoint' },
-  { tool: 'line', icon: Minus, label: 'sketch.toolLine' },
-  { tool: 'circle', icon: Circle, label: 'sketch.toolCircle' },
-  { tool: 'arc', icon: CircleSlashed, label: 'sketch.toolArc' },
-  { tool: 'ellipse', icon: Disc, label: 'sketch.toolEllipse' },
-  { tool: 'bezier', icon: PenTool, label: 'sketch.toolBezier' },
+  { tool: 'point', icon: PointIcon, label: 'sketch.toolPoint' },
+  { tool: 'line', icon: Waypoints, label: 'sketch.toolLine' },
+  { tool: 'circle', icon: CircleDot, label: 'sketch.toolCircle' },
+  { tool: 'arc', icon: LoaderCircle, label: 'sketch.toolArc' },
+  { tool: 'ellipse', icon: Ellipse, label: 'sketch.toolEllipse' },
+  { tool: 'bezier', icon: LineSquiggle, label: 'sketch.toolBezier' },
 ];
 
 export function SketchToolRail() {
@@ -148,14 +148,14 @@ export function SketchToolRail() {
         disabled={constructionEntities.length === 0}
         onClick={toggleConstruction}
       >
-        <Ruler size={17} />
+        <LineStyle size={17} />
       </IconButton>
       <IconButton
         label={t('tools.constraints')}
         disabled={actions.length === 0 || busy}
         onClick={openConstraints}
       >
-        <Lock size={17} />
+        <Ruler size={17} />
       </IconButton>
       <IconButton
         label={t('common.delete')}

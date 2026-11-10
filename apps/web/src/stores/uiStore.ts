@@ -17,8 +17,10 @@ export interface ToastMessage {
 interface UiState {
   toast: ToastMessage | null;
   deleteRequest: DeleteRequest | null;
-  /** Operation waiting for objects to be picked in the 3D view. */
+  /** Operation waiting for faces to be picked in the 3D view. */
   pickingExtrude: string | null;
+  /** Operation waiting for target bodies to be picked in the 3D view. */
+  pickingExtrudeBodies: string | null;
   sectionEnabled: boolean;
   sketchSectionEnabled: boolean;
   activeSketchId: string | null;
@@ -29,8 +31,11 @@ interface UiState {
   sketchProblemConstraintIds: string[];
   sketchMagnetEnabled: boolean;
   sketchTool: SketchTool;
+  /** Bumped whenever a tool is chosen, so re-clicking it restarts its draft. */
+  sketchToolNonce: number;
   requestDelete: (request: DeleteRequest) => void;
   setPickingExtrude: (featureId: string | null) => void;
+  setPickingExtrudeBodies: (featureId: string | null) => void;
   cancelDelete: () => void;
   showToast: (key: string, kind?: 'info' | 'error', params?: Record<string, unknown>) => void;
   dismissToast: () => void;
@@ -75,6 +80,7 @@ export const useUiStore = create<UiState>((set) => ({
   toast: null,
   deleteRequest: null,
   pickingExtrude: null,
+  pickingExtrudeBodies: null,
   sectionEnabled: loadSectionEnabled(),
   sketchSectionEnabled: true,
   activeSketchId: null,
@@ -85,12 +91,17 @@ export const useUiStore = create<UiState>((set) => ({
   sketchProblemConstraintIds: [],
   sketchMagnetEnabled: loadSketchMagnet(),
   sketchTool: 'select',
+  sketchToolNonce: 0,
   showToast: (key, kind = 'info', params) => {
     set({ toast: { id: ++toastSequence, key, kind, params } });
   },
   dismissToast: () => set({ toast: null }),
   requestDelete: (deleteRequest) => set({ deleteRequest }),
-  setPickingExtrude: (pickingExtrude) => set({ pickingExtrude }),
+  // Face and body picking are mutually exclusive.
+  setPickingExtrude: (pickingExtrude) =>
+    set(pickingExtrude ? { pickingExtrude, pickingExtrudeBodies: null } : { pickingExtrude }),
+  setPickingExtrudeBodies: (pickingExtrudeBodies) =>
+    set(pickingExtrudeBodies ? { pickingExtrudeBodies, pickingExtrude: null } : { pickingExtrudeBodies }),
   cancelDelete: () => set({ deleteRequest: null }),
   setActiveSketch: (activeSketchId) =>
     set({
@@ -131,7 +142,12 @@ export const useUiStore = create<UiState>((set) => ({
     }
     set({ sketchMagnetEnabled });
   },
-  setSketchTool: (sketchTool) => set({ sketchTool, sketchAutoHighlightIds: [] }),
+  setSketchTool: (sketchTool) =>
+    set((state) => ({
+      sketchTool,
+      sketchToolNonce: state.sketchToolNonce + 1,
+      sketchAutoHighlightIds: [],
+    })),
   setSectionEnabled: (sectionEnabled) => {
     try {
       localStorage.setItem(SECTION_ENABLED_KEY, String(sectionEnabled));

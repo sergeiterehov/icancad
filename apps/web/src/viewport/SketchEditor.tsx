@@ -1,6 +1,7 @@
 import {
   createId,
   type Project,
+  type SketchConstraint,
   type SketchConstraintRef,
   type SketchEntity,
   type SketchFeature,
@@ -23,6 +24,7 @@ import { solveDrag } from '../sketch/dragSolve';
 import { liveMeasures, measureInfo } from '../sketch/measure';
 import { referenceMenuItems } from '../sketch/referenceMenu';
 import type { SketchSnap, SketchSnapInput, SketchSnapMode } from '../sketch/snap';
+import type { SketchTool } from '../sketch/tool';
 import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
 import { useContextMenuStore } from '../ui/ContextMenu';
@@ -112,6 +114,8 @@ export function SketchEditor() {
   const openContextMenu = useContextMenuStore((state) => state.open);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
   const setActiveSketch = useUiStore((state) => state.setActiveSketch);
+  const setSketchTool = useUiStore((state) => state.setSketchTool);
+  const sketchToolNonce = useUiStore((state) => state.sketchToolNonce);
   const selectionIds = useUiStore((state) => state.sketchSelectionIds);
   const setSketchSelection = useUiStore((state) => state.setSketchSelection);
   const selectedConstraintId = useUiStore((state) => state.sketchConstraintId);
@@ -136,12 +140,23 @@ export function SketchEditor() {
     : null;
 
   const [draft, setDraft] = useState<DraftPoint[]>([]);
+  // The ref mirrors the draft synchronously, so a tool switch can clear it
+  // before the next click even if React has not rendered the reset yet.
+  const draftRef = useRef<DraftPoint[]>([]);
+  const updateDraft = (next: DraftPoint[]) => {
+    draftRef.current = next;
+    setDraft(next);
+  };
   const [hover, setHover] = useState<Point2 | null>(null);
   const [hoverSnap, setHoverSnap] = useState<SketchSnap | null>(null);
   const pointerDown = useRef<{ x: number; y: number } | null>(null);
   const drag = useRef<DragState | null>(null);
   const highlightKey = useRef('');
   const commitQueue = useRef<Promise<void>>(Promise.resolve());
+  // Last line of a polyline, so the next segment can be joined to it.
+  const polylineTail = useRef<string | null>(null);
+  // The tool that produced the current draft. A tool switch must not reuse it.
+  const draftToolRef = useRef<SketchTool>(tool);
 
   const applyAutoHighlight = (ids: string[]) => {
     const key = ids.join('|');
@@ -151,11 +166,13 @@ export function SketchEditor() {
   };
 
   useEffect(() => {
-    setDraft([]);
+    updateDraft([]);
     setHover(null);
     setHoverSnap(null);
+    polylineTail.current = null;
+    draftToolRef.current = tool;
     applyAutoHighlight([]);
-  }, [activeSketchId, tool]);
+  }, [activeSketchId, tool, sketchToolNonce]);
 
   useEffect(() => {
     if (activeSketchId && !sketch) setActiveSketch(null);
@@ -287,21 +304,28 @@ export function SketchEditor() {
           feature.id === sketch?.id && feature.type === 'sketch',
       );
 
-  const applyAutoConstraintsNow = async (entity: SketchEntity, inputs: SketchSnapInput[]) => {
-    if (!sketch || !magnetEnabled) {
+  const applyAutoConstraintsNow = async (
+    entity: SketchEntity,
+    inputs: SketchSnapInput[],
+    extra: SketchConstraint[] = [],
+  ) => {
+    if (!sketch) {
       applyAutoHighlight([]);
       return;
     }
-    const auto = autoConstraintsForEntity(entity, inputs);
-    if (auto.constraints.length === 0) {
+    const auto = magnetEnabled
+      ? autoConstraintsForEntity(entity, inputs)
+      : { constraints: [], snapConstraints: [], highlightIds: [] };
+    const base = [...auto.constraints, ...extra];
+    if (base.length === 0) {
       applyAutoHighlight([]);
       return;
     }
-
-    const attempts =
-      auto.snapConstraints.length === auto.constraints.length
-        ? [auto.constraints]
-        : [auto.constraints, auto.snapConstraints];
+    const attempts: SketchConstraint[][] = [base];
+    if (auto.snapConstraints.length > 0) {
+      const fallback = [...auto.snapConstraints, ...extra];
+      if (fallback.length !== base.length) attempts.push(fallback);
+    }
     for (const constraints of attempts) {
       if (constraints.length === 0) continue;
       const latest = currentSketch();
@@ -350,11 +374,15 @@ export function SketchEditor() {
     applyAutoHighlight([]);
   };
 
-  const commitNewEntity = (entity: SketchEntity, inputs: SketchSnapInput[]) => {
+  const commitNewEntity = (
+    entity: SketchEntity,
+    inputs: SketchSnapInput[],
+    extra: SketchConstraint[] = [],
+  ) => {
     const before = useDocumentStore.getState().project;
     mergeEntity(entity);
     commitQueue.current = commitQueue.current
-      .then(() => applyAutoConstraintsNow(entity, inputs))
+      .then(() => applyAutoConstraintsNow(entity, inputs, extra))
       .then(() => commitPreview(before))
       .catch(() => commitPreview(before));
   };
@@ -372,12 +400,29 @@ export function SketchEditor() {
         draft.map(({ input }) => input),
       );
     }
-    setDraft([]);
+    updateDraft([]);
     setHoverSnap(null);
   };
 
+  // Ends a polyline but keeps the line tool active for the next chain.
+  const finishLine = () => {
+    updateDraft([]);
+    setHoverSnap(null);
+    polylineTail.current = null;
+  };
+
   const addPoint = (point: Point2, input: SketchSnapInput) => {
-    if (tool === 'point') {
+    const activeTool = useUiStore.getState().sketchTool;
+    const toolChanged = draftToolRef.current !== activeTool;
+    const currentDraft = toolChanged ? [] : draftRef.current;
+    if (toolChanged) {
+      draftToolRef.current = activeTool;
+      updateDraft([]);
+      setHover(null);
+      setHoverSnap(null);
+      polylineTail.current = null;
+    }
+    if (activeTool === 'point') {
       const entity: SketchEntity = {
         id: createId('entity'),
         type: 'point',
@@ -388,52 +433,73 @@ export function SketchEditor() {
       void commitNewEntity(entity, [input]);
       return;
     }
-    if (tool === 'bezier') {
-      setDraft([...draft, { point, input }]);
+    if (activeTool === 'bezier') {
+      updateDraft([...currentDraft, { point, input }]);
       return;
     }
-    if (tool === 'line') {
-      if (draft.length === 0) setDraft([{ point, input }]);
-      else {
-        const entity: SketchEntity = {
-          id: createId('entity'),
-          type: 'line',
-          construction: false,
-          x1: draft[0]!.point[0],
-          y1: draft[0]!.point[1],
-          x2: point[0],
-          y2: point[1],
-        };
-        void commitNewEntity(entity, [draft[0]!.input, input]);
-        setDraft([]);
-        setHoverSnap(null);
+    if (activeTool === 'line') {
+      if (currentDraft.length === 0) {
+        polylineTail.current = null;
+        updateDraft([{ point, input }]);
+        return;
       }
+      if (distance(currentDraft[0]!.point, point) <= 0.01) return;
+      const entity: SketchEntity = {
+        id: createId('entity'),
+        type: 'line',
+        construction: false,
+        x1: currentDraft[0]!.point[0],
+        y1: currentDraft[0]!.point[1],
+        x2: point[0],
+        y2: point[1],
+      };
+      // Consecutive segments share a vertex, so the solver must keep them
+      // joined instead of letting the next drag pull them apart.
+      const extra: SketchConstraint[] = polylineTail.current
+        ? [
+            {
+              id: createId('con'),
+              type: 'coincident',
+              refs: [
+                { entityId: polylineTail.current, pointIndex: 1 },
+                { entityId: entity.id, pointIndex: 0 },
+              ],
+            },
+          ]
+        : [];
+      void commitNewEntity(entity, [currentDraft[0]!.input, input], extra);
+      polylineTail.current = entity.id;
+      // The end of this segment becomes the start of the next one. Clear the
+      // hover so the committed segment does not leave a zero-length preview.
+      updateDraft([{ point, input }]);
+      setHover(null);
+      setHoverSnap(null);
       return;
     }
-    if (tool === 'circle') {
-      if (draft.length === 0) setDraft([{ point, input }]);
+    if (activeTool === 'circle') {
+      if (currentDraft.length === 0) updateDraft([{ point, input }]);
       else {
-        const radius = distance(draft[0]!.point, point);
+        const radius = distance(currentDraft[0]!.point, point);
         if (radius > 0.01) {
           const entity: SketchEntity = {
             id: createId('entity'),
             type: 'circle',
             construction: false,
-            cx: draft[0]!.point[0],
-            cy: draft[0]!.point[1],
+            cx: currentDraft[0]!.point[0],
+            cy: currentDraft[0]!.point[1],
             r: radius,
           };
-          void commitNewEntity(entity, [draft[0]!.input, input]);
+          void commitNewEntity(entity, [currentDraft[0]!.input, input]);
         }
-        setDraft([]);
+        updateDraft([]);
         setHoverSnap(null);
       }
       return;
     }
-    if (tool === 'arc') {
-      if (draft.length < 2) setDraft([...draft, { point, input }]);
+    if (activeTool === 'arc') {
+      if (currentDraft.length < 2) updateDraft([...currentDraft, { point, input }]);
       else {
-        const [origin, start] = draft;
+        const [origin, start] = currentDraft;
         const radius = distance(origin!.point, start!.point);
         if (radius > 0.01) {
           const entity: SketchEntity = {
@@ -451,30 +517,30 @@ export function SketchEditor() {
           };
           void commitNewEntity(entity, [origin!.input, start!.input, input]);
         }
-        setDraft([]);
+        updateDraft([]);
         setHoverSnap(null);
       }
       return;
     }
-    if (tool === 'ellipse') {
-      if (draft.length === 0) setDraft([{ point, input }]);
+    if (activeTool === 'ellipse') {
+      if (currentDraft.length === 0) updateDraft([{ point, input }]);
       else {
-        const rx = Math.abs(point[0] - draft[0]!.point[0]);
-        const ry = Math.abs(point[1] - draft[0]!.point[1]);
+        const rx = Math.abs(point[0] - currentDraft[0]!.point[0]);
+        const ry = Math.abs(point[1] - currentDraft[0]!.point[1]);
         if (rx > 0.01 && ry > 0.01) {
           const entity: SketchEntity = {
             id: createId('entity'),
             type: 'ellipse',
             construction: false,
-            cx: draft[0]!.point[0],
-            cy: draft[0]!.point[1],
+            cx: currentDraft[0]!.point[0],
+            cy: currentDraft[0]!.point[1],
             rx,
             ry,
             rotation: 0,
           };
-          void commitNewEntity(entity, [draft[0]!.input, input]);
+          void commitNewEntity(entity, [currentDraft[0]!.input, input]);
         }
-        setDraft([]);
+        updateDraft([]);
         setHoverSnap(null);
       }
     }
@@ -489,7 +555,8 @@ export function SketchEditor() {
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
       pointerDown.current = { x: event.clientX, y: event.clientY };
-      if (tool !== 'select' || !sketch) return;
+      const activeTool = useUiStore.getState().sketchTool;
+      if (activeTool !== 'select' || !sketch) return;
       const additive = event.metaKey || event.ctrlKey || event.shiftKey;
       const pick = getViewport()?.pickSketch(
         event.clientX,
@@ -517,7 +584,8 @@ export function SketchEditor() {
       };
     };
     const onPointerMove = (event: PointerEvent) => {
-      if (tool === 'select') {
+      const activeTool = useUiStore.getState().sketchTool;
+      if (activeTool === 'select') {
         const activeDrag = drag.current;
         if (!activeDrag) return;
         if (!activeDrag.active) {
@@ -574,7 +642,9 @@ export function SketchEditor() {
           .catch(() => undefined);
         return;
       }
-      const mode = snapModeFor(tool, draft.length);
+      const draftLength =
+        draftToolRef.current === activeTool ? draftRef.current.length : 0;
+      const mode = snapModeFor(activeTool, draftLength);
       const snap = getViewport()?.snapSketch(
         event.clientX,
         event.clientY,
@@ -634,7 +704,8 @@ export function SketchEditor() {
       const down = pointerDown.current;
       pointerDown.current = null;
       if (down && Math.hypot(event.clientX - down.x, event.clientY - down.y) > 4) return;
-      if (tool === 'select') {
+      const activeTool = useUiStore.getState().sketchTool;
+      if (activeTool === 'select') {
         const pick = getViewport()?.pickSketch(
           event.clientX,
           event.clientY,
@@ -660,7 +731,9 @@ export function SketchEditor() {
         }
         return;
       }
-      const mode = snapModeFor(tool, draft.length);
+      const draftLength =
+        draftToolRef.current === activeTool ? draftRef.current.length : 0;
+      const mode = snapModeFor(activeTool, draftLength);
       const snap = getViewport()?.snapSketch(
         event.clientX,
         event.clientY,
@@ -675,11 +748,13 @@ export function SketchEditor() {
       });
     };
     const onDoubleClick = () => {
-      if (tool === 'bezier') finishBezier();
+      const activeTool = useUiStore.getState().sketchTool;
+      if (activeTool === 'bezier') finishBezier();
+      else if (activeTool === 'line') finishLine();
     };
 
     const onContextMenu = (event: globalThis.MouseEvent) => {
-      if (tool !== 'select') return;
+      if (useUiStore.getState().sketchTool !== 'select') return;
       const current = currentSketch();
       if (!current) return;
       const pick = getViewport()?.pickSketch(event.clientX, event.clientY, current.entities);
@@ -833,10 +908,25 @@ export function SketchEditor() {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+      const activeTool = useUiStore.getState().sketchTool;
       if (event.key === 'Escape') {
-        setDraft([]);
-        setHover(null);
+        // While a tool has progress, Escape only rewinds it. With no progress
+        // it returns to Select, and Select itself finishes the sketch.
+        if (draftRef.current.length > 0) {
+          updateDraft([]);
+          setHover(null);
+          setHoverSnap(null);
+          setSketchSelection([]);
+          polylineTail.current = null;
+          return;
+        }
         setSketchSelection([]);
+        if (activeTool !== 'select') {
+          setSketchTool('select');
+          return;
+        }
+        setActiveSketch(null);
+        return;
       }
       if (event.key === 'Delete' || event.key === 'Backspace') {
         if (selectedConstraintId && sketch) {
@@ -859,7 +949,8 @@ export function SketchEditor() {
           void diagnoseSketch(next);
         }
       }
-      if (event.key === 'Enter' && tool === 'bezier') finishBezier();
+      if (event.key === 'Enter' && activeTool === 'bezier') finishBezier();
+      if (event.key === 'Enter' && activeTool === 'line') finishLine();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);

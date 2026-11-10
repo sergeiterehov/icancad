@@ -15,6 +15,7 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { SketchSnap } from '../sketch/snap';
 import { CAMERA_FOV_DEGREES, easeInOut, fitDistance, shortestAngle } from './cameraFit';
 import type { ScenePick, SceneSketch, SketchPick, ViewName, ViewportCamera } from './handle';
+import { isPlanarFace } from './planarFace';
 
 const HATCH_SPACING_PX = 6;
 
@@ -37,6 +38,16 @@ interface BodyEntry {
 
 const FOV_DEGREES = CAMERA_FOV_DEGREES;
 const CAMERA_TRANSITION_MS = 500;
+
+/** Faces selected for an operation, plus the one under the cursor. */
+export interface FaceHighlightState {
+  /** `s:<sketchId>#<faceId>` or `b:<bodyId>#<faceId>`. */
+  selected: readonly string[];
+  invalid: readonly string[];
+  picking: boolean;
+  /** Bodies are being picked as operation targets. */
+  bodyPicking: boolean;
+}
 
 interface CameraPose {
   target: THREE.Vector3;
@@ -93,6 +104,30 @@ function pointSegmentDistance(point: Point2, a: Point2, b: Point2): number {
   return Math.hypot(point[0] - (a[0] + dx * t), point[1] - (a[1] + dy * t));
 }
 
+// Triangles of one B-rep face as a standalone highlight surface.
+function faceGeometry(mesh: TessellationResult, faceId: number): THREE.BufferGeometry | null {
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const { positions: source, normals: sourceNormals, indices, faceIds } = mesh;
+  for (let triangle = 0; triangle < faceIds.length; triangle += 1) {
+    if (faceIds[triangle] !== faceId) continue;
+    for (let corner = 0; corner < 3; corner += 1) {
+      const vertex = indices[triangle * 3 + corner]!;
+      positions.push(source[vertex * 3]!, source[vertex * 3 + 1]!, source[vertex * 3 + 2]!);
+      normals.push(
+        sourceNormals[vertex * 3]!,
+        sourceNormals[vertex * 3 + 1]!,
+        sourceNormals[vertex * 3 + 2]!,
+      );
+    }
+  }
+  if (positions.length === 0) return null;
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  return geometry;
+}
+
 function closestOnSegment(
   point: Point2,
   a: Point2,
@@ -131,6 +166,33 @@ export class SceneController {
     active: boolean;
   }[] = [];
   private readonly facePickMeshes: THREE.Mesh[] = [];
+  /** Highlight surfaces for picked faces, keyed by `s:`/`b:` refs. */
+  private readonly sketchFaceMaterials = new Map<string, THREE.MeshBasicMaterial>();
+  private readonly bodyFaceOverlays = new Map<
+    string,
+    { mesh: THREE.Mesh; material: THREE.MeshBasicMaterial }
+  >();
+  private readonly faceOverlayGroup = new THREE.Group();
+  private faceHighlights: {
+    selected: Set<string>;
+    invalid: Set<string>;
+    picking: boolean;
+    bodyPicking: boolean;
+  } = {
+    selected: new Set(),
+    invalid: new Set(),
+    picking: false,
+    bodyPicking: false,
+  };
+  private bodyStyles: {
+    selected: Set<string>;
+    highlighted: Set<string>;
+    errored: Set<string>;
+  } = { selected: new Set(), highlighted: new Set(), errored: new Set() };
+  private hoveredBodyId: string | null = null;
+  private hoveredFaceKey: string | null = null;
+  private hoverFrame = 0;
+  private hoverPoint: { x: number; y: number } | null = null;
   private sketchOverlay: THREE.Group | null = null;
   private sketchLineMaterials: LineMaterial[] = [];
   private readonly pointTexture = createCircleTexture();
@@ -198,6 +260,8 @@ export class SceneController {
 
     this.grid = this.createGrid();
     this.scene.add(this.grid);
+    this.faceOverlayGroup.renderOrder = 6;
+    this.scene.add(this.faceOverlayGroup);
 
     this.bindEvents();
     this.resizeObserver = new ResizeObserver(() => this.resize());
@@ -211,10 +275,14 @@ export class SceneController {
     bodies: SceneBody[],
     selectedBodyIds: readonly string[],
     highlightedBodyIds: readonly string[] = [],
+    errorBodyIds: readonly string[] = [],
   ): void {
     const seen = new Set<string>();
-    const selected = new Set(selectedBodyIds);
-    const highlighted = new Set(highlightedBodyIds);
+    this.bodyStyles = {
+      selected: new Set(selectedBodyIds),
+      highlighted: new Set(highlightedBodyIds),
+      errored: new Set(errorBodyIds),
+    };
     let sectionChanged = false;
 
     for (const body of bodies) {
@@ -236,10 +304,6 @@ export class SceneController {
       if (entry.group.visible !== body.visible) sectionChanged = true;
       entry.group.visible = body.visible;
       entry.material.color.set(body.color);
-      const isSelected = selected.has(body.id);
-      const isHighlighted = !isSelected && highlighted.has(body.id);
-      entry.material.emissive.setHex(isSelected ? 0x2a4a8a : isHighlighted ? 0x3a4a63 : 0x000000);
-      entry.material.emissiveIntensity = isSelected || isHighlighted ? 1 : 0;
     }
 
     for (const id of [...this.bodies.keys()]) {
@@ -249,8 +313,45 @@ export class SceneController {
       }
     }
 
+    this.applyBodyMaterials();
     this.applyClipping();
     if (sectionChanged && this.sectionPlanes.length > 0) this.rebuildSection();
+    this.applyFaceHighlights();
+    this.invalidate();
+  }
+
+  private applyBodyMaterials(): void {
+    for (const [id, entry] of this.bodies) {
+      const isError = this.bodyStyles.errored.has(id);
+      const isSelected = !isError && this.bodyStyles.selected.has(id);
+      const isHovered = !isError && !isSelected && this.hoveredBodyId === id;
+      const isHighlighted = !isError && !isSelected && !isHovered && this.bodyStyles.highlighted.has(id);
+      entry.material.emissive.setHex(
+        isError
+          ? 0x7a1a1a
+          : isSelected || isHovered
+            ? 0x2a4a8a
+            : isHighlighted
+              ? 0x24406e
+              : 0x000000,
+      );
+      entry.material.emissiveIntensity = isError || isSelected || isHovered || isHighlighted ? 1 : 0;
+    }
+  }
+
+  setFaceHighlights(state: FaceHighlightState): void {
+    this.faceHighlights = {
+      selected: new Set(state.selected),
+      invalid: new Set(state.invalid),
+      picking: state.picking,
+      bodyPicking: state.bodyPicking,
+    };
+    if (!state.picking) this.hoveredFaceKey = null;
+    if (!state.bodyPicking && this.hoveredBodyId !== null) {
+      this.hoveredBodyId = null;
+      this.applyBodyMaterials();
+    }
+    this.applyFaceHighlights();
     this.invalidate();
   }
 
@@ -564,7 +665,70 @@ export class SceneController {
       });
     }
     this.rebuildSketchOverlay();
+    this.applyFaceHighlights();
     this.invalidate();
+  }
+
+  private applyFaceHighlights(): void {
+    for (const [key, material] of this.sketchFaceMaterials) {
+      const invalid = this.faceHighlights.invalid.has(key);
+      const selected = this.faceHighlights.selected.has(key);
+      const hovered = this.hoveredFaceKey === key;
+      material.color.setHex(invalid ? 0xef4444 : this.sketchHighlightColor());
+      const opacity = invalid
+        ? 0.5
+        : selected
+          ? 0.45
+          : hovered
+            ? 0.3
+            : this.faceHighlights.picking
+              ? 0.12
+              : 0;
+      material.opacity = opacity;
+      material.visible = opacity > 0;
+    }
+
+    for (const { mesh, material } of this.bodyFaceOverlays.values()) {
+      this.faceOverlayGroup.remove(mesh);
+      mesh.geometry.dispose();
+      material.dispose();
+    }
+    this.bodyFaceOverlays.clear();
+
+    const keys = new Set<string>();
+    for (const key of this.faceHighlights.selected) {
+      if (key.startsWith('b:')) keys.add(key);
+    }
+    for (const key of this.faceHighlights.invalid) {
+      if (key.startsWith('b:')) keys.add(key);
+    }
+    if (this.hoveredFaceKey?.startsWith('b:')) keys.add(this.hoveredFaceKey);
+
+    for (const key of keys) {
+      const [bodyId, faceId] = key.slice(2).split('#');
+      if (!bodyId || faceId === undefined) continue;
+      const entry = this.bodies.get(bodyId);
+      if (!entry || !entry.group.visible) continue;
+      const geometry = faceGeometry(entry.meshRef, Number(faceId));
+      if (!geometry) continue;
+      const invalid = this.faceHighlights.invalid.has(key);
+      const selected = this.faceHighlights.selected.has(key);
+      const material = new THREE.MeshBasicMaterial({
+        color: invalid ? 0xef4444 : this.sketchHighlightColor(),
+        transparent: true,
+        opacity: invalid ? 0.5 : selected ? 0.45 : 0.3,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+        clippingPlanes: this.sectionClipPlanes,
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.renderOrder = 7;
+      this.faceOverlayGroup.add(mesh);
+      this.bodyFaceOverlays.set(key, { mesh, material });
+    }
   }
 
   setSketchOverlay(
@@ -929,9 +1093,9 @@ export class SceneController {
       depthWrite: false,
       resolution: new THREE.Vector2(this.width, this.height),
       dashed,
-      dashSize: 4,
-      gapSize: 3,
-      dashScale: 1,
+      dashSize: 8,
+      gapSize: 8,
+      dashScale: this.pixelsPerWorldUnit(),
     });
     this.sketchLineMaterials.push(material);
     const line = new Line2(geometry, material);
@@ -1008,6 +1172,7 @@ export class SceneController {
     }
     this.sketchEntries = [];
     this.sketchLineMaterials = [];
+    this.sketchFaceMaterials.clear();
     this.facePickMeshes.length = 0;
     if (this.sketchOverlay) {
       this.scene.remove(this.sketchOverlay);
@@ -1159,10 +1324,17 @@ export class SceneController {
     if (this.disposed) return;
     this.disposed = true;
     cancelAnimationFrame(this.animationFrame);
+    cancelAnimationFrame(this.hoverFrame);
     this.resizeObserver.disconnect();
     this.unbindEvents();
 
     for (const id of [...this.bodies.keys()]) this.removeEntry(id);
+    for (const { mesh, material } of this.bodyFaceOverlays.values()) {
+      this.faceOverlayGroup.remove(mesh);
+      mesh.geometry.dispose();
+      material.dispose();
+    }
+    this.bodyFaceOverlays.clear();
     this.disposeSection();
     this.disposeSketchEntries();
     this.capGeometry.dispose();
@@ -1240,6 +1412,12 @@ export class SceneController {
     this.updateCamera();
   }
 
+  // LineMaterial measures dashes in world units multiplied by dashScale, so a
+  // scale of pixels-per-unit makes an 8/8 dash pattern 8 screen pixels wide.
+  private pixelsPerWorldUnit(): number {
+    return this.height / Math.max(1e-6, this.camera.top - this.camera.bottom);
+  }
+
   private updateCamera(): void {
     const aspect = this.width / this.height;
     const halfHeight = this.distance * Math.tan((FOV_DEGREES * Math.PI) / 180 / 2);
@@ -1263,6 +1441,12 @@ export class SceneController {
     this.camera.lookAt(this.target);
     this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld();
+    const dashScale = this.pixelsPerWorldUnit();
+    for (const material of this.sketchLineMaterials) {
+      (
+        material as unknown as { uniforms: { dashScale: { value: number } } }
+      ).uniforms.dashScale.value = dashScale;
+    }
     this.onCameraChange?.(this.azimuth, this.polar, this.distance);
     this.invalidate();
   }
@@ -1272,6 +1456,7 @@ export class SceneController {
     this.canvas.addEventListener('pointermove', this.onPointerMove);
     this.canvas.addEventListener('pointerup', this.onPointerUp);
     this.canvas.addEventListener('pointercancel', this.onPointerUp);
+    this.canvas.addEventListener('pointerleave', this.onPointerLeave);
     this.canvas.addEventListener('wheel', this.onWheel, { passive: false });
     this.canvas.addEventListener('contextmenu', this.onContextMenu);
   }
@@ -1281,6 +1466,7 @@ export class SceneController {
     this.canvas.removeEventListener('pointermove', this.onPointerMove);
     this.canvas.removeEventListener('pointerup', this.onPointerUp);
     this.canvas.removeEventListener('pointercancel', this.onPointerUp);
+    this.canvas.removeEventListener('pointerleave', this.onPointerLeave);
     this.canvas.removeEventListener('wheel', this.onWheel);
     this.canvas.removeEventListener('contextmenu', this.onContextMenu);
   }
@@ -1311,7 +1497,15 @@ export class SceneController {
       const movedY = event.clientY - this.pointerDown.y;
       if (Math.hypot(movedX, movedY) > 4) this.pointerMoved = true;
     }
-    if (!this.dragMode) return;
+    if (!this.dragMode) {
+      if (
+        (this.faceHighlights.picking || this.faceHighlights.bodyPicking) &&
+        event.buttons === 0
+      ) {
+        this.scheduleHover(event.clientX, event.clientY);
+      }
+      return;
+    }
     const dx = event.clientX - this.lastX;
     const dy = event.clientY - this.lastY;
     this.lastX = event.clientX;
@@ -1345,7 +1539,11 @@ export class SceneController {
       this.pointerDown = null;
       this.pointerMoved = false;
       if (shouldPick) {
-        const pick = this.pickSceneAt(event.clientX, event.clientY);
+        const pick = this.pickSceneAt(
+          event.clientX,
+          event.clientY,
+          this.faceHighlights.picking,
+        );
         this.onPick?.(pick, event.metaKey || event.ctrlKey || event.shiftKey);
       }
     }
@@ -1361,24 +1559,47 @@ export class SceneController {
     return this.raycaster;
   }
 
-  private pickSceneAt(clientX: number, clientY: number): ScenePick | null {
+  private pickSceneAt(clientX: number, clientY: number, faces = false): ScenePick | null {
     const raycaster = this.pointerToRay(clientX, clientY);
     const bodyMeshes = [...this.bodies.values()]
       .filter((entry) => entry.group.visible)
       .map((entry) => entry.mesh);
-    const faceHit = raycaster.intersectObjects(this.facePickMeshes, false)[0];
+    const faceHit = faces ? raycaster.intersectObjects(this.facePickMeshes, false)[0] : undefined;
     const bodyHit = raycaster.intersectObjects(bodyMeshes, false)[0];
     // While faces are being picked they win over the solids they produced, so a
     // face stays clickable after it has been extruded.
-    const picking = this.sketchData.some((sketch) => sketch.facesPicking);
-    const hit = picking && faceHit ? faceHit : (faceHit && (!bodyHit || faceHit.distance <= bodyHit.distance) ? faceHit : bodyHit);
-    if (!hit) return null;
-    const face = hit.object.userData.sketchFace as
-      | { sketchId: string; faceId: string }
-      | undefined;
-    if (face) return { kind: 'face', sketchId: face.sketchId, faceId: face.faceId };
-    const bodyId = hit.object.userData.bodyId as string | undefined;
-    return bodyId ? { kind: 'body', id: bodyId } : null;
+    if (faces && faceHit) {
+      const face = faceHit.object.userData.sketchFace as
+        | { sketchId: string; faceId: string }
+        | undefined;
+      if (face) return { kind: 'face', sketchId: face.sketchId, faceId: face.faceId };
+    }
+    if (bodyHit) {
+      const bodyId = bodyHit.object.userData.bodyId as string | undefined;
+      if (bodyId && faces) {
+        const entry = this.bodies.get(bodyId);
+        const faceId = entry?.meshRef.faceIds[bodyHit.faceIndex ?? -1];
+        if (entry && faceId !== undefined) {
+          const normal = bodyHit.face?.normal;
+          return {
+            kind: 'body-face',
+            bodyId,
+            faceId: String(faceId),
+            normal: normal ? [normal.x, normal.y, normal.z] : [0, 0, 1],
+            origin: [bodyHit.point.x, bodyHit.point.y, bodyHit.point.z],
+            planar: isPlanarFace(entry.meshRef, faceId),
+          };
+        }
+      }
+      if (bodyId) return { kind: 'body', id: bodyId };
+    }
+    if (faceHit) {
+      const face = faceHit.object.userData.sketchFace as
+        | { sketchId: string; faceId: string }
+        | undefined;
+      if (face) return { kind: 'face', sketchId: face.sketchId, faceId: face.faceId };
+    }
+    return null;
   }
 
   private pickBodyAt(clientX: number, clientY: number): string | null {
@@ -1386,17 +1607,55 @@ export class SceneController {
     return pick?.kind === 'body' ? pick.id : null;
   }
 
+  private scheduleHover(clientX: number, clientY: number): void {
+    this.hoverPoint = { x: clientX, y: clientY };
+    if (this.hoverFrame) return;
+    this.hoverFrame = requestAnimationFrame(() => {
+      this.hoverFrame = 0;
+      if (
+        !this.hoverPoint ||
+        (!this.faceHighlights.picking && !this.faceHighlights.bodyPicking)
+      ) {
+        return;
+      }
+      this.updateHover(this.hoverPoint.x, this.hoverPoint.y);
+    });
+  }
+
+  private updateHover(clientX: number, clientY: number): void {
+    if (this.faceHighlights.bodyPicking) {
+      const pick = this.pickSceneAt(clientX, clientY, false);
+      const bodyId = pick?.kind === 'body' ? pick.id : null;
+      if (bodyId === this.hoveredBodyId) return;
+      this.hoveredBodyId = bodyId;
+      this.hoveredFaceKey = null;
+      this.canvas.style.cursor = bodyId ? 'pointer' : '';
+      this.applyBodyMaterials();
+      this.applyFaceHighlights();
+      this.invalidate();
+      return;
+    }
+
+    const pick = this.pickSceneAt(clientX, clientY, true);
+    const key =
+      pick?.kind === 'face'
+        ? `s:${pick.sketchId}#${pick.faceId}`
+        : pick?.kind === 'body-face'
+          ? `b:${pick.bodyId}#${pick.faceId}`
+          : null;
+    if (key === this.hoveredFaceKey && this.hoveredBodyId === null) return;
+    this.hoveredBodyId = null;
+    this.hoveredFaceKey = key;
+    this.canvas.style.cursor = key ? 'pointer' : '';
+    this.applyBodyMaterials();
+    this.applyFaceHighlights();
+    this.invalidate();
+  }
+
   // Sketch faces are invisible picking surfaces: they let the 3D view select a
   // region of a sketch the same way the tree does.
   private addSketchFacePickers(group: THREE.Group, sketch: SceneSketch): void {
     if (sketch.faces.length === 0) return;
-    const material = new THREE.MeshBasicMaterial({
-      color: this.sketchHighlightColor(),
-      transparent: true,
-      opacity: sketch.facesPicking ? 0.12 : 0,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
     const [ox, oy, oz] = sketch.frame.origin;
     const [xx, xy, xz] = sketch.frame.xAxis;
     const [yx, yy, yz] = sketch.frame.yAxis;
@@ -1411,6 +1670,13 @@ export class SceneController {
       for (const hole of face.holes) {
         shape.holes.push(new THREE.Path(hole.map((point) => new THREE.Vector2(point[0], point[1]))));
       }
+      const material = new THREE.MeshBasicMaterial({
+        color: this.sketchHighlightColor(),
+        transparent: true,
+        opacity: sketch.facesPicking ? 0.12 : 0,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
       const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), material);
       mesh.matrixAutoUpdate = false;
       mesh.matrix.copy(basis).setPosition(ox, oy, oz);
@@ -1418,6 +1684,7 @@ export class SceneController {
       mesh.userData.sketchFace = { sketchId: sketch.id, faceId: face.id };
       group.add(mesh);
       this.facePickMeshes.push(mesh);
+      this.sketchFaceMaterials.set(`s:${sketch.id}#${face.id}`, material);
     }
   }
 
@@ -1433,6 +1700,17 @@ export class SceneController {
     event.preventDefault();
     const bodyId = this.pickBodyAt(event.clientX, event.clientY);
     this.onBodyContextMenu?.(bodyId, event.clientX, event.clientY);
+  };
+
+  private onPointerLeave = (): void => {
+    this.hoverPoint = null;
+    if (this.hoveredFaceKey === null && this.hoveredBodyId === null) return;
+    this.hoveredFaceKey = null;
+    this.hoveredBodyId = null;
+    this.canvas.style.cursor = '';
+    this.applyBodyMaterials();
+    this.applyFaceHighlights();
+    this.invalidate();
   };
 
   private invalidate(): void {

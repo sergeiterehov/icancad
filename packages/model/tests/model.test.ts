@@ -64,8 +64,11 @@ function extrudeFeature(id = 'feat_extrude', sketchId = 'feat_sketch'): ExtrudeF
     type: 'extrude',
     sketchId,
     regions: [],
+    faceRefs: [],
+    objectOrder: [],
     end: 'blind',
     distance: 10,
+    reversed: false,
     op: 'new',
     scope: 'all',
     bodyIds: [],
@@ -97,6 +100,21 @@ describe('project model', () => {
     expect(project.features).toHaveLength(1);
     expect(project.bodies).toHaveLength(1);
     expect(project.bodies[0]?.createdBy).toBe('feat_box');
+  });
+
+  it('fills new extrude fields when opening an older project', () => {
+    const legacy: Record<string, unknown> = { ...extrudeFeature() };
+    delete legacy.faceRefs;
+    delete legacy.objectOrder;
+    delete legacy.reversed;
+    const project = parseProject({
+      ...createProject('Old project'),
+      features: [legacy],
+    });
+    const parsed = project.features[0] as ExtrudeFeature;
+    expect(parsed.faceRefs).toEqual([]);
+    expect(parsed.objectOrder).toEqual([]);
+    expect(parsed.reversed).toBe(false);
   });
 
   it('rejects duplicate ids', () => {

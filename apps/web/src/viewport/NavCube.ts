@@ -280,11 +280,14 @@ export class NavCube {
       const direction = [0, 0, 0];
       direction[axis] = sign;
       direction[otherAxes[index]!] = Math.sign(coordinates[index]!);
+      // Aim along the sum of both face normals. Top and bottom edges need a
+      // polar of 45/135 degrees, not a horizontal view.
+      const length = Math.hypot(direction[0]!, direction[1]!, direction[2]!);
       return {
         faces: [normalFace, faceOfAxis(otherAxes[index]!, Math.sign(coordinates[index]!))],
         dir: [direction[0]!, direction[1]!, direction[2]!],
         azimuth: Math.atan2(direction[1]!, direction[0]!),
-        polar: Math.PI / 2,
+        polar: Math.acos(direction[2]! / length),
       };
     }
 

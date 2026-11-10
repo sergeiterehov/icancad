@@ -22,6 +22,10 @@ interface KernelState {
   meshStats: Record<string, MeshStats>;
   shapeIds: string[];
   featureErrors: Record<string, string>;
+  /** Errors of individual body targets, keyed by operation then body. */
+  featureBodyErrors: Record<string, Record<string, string>>;
+  /** Errors of picked face objects, keyed by operation then `s:`/`b:` ref. */
+  featureObjectErrors: Record<string, Record<string, string>>;
   tasks: KernelTask[];
   handleStatus: (event: KernelStatusEvent) => void;
   setReady: (health: HealthResult) => void;
@@ -33,6 +37,8 @@ interface KernelState {
     meshStats: Record<string, MeshStats>,
     shapeIds: string[],
     featureErrors: Record<string, string>,
+    featureBodyErrors: Record<string, Record<string, string>>,
+    featureObjectErrors: Record<string, Record<string, string>>,
   ) => void;
   clearScene: () => void;
 }
@@ -49,6 +55,8 @@ export const useKernelStore = create<KernelState>((set) => ({
   meshStats: {},
   shapeIds: [],
   featureErrors: {},
+  featureBodyErrors: {},
+  featureObjectErrors: {},
   tasks: [],
 
   handleStatus: (event) => {
@@ -82,9 +90,33 @@ export const useKernelStore = create<KernelState>((set) => ({
 
   setTasks: (tasks) => set({ tasks }),
 
-  setScene: (meshes, shapeStats, meshStats, shapeIds, featureErrors) =>
-    set({ meshes, shapeStats, meshStats, shapeIds, featureErrors }),
+  setScene: (
+    meshes,
+    shapeStats,
+    meshStats,
+    shapeIds,
+    featureErrors,
+    featureBodyErrors,
+    featureObjectErrors,
+  ) =>
+    set({
+      meshes,
+      shapeStats,
+      meshStats,
+      shapeIds,
+      featureErrors,
+      featureBodyErrors,
+      featureObjectErrors,
+    }),
 
   clearScene: () =>
-    set({ meshes: {}, shapeStats: {}, meshStats: {}, shapeIds: [], featureErrors: {} }),
+    set({
+      meshes: {},
+      shapeStats: {},
+      meshStats: {},
+      shapeIds: [],
+      featureErrors: {},
+      featureBodyErrors: {},
+      featureObjectErrors: {},
+    }),
 }));

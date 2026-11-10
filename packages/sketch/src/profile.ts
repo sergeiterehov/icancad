@@ -41,6 +41,8 @@ export interface ProfileRegion {
   depth: number;
   outer: ProfileLoop;
   holes: ProfileLoop[];
+  /** Stable edge keys, shared by faces that touch along an edge. */
+  edges: string[];
 }
 
 // Sketch faces as extrusion profiles: exact lines, arcs and circles with the
@@ -62,6 +64,7 @@ export function sketchProfiles(entities: readonly SketchEntity[]): ProfileRegion
         .slice(1)
         .map((loop) => ({ curves: loopCurves(loop, byId, 'backward') }))
         .filter((loop) => loop.curves.length > 0),
+      edges: [...new Set(face.loops.flat().map((entry) => entry.edgeKey))],
     });
   }
   return regions;
@@ -70,6 +73,84 @@ export function sketchProfiles(entities: readonly SketchEntity[]): ProfileRegion
 interface EntityOrientations {
   forward: ProfileCurve[];
   backward: ProfileCurve[];
+}
+
+// Curves for one loop run. Whole entities keep their exact representation;
+// partial runs of a circle or arc become the exact arc between their ends.
+function runCurves(
+  entry: SketchTopologyLoopCurve,
+  byId: Map<string, SketchEntity>,
+): ProfileCurve[] {
+  const entity = byId.get(entry.entityId);
+  if (!entity) return polylineCurves(entry.points);
+  if (entry.full) {
+    const orientations = entityOrientations(entity);
+    const start = entry.points[0];
+    const end = entry.points[entry.points.length - 1];
+    if (start && end) {
+      const matches = (curves: ProfileCurve[]) =>
+        samePoint(chainStart(curves), start) && samePoint(chainEnd(curves), end);
+      if (matches(orientations.forward)) return orientations.forward;
+      if (matches(orientations.backward)) return orientations.backward;
+    }
+    return entry.reversed ? orientations.backward : orientations.forward;
+  }
+  if (entity.type === 'circle' || entity.type === 'arc') {
+    const arc = exactArc(entity, entry.points);
+    if (arc) return [arc];
+  }
+  if (entity.type === 'line') {
+    const start = entry.points[0];
+    const end = entry.points[entry.points.length - 1];
+    if (start && end) {
+      return [{ type: 'line', x1: start[0], y1: start[1], x2: end[0], y2: end[1] }];
+    }
+  }
+  return polylineCurves(entry.points);
+}
+
+// An exact arc from the first to the last point of a run. The run's second
+// point tells which way the loop walks the circle; endpoints that came from a
+// polygonal fallback are not on the circle and stay polygonal.
+function exactArc(
+  entity: { cx: number; cy: number; r: number },
+  points: readonly Point2[],
+): ProfileArcCurve | null {
+  const start = points[0];
+  const end = points[points.length - 1];
+  if (!start || !end) return null;
+  const onCircle = (point: Point2) =>
+    Math.abs(Math.hypot(point[0] - entity.cx, point[1] - entity.cy) - entity.r) <= 1e-6;
+  if (!onCircle(start) || !onCircle(end) || samePoint(start, end, SNAP_TOLERANCE)) return null;
+  const startAngle = Math.atan2(start[1] - entity.cy, start[0] - entity.cx);
+  const endAngle = Math.atan2(end[1] - entity.cy, end[0] - entity.cx);
+  const next = points[1] ?? end;
+  const alongTangent =
+    (next[0] - start[0]) * -Math.sin(startAngle) +
+    (next[1] - start[1]) * Math.cos(startAngle);
+  if (alongTangent >= 0) {
+    let sweepEnd = endAngle;
+    while (sweepEnd <= startAngle) sweepEnd += Math.PI * 2;
+    return {
+      type: 'arc',
+      cx: entity.cx,
+      cy: entity.cy,
+      r: entity.r,
+      startAngle,
+      endAngle: sweepEnd,
+    };
+  }
+  let sweepEnd = startAngle;
+  while (sweepEnd <= endAngle) sweepEnd += Math.PI * 2;
+  return {
+    type: 'arc',
+    cx: entity.cx,
+    cy: entity.cy,
+    r: entity.r,
+    startAngle: endAngle,
+    endAngle: sweepEnd,
+    reversed: true,
+  };
 }
 
 const JOIN_TOLERANCE = 1e-3;
@@ -84,6 +165,13 @@ function loopCurves(
   byId: Map<string, SketchEntity>,
   seed: 'forward' | 'backward',
 ): ProfileCurve[] {
+  // A run cut by intersections only covers part of its entity. The topology
+  // gives those pieces in loop order; keep circles and arcs exact so the
+  // extruded side stays one curved face instead of a fan of flat strips.
+  if (loop.some((entry) => !entry.full)) {
+    return snapChain(loop.flatMap((entry) => runCurves(entry, byId)));
+  }
+
   const pairs: EntityOrientations[] = [];
   for (const entry of loop) {
     const entity = byId.get(entry.entityId);

@@ -189,13 +189,23 @@ const sketchFeature = z.object({
   references: z.array(sketchReference).default([]),
 });
 
+const bodyFaceRef = z.object({
+  bodyId: z.string().min(1),
+  faceId: z.string().min(1),
+  normal: vec3,
+  origin: vec3,
+});
+
 const extrudeFeature = z.object({
   ...featureBase,
   type: z.literal('extrude'),
   sketchId: z.string().min(1).optional(),
   regions: z.array(z.string()),
+  faceRefs: z.array(bodyFaceRef).default([]),
+  objectOrder: z.array(z.string()).default([]),
   end: z.enum(['blind', 'symmetric', 'through-all']),
   distance: z.number(),
+  reversed: z.boolean().default(false),
   secondDirection: z
     .object({ end: z.enum(['blind', 'through-all']), distance: z.number() })
     .optional(),

@@ -57,6 +57,15 @@ interface DocumentState {
   setExtrudeOp: (featureId: string, op: ExtrudeFeature['op']) => void;
   setExtrudeInput: (featureId: string, input: ExtrudeInput | null) => void;
   toggleExtrudeFace: (featureId: string, sketchId: string, faceId: string) => void;
+  toggleExtrudeBodyFace: (
+    featureId: string,
+    bodyId: string,
+    faceId: string,
+    normal: [number, number, number],
+    origin: [number, number, number],
+  ) => void;
+  toggleExtrudeBodyTarget: (featureId: string, bodyId: string) => void;
+  setExtrudeReversed: (featureId: string, reversed: boolean) => void;
   toggleExtrudeSketch: (featureId: string, sketchId: string) => void;
   toggleSketchVisibility: (sketchId: string) => void;
   addImportedMesh: (name: string, featureId: string, format: MeshFormat) => void;
@@ -65,7 +74,10 @@ interface DocumentState {
   confirmRemoveFeature: (featureId: string) => void;
   deleteBody: (bodyId: string, name: string) => void;
   /** Reconciles body refs with the bodies the kernel actually produced. */
-  syncCreatedBodies: (bodies: Map<string, string[]>) => void;
+  syncCreatedBodies: (
+    bodies: Map<string, string[]>,
+    blockedFeatureId?: string | null,
+  ) => void;
   renameProject: (name: string) => void;
   setHistoryEnd: (featureId: string | null) => void;
   rollHistoryTo: (featureId: string | null) => void;
@@ -76,6 +88,21 @@ export interface ExtrudeInput {
   sketchId: string;
   /** Empty means the whole sketch; otherwise the picked faces. */
   regions: string[];
+}
+
+/** Picked objects are keyed so sketch faces and body faces share one order. */
+export function sketchFaceKey(sketchId: string, faceId: string): string {
+  return `s:${sketchId}#${faceId}`;
+}
+
+export function bodyFaceKey(bodyId: string, faceId: string): string {
+  return `b:${bodyId}#${faceId}`;
+}
+
+function withOrderKey(order: readonly string[] | undefined, key: string, add: boolean): string[] {
+  const current: readonly string[] = order ?? [];
+  if (!add) return current.filter((candidate) => candidate !== key);
+  return current.includes(key) ? [...current] : [...current, key];
 }
 
 const HISTORY_LIMIT = 100;
@@ -215,6 +242,27 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   select: (item, options) => {
+    // An active picking control owns selection: clicks in the 3D view, the tree
+    // or the sketch face list feed that control instead of replacing the
+    // selection and closing the control.
+    const ui = useUiStore.getState();
+    if (ui.pickingExtrude) {
+      if (item?.kind === 'face') {
+        const [sketchId, faceId] = item.id.split('#');
+        if (sketchId && faceId) get().toggleExtrudeFace(ui.pickingExtrude, sketchId, faceId);
+      } else if (item?.kind === 'sketch') {
+        // Clicking a sketch in the object tree picks the whole sketch.
+        get().toggleExtrudeSketch(ui.pickingExtrude, item.id);
+      }
+      return;
+    }
+    if (ui.pickingExtrudeBodies) {
+      if (item?.kind === 'body') {
+        get().toggleExtrudeBodyTarget(ui.pickingExtrudeBodies, item.id);
+      }
+      return;
+    }
+
     if (!item) {
       set({ selection: [] });
       return;
@@ -308,8 +356,15 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       type: 'extrude',
       ...(input ? { sketchId: input.sketchId } : {}),
       regions,
+      faceRefs: [],
+      objectOrder: input
+        ? regions.length > 0
+          ? regions.map((regionId) => sketchFaceKey(input.sketchId, regionId))
+          : [`s:${input.sketchId}#*`]
+        : [],
       end: 'blind',
       distance: 10,
+      reversed: false,
       op: hasBodies ? 'add' : 'new',
       scope: regions.length > 0 ? 'selected' : 'all',
       bodyIds: [],
@@ -328,11 +383,20 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     );
     if (!feature) return;
     const regions = input?.regions ?? [];
+    const sketchKeys = input
+      ? regions.length > 0
+        ? regions.map((regionId) => sketchFaceKey(input.sketchId, regionId))
+        : [`s:${input.sketchId}#*`]
+      : [];
     const next: ExtrudeFeature = {
       ...feature,
       ...(input ? { sketchId: input.sketchId } : { sketchId: undefined }),
       regions,
       scope: regions.length > 0 ? 'selected' : 'all',
+      objectOrder: [
+        ...(feature.objectOrder ?? []).filter((key) => !key.startsWith('s:')),
+        ...sketchKeys,
+      ],
     };
     get().apply({ type: 'feature/replace', feature: next });
   },
@@ -343,15 +407,67 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         candidate.id === featureId && candidate.type === 'extrude',
     );
     if (!feature) return;
-    const regions =
-      feature.sketchId === sketchId && feature.scope === 'selected' ? feature.regions : [];
-    const next = regions.includes(faceId)
-      ? regions.filter((id) => id !== faceId)
-      : [...regions, faceId];
-    get().setExtrudeInput(
-      featureId,
-      next.length > 0 ? { sketchId, regions: next } : null,
+    const sameSketch = feature.sketchId === sketchId;
+    const regions = sameSketch && feature.scope === 'selected' ? feature.regions : [];
+    const key = sketchFaceKey(sketchId, faceId);
+    const adding = !regions.includes(faceId);
+    const next = adding ? [...regions, faceId] : regions.filter((id) => id !== faceId);
+    let order = (feature.objectOrder ?? []).filter(
+      (candidate) => sameSketch || !candidate.startsWith('s:'),
     );
+    if (next.length === 0) order = order.filter((candidate) => !candidate.startsWith('s:'));
+    get().apply({
+      type: 'feature/replace',
+      feature: {
+        ...feature,
+        ...(next.length > 0
+          ? { sketchId, regions: next, scope: 'selected' as const }
+          : { sketchId: undefined, regions: [], scope: 'all' as const }),
+        objectOrder: withOrderKey(order, key, adding),
+      },
+    });
+  },
+
+  toggleExtrudeBodyFace: (featureId, bodyId, faceId, normal, origin) => {
+    const feature = get().project.features.find(
+      (candidate): candidate is ExtrudeFeature =>
+        candidate.id === featureId && candidate.type === 'extrude',
+    );
+    if (!feature) return;
+    const refs = feature.faceRefs ?? [];
+    const exists = refs.some((ref) => ref.bodyId === bodyId && ref.faceId === faceId);
+    const faceRefs = exists
+      ? refs.filter((ref) => !(ref.bodyId === bodyId && ref.faceId === faceId))
+      : [...refs, { bodyId, faceId, normal, origin }];
+    get().apply({
+      type: 'feature/replace',
+      feature: {
+        ...feature,
+        faceRefs,
+        objectOrder: withOrderKey(feature.objectOrder, bodyFaceKey(bodyId, faceId), !exists),
+      },
+    });
+  },
+
+  toggleExtrudeBodyTarget: (featureId, bodyId) => {
+    const feature = get().project.features.find(
+      (candidate): candidate is ExtrudeFeature =>
+        candidate.id === featureId && candidate.type === 'extrude',
+    );
+    if (!feature) return;
+    const bodyIds = feature.bodyIds.includes(bodyId)
+      ? feature.bodyIds.filter((id) => id !== bodyId)
+      : [...feature.bodyIds, bodyId];
+    get().apply({ type: 'feature/replace', feature: { ...feature, bodyIds } });
+  },
+
+  setExtrudeReversed: (featureId, reversed) => {
+    const feature = get().project.features.find(
+      (candidate): candidate is ExtrudeFeature =>
+        candidate.id === featureId && candidate.type === 'extrude',
+    );
+    if (!feature) return;
+    get().apply({ type: 'feature/replace', feature: { ...feature, reversed } });
   },
 
   toggleExtrudeSketch: (featureId, sketchId) => {
@@ -373,11 +489,18 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         candidate.id === featureId && candidate.type === 'extrude',
     );
     if (!feature || feature.op === op) return;
-    // Through-all cannot create or add material, so such an operation falls back
-    // to a blind extent when the operation changes.
-    const end =
-      (op === 'new' || op === 'add') && feature.end === 'through-all' ? 'blind' : feature.end;
-    get().apply({ type: 'feature/replace', feature: { ...feature, op, end } });
+    // Through-all cannot create or add material. Both extents fall back to a
+    // blind distance when the operation changes, because their controls hide.
+    const allowsThroughAll = op === 'subtract' || op === 'intersect';
+    const end = !allowsThroughAll && feature.end === 'through-all' ? 'blind' : feature.end;
+    const secondDirection =
+      feature.secondDirection && !allowsThroughAll && feature.secondDirection.end === 'through-all'
+        ? { ...feature.secondDirection, end: 'blind' as const }
+        : feature.secondDirection;
+    get().apply({
+      type: 'feature/replace',
+      feature: { ...feature, op, end, secondDirection },
+    });
   },
 
   addImportedMesh: (name, featureId, format) => {
@@ -474,10 +597,26 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   // Bodies are objects derived from the geometry an operation produced (ADR
   // 0007): the kernel reports them and the document only keeps the refs, so the
   // reconciliation is not an undoable edit of its own.
-  syncCreatedBodies: (created) => {
+  syncCreatedBodies: (created, blockedFeatureId = null) => {
     const state = get();
     const project = state.project;
     const commands: Command[] = [];
+    const removals = new Set<string>();
+    // Rebuild stops at the first failure, so bodies owned by that operation and
+    // by everything after it no longer exist.
+    const blockedIndex = blockedFeatureId
+      ? project.features.findIndex((feature) => feature.id === blockedFeatureId)
+      : -1;
+    const featureIndices = new Map(
+      project.features.map((feature, index) => [feature.id, index]),
+    );
+    const staleBodies = new Set(
+      blockedIndex >= 0
+        ? project.bodies
+            .filter((body) => (featureIndices.get(body.createdBy) ?? -1) >= blockedIndex)
+            .map((body) => body.id)
+        : [],
+    );
     // Numbers and colours continue the project-wide sequence instead of
     // restarting for every operation.
     let nextNumber = nextBodyNumber(project);
@@ -505,9 +644,15 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         existingCount += 1;
       }
       for (const body of existing) {
-        if (bodyIds.includes(body.id)) continue;
+        if (bodyIds.includes(body.id) || staleBodies.has(body.id)) continue;
         commands.push({ type: 'body/remove', bodyId: body.id });
+        removals.add(body.id);
       }
+    }
+    for (const bodyId of staleBodies) {
+      if (removals.has(bodyId)) continue;
+      commands.push({ type: 'body/remove', bodyId });
+      removals.add(bodyId);
     }
     if (commands.length === 0) return;
     let next: Project;

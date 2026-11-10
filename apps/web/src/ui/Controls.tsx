@@ -38,6 +38,29 @@ export function Segmented({ ariaLabel, children }: { ariaLabel: string; children
   );
 }
 
+export function Switch({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      title={label}
+      className="switch"
+      data-active={checked ? 'true' : undefined}
+      onClick={() => onChange(!checked)}
+    />
+  );
+}
+
 // A tab is one option of a segmented switch. Labels never wrap: the row is a
 // single line like the sketch plane selector.
 export function SegmentedTab({
@@ -94,18 +117,23 @@ export function Button({
 export function PanelSection({
   title,
   count,
+  icon,
   action,
+  className,
   children,
 }: {
   title: string;
   count?: number;
+  icon?: ReactNode;
   action?: ReactNode;
+  className?: string;
   children: ReactNode;
 }) {
   return (
-    <section className="panel-section">
+    <section className={clsx('panel-section', className)}>
       <header className="panel-section-header">
         <span className="panel-section-title">
+          {icon && <span className="panel-section-icon">{icon}</span>}
           {title}
           {count !== undefined && <span className="panel-count">{count}</span>}
         </span>

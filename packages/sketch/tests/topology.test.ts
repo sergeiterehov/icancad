@@ -58,6 +58,45 @@ describe('sketch topology', () => {
     expect(ring?.holes[0]).toEqual(['c1']);
   });
 
+  it('splits intersecting circles into three adjacent faces instead of holes', () => {
+    const a: SketchEntity = { id: 'a', type: 'circle', construction: false, cx: 0, cy: 0, r: 10 };
+    const b: SketchEntity = {
+      id: 'b',
+      type: 'circle',
+      construction: false,
+      cx: 12,
+      cy: 0,
+      r: 10,
+    };
+    const topology = sketchTopology([a, b]);
+    expect(topology.faces).toHaveLength(3);
+    // Faces bounded by the same two circles must still be picked separately.
+    expect(new Set(topology.faces.map((face) => face.id)).size).toBe(3);
+
+    const areas = topology.faces.map((face) => face.area).sort((left, right) => right - left);
+    expect(areas[0]).toBeGreaterThan(200);
+    expect(areas[1]).toBeGreaterThan(200);
+    expect(areas[2]).toBeLessThan(120);
+    for (const face of topology.faces) {
+      expect(face.holes).toEqual([]);
+      expect(face.depth).toBe(0);
+      // Crossings cut every run, so no loop is a whole circle any more.
+      expect(face.loops.flat().every((curve) => !curve.full)).toBe(true);
+    }
+
+    const edgesOf = (face: (typeof topology.faces)[number]) =>
+      new Set(face.loops.flat().map((curve) => curve.edgeKey));
+    const lens = [...topology.faces].sort((left, right) => left.area - right.area)[0]!;
+    const lensEdges = edgesOf(lens);
+    const touching = topology.faces.filter(
+      (face) =>
+        face !== lens && [...edgesOf(face)].some((edge) => lensEdges.has(edge)),
+    );
+    expect(touching).toHaveLength(2);
+    const [first, second] = touching;
+    expect([...edgesOf(first!)].some((edge) => edgesOf(second!).has(edge))).toBe(false);
+  });
+
   it('ignores construction geometry and isolated points only produce points', () => {
     const construction: SketchEntity = { ...line('c', 0, 5, 20, 5), construction: true };
     const point: SketchEntity = { id: 'p1', type: 'point', construction: false, x: 40, y: 40 };

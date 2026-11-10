@@ -40,7 +40,7 @@ describe('OCCT kernel engine', () => {
 
   it('creates a box with the expected topology', () => {
     const result = engine.makeBox({ shapeId: 'box-1', dx: 20, dy: 10, dz: 5 });
-    expect(result.stats).toEqual({ faces: 6, edges: 12 });
+    expect(result.stats).toEqual({ faces: 6, edges: 12, solids: 1 });
   });
 
   it('tessellates a box into a closed mesh', () => {
@@ -215,6 +215,125 @@ describe('OCCT kernel engine', () => {
       expect(Math.max(...spans)).toBeCloseTo(20, 1);
       expect(meshSignedVolume(mesh)).toBeGreaterThan(0);
     }
+  });
+
+  it('extrudes a face of an existing solid', () => {
+    engine.makeBox({ shapeId: 'face-source', dx: 20, dy: 20, dz: 20 });
+    const source = engine.tessellate('face-source');
+    const faceId = source.faceIds[0]!;
+    const triangle = source.faceIds.findIndex((id) => id === faceId);
+    expect(triangle).toBeGreaterThanOrEqual(0);
+
+    const corners = [0, 1, 2].map((corner) => {
+      const vertex = source.indices[triangle * 3 + corner]!;
+      return [
+        source.positions[vertex * 3]!,
+        source.positions[vertex * 3 + 1]!,
+        source.positions[vertex * 3 + 2]!,
+      ] as const;
+    });
+    const a = corners[0]!;
+    const b = corners[1]!;
+    const c = corners[2]!;
+    const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    const normal: [number, number, number] = [
+      u[1]! * v[2]! - u[2]! * v[1]!,
+      u[2]! * v[0]! - u[0]! * v[2]!,
+      u[0]! * v[1]! - u[1]! * v[0]!,
+    ];
+
+    const result = engine.makeFacePrism({
+      shapeId: 'face-prism',
+      sourceShapeId: 'face-source',
+      faceId,
+      normal,
+      distances: [5],
+    });
+    expect(result.stats.faces).toBeGreaterThan(0);
+
+    const prism = engine.tessellate('face-prism');
+    expect(prism.triangleCount).toBeGreaterThan(0);
+    expect(prism.indices.length).toBe(prism.triangleCount * 3);
+    expect(Math.abs(meshSignedVolume(prism))).toBeGreaterThan(0);
+  });
+
+  it('rejects extruding a curved body face', () => {
+    engine.makePrism({
+      shapeId: 'curved-face-source',
+      origin: [0, 0, 0],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 1, 0],
+      regions: [{ outer: { curves: [{ type: 'circle', cx: 0, cy: 0, r: 5 }] }, holes: [] }],
+      distances: [10],
+    });
+    // A cylinder has one curved side and two planar caps.
+    const outcomes: string[] = [];
+    for (let faceId = 0; faceId < 3; faceId += 1) {
+      try {
+        engine.makeFacePrism({
+          shapeId: `curved-face-${faceId}`,
+          sourceShapeId: 'curved-face-source',
+          faceId,
+          normal: [0, 0, 1],
+          distances: [2],
+        });
+        outcomes.push('ok');
+      } catch (error) {
+        outcomes.push(error instanceof KernelOpError ? error.code : 'unknown');
+      }
+    }
+    expect(outcomes.filter((code) => code === 'FACE_NOT_PLANAR')).toHaveLength(1);
+    expect(outcomes.filter((code) => code === 'ok')).toHaveLength(2);
+  });
+
+  it('reports disjoint solids when fused regions do not touch', () => {
+    const square = (x: number) => ({
+      curves: [
+        { type: 'line' as const, x1: x, y1: 0, x2: x + 10, y2: 0 },
+        { type: 'line' as const, x1: x + 10, y1: 0, x2: x + 10, y2: 10 },
+        { type: 'line' as const, x1: x + 10, y1: 10, x2: x, y2: 10 },
+        { type: 'line' as const, x1: x, y1: 10, x2: x, y2: 0 },
+      ],
+    });
+    const result = engine.makePrism({
+      shapeId: 'disjoint',
+      origin: [0, 0, 0],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 1, 0],
+      regions: [
+        { outer: square(0), holes: [] },
+        { outer: square(20), holes: [] },
+      ],
+      distances: [5],
+    });
+    expect(result.stats.solids).toBe(2);
+  });
+
+  it('merges coplanar faces when fused regions share an edge', () => {
+    const square = (x: number) => ({
+      curves: [
+        { type: 'line' as const, x1: x, y1: 0, x2: x + 10, y2: 0 },
+        { type: 'line' as const, x1: x + 10, y1: 0, x2: x + 10, y2: 10 },
+        { type: 'line' as const, x1: x + 10, y1: 10, x2: x, y2: 10 },
+        { type: 'line' as const, x1: x, y1: 10, x2: x, y2: 0 },
+      ],
+    });
+    // Two 10x10 squares side by side make one 20x10 box: the shared edge must
+    // not leave the top and bottom split into two coplanar faces.
+    const result = engine.makePrism({
+      shapeId: 'joined',
+      origin: [0, 0, 0],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 1, 0],
+      regions: [
+        { outer: square(0), holes: [] },
+        { outer: square(10), holes: [] },
+      ],
+      distances: [5],
+    });
+    expect(result.stats.solids).toBe(1);
+    expect(result.stats.faces).toBe(6);
   });
 
   it('cuts one solid with another', () => {

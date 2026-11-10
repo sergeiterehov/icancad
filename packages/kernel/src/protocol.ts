@@ -23,6 +23,8 @@ export interface TessellationResult {
 export interface ShapeStats {
   faces: number;
   edges: number;
+  /** Number of separate solids in the shape; more than one means disjoint parts. */
+  solids: number;
 }
 
 export interface HealthResult {
@@ -91,6 +93,17 @@ export interface MakePrismParams {
   distances: number[];
 }
 
+export interface MakeFacePrismParams {
+  shapeId: string;
+  sourceShapeId: string;
+  /** OCCT face traversal index, the same one tessellation reports in `faceIds`. */
+  faceId: number;
+  /** Outward normal of the face, captured by the viewport at pick time. */
+  normal: Vec3;
+  /** Signed extrusion distances along the normal. */
+  distances: number[];
+}
+
 export interface BooleanParams {
   shapeId: string;
   baseShapeId: string;
@@ -112,6 +125,7 @@ export interface KernelStatusEvent {
 export type KernelErrorCode =
   | 'SHAPE_NOT_FOUND'
   | 'INVALID_PARAMS'
+  | 'FACE_NOT_PLANAR'
   | 'NOT_IMPLEMENTED'
   | 'OP_FAILED';
 
@@ -119,6 +133,7 @@ export type KernelRequestPayload =
   | { type: 'health' }
   | { type: 'make-box'; params: BoxParams }
   | { type: 'make-prism'; params: MakePrismParams }
+  | { type: 'make-face-prism'; params: MakeFacePrismParams }
   | { type: 'boolean'; params: BooleanParams }
   | { type: 'tessellate'; shapeId: string; quality?: TessellationQuality }
   | { type: 'topology'; shapeId: string }

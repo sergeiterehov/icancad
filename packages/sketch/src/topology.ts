@@ -23,6 +23,12 @@ export interface SketchTopologyLoopCurve {
   entityId: string;
   /** True when the loop walks the entity against its natural direction. */
   reversed: boolean;
+  /** The portion of the entity used by this loop, in loop direction. */
+  points: Point2[];
+  /** The run uses the whole entity, so the exact curve can be used. */
+  full: boolean;
+  /** Stable identity of the geometric edge, shared by adjacent faces. */
+  edgeKey: string;
 }
 
 export interface SketchTopologyFace {
@@ -104,6 +110,131 @@ function closedLoop(entity: SketchEntity): boolean {
   return entity.type === 'circle' || entity.type === 'ellipse';
 }
 
+// Crossing point of two polyline segments, with the parameters needed to split
+// both entities at the same place.
+function segmentIntersection(
+  a: Point2,
+  b: Point2,
+  c: Point2,
+  d: Point2,
+): { point: Point2; t: number; u: number } | null {
+  const rx = b[0] - a[0];
+  const ry = b[1] - a[1];
+  const sx = d[0] - c[0];
+  const sy = d[1] - c[1];
+  const denominator = rx * sy - ry * sx;
+  if (Math.abs(denominator) < 1e-9) return null;
+  const qx = c[0] - a[0];
+  const qy = c[1] - a[1];
+  const t = (qx * sy - qy * sx) / denominator;
+  const u = (qx * ry - qy * rx) / denominator;
+  const eps = 1e-9;
+  if (t < -eps || t > 1 + eps || u < -eps || u > 1 + eps) return null;
+  const clamped = Math.min(1, Math.max(0, t));
+  return {
+    point: [a[0] + rx * clamped, a[1] + ry * clamped],
+    t: clamped,
+    u: Math.min(1, Math.max(0, u)),
+  };
+}
+
+const TAU = Math.PI * 2;
+
+function normalizeAngle(angle: number): number {
+  let value = angle % TAU;
+  if (value < 0) value += TAU;
+  return value;
+}
+
+interface CircleLike {
+  cx: number;
+  cy: number;
+  r: number;
+  /** Set for arcs: true when the angle lies inside the drawn sweep. */
+  onArc?: (angle: number) => boolean;
+}
+
+function circleOf(entity: SketchEntity): CircleLike | null {
+  if (entity.type === 'circle') return { cx: entity.cx, cy: entity.cy, r: entity.r };
+  if (entity.type !== 'arc') return null;
+  const { cx, cy, r, startAngle, endAngle } = entity;
+  const naturalCcw = endAngle >= startAngle;
+  const from = naturalCcw ? startAngle : endAngle;
+  const sweep = normalizeAngle((naturalCcw ? endAngle - startAngle : startAngle - endAngle));
+  return {
+    cx,
+    cy,
+    r,
+    onArc: (angle) => normalizeAngle(angle - from) <= sweep + 1e-9,
+  };
+}
+
+// Exact crossings for circles, arcs and lines. Splitting at chord intersections
+// would leave the intersection slightly off the real circle and force the
+// profile to stay polygonal; exact points keep partial runs as real arcs.
+function exactIntersections(first: SketchEntity, second: SketchEntity): Point2[] | null {
+  const firstCircle = circleOf(first);
+  const secondCircle = circleOf(second);
+  if (firstCircle && secondCircle) {
+    const dx = secondCircle.cx - firstCircle.cx;
+    const dy = secondCircle.cy - firstCircle.cy;
+    const distance = Math.hypot(dx, dy);
+    if (distance < 1e-9) return [];
+    if (
+      distance > firstCircle.r + secondCircle.r + 1e-9 ||
+      distance < Math.abs(firstCircle.r - secondCircle.r) - 1e-9
+    ) {
+      return [];
+    }
+    const along = (distance * distance + firstCircle.r * firstCircle.r - secondCircle.r * secondCircle.r) / (2 * distance);
+    const height = Math.sqrt(Math.max(0, firstCircle.r * firstCircle.r - along * along));
+    const mx = firstCircle.cx + (along * dx) / distance;
+    const my = firstCircle.cy + (along * dy) / distance;
+    const points: Point2[] =
+      height < 1e-9
+        ? [[mx, my]]
+        : [
+            [mx - (dy / distance) * height, my + (dx / distance) * height],
+            [mx + (dy / distance) * height, my - (dx / distance) * height],
+          ];
+    return points.filter((point) => {
+      const angle = Math.atan2(point[1] - firstCircle.cy, point[0] - firstCircle.cx);
+      const secondAngle = Math.atan2(point[1] - secondCircle.cy, point[0] - secondCircle.cx);
+      return (
+        (!firstCircle.onArc || firstCircle.onArc(angle)) &&
+        (!secondCircle.onArc || secondCircle.onArc(secondAngle))
+      );
+    });
+  }
+  if (firstCircle && second.type === 'line') return lineCircle(firstCircle, second);
+  if (secondCircle && first.type === 'line') return lineCircle(secondCircle, first);
+  return null;
+}
+
+function lineCircle(circle: CircleLike, line: SketchEntity): Point2[] {
+  if (line.type !== 'line') return [];
+  const dx = line.x2 - line.x1;
+  const dy = line.y2 - line.y1;
+  const length2 = dx * dx + dy * dy;
+  if (length2 < 1e-18) return [];
+  const projection = ((circle.cx - line.x1) * dx + (circle.cy - line.y1) * dy) / length2;
+  const footX = line.x1 + projection * dx;
+  const footY = line.y1 + projection * dy;
+  const distance2 = (footX - circle.cx) ** 2 + (footY - circle.cy) ** 2;
+  if (distance2 > circle.r * circle.r + 1e-9) return [];
+  const offset = Math.sqrt(Math.max(0, circle.r * circle.r - distance2) / length2);
+  const parameters = offset < 1e-9 ? [projection] : [projection - offset, projection + offset];
+  return parameters
+    .filter((value) => value >= -1e-9 && value <= 1 + 1e-9)
+    .map((value): Point2 => [line.x1 + dx * value, line.y1 + dy * value])
+    .filter((point) => {
+      if (!circle.onArc) return true;
+      return circle.onArc(Math.atan2(point[1] - circle.cy, point[0] - circle.cx));
+    });
+}
+
+
+
 // Sketch geometry as the object it becomes after the sketch is finished: points,
 // edges and the faces bounded by those edges. Construction geometry is ignored.
 export function sketchTopology(entities: readonly SketchEntity[]): SketchTopology {
@@ -150,31 +281,141 @@ export function sketchTopology(entities: readonly SketchEntity[]): SketchTopolog
     return `pt_${best!.entityId}_${best!.index}`;
   };
 
+  interface CurveData {
+    entity: SketchEntity;
+    polyline: Point2[];
+    closed: boolean;
+    /** Intersections that must be inserted into each polyline segment. */
+    splits: Map<number, { t: number; point: Point2 }[]>;
+  }
+
   const edges: SketchTopologyEdge[] = [];
-  const segments: Segment[] = [];
+  const curves: CurveData[] = [];
 
   for (const entity of curveEntities) {
     const polyline = tessellateEntity(entity);
     if (polyline.length < 2) continue;
     const closed = closedLoop(entity);
-    const nodeIds = polyline.map((point) => resolveNode(point));
 
     let length = 0;
     for (let index = 0; index < polyline.length - 1; index += 1) {
       const a = polyline[index]!;
       const b = polyline[index + 1]!;
       length += Math.hypot(b[0] - a[0], b[1] - a[1]);
-      segments.push({ entityId: entity.id, from: nodeIds[index]!, to: nodeIds[index + 1]! });
     }
     if (closed) {
       const a = polyline[polyline.length - 1]!;
       const b = polyline[0]!;
       length += Math.hypot(b[0] - a[0], b[1] - a[1]);
-      segments.push({
-        entityId: entity.id,
-        from: nodeIds[nodeIds.length - 1]!,
-        to: nodeIds[0]!,
-      });
+    }
+
+    const endpoints = entityEndpoints(entity);
+    edges.push({
+      id: entity.id,
+      start: '',
+      end: '',
+      closed: closed || (endpoints ? nodeKey(endpoints[0]) === nodeKey(endpoints[1]) : false),
+      length,
+      points: polyline,
+    });
+    curves.push({ entity, polyline, closed, splits: new Map() });
+  }
+
+  // Curves are tessellated independently, so crossings are not vertices yet.
+  // Split every segment at its intersections with the other curves before the
+  // half-edge traversal; without this two crossing circles stay two loops
+  // instead of becoming three faces.
+  const segmentCount = (curve: CurveData) =>
+    curve.closed ? curve.polyline.length : curve.polyline.length - 1;
+  const addSplit = (
+    curve: CurveData,
+    index: number,
+    split: { t: number; point: Point2 },
+  ) => {
+    const list = curve.splits.get(index) ?? [];
+    list.push(split);
+    curve.splits.set(index, list);
+  };
+  const projectOntoCurve = (
+    curve: CurveData,
+    point: Point2,
+  ): { index: number; t: number } | null => {
+    const { polyline } = curve;
+    let best: { index: number; t: number } | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (let index = 0; index < segmentCount(curve); index += 1) {
+      const from = polyline[index]!;
+      const to = polyline[(index + 1) % polyline.length]!;
+      const dx = to[0] - from[0];
+      const dy = to[1] - from[1];
+      const length2 = dx * dx + dy * dy;
+      const t =
+        length2 === 0
+          ? 0
+          : Math.min(1, Math.max(0, ((point[0] - from[0]) * dx + (point[1] - from[1]) * dy) / length2));
+      const x = from[0] + dx * t;
+      const y = from[1] + dy * t;
+      const distance = (point[0] - x) ** 2 + (point[1] - y) ** 2;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = { index, t };
+      }
+    }
+    return best;
+  };
+  const addExactSplit = (curve: CurveData, point: Point2) => {
+    const projection = projectOntoCurve(curve, point);
+    if (!projection) return;
+    addSplit(curve, projection.index, { t: projection.t, point });
+  };
+
+  for (let a = 0; a < curves.length; a += 1) {
+    for (let b = a + 1; b < curves.length; b += 1) {
+      const first = curves[a]!;
+      const second = curves[b]!;
+      const exact = exactIntersections(first.entity, second.entity);
+      if (exact) {
+        for (const point of exact) {
+          addExactSplit(first, point);
+          addExactSplit(second, point);
+        }
+        continue;
+      }
+      for (let i = 0; i < segmentCount(first); i += 1) {
+        const a1 = first.polyline[i]!;
+        const a2 = first.polyline[(i + 1) % first.polyline.length]!;
+        for (let j = 0; j < segmentCount(second); j += 1) {
+          const b1 = second.polyline[j]!;
+          const b2 = second.polyline[(j + 1) % second.polyline.length]!;
+          const hit = segmentIntersection(a1, a2, b1, b2);
+          if (!hit) continue;
+          addSplit(first, i, { t: hit.t, point: hit.point });
+          addSplit(second, j, { t: hit.u, point: hit.point });
+        }
+      }
+    }
+  }
+
+  const segments: Segment[] = [];
+  for (const curve of curves) {
+    const { entity, polyline, splits } = curve;
+    const nodeIds = polyline.map((point) => resolveNode(point));
+    const count = segmentCount(curve);
+    for (let index = 0; index < count; index += 1) {
+      const endIndex = (index + 1) % polyline.length;
+      let previous = nodeIds[index]!;
+      const points = (splits.get(index) ?? []).sort((a, b) => a.t - b.t);
+      for (const split of points) {
+        if (split.t <= 1e-9 || split.t >= 1 - 1e-9) continue;
+        const node = resolveNode(split.point);
+        if (node === previous) continue;
+        segments.push({ entityId: entity.id, from: previous, to: node });
+        previous = node;
+      }
+      const endNode = nodeIds[endIndex]!;
+      if (endNode !== previous) {
+        segments.push({ entityId: entity.id, from: previous, to: endNode });
+      }
     }
 
     const endpoints = entityEndpoints(entity);
@@ -189,15 +430,6 @@ export function sketchTopology(entities: readonly SketchEntity[]): SketchTopolog
     if (entity.type === 'circle' || entity.type === 'arc' || entity.type === 'ellipse') {
       registerRef(resolveNode([entity.cx, entity.cy]), entity.id, 0);
     }
-
-    edges.push({
-      id: entity.id,
-      start: '',
-      end: '',
-      closed: closed || (endpoints ? nodeKey(endpoints[0]) === nodeKey(endpoints[1]) : false),
-      length,
-      points: polyline,
-    });
   }
 
   const points: SketchTopologyPoint[] = [];
@@ -286,10 +518,12 @@ function findFaces(
     return Math.atan2(b.y - a.y, b.x - a.x);
   };
 
+  const segmentTotals = new Map<string, number>();
   const halfEdges: { segment: number; from: number; to: number; angle: number }[] = [];
   for (let index = 0; index < segments.length; index += 1) {
     if (!live[index]) continue;
     const segment = segments[index]!;
+    segmentTotals.set(segment.entityId, (segmentTotals.get(segment.entityId) ?? 0) + 1);
     halfEdges.push({ segment: index, from: segment.from, to: segment.to, angle: angleAt(segment.from, segment.to) });
     halfEdges.push({ segment: index, from: segment.to, to: segment.from, angle: angleAt(segment.to, segment.from) });
   }
@@ -365,47 +599,146 @@ function findFaces(
       const from = nodes[startHalf.from]!;
       const to = nodes[endHalf.to]!;
       const reversed = directionOfRun(polyline, from, to) === 'reversed';
-      curves.push({ entityId, reversed });
+      const runPoints: Point2[] = [];
+      for (let step = index; step <= end; step += 1) {
+        const node = nodes[halfEdges[cycle[step]!]!.from]!;
+        runPoints.push([node.x, node.y]);
+      }
+      runPoints.push([to.x, to.y]);
+      const startKey = nodeKey([from.x, from.y]);
+      const endKey = nodeKey([to.x, to.y]);
+      // Two arcs can share endpoints on the same circle (lens vs crescent), so
+      // the length is part of the edge identity.
+      let runLength = 0;
+      for (let step = 1; step < runPoints.length; step += 1) {
+        const previous = runPoints[step - 1]!;
+        const point = runPoints[step]!;
+        runLength += Math.hypot(point[0] - previous[0], point[1] - previous[1]);
+      }
+      curves.push({
+        entityId,
+        reversed,
+        points: runPoints,
+        full: end - index + 1 === (segmentTotals.get(entityId) ?? -1),
+        edgeKey: `${entityId}|${[startKey, endKey].sort().join('-')}|${runLength.toFixed(6)}`,
+      });
       index = end + 1;
+    }
+
+    // The loop starts at an arbitrary half-edge, which can cut a single
+    // geometric run in two. Join the last and first runs when they belong to
+    // the same entity; otherwise adjacent faces would describe the same arc
+    // with different edge keys just because they started elsewhere.
+    if (curves.length > 1) {
+      const first = curves[0]!;
+      const last = curves[curves.length - 1]!;
+      if (first.entityId === last.entityId) {
+        const mergedPoints = [...last.points, ...first.points.slice(1)];
+        let mergedLength = 0;
+        for (let step = 1; step < mergedPoints.length; step += 1) {
+          const previous = mergedPoints[step - 1]!;
+          const point = mergedPoints[step]!;
+          mergedLength += Math.hypot(point[0] - previous[0], point[1] - previous[1]);
+        }
+        const startKey = nodeKey(mergedPoints[0]!);
+        const endKey = nodeKey(mergedPoints[mergedPoints.length - 1]!);
+        curves.splice(0, 1);
+        curves.pop();
+        curves.unshift({
+          entityId: first.entityId,
+          reversed: last.reversed,
+          points: mergedPoints,
+          full: mergedPoints.length - 1 === (segmentTotals.get(first.entityId) ?? -1),
+          edgeKey: `${first.entityId}|${[startKey, endKey].sort().join('-')}|${mergedLength.toFixed(6)}`,
+        });
+      }
     }
     loops.push({ points, entityIds, curves });
   });
 
-  const faces: SketchTopologyFace[] = [];
-  for (const loop of loops) {
-    const holes = loops
-      .filter((candidate) => candidate !== loop && contains(candidate.points[0]!, loop.points))
-      .filter(
-        (candidate) =>
-          !loops.some(
-            (other) =>
-              other !== loop &&
-              other !== candidate &&
-              contains(candidate.points[0]!, other.points) &&
-              contains(other.points[0]!, loop.points),
-          ),
-      )
-      .map((candidate) => candidate.entityIds);
+  // A loop is a hole only when every one of its points is inside the outer
+  // contour. Testing a single point wrongly turns an overlapping circle into a
+  // hole: its first vertex may lie inside the other circle even though the
+  // loops cross.
+  const loopInside = (inner: readonly Point2[], outer: readonly Point2[]): boolean =>
+    inner.every((point) => contains(point, outer));
+
+  const entries = loops.map((loop) => {
     const holeContours = loops
-      .filter((candidate) => candidate !== loop && contains(candidate.points[0]!, loop.points))
+      .filter((candidate) => candidate !== loop && loopInside(candidate.points, loop.points))
       .filter(
         (candidate) =>
           !loops.some(
             (other) =>
               other !== loop &&
               other !== candidate &&
-              contains(candidate.points[0]!, other.points) &&
-              contains(other.points[0]!, loop.points),
+              loopInside(candidate.points, other.points) &&
+              loopInside(other.points, loop.points),
           ),
       );
+    const holes = holeContours.map((candidate) => candidate.entityIds);
+    return {
+      loop,
+      holes,
+      holeContours,
+      base: hash([...loop.entityIds.sort(), '|', ...holes.flat().sort()]),
+      id: '',
+    };
+  });
+
+  // Faces of intersecting curves share the same boundary entities, so the
+  // entity ids alone are not unique. Number such faces by area and by the
+  // centroid relative to their own bounding box, which stays the same when the
+  // sketch is translated.
+  const normalizedCentroid = (points: readonly Point2[]): Point2 => {
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let sumX = 0;
+    let sumY = 0;
+    for (const point of points) {
+      minX = Math.min(minX, point[0]);
+      minY = Math.min(minY, point[1]);
+      sumX += point[0];
+      sumY += point[1];
+    }
+    return [sumX / points.length - minX, sumY / points.length - minY];
+  };
+  const byBase = new Map<string, typeof entries>();
+  for (const entry of entries) {
+    const group = byBase.get(entry.base) ?? [];
+    group.push(entry);
+    byBase.set(entry.base, group);
+  }
+  for (const group of byBase.values()) {
+    if (group.length === 1) {
+      group[0]!.id = `face_${group[0]!.base}`;
+      continue;
+    }
+    group.sort((left, right) => {
+      const areaDiff = area(left.loop.points) - area(right.loop.points);
+      if (Math.abs(areaDiff) > 1e-9) return areaDiff;
+      const [leftX, leftY] = normalizedCentroid(left.loop.points);
+      const [rightX, rightY] = normalizedCentroid(right.loop.points);
+      if (Math.abs(leftX - rightX) > 1e-9) return leftX - rightX;
+      return leftY - rightY;
+    });
+    group.forEach((entry, index) => {
+      entry.id = `face_${entry.base}-${index}`;
+    });
+  }
+
+  const faces: SketchTopologyFace[] = [];
+  for (const { loop, holes, holeContours, id } of entries) {
     // A hole must be walked opposite to the outer contour.
     const holeLoops = holeContours.map((candidate) =>
-      [...candidate.curves]
-        .reverse()
-        .map((curve) => ({ entityId: curve.entityId, reversed: !curve.reversed })),
+      [...candidate.curves].reverse().map((curve) => ({
+        ...curve,
+        reversed: !curve.reversed,
+        points: [...curve.points].reverse(),
+      })),
     );
     faces.push({
-      id: `face_${hash([...loop.entityIds.sort(), '|', ...holes.flat().sort()])}`,
+      id,
       area: area(loop.points),
       boundary: loop.entityIds,
       holes,
@@ -413,7 +746,7 @@ function findFaces(
       holeOutlines: holeContours.map((candidate) => candidate.points),
       loops: [loop.curves, ...holeLoops],
       depth: loops.filter(
-        (candidate) => candidate !== loop && contains(loop.points[0]!, candidate.points),
+        (candidate) => candidate !== loop && loopInside(loop.points, candidate.points),
       ).length,
     });
   }
