@@ -36,6 +36,7 @@ import {
   bodyFaceKey,
   sketchFaceKey,
   useDocumentStore,
+  useViewProject,
 } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { useUiStore } from '../stores/uiStore';
@@ -440,7 +441,7 @@ export function Inspector() {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? 'en';
   const selection = useDocumentStore((state) => state.selection);
-  const project = useDocumentStore((state) => state.project);
+  const project = useViewProject();
   const apply = useDocumentStore((state) => state.apply);
   const renameProject = useDocumentStore((state) => state.renameProject);
   const select = useDocumentStore((state) => state.select);
@@ -462,6 +463,7 @@ export function Inspector() {
   const featureErrors = useKernelStore((state) => state.featureErrors);
   const featureBodyErrors = useKernelStore((state) => state.featureBodyErrors);
   const featureObjectErrors = useKernelStore((state) => state.featureObjectErrors);
+  const preview = useKernelStore((state) => state.preview);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
 
   const feature =
@@ -505,14 +507,24 @@ export function Inspector() {
   const ownedMeshes = ownedBodies
     .map((candidate) => meshes[candidate.id])
     .filter((candidate): candidate is TessellationResult => Boolean(candidate));
-  const mesh = body
-    ? meshes[body.id]
-    : ownedMeshes.length > 0
-      ? mergeBounds(ownedMeshes)
-      : undefined;
+  // While the operation is being configured its result only exists in the
+  // preview, so its statistics are taken from there.
+  const previewMeshes =
+    feature && preview?.featureId === feature.id
+      ? preview.bodies
+          .filter((mark) => mark.kind === 'added')
+          .map((mark) => meshes[mark.id])
+          .filter((candidate): candidate is TessellationResult => Boolean(candidate))
+      : [];
+  const parts = ownedMeshes.length > 0 ? ownedMeshes : previewMeshes;
+  const mesh = body ? meshes[body.id] : parts.length > 0 ? mergeBounds(parts) : undefined;
   const statsKey = body?.id ?? feature?.id;
   const stats = statsKey ? shapeStats[statsKey] : undefined;
-  const importedStats = statsKey ? meshStats[statsKey] : undefined;
+  // Imported meshes keep their statistics under the creating operation, so a
+  // selected mesh body reads them through its creator.
+  const importedStats = statsKey
+    ? (meshStats[statsKey] ?? (body ? meshStats[body.createdBy] : undefined))
+    : undefined;
   const featureError = feature
     ? featureErrors[feature.id]
     : body

@@ -9,18 +9,31 @@ import {
   type SketchFeature,
 } from '@icancad/model';
 import clsx from 'clsx';
-import { Box, Eye, EyeOff, FileUp, PawPrint, PencilRuler, Plus, Trash2 } from 'lucide-react';
+import {
+  Box,
+  Eye,
+  EyeOff,
+  FileUp,
+  PawPrint,
+  PencilRuler,
+  Plus,
+  SquareMinus,
+  SquarePen,
+  SquarePlus,
+  Trash2,
+} from 'lucide-react';
 import { useRef, type ChangeEvent, type MouseEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { saveAsset } from '../persistence/db';
 import { canEditSketch, sketchPlaneReady } from '../sketch/sectionPlane';
-import { useDocumentStore } from '../stores/documentStore';
-import { useKernelStore } from '../stores/kernelStore';
+import { useDocumentStore, useViewProject } from '../stores/documentStore';
+import { useKernelStore, type PreviewMarkKind } from '../stores/kernelStore';
 import { isDirectlySelected, linkedBodyIds } from '../stores/selection';
 import { useUiStore } from '../stores/uiStore';
 import { IconButton } from './Controls';
 import { showContextMenu, useContextMenuStore } from './ContextMenu';
 import { formatNumber } from './format';
+import { Tooltip } from './Tooltip';
 
 const MESH_ACCEPT = '.stl,.obj,.ply,.glb';
 
@@ -41,7 +54,7 @@ const MESH_MIME: Record<MeshFormat, string> = {
 export function LeftPanel() {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? 'en';
-  const project = useDocumentStore((state) => state.project);
+  const project = useViewProject();
   const bodies = bodiesInHistory(project);
   const activeIds = activeFeatureIds(project);
   const selection = useDocumentStore((state) => state.selection);
@@ -53,6 +66,7 @@ export function LeftPanel() {
   const addBox = useDocumentStore((state) => state.addPrimitiveBox);
   const meshes = useKernelStore((state) => state.meshes);
   const featureErrors = useKernelStore((state) => state.featureErrors);
+  const preview = useKernelStore((state) => state.preview);
   const kernelReady = useKernelStore((state) => state.status === 'ready');
   const openMenu = useContextMenuStore((state) => state.open);
   const showToast = useUiStore((state) => state.showToast);
@@ -63,11 +77,27 @@ export function LeftPanel() {
   const hasSketches = project.features.some(
     (feature) =>
       feature.type === 'sketch' &&
-      activeIds.has(feature.id) &&
+      (activeIds.has(feature.id) || feature.id === preview?.featureId) &&
       sketchPlaneReady(feature) &&
       !featureErrors[feature.id],
   );
-  const isEmpty = bodies.length === 0 && !hasSketches;
+  // The operation being edited reports which objects it adds, changes or
+  // removes, so the tree shows the same phantom delta as the viewport.
+  const previewMarks = new Map((preview?.bodies ?? []).map((mark) => [mark.id, mark]));
+  const previewAdded = (preview?.bodies ?? []).filter((mark) => mark.kind === 'added');
+  const isEmpty = bodies.length === 0 && !hasSketches && previewAdded.length === 0;
+
+  const markIcon = (kind: PreviewMarkKind) => {
+    if (kind === 'added') return <SquarePlus size={13} />;
+    if (kind === 'modified') return <SquarePen size={13} />;
+    return <SquareMinus size={13} />;
+  };
+  const markLabel = (kind: PreviewMarkKind) =>
+    kind === 'added'
+      ? t('tree.previewAdded')
+      : kind === 'modified'
+        ? t('tree.previewModified')
+        : t('tree.previewRemoved');
 
   const openAddMenu = (event: MouseEvent<HTMLButtonElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -112,6 +142,7 @@ export function LeftPanel() {
     const kind = body.kind === 'mesh' ? 'mesh' : 'body';
     const direct = isDirectlySelected(selection, kind, body.id);
     const linked = !direct && highlightedBodyIds.includes(body.id);
+    const mark = previewMarks.get(body.id);
     return (
       <div
         key={body.id}
@@ -120,6 +151,7 @@ export function LeftPanel() {
           direct && 'selected',
           linked && 'linked',
           !body.visible && 'muted',
+          mark && `preview-${mark.kind}`,
         )}
         onContextMenu={(event) =>
           showContextMenu(event, [
@@ -155,6 +187,13 @@ export function LeftPanel() {
           <span className="tree-name">{body.name}</span>
           {mesh && <span className="tree-meta">{formatNumber(mesh.triangleCount, locale, 0)}</span>}
         </button>
+        {mark && (
+          <Tooltip content={markLabel(mark.kind)}>
+            <span className={clsx('tree-preview-icon', mark.kind)} aria-label={markLabel(mark.kind)}>
+              {markIcon(mark.kind)}
+            </span>
+          </Tooltip>
+        )}
         <IconButton
           label={body.visible ? t('tree.hide') : t('tree.show')}
           className="tiny"
@@ -166,7 +205,30 @@ export function LeftPanel() {
     );
   };
 
-  const renderSketch = (feature: SketchFeature): ReactNode => {
+  const renderSketch = (feature: SketchFeature, phantom = false): ReactNode => {
+    if (phantom) {
+      // The edited sketch is the operation's result: shown, not selectable.
+      return (
+        <div
+          key={feature.id}
+          className="tree-row preview-added"
+          aria-label={t('tree.previewAdded')}
+        >
+          <span className="tree-main">
+            <span className="tree-icon">
+              <PencilRuler size={14} />
+            </span>
+            <span className="tree-name">{feature.name}</span>
+            <span className="tree-meta">
+              {formatNumber(feature.entities.length, locale, 0)}
+            </span>
+          </span>
+          <span className="tree-preview-icon added" aria-hidden="true">
+            <SquarePlus size={13} />
+          </span>
+        </div>
+      );
+    }
     const direct = isDirectlySelected(selection, 'sketch', feature.id);
     const linked =
       !direct && selection.some((item) => item.kind === 'feature' && item.id === feature.id);
@@ -239,10 +301,16 @@ export function LeftPanel() {
   const placedBodies = new Set<string>();
   const rows: ReactNode[] = [];
 
+  // The operation being edited is not in the active history, but its preview is
+  // on screen, so its sketch object is listed as a phantom row.
+  const previewedSketchId = preview?.featureId ?? null;
   for (const feature of project.features) {
-    if (!activeIds.has(feature.id)) continue;
+    const previewedSketch = feature.id === previewedSketchId && feature.type === 'sketch';
+    if (!activeIds.has(feature.id) && !previewedSketch) continue;
     if (feature.type === 'sketch') {
-      if (sketchPlaneReady(feature) && !featureErrors[feature.id]) rows.push(renderSketch(feature));
+      if (sketchPlaneReady(feature) && !featureErrors[feature.id]) {
+        rows.push(renderSketch(feature, previewedSketch && !activeIds.has(feature.id)));
+      }
     }
     for (const body of bodiesByCreator.get(feature.id) ?? []) {
       rows.push(renderBody(body));
@@ -251,6 +319,28 @@ export function LeftPanel() {
   }
   for (const body of bodies) {
     if (!placedBodies.has(body.id)) rows.push(renderBody(body));
+  }
+  // Objects the edited operation will add are not document objects yet: they
+  // are shown dimmed and cannot be selected.
+  for (const mark of previewAdded) {
+    if (bodies.some((body) => body.id === mark.id)) continue;
+    rows.push(
+      <div
+        key={`preview-${mark.id}`}
+        className="tree-row preview-added"
+        aria-label={t('tree.previewAdded')}
+      >
+        <span className="tree-main">
+          <span className="tree-icon" style={{ color: mark.color }}>
+            <Box size={14} />
+          </span>
+          <span className="tree-name">{mark.name}</span>
+        </span>
+        <span className="tree-preview-icon added" aria-hidden="true">
+          <SquarePlus size={13} />
+        </span>
+      </div>,
+    );
   }
 
   return (

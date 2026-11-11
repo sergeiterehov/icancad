@@ -1,12 +1,22 @@
 import { HISTORY_START, type Feature } from '@icancad/model';
 import clsx from 'clsx';
-import { Box, CornerUpLeft, FileUp, Layers, PencilRuler, Scissors, Trash2 } from 'lucide-react';
+import {
+  Box,
+  CornerUpLeft,
+  FileUp,
+  Layers,
+  PencilRuler,
+  Scissors,
+  SquareChevronsRight,
+  Trash2,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { isDirectlySelected, selectedFeatureIds } from '../stores/selection';
 import { canEditSketch } from '../sketch/sectionPlane';
+import { rebuildFrom } from '../kernel/rebuild';
 import { showContextMenu } from './ContextMenu';
 import { ExtrudeOpIcon } from './featureIcons';
 import { Tooltip } from './Tooltip';
@@ -91,7 +101,10 @@ export function Timeline() {
   const rebuildCursor = useKernelStore((state) => state.rebuildCursor);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
   const setActiveSketch = useUiStore((state) => state.setActiveSketch);
-  const locked = activeSketchId !== null;
+  const editingFeatureId = useDocumentStore((state) => state.editingFeatureId);
+  // While an operation is being edited the model is evaluated at its position,
+  // so the cursor stays put until the operation is dismissed.
+  const locked = activeSketchId !== null || editingFeatureId !== null;
 
   const position =
     project.historyEnd === null
@@ -175,6 +188,12 @@ export function Timeline() {
                             disabled:
                               locked || position === index + 1 || blockedPosition(index + 1),
                             onSelect: () => goTo(index + 1),
+                          },
+                          {
+                            id: 'rebuild',
+                            label: t('context.rebuildFromHere'),
+                            icon: <SquareChevronsRight size={14} />,
+                            onSelect: () => rebuildFrom(feature.id),
                           },
                           {
                             id: 'delete',

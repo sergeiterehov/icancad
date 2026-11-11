@@ -18,6 +18,43 @@ export function isModelRebuilding(state: {
   return state.status !== 'ready' || state.tasks.some((task) => task.key === 'rebuild');
 }
 
+/** How an object differs between the model and the operation being edited. */
+export type PreviewMarkKind = 'added' | 'modified' | 'removed';
+
+export interface PreviewBodyMark {
+  /** Body id; added bodies may not exist in the document yet. */
+  id: string;
+  kind: PreviewMarkKind;
+  name: string;
+  color: string;
+  /** Tessellation of the body before the operation; 3D picking uses it. */
+  baseMesh?: TessellationResult;
+  /**
+   * Whether the body is drawn as a translucent phantom. A cut shows its result
+   * solid so the removed material reads as a hole, so it stays opaque.
+   */
+  translucent?: boolean;
+}
+
+/** A translucent volume that only exists in the preview, such as a cut tool. */
+export interface SceneGhost {
+  id: string;
+  mesh: TessellationResult;
+  color: string;
+  /**
+   * Soft edges of the ghost: beyond the given plane the opacity fades out over
+   * roughly 100 screen pixels, so a through cut does not end abruptly.
+   */
+  fade?: { axis: [number, number, number]; start: number }[];
+}
+
+/** Live preview of the operation that is being edited. */
+export interface ScenePreview {
+  featureId: string;
+  bodies: PreviewBodyMark[];
+  ghosts: SceneGhost[];
+}
+
 interface KernelState {
   status: KernelStatus;
   phase: KernelStatusEvent['phase'] | null;
@@ -30,7 +67,6 @@ interface KernelState {
   sketchFrames: Record<string, SketchFrame>;
   /** Increments whenever a rebuild publishes a scene. */
   sceneVersion: number;
-  sceneHistoryEnd: string | null;
   shapeStats: Record<string, ShapeStats>;
   meshStats: Record<string, MeshStats>;
   shapeIds: string[];
@@ -39,6 +75,8 @@ interface KernelState {
   featureBodyErrors: Record<string, Record<string, string>>;
   /** Errors of picked face objects, keyed by operation then `s:`/`b:` ref. */
   featureObjectErrors: Record<string, Record<string, string>>;
+  /** Operation preview, or null when the scene shows the document as is. */
+  preview: ScenePreview | null;
   tasks: KernelTask[];
   /** Caret position of the operation currently being rebuilt. */
   rebuildCursor: number | null;
@@ -56,7 +94,7 @@ interface KernelState {
     featureBodyErrors: Record<string, Record<string, string>>,
     featureObjectErrors: Record<string, Record<string, string>>,
     sketchFrames: Record<string, SketchFrame>,
-    sceneHistoryEnd: string | null,
+    preview: ScenePreview | null,
   ) => void;
   clearScene: () => void;
   clearFeatureError: (featureId: string) => void;
@@ -72,13 +110,13 @@ export const useKernelStore = create<KernelState>((set) => ({
   meshes: {},
   sketchFrames: {},
   sceneVersion: 0,
-  sceneHistoryEnd: null,
   shapeStats: {},
   meshStats: {},
   shapeIds: [],
   featureErrors: {},
   featureBodyErrors: {},
   featureObjectErrors: {},
+  preview: null,
   tasks: [],
   rebuildCursor: null,
 
@@ -123,19 +161,19 @@ export const useKernelStore = create<KernelState>((set) => ({
     featureBodyErrors,
     featureObjectErrors,
     sketchFrames,
-    sceneHistoryEnd,
+    preview,
   ) =>
     set((state) => ({
       meshes,
       sketchFrames,
       sceneVersion: state.sceneVersion + 1,
-      sceneHistoryEnd,
       shapeStats,
       meshStats,
       shapeIds,
       featureErrors,
       featureBodyErrors,
       featureObjectErrors,
+      preview,
     })),
 
   clearScene: () =>
@@ -143,13 +181,13 @@ export const useKernelStore = create<KernelState>((set) => ({
       meshes: {},
       sketchFrames: {},
       sceneVersion: state.sceneVersion + 1,
-      sceneHistoryEnd: null,
       shapeStats: {},
       meshStats: {},
       shapeIds: [],
       featureErrors: {},
       featureBodyErrors: {},
       featureObjectErrors: {},
+      preview: null,
       rebuildCursor: null,
     })),
   clearFeatureError: (featureId) =>

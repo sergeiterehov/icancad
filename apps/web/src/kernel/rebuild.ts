@@ -2,10 +2,13 @@ import type { MakeBoxResult, ShapeStats, TessellationResult } from '@icancad/ker
 import { sketchProfiles, type ProfileRegion } from '@icancad/sketch';
 import {
   HISTORY_START,
+  BODY_COLORS,
   extrudeBodyId,
   featureBodyId,
+  isMeshObject,
   type BodyFaceRef,
   type ExtrudeFeature,
+  type Feature,
   type ImportMeshFeature,
   type Project,
   type SketchFeature,
@@ -14,14 +17,24 @@ import {
 import { computeSketchFrame, faceSketchValid } from '../sketch/sectionPlane';
 import type { MeshFormat, MeshStats, ParsedMesh } from '@icancad/io';
 import { loadAsset } from '../persistence/db';
-import { useDocumentStore } from '../stores/documentStore';
-import { useKernelStore } from '../stores/kernelStore';
+import { nextBodyNumber, useDocumentStore } from '../stores/documentStore';
+import {
+  useKernelStore,
+  type PreviewBodyMark,
+  type SceneGhost,
+  type ScenePreview,
+} from '../stores/kernelStore';
 import { parseMeshInWorker } from '../io/client';
+import { i18n } from '../i18n';
 import { getKernelClient } from './client';
 import { kernelTaskQueue } from './scheduler';
+import { RebuildCache, type RebuildCheckpoint } from './checkpoints';
 
 let rebuildEpoch = 0;
 const importedMeshCache = new Map<string, Promise<ParsedMesh>>();
+
+/** Kernel shapes this pipeline created; shapes nobody references are disposed. */
+const liveShapes = new Set<string>();
 
 async function loadImportedMesh(assetId: string, format: MeshFormat): Promise<ParsedMesh> {
   const cached = importedMeshCache.get(assetId);
@@ -100,198 +113,462 @@ function transformImportedMesh(mesh: ParsedMesh, feature: ImportMeshFeature): Te
   };
 }
 
+/**
+ * Everything an operation inherits from the ones before it. Snapshots of this
+ * state are what makes moving the timeline cursor instant.
+ */
+interface RebuildState {
+  bodyShapes: Map<string, string>;
+  bodyOwner: Map<string, string>;
+  /** Tessellated triangles of each body, keyed by body id. */
+  meshes: Record<string, TessellationResult>;
+  /** Face/edge/solid counts of each body shape, keyed by body id. */
+  bodyStats: Record<string, ShapeStats>;
+  meshStats: Record<string, MeshStats>;
+  /** Bodies each creating operation owns, keyed by operation id. */
+  createdBodies: Map<string, string[]>;
+  /** Sketch id -> frame frozen when that operation was evaluated. */
+  sketchFrames: Record<string, SketchFrame>;
+  sketches: Map<string, SketchFeature>;
+  featureErrors: Record<string, string>;
+  featureBodyErrors: Record<string, Record<string, string>>;
+  featureObjectErrors: Record<string, Record<string, string>>;
+  /** The first failed operation: nothing after it is built. */
+  blockedFeatureId: string | null;
+}
+
+/** The shape a cut subtracts, shown as a translucent ghost while editing. */
+interface GhostCollector {
+  mesh?: TessellationResult;
+  fade?: { axis: [number, number, number]; start: number }[];
+}
+
+interface EvalContext {
+  client: ReturnType<typeof getKernelClient>;
+  epoch: number;
+  project: Project;
+  ghost?: GhostCollector;
+}
+
+const rebuildCache = new RebuildCache<RebuildState>();
+
+// Tessellations are rebuilt whenever an operation is evaluated, so identity
+// alone cannot tell whether a body actually changed. The signature is cached
+// per tessellation to keep previews cheap.
+const meshSignatures = new WeakMap<TessellationResult, string>();
+
+function meshSignature(mesh: TessellationResult): string {
+  const cached = meshSignatures.get(mesh);
+  if (cached !== undefined) return cached;
+  let hash = 2166136261;
+  for (let index = 0; index < mesh.positions.length; index += 1) {
+    hash ^= Math.round(mesh.positions[index]! * 1e4) | 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  const signature = `${mesh.triangleCount}:${hash}`;
+  meshSignatures.set(mesh, signature);
+  return signature;
+}
+
+function emptyState(): RebuildState {
+  return {
+    bodyShapes: new Map(),
+    bodyOwner: new Map(),
+    meshes: {},
+    bodyStats: {},
+    meshStats: {},
+    createdBodies: new Map(),
+    sketchFrames: {},
+    sketches: new Map(),
+    featureErrors: {},
+    featureBodyErrors: {},
+    featureObjectErrors: {},
+    blockedFeatureId: null,
+  };
+}
+
+function cloneErrors(
+  errors: Record<string, Record<string, string>>,
+): Record<string, Record<string, string>> {
+  const clone: Record<string, Record<string, string>> = {};
+  for (const [key, value] of Object.entries(errors)) clone[key] = { ...value };
+  return clone;
+}
+
+function cloneState(state: RebuildState): RebuildState {
+  return {
+    bodyShapes: new Map(state.bodyShapes),
+    bodyOwner: new Map(state.bodyOwner),
+    // Tessellations and statistics are immutable values shared between
+    // snapshots; only the containers are copied.
+    meshes: { ...state.meshes },
+    bodyStats: { ...state.bodyStats },
+    meshStats: { ...state.meshStats },
+    createdBodies: new Map(
+      [...state.createdBodies].map(([featureId, bodyIds]) => [featureId, [...bodyIds]]),
+    ),
+    sketchFrames: { ...state.sketchFrames },
+    sketches: new Map(state.sketches),
+    featureErrors: { ...state.featureErrors },
+    featureBodyErrors: cloneErrors(state.featureBodyErrors),
+    featureObjectErrors: cloneErrors(state.featureObjectErrors),
+    blockedFeatureId: state.blockedFeatureId,
+  };
+}
+
+function trackShape(shapeId: string): string {
+  liveShapes.add(shapeId);
+  return shapeId;
+}
+
+/** Drops every snapshot. The worker was restarted, so its shapes are gone too. */
+export function resetRebuildCache(): void {
+  rebuildCache.clear();
+  liveShapes.clear();
+}
+
 export function abortRebuild(): void {
   rebuildEpoch += 1;
   useKernelStore.getState().setRebuildCursor(null);
 }
 
-export function rebuildScene(project: Project, label: string): Promise<void> {
+export function rebuildScene(
+  project: Project,
+  label: string,
+  options?: { fromIndex?: number },
+): Promise<void> {
   if (useKernelStore.getState().status !== 'ready') return Promise.resolve();
+  // Read at enqueue time so the preview matches the project being rebuilt.
+  const previewFeatureId = useDocumentStore.getState().editingFeatureId;
+  const fromIndex = options?.fromIndex;
   return kernelTaskQueue.enqueue({
     key: 'rebuild',
     label,
-    run: () => runRebuild(project),
+    run: () => runRebuild(project, previewFeatureId, fromIndex),
   });
 }
 
-async function runRebuild(project: Project): Promise<void> {
+/**
+ * Forces the model to be recalculated from the given operation on, ignoring the
+ * cached states captured after it.
+ */
+export function rebuildFrom(featureId: string): void {
+  const project = useDocumentStore.getState().project;
+  const index = project.features.findIndex((feature) => feature.id === featureId);
+  if (index < 0) return;
+  rebuildCache.invalidateFrom(index);
+  // A rebuild that is already running may store snapshots we just dropped, so
+  // the start point is passed explicitly instead of relying on the cache.
+  void rebuildScene(project, i18n.t('status.rebuild'), { fromIndex: index }).catch(() => undefined);
+}
+
+async function runRebuild(
+  project: Project,
+  previewFeatureId: string | null,
+  fromIndex?: number,
+): Promise<void> {
   const epoch = ++rebuildEpoch;
-  const kernel = useKernelStore.getState();
   const client = getKernelClient();
+  const features = project.features;
 
+  // An edited operation is evaluated against its own input state, so the
+  // rebuild stops in front of it no matter where the user's cursor sits.
+  const previewIndex =
+    previewFeatureId === null
+      ? -1
+      : features.findIndex((feature) => feature.id === previewFeatureId);
   const endIndex =
-    project.historyEnd === null
-      ? project.features.length - 1
-      : project.historyEnd === HISTORY_START
-        ? -1
-        : project.features.findIndex((feature) => feature.id === project.historyEnd);
-  const activeFeatures = project.features
-    .slice(0, endIndex + 1)
-    .filter((feature) => !feature.suppressed);
+    previewIndex >= 0
+      ? previewIndex - 1
+      : project.historyEnd === null
+        ? features.length - 1
+        : project.historyEnd === HISTORY_START
+          ? -1
+          : features.findIndex((feature) => feature.id === project.historyEnd);
 
-  const meshes: Record<string, TessellationResult> = {};
-  const meshStats: Record<string, MeshStats> = {};
-  const featureErrors: Record<string, string> = {};
-  /** Per-operation errors of individual body targets, shown on the body itself. */
-  const featureBodyErrors: Record<string, Record<string, string>> = {};
-  /** Per-operation errors of picked face objects, keyed by `s:`/`b:` ref. */
-  const featureObjectErrors: Record<string, Record<string, string>> = {};
-  const shapeIds: string[] = [];
-  /** Body id -> shape that currently represents it in the kernel. */
-  const bodyShapes = new Map<string, string>();
-  /** Body id -> operation that owns the body. */
-  const bodyOwner = new Map<string, string>();
-  const createdBodies = new Map<string, string[]>();
-  const sketches = new Map<string, SketchFeature>();
-  /** Sketch id -> frame frozen when that operation was evaluated. */
-  const sketchFrames: Record<string, SketchFrame> = {};
-  /** The first failed operation: nothing after it is built. */
-  let blockedFeatureId: string | null = null;
-  useKernelStore.getState().setRebuildCursor(0);
+  // Reuse the newest snapshot whose history is still identical. Editing an
+  // operation replaces its feature object, so every snapshot from it on is
+  // discarded automatically.
+  const reuseUntil = fromIndex === undefined ? endIndex : Math.min(endIndex, fromIndex - 1);
+  const cached = rebuildCache.find(features, reuseUntil);
+  const startIndex = cached ? cached.index + 1 : 0;
+  const state = cached ? cloneState(cached.state) : emptyState();
+  const produced: RebuildCheckpoint<RebuildState>[] = [];
 
-  for (const feature of activeFeatures) {
+  useKernelStore.getState().setRebuildCursor(startIndex);
+
+  for (let index = startIndex; index <= endIndex; index += 1) {
     if (epoch !== rebuildEpoch) return;
+    const feature = features[index];
+    if (!feature) break;
     // The dashed caret sits after the operation that is being computed.
-    const progress = project.features.findIndex((candidate) => candidate.id === feature.id);
-    if (progress >= 0) useKernelStore.getState().setRebuildCursor(progress + 1);
-    if (feature.type === 'sketch') {
-      if (feature.plane.type === 'face') {
-        const bodyId = feature.plane.bodyId ?? '';
-        if (!bodyShapes.has(bodyId) || !faceSketchValid(feature, meshes[bodyId])) {
-          featureErrors[feature.id] = 'INVALID_SKETCH_PLANE';
-          blockedFeatureId = feature.id;
-          break;
-        }
-      }
-      sketchFrames[feature.id] = computeSketchFrame(
-        feature,
-        feature.plane.type === 'face' ? meshes[feature.plane.bodyId ?? ''] : undefined,
-      );
-      sketches.set(feature.id, feature);
-      continue;
+    useKernelStore.getState().setRebuildCursor(index + 1);
+    if (!feature.suppressed) {
+      await evaluateFeature(feature, state, { client, epoch, project });
+      if (epoch !== rebuildEpoch) return;
+      if (state.blockedFeatureId) break;
     }
-    if (feature.type === 'import-mesh') {
-      try {
-        const parsed = await loadImportedMesh(feature.assetId, feature.format ?? 'stl');
-        const bodyId = featureBodyId(feature.id);
-        meshes[bodyId] = transformImportedMesh(parsed, feature);
-        bodyOwner.set(bodyId, feature.id);
-        meshStats[feature.id] = parsed.stats;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'IMPORT_FAILED';
-        featureErrors[feature.id] = message === 'MISSING_ASSET' ? 'MISSING_ASSET' : 'IMPORT_FAILED';
-        blockedFeatureId = feature.id;
-        break;
-      }
-      continue;
-    }
-
-    if (feature.type === 'primitive') {
-      try {
-        const bodyId = featureBodyId(feature.id);
-        const shapeId = `feat:${feature.id}`;
-        await client.request<MakeBoxResult>({
-          type: 'make-box',
-          params: { shapeId, ...feature.params },
-        });
-        bodyShapes.set(bodyId, shapeId);
-        bodyOwner.set(bodyId, feature.id);
-        shapeIds.push(shapeId);
-        const mesh = await client.request<TessellationResult>({ type: 'tessellate', shapeId });
-        if (epoch !== rebuildEpoch) return;
-        meshes[bodyId] = mesh;
-      } catch (error) {
-        featureErrors[feature.id] = kernelErrorCode(error);
-        blockedFeatureId = feature.id;
-        break;
-      }
-      continue;
-    }
-
-    if (feature.type === 'delete-body') {
-      bodyShapes.delete(feature.bodyId);
-      delete meshes[feature.bodyId];
-      continue;
-    }
-
-    if (feature.type === 'extrude') {
-      // Bodies are whatever this rebuild reports; an operation that no longer
-      // creates bodies (or fails) owns none.
-      createdBodies.set(feature.id, []);
-      try {
-        await applyExtrude(feature, {
-          sketches,
-          sketchFrames,
-          bodyShapes,
-          bodyOwner,
-          shapeIds,
-          meshes,
-          createdBodies,
-          featureErrors,
-          featureBodyErrors,
-          featureObjectErrors,
-          client,
-          epoch,
-        });
-        // A per-body failure does not throw, but it still blocks the timeline:
-        // later operations must not be built on a failed state.
-        if (featureErrors[feature.id]) {
-          blockedFeatureId = feature.id;
-          break;
-        }
-      } catch (error) {
-        featureErrors[feature.id] = kernelErrorCode(error);
-        blockedFeatureId = feature.id;
-        break;
-      }
-      continue;
-    }
-
-    featureErrors[feature.id] = 'NOT_IMPLEMENTED';
-    blockedFeatureId = feature.id;
-    break;
+    produced.push({ index, prefix: features.slice(0, index + 1), state: cloneState(state) });
   }
 
   if (epoch !== rebuildEpoch) return;
 
-  // Stats are kept per body and summed per operation, so selecting either shows
-  // the numbers of what is actually on screen.
-  const shapeStats: Record<string, ShapeStats> = {};
-  for (const [bodyId, ownerId] of bodyOwner) {
-    const shapeId = bodyShapes.get(bodyId);
-    if (!shapeId) continue;
-    const stats = await client.request<ShapeStats>({ type: 'topology', shapeId });
-    shapeStats[bodyId] = stats;
-    const total = shapeStats[ownerId] ?? { faces: 0, edges: 0, solids: 0 };
-    shapeStats[ownerId] = {
-      faces: total.faces + stats.faces,
-      edges: total.edges + stats.edges,
-      solids: total.solids + stats.solids,
-    };
+  // The operation being edited is evaluated on top of the cursor state so the
+  // user sees its result, while every later operation stays rolled back.
+  const base = state;
+  const previewFeature = previewIndex >= 0 ? features[previewIndex] : undefined;
+  let published = base;
+  let preview: ScenePreview | null = null;
+
+  if (previewFeature && previewIndex === endIndex + 1 && !base.blockedFeatureId) {
+    const ghost: GhostCollector = {};
+    // Opening the settings of an operation that was already evaluated just
+    // reuses its snapshot: only real edits force a recalculation. A cut has to
+    // be evaluated again because its tool volume is only tessellated for the
+    // preview.
+    const needsGhost = previewFeature.type === 'extrude' && previewFeature.op === 'subtract';
+    const cachedPreview = needsGhost ? null : rebuildCache.find(features, previewIndex);
+    if (cachedPreview && cachedPreview.index === previewIndex) {
+      published = cachedPreview.state;
+      preview = buildPreview(previewFeature, base, published, ghost, project);
+    } else {
+      const next = cloneState(base);
+      if (!previewFeature.suppressed) {
+        await evaluateFeature(previewFeature, next, { client, epoch, project, ghost });
+        if (epoch !== rebuildEpoch) return;
+        if (!next.blockedFeatureId) {
+          produced.push({
+            index: previewIndex,
+            prefix: features.slice(0, previewIndex + 1),
+            state: cloneState(next),
+          });
+        }
+      }
+      published = next;
+      preview = buildPreview(previewFeature, base, next, ghost, project);
+    }
   }
+
   if (epoch !== rebuildEpoch) return;
   useKernelStore.getState().setRebuildCursor(null);
+
+  // Removed objects stay on screen while the deletion is previewed.
+  const scene = preview ? withRemovedBodies(published, base) : published;
+  const shapeStats = aggregateStats(scene);
 
   useKernelStore
     .getState()
     .setScene(
-      meshes,
+      scene.meshes,
       shapeStats,
-      meshStats,
-      shapeIds,
-      featureErrors,
-      featureBodyErrors,
-      featureObjectErrors,
-      sketchFrames,
-      project.historyEnd,
+      scene.meshStats,
+      [...scene.bodyShapes.values()],
+      scene.featureErrors,
+      scene.featureBodyErrors,
+      scene.featureObjectErrors,
+      scene.sketchFrames,
+      preview,
     );
-  useDocumentStore.getState().syncCreatedBodies(createdBodies, blockedFeatureId);
 
-  for (const shapeId of kernel.shapeIds) {
-    if (!shapeIds.includes(shapeId)) {
-      void client.request({ type: 'dispose', shapeId }).catch(() => undefined);
-    }
+  for (const checkpoint of produced) rebuildCache.store(checkpoint);
+  useDocumentStore.getState().syncCreatedBodies(base.createdBodies, base.blockedFeatureId);
+
+  disposeUnusedShapes(client);
+}
+
+function withRemovedBodies(state: RebuildState, base: RebuildState): RebuildState {
+  const merged = cloneState(state);
+  for (const bodyId of Object.keys(base.meshes)) {
+    if (!merged.meshes[bodyId]) merged.meshes[bodyId] = base.meshes[bodyId]!;
   }
+  for (const [bodyId, stats] of Object.entries(base.bodyStats)) {
+    if (!merged.bodyStats[bodyId]) merged.bodyStats[bodyId] = stats;
+  }
+  return merged;
+}
+
+function aggregateStats(state: RebuildState): Record<string, ShapeStats> {
+  const stats: Record<string, ShapeStats> = { ...state.bodyStats };
+  for (const [bodyId, ownerId] of state.bodyOwner) {
+    const body = state.bodyStats[bodyId];
+    if (!body) continue;
+    const total = stats[ownerId] ?? { faces: 0, edges: 0, solids: 0 };
+    stats[ownerId] = {
+      faces: total.faces + body.faces,
+      edges: total.edges + body.edges,
+      solids: total.solids + body.solids,
+    };
+  }
+  return stats;
+}
+
+function buildPreview(
+  feature: Feature,
+  base: RebuildState,
+  after: RebuildState,
+  ghost: GhostCollector,
+  project: Project,
+): ScenePreview {
+  const bodies: PreviewBodyMark[] = [];
+  let nextNumber = nextBodyNumber(project);
+  let colorIndex = project.bodies.filter((body) => !isMeshObject(body)).length;
+  const describe = (bodyId: string): { name: string; color: string } => {
+    const metadata = project.metadata[bodyId];
+    return {
+      name: metadata?.name ?? `${i18n.t('inspector.body')} ${nextNumber++}`,
+      color: metadata?.color ?? BODY_COLORS[colorIndex++ % BODY_COLORS.length] ?? '#6ea8fe',
+    };
+  };
+
+  const isCut = feature.type === 'extrude' && feature.op === 'subtract';
+  // Meshes cover solid bodies and imported meshes alike.
+  for (const bodyId of Object.keys(after.meshes)) {
+    const before = base.meshes[bodyId];
+    const now = after.meshes[bodyId];
+    if (!now) continue;
+    if (!before) {
+      bodies.push({ id: bodyId, kind: 'added', ...describe(bodyId) });
+      continue;
+    }
+    if (before === now) continue;
+    // A boolean against a body the tool misses still produces a new shape;
+    // only a changed tessellation counts as a modification.
+    if (meshSignature(before) === meshSignature(now)) continue;
+    bodies.push({
+      id: bodyId,
+      kind: 'modified',
+      ...describe(bodyId),
+      baseMesh: before,
+      // The cut result stays solid so the hole itself is visible.
+      ...(isCut ? { translucent: false } : {}),
+    });
+  }
+  for (const bodyId of Object.keys(base.meshes)) {
+    if (after.meshes[bodyId]) continue;
+    const baseMesh = base.meshes[bodyId];
+    bodies.push({
+      id: bodyId,
+      kind: 'removed',
+      ...describe(bodyId),
+      ...(baseMesh ? { baseMesh } : {}),
+    });
+  }
+
+  const ghosts: SceneGhost[] = [];
+  if (ghost.mesh) {
+    ghosts.push({
+      id: `ghost:${feature.id}`,
+      mesh: ghost.mesh,
+      color: '#ef4444',
+      ...(ghost.fade ? { fade: ghost.fade } : {}),
+    });
+  }
+
+  return { featureId: feature.id, bodies, ghosts };
+}
+
+function disposeUnusedShapes(client: ReturnType<typeof getKernelClient>): void {
+  const keep = new Set<string>();
+  // Cached snapshots must stay continuable: their body shapes remain alive.
+  for (const checkpoint of rebuildCache.all()) {
+    for (const shapeId of checkpoint.state.bodyShapes.values()) keep.add(shapeId);
+  }
+  for (const shapeId of [...liveShapes]) {
+    if (keep.has(shapeId)) continue;
+    liveShapes.delete(shapeId);
+    void client.request({ type: 'dispose', shapeId }).catch(() => undefined);
+  }
+}
+
+async function evaluateFeature(
+  feature: Feature,
+  state: RebuildState,
+  context: EvalContext,
+): Promise<void> {
+  const { client, epoch } = context;
+
+  if (feature.type === 'sketch') {
+    if (feature.plane.type === 'face') {
+      const bodyId = feature.plane.bodyId ?? '';
+      if (!state.bodyShapes.has(bodyId) || !faceSketchValid(feature, state.meshes[bodyId])) {
+        state.featureErrors[feature.id] = 'INVALID_SKETCH_PLANE';
+        state.blockedFeatureId = feature.id;
+        return;
+      }
+    }
+    state.sketchFrames[feature.id] = computeSketchFrame(
+      feature,
+      feature.plane.type === 'face' ? state.meshes[feature.plane.bodyId ?? ''] : undefined,
+    );
+    state.sketches.set(feature.id, feature);
+    return;
+  }
+
+  if (feature.type === 'import-mesh') {
+    try {
+      const parsed = await loadImportedMesh(feature.assetId, feature.format ?? 'stl');
+      const bodyId = featureBodyId(feature.id);
+      state.meshes[bodyId] = transformImportedMesh(parsed, feature);
+      state.bodyOwner.set(bodyId, feature.id);
+      state.meshStats[feature.id] = parsed.stats;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'IMPORT_FAILED';
+      state.featureErrors[feature.id] =
+        message === 'MISSING_ASSET' ? 'MISSING_ASSET' : 'IMPORT_FAILED';
+      state.blockedFeatureId = feature.id;
+    }
+    return;
+  }
+
+  if (feature.type === 'primitive') {
+    try {
+      const bodyId = featureBodyId(feature.id);
+      const shapeId = trackShape(`feat:${feature.id}`);
+      const result = await client.request<MakeBoxResult>({
+        type: 'make-box',
+        params: { shapeId, ...feature.params },
+      });
+      if (epoch !== rebuildEpoch) return;
+      const mesh = await client.request<TessellationResult>({ type: 'tessellate', shapeId });
+      if (epoch !== rebuildEpoch) return;
+      state.bodyShapes.set(bodyId, shapeId);
+      state.bodyOwner.set(bodyId, feature.id);
+      state.bodyStats[bodyId] = result.stats;
+      state.meshes[bodyId] = mesh;
+    } catch (error) {
+      state.featureErrors[feature.id] = kernelErrorCode(error);
+      state.blockedFeatureId = feature.id;
+    }
+    return;
+  }
+
+  if (feature.type === 'delete-body') {
+    state.bodyShapes.delete(feature.bodyId);
+    state.bodyOwner.delete(feature.bodyId);
+    delete state.bodyStats[feature.bodyId];
+    delete state.meshes[feature.bodyId];
+    return;
+  }
+
+  if (feature.type === 'extrude') {
+    // Bodies are whatever this rebuild reports; an operation that no longer
+    // creates bodies (or fails) owns none.
+    state.createdBodies.set(feature.id, []);
+    try {
+      await applyExtrude(feature, state, context);
+    } catch (error) {
+      state.featureErrors[feature.id] = kernelErrorCode(error);
+      state.blockedFeatureId = feature.id;
+      return;
+    }
+    // A per-body failure does not throw, but it still blocks the timeline:
+    // later operations must not be built on a failed state.
+    if (state.featureErrors[feature.id]) state.blockedFeatureId = feature.id;
+    return;
+  }
+
+  state.featureErrors[feature.id] = 'NOT_IMPLEMENTED';
+  state.blockedFeatureId = feature.id;
 }
 
 function kernelErrorCode(error: unknown): string {
@@ -302,37 +579,24 @@ function kernelErrorCode(error: unknown): string {
   return /^[A-Z][A-Z0-9_]+$/.test(error.message) ? error.message : 'OP_FAILED';
 }
 
-interface ExtrudeContext {
-  sketches: Map<string, SketchFeature>;
-  sketchFrames: Record<string, SketchFrame>;
-  bodyShapes: Map<string, string>;
-  bodyOwner: Map<string, string>;
-  shapeIds: string[];
-  meshes: Record<string, TessellationResult>;
-  /** Bodies each creating operation is expected to own, keyed by operation. */
-  createdBodies: Map<string, string[]>;
-  featureErrors: Record<string, string>;
-  featureBodyErrors: Record<string, Record<string, string>>;
-  featureObjectErrors: Record<string, Record<string, string>>;
-  client: ReturnType<typeof getKernelClient>;
-  epoch: number;
-}
-
-async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): Promise<void> {
+async function applyExtrude(
+  feature: ExtrudeFeature,
+  state: RebuildState,
+  context: EvalContext,
+): Promise<void> {
+  const { client, epoch, ghost } = context;
   const {
     sketches,
     sketchFrames,
     bodyShapes,
     bodyOwner,
-    shapeIds,
     meshes,
+    bodyStats,
     createdBodies,
     featureErrors,
     featureBodyErrors,
     featureObjectErrors,
-    client,
-    epoch,
-  } = context;
+  } = state;
 
   const faceRefs = feature.faceRefs ?? [];
   // An operation without objects builds nothing yet, which is not an error.
@@ -353,9 +617,7 @@ async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): P
     if (selected.length === 0) throw new Error('NO_PROFILE');
   }
 
-  const frame = sketch
-    ? (sketchFrames[sketch.id] ?? computeSketchFrame(sketch))
-    : null;
+  const frame = sketch ? (sketchFrames[sketch.id] ?? computeSketchFrame(sketch)) : null;
   const markBodyError = (bodyId: string, code: string) => {
     const errors = featureBodyErrors[feature.id] ?? {};
     errors[bodyId] = code;
@@ -375,9 +637,7 @@ async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): P
       ref?: BodyFaceRef;
     }
     const profileByRegion = new Map(selected.map((profile) => [profile.id, profile]));
-    const refByKey = new Map(
-      faceRefs.map((ref) => [`b:${ref.bodyId}#${ref.faceId}`, ref]),
-    );
+    const refByKey = new Map(faceRefs.map((ref) => [`b:${ref.bodyId}#${ref.faceId}`, ref]));
     const parts: NewBodyPart[] = [];
     const usedProfiles = new Set<string>();
     const usedRefs = new Set<string>();
@@ -436,7 +696,7 @@ async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): P
         if (emittedGroups.has(group)) continue;
         emittedGroups.add(group);
         const bodyId = extrudeBodyId(feature.id, `body-${slot}`);
-        const shapeId = `${feature.id}:prism-${slot}`;
+        const shapeId = trackShape(`${feature.id}:prism-${slot}`);
         await client.request({
           type: 'make-prism',
           params: {
@@ -452,12 +712,13 @@ async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): P
           },
         });
         if (epoch !== rebuildEpoch) return;
-        shapeIds.push(shapeId);
         bodyShapes.set(bodyId, shapeId);
         bodyOwner.set(bodyId, feature.id);
         const mesh = await client.request<TessellationResult>({ type: 'tessellate', shapeId });
         if (epoch !== rebuildEpoch) return;
         meshes[bodyId] = mesh;
+        bodyStats[bodyId] = await client.request<ShapeStats>({ type: 'topology', shapeId });
+        if (epoch !== rebuildEpoch) return;
         bodies.push(bodyId);
         slot += 1;
         continue;
@@ -470,7 +731,7 @@ async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): P
         continue;
       }
       const bodyId = extrudeBodyId(feature.id, `body-${slot}`);
-      const shapeId = `${feature.id}:face-${slot}`;
+      const shapeId = trackShape(`${feature.id}:face-${slot}`);
       await client.request({
         type: 'make-face-prism',
         params: {
@@ -482,12 +743,13 @@ async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): P
         },
       });
       if (epoch !== rebuildEpoch) return;
-      shapeIds.push(shapeId);
       bodyShapes.set(bodyId, shapeId);
       bodyOwner.set(bodyId, feature.id);
       const mesh = await client.request<TessellationResult>({ type: 'tessellate', shapeId });
       if (epoch !== rebuildEpoch) return;
       meshes[bodyId] = mesh;
+      bodyStats[bodyId] = await client.request<ShapeStats>({ type: 'topology', shapeId });
+      if (epoch !== rebuildEpoch) return;
       bodies.push(bodyId);
       slot += 1;
     }
@@ -505,7 +767,7 @@ async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): P
   // so a part that cannot be applied can be reported on its own row.
   const toolParts: { shapeId: string; key: string }[] = [];
   for (const [index, profile] of selected.entries()) {
-    const shapeId = `tool:${feature.id}:sketch-${index}`;
+    const shapeId = trackShape(`tool:${feature.id}:sketch-${index}`);
     await client.request({
       type: 'make-prism',
       params: {
@@ -518,7 +780,6 @@ async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): P
       },
     });
     if (epoch !== rebuildEpoch) return;
-    shapeIds.push(shapeId);
     toolParts.push({ shapeId, key: `s:${sketch!.id}#${profile.id}` });
   }
   for (const [index, ref] of faceRefs.entries()) {
@@ -527,7 +788,7 @@ async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): P
       markBodyError(ref.bodyId, bodyErrorCode(ref.bodyId));
       continue;
     }
-    const shapeId = `tool:${feature.id}:face-${index}`;
+    const shapeId = trackShape(`tool:${feature.id}:face-${index}`);
     await client.request({
       type: 'make-face-prism',
       params: {
@@ -539,7 +800,6 @@ async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): P
       },
     });
     if (epoch !== rebuildEpoch) return;
-    shapeIds.push(shapeId);
     toolParts.push({ shapeId, key: `b:${ref.bodyId}#${ref.faceId}` });
   }
   if (toolParts.length === 0) throw new Error('NO_PROFILE');
@@ -549,7 +809,7 @@ async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): P
   let toolShapeId = toolParts[0]!.shapeId;
   if (feature.op !== 'add') {
     for (const [index, part] of toolParts.slice(1).entries()) {
-      const fusedId = `tool:${feature.id}:fused-${index}`;
+      const fusedId = trackShape(`tool:${feature.id}:fused-${index}`);
       await client.request({
         type: 'boolean',
         params: {
@@ -560,8 +820,32 @@ async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): P
         },
       });
       if (epoch !== rebuildEpoch) return;
-      shapeIds.push(fusedId);
       toolShapeId = fusedId;
+    }
+  }
+
+  // The volume a cut removes is shown in the preview even though the resulting
+  // body no longer contains it.
+  if (ghost && feature.op === 'subtract') {
+    ghost.mesh = await client.request<TessellationResult>({
+      type: 'tessellate',
+      shapeId: toolShapeId,
+    });
+    if (epoch !== rebuildEpoch) return;
+    if (frame) {
+      const fade: { axis: [number, number, number]; start: number }[] = [];
+      const sign = feature.reversed ? -1 : 1;
+      const primary = signedDirection(frame.normal, sign);
+      // The ghost fades only after the material ends: everything up to the
+      // model's far point stays as solid as a blind cut.
+      if (feature.end === 'through-all') {
+        fade.push({ axis: primary, start: modelSupport(meshes, primary) });
+      }
+      if (feature.secondDirection?.end === 'through-all') {
+        const secondary = signedDirection(frame.normal, -sign);
+        fade.push({ axis: secondary, start: modelSupport(meshes, secondary) });
+      }
+      if (fade.length > 0) ghost.fade = fade;
     }
   }
 
@@ -599,7 +883,7 @@ async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): P
       let touched = false;
 
       for (const [index, part] of toolParts.entries()) {
-        const resultShapeId = `${bodyId}:${feature.id}:part-${index}`;
+        const resultShapeId = trackShape(`${bodyId}:${feature.id}:part-${index}`);
         await client.request({
           type: 'boolean',
           params: {
@@ -616,10 +900,10 @@ async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): P
         });
         if (epoch !== rebuildEpoch) return;
         if (after.solids > solidCount) {
+          liveShapes.delete(resultShapeId);
           void client.request({ type: 'dispose', shapeId: resultShapeId }).catch(() => undefined);
           continue;
         }
-        shapeIds.push(resultShapeId);
         currentShapeId = resultShapeId;
         solidCount = after.solids;
         touched = true;
@@ -639,11 +923,16 @@ async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): P
       });
       if (epoch !== rebuildEpoch) return;
       meshes[bodyId] = mesh;
+      bodyStats[bodyId] = await client.request<ShapeStats>({
+        type: 'topology',
+        shapeId: currentShapeId,
+      });
+      if (epoch !== rebuildEpoch) return;
       applied += 1;
       continue;
     }
 
-    const resultShapeId = `${bodyId}:${feature.id}`;
+    const resultShapeId = trackShape(`${bodyId}:${feature.id}`);
     const booleanOp = feature.op === 'subtract' ? 'cut' : 'common';
     await client.request({
       type: 'boolean',
@@ -655,7 +944,6 @@ async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): P
       },
     });
     if (epoch !== rebuildEpoch) return;
-    shapeIds.push(resultShapeId);
     bodyShapes.set(bodyId, resultShapeId);
     const mesh = await client.request<TessellationResult>({
       type: 'tessellate',
@@ -663,6 +951,11 @@ async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): P
     });
     if (epoch !== rebuildEpoch) return;
     meshes[bodyId] = mesh;
+    bodyStats[bodyId] = await client.request<ShapeStats>({
+      type: 'topology',
+      shapeId: resultShapeId,
+    });
+    if (epoch !== rebuildEpoch) return;
     applied += 1;
   }
 
@@ -684,6 +977,13 @@ async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): P
     // there is simply nothing to apply the extrusion to.
     featureErrors[feature.id] = bodyErrors[0] ?? objectErrors[0] ?? 'NO_TARGET_BODY';
   }
+}
+
+function signedDirection(
+  normal: readonly [number, number, number],
+  sign: number,
+): [number, number, number] {
+  return [normal[0] * sign, normal[1] * sign, normal[2] * sign];
 }
 
 // Distances are signed along the normal. Flipping mirrors the primary direction,
@@ -728,7 +1028,62 @@ function extrudeDistances(
   return distances;
 }
 
-function throughAllDistance(
+// Support of one tessellation along a direction, cached: through-all needs it
+// on every preview rebuild while the meshes stay the same.
+const supportCache = new WeakMap<TessellationResult, Map<string, number>>();
+
+function meshSupport(
+  mesh: TessellationResult,
+  direction: readonly [number, number, number],
+): number {
+  let cache = supportCache.get(mesh);
+  if (!cache) {
+    cache = new Map();
+    supportCache.set(mesh, cache);
+  }
+  const key = `${direction[0].toFixed(5)},${direction[1].toFixed(5)},${direction[2].toFixed(5)}`;
+  const cached = cache.get(key);
+  if (cached !== undefined) return cached;
+  const [nx, ny, nz] = direction;
+  const positions = mesh.positions;
+  let far = -Infinity;
+  for (let index = 0; index < positions.length; index += 3) {
+    const value = positions[index]! * nx + positions[index + 1]! * ny + positions[index + 2]! * nz;
+    if (value > far) far = value;
+  }
+  const support = Number.isFinite(far) ? far : 0;
+  cache.set(key, support);
+  return support;
+}
+
+/**
+ * Farthest point of the model measured along `direction` from the world origin.
+ * Vertices, not bounding-box corners: an oblique direction reaches a mixed
+ * corner that the axis-aligned box does not contain as min/max.
+ */
+export function modelSupport(
+  meshes: Record<string, TessellationResult>,
+  direction: readonly [number, number, number],
+): number {
+  let far = -Infinity;
+  for (const mesh of Object.values(meshes)) {
+    far = Math.max(far, meshSupport(mesh, direction));
+  }
+  return Number.isFinite(far) ? far : 0;
+}
+
+// How far the model reaches from the sketch origin along a direction.
+function modelExtent(
+  meshes: Record<string, TessellationResult>,
+  origin: readonly [number, number, number],
+  direction: readonly [number, number, number],
+): number {
+  const [nx, ny, nz] = direction;
+  const originProjection = origin[0] * nx + origin[1] * ny + origin[2] * nz;
+  return modelSupport(meshes, direction) - originProjection;
+}
+
+export function throughAllDistance(
   frame: {
     origin: readonly [number, number, number];
     normal: readonly [number, number, number];
@@ -737,16 +1092,8 @@ function throughAllDistance(
   direction: number,
 ): number {
   const [nx, ny, nz] = frame.normal;
-  let far = 0;
-  for (const mesh of Object.values(meshes)) {
-    for (const corner of [mesh.bbox.min, mesh.bbox.max] as [number, number, number][]) {
-      const offset =
-        ((corner[0] - frame.origin[0]) * nx +
-          (corner[1] - frame.origin[1]) * ny +
-          (corner[2] - frame.origin[2]) * nz) *
-        direction;
-      far = Math.max(far, offset);
-    }
-  }
-  return Math.max(10, far + 10);
+  return Math.max(
+    10,
+    modelExtent(meshes, frame.origin, [nx * direction, ny * direction, nz * direction]) + 10,
+  );
 }

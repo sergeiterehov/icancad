@@ -92,6 +92,24 @@ async function addBox(page: Page) {
   await page.getByRole('button', { name: 'Add object' }).click();
   await page.getByRole('menuitem', { name: 'Box' }).click();
   await expect(page.getByText('20 × 20 × 20 mm')).toBeVisible();
+  await commitOperation(page);
+}
+
+const PREVIEW_MARKS =
+  '.tree-row.preview-added, .tree-row.preview-modified, .tree-row.preview-removed';
+
+// Opening an operation shows the state in front of it without moving the
+// document cursor, so clicking empty space in the view simply dismisses it.
+async function commitOperation(page: Page) {
+  const markers = page.locator(PREVIEW_MARKS);
+  const canvas = page.getByTestId('viewport-canvas');
+  const box = await canvas.boundingBox();
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    await page.mouse.click(box!.x + 12, box!.y + 12);
+    await page.waitForTimeout(200);
+    if ((await markers.count()) === 0) return;
+  }
+  await expect(markers).toHaveCount(0);
 }
 
 test.describe('ICANCad foundation', () => {
@@ -99,8 +117,11 @@ test.describe('ICANCad foundation', () => {
     await openApp(page);
     await addBox(page);
 
+    // Selecting the operation previews the body it will create on top of the
+    // state in front of it.
+    await page.locator('.timeline-op').last().click();
     await expect(page.getByText('Faces')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Hide' }).first()).toBeVisible();
+    await expect(page.locator('.tree-row.preview-added')).toHaveCount(1);
 
     const width = page.getByRole('textbox', { name: 'Width (X)' });
     await width.fill('30');
@@ -139,6 +160,56 @@ test.describe('ICANCad foundation', () => {
     await expect(page.getByRole('textbox', { name: 'Width (X)' })).toHaveValue('30');
   });
 
+  test('keeps the user cursor while an operation is open and across a reload', async ({ page }) => {
+    await openApp(page);
+    await addBox(page);
+    await addBox(page);
+
+    const carets = page.locator('.timeline-caret');
+    // The new operation became the cursor position.
+    await expect(carets.last()).toHaveAttribute('aria-pressed', 'true');
+
+    // Opening the first operation shows the state in front of it, but the
+    // document cursor stays where the user left it.
+    await page.locator('.timeline-op').first().click();
+    await expect(page.locator('.tree-row.preview-added')).toHaveCount(1);
+    await expect(carets.last()).toHaveAttribute('aria-pressed', 'true');
+    await expect(carets.last()).toBeDisabled();
+
+    await expect(page.getByTestId('save-state')).toHaveAttribute('data-state', 'saved');
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Geometry pipeline check' })).toBeHidden({
+      timeout: 120_000,
+    });
+    // Not on the operation that was open, but where the user was.
+    await expect(page.locator('.timeline-caret').last()).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('.tree-row')).toHaveCount(2);
+  });
+
+  test('shows a hidden sketch only while its operation is selected', async ({ page }) => {
+    await openApp(page);
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await page.waitForTimeout(600);
+    await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+
+    const sketchRow = page.locator('.tree-row').first();
+    await sketchRow.getByRole('button', { name: 'Hide' }).click();
+    await expect(sketchRow.getByRole('button', { name: 'Show' })).toBeVisible();
+
+    // A sketch that cannot be seen cannot be configured, so opening its
+    // operation shows it — as a view override only: once the operation is
+    // dismissed the sketch is hidden again.
+    await page.locator('.timeline-op').first().click();
+    await expect(page.locator('.tree-row.preview-added')).toHaveCount(1);
+    await commitOperation(page);
+    await expect(
+      page.locator('.tree-row').first().getByRole('button', { name: 'Show' }),
+    ).toBeVisible();
+  });
+
   test('imports and exports STL meshes', async ({ page }) => {
     await openApp(page);
     await page.setInputFiles('[data-testid="import-mesh"]', {
@@ -147,15 +218,16 @@ test.describe('ICANCad foundation', () => {
       buffer: cubeStl(20),
     });
 
+    await commitOperation(page);
     const meshRow = page.getByTestId('left').getByRole('button', { name: /^cube/ });
     await expect(meshRow).toBeVisible();
-    await expect(page.getByText('20 × 20 × 20 mm')).toBeVisible();
-    await expect(page.getByText('Watertight')).toBeVisible();
 
     // An imported STL is a mesh object, not a solid body: it cannot be picked
     // as an extrude target.
     await meshRow.click();
     await expect(page.getByTestId('inspector').getByText('Mesh', { exact: true })).toBeVisible();
+    await expect(page.getByText('20 × 20 × 20 mm')).toBeVisible();
+    await expect(page.getByText('Watertight')).toBeVisible();
     await page.getByRole('button', { name: 'Extrude', exact: true }).click();
     const inspector = page.getByTestId('inspector');
     const bodiesSection = inspector
@@ -227,17 +299,21 @@ test.describe('ICANCad foundation', () => {
     await expect(page.getByRole('menuitem', { name: 'Top' })).toContainText('+Z');
     await page.getByRole('menuitem', { name: 'Top' }).click();
     await expect.poll(async () => Number(await cube.getAttribute('data-polar'))).toBeLessThan(0.01);
+    await page.locator('.timeline-op').last().click();
     await expect(page.locator('.dimension-field')).toHaveCount(3);
     await expect(page.locator('.dimension-unit')).toHaveCount(3);
+    await commitOperation(page);
 
     const bodyRows = page.locator('.tree-row');
     await expect(bodyRows).toHaveCount(2);
-    await bodyRows.first().click();
-    await expect(page.locator('.timeline-op.dimmed')).toHaveCount(1);
 
-    await page.locator('.timeline-op').first().click();
+    // Selecting an operation dims nothing; selecting an unrelated body dims it.
+    await page.locator('.timeline-op').last().click();
     await expect(page.locator('.timeline-op.selected')).toHaveCount(1);
     await expect(page.locator('.timeline-op.dimmed')).toHaveCount(0);
+    await commitOperation(page);
+    await bodyRows.first().click();
+    await expect(page.locator('.timeline-op.dimmed')).toHaveCount(1);
     await bodyRows.nth(1).click({ modifiers: ['Meta'] });
     await expect(page.locator('.selection-item')).toHaveCount(2);
 
@@ -352,10 +428,11 @@ test.describe('ICANCad foundation', () => {
       buffer: cubeObj(20),
     });
 
-    await expect(
-      page.getByTestId('left').getByRole('button', { name: 'cube', exact: true }),
-    ).toBeVisible();
+    await commitOperation(page);
+    const objRow = page.getByTestId('left').getByRole('button', { name: /^cube/ });
+    await expect(objRow).toBeVisible();
     await expect(page.getByTestId('left').locator('.tree-row')).toHaveCount(1);
+    await objRow.click();
     await expect(page.getByText('20 × 20 × 20 mm')).toBeVisible();
     await expect(page.getByText('Watertight')).toBeVisible();
     await expect(page.getByText('Volume')).toBeVisible();
@@ -369,7 +446,8 @@ test.describe('ICANCad foundation', () => {
 
     const downloadPromise = page.waitForEvent('download');
     await page.getByRole('button', { name: 'Export', exact: true }).click();
-    await page.getByRole('menuitem', { name: 'STL', exact: true }).click();
+    // The item names the selection that will be exported.
+    await page.getByRole('menuitem', { name: /^STL/ }).click();
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toBe('untitled-project.stl');
 
@@ -446,9 +524,7 @@ test.describe('ICANCad foundation', () => {
       .toBeLessThan(0.001);
 
     const sketchRow = page.locator('.tree-row').first();
-    const sketchNameField = page
-      .getByTestId('inspector')
-      .getByRole('textbox', { name: 'Name' });
+    const sketchNameField = page.getByTestId('inspector').getByRole('textbox', { name: 'Name' });
     await sketchRow.locator('.tree-main').click();
     await sketchNameField.fill('Profile');
     await sketchNameField.press('Enter');
@@ -460,6 +536,8 @@ test.describe('ICANCad foundation', () => {
     await sketchNameField.press('Enter');
     await expect(sketchRow).toContainText('Outline');
     await expect(page.locator('.timeline-op').first()).toHaveAttribute('aria-label', 'Outline');
+    await commitOperation(page);
+    await expect(sketchRow).not.toHaveClass(/preview-added/);
 
     await sketchRow.getByRole('button', { name: 'Hide', exact: true }).click();
     await expect(sketchRow.getByRole('button', { name: 'Show', exact: true })).toBeVisible();
@@ -507,6 +585,7 @@ test.describe('ICANCad foundation', () => {
     await expect(page.locator('.tree-row')).toHaveCount(2);
     await expect(page.locator('.timeline-op.error')).toHaveCount(0);
 
+    await commitOperation(page);
     const sketchRow = page.locator('.tree-row').filter({ hasText: 'Sketch' });
     await sketchRow.locator('.tree-main').dblclick();
     await expect(page.locator('.sketch-overlay')).toBeVisible();
@@ -557,9 +636,7 @@ test.describe('ICANCad foundation', () => {
 
     await rows.first().locator('.tree-main').dblclick();
     await expect(page.locator('.sketch-overlay')).toBeVisible();
-    await expect
-      .poll(async () => Number(await cube.getAttribute('data-polar')))
-      .toBeLessThan(0.01);
+    await expect.poll(async () => Number(await cube.getAttribute('data-polar'))).toBeLessThan(0.01);
     await page.getByRole('button', { name: 'Finish sketch' }).click();
 
     await rows.nth(1).locator('.tree-main').dblclick();
@@ -575,9 +652,7 @@ test.describe('ICANCad foundation', () => {
     // directly while the second one is being edited.
     await rows.first().locator('.tree-main').dblclick();
     await expect(page.locator('.sketch-overlay')).toBeVisible();
-    await expect
-      .poll(async () => Number(await cube.getAttribute('data-polar')))
-      .toBeLessThan(0.01);
+    await expect.poll(async () => Number(await cube.getAttribute('data-polar'))).toBeLessThan(0.01);
     await page.getByRole('button', { name: 'Finish sketch' }).click();
 
     await rows.nth(1).locator('.tree-main').dblclick();
@@ -675,9 +750,7 @@ test.describe('ICANCad foundation', () => {
       canvasBox!.y + canvasBox!.height * 0.3,
     );
     await expect(page.locator('.sketch-overlay')).toBeVisible();
-    await expect
-      .poll(async () => Number(await cube.getAttribute('data-polar')))
-      .toBeLessThan(0.2);
+    await expect.poll(async () => Number(await cube.getAttribute('data-polar'))).toBeLessThan(0.2);
     const facePolar = Number(await cube.getAttribute('data-polar'));
     const faceAzimuth = Number(await cube.getAttribute('data-azimuth'));
     await page.getByRole('button', { name: 'Finish sketch' }).click();
@@ -740,9 +813,13 @@ test.describe('ICANCad foundation', () => {
     await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
 
     const rows = page.locator('.tree-row');
+    // While the operation is being configured, its body is a phantom.
     await expect(rows).toHaveCount(2);
-    // A new body is an object of its own, not a copy of the operation name.
     await expect(rows.nth(1)).toContainText('Body');
+    await expect(page.locator(PREVIEW_MARKS)).toHaveCount(1);
+    await commitOperation(page);
+
+    // A new body is an object of its own, not a copy of the operation name.
     const inspector = page.getByTestId('right');
     // Statistics describe the body, not the operation.
     await rows.nth(1).locator('.tree-main').click();
@@ -754,15 +831,22 @@ test.describe('ICANCad foundation', () => {
     const distance = inspector.getByRole('textbox').nth(1);
     await distance.fill('25');
     await distance.press('Enter');
+    await commitOperation(page);
     await rows.nth(1).locator('.tree-main').click();
     await expect.poll(async () => inspector.innerText()).toContain('× 25 mm');
 
-    // Turning the operation into a cut removes the body it used to create.
+    // Turning the operation into a cut makes it create nothing, so the body is
+    // no longer part of the preview at all.
     await page.locator('.timeline-op').last().click();
     await inspector.getByRole('button', { name: 'Cut', exact: true }).click();
+    await expect(page.locator('.tree-row.preview-added')).toHaveCount(0);
+    await expect(rows).toHaveCount(1);
+    await commitOperation(page);
     await expect(rows).toHaveCount(1);
 
+    await page.locator('.timeline-op').last().click();
     await inspector.getByRole('button', { name: 'New body', exact: true }).click();
+    await commitOperation(page);
     await expect(rows).toHaveCount(2);
   });
   test('separates the sketch object from its construction operation', async ({ page }) => {
@@ -812,6 +896,7 @@ test.describe('ICANCad foundation', () => {
     await expect(inspector.getByText('Faces')).toHaveCount(0);
 
     // Editing also targets the operation, because the recipe is what changes.
+    await commitOperation(page);
     await page.locator('.tree-row').first().locator('.tree-main').dblclick();
     await expect(page.locator('.sketch-overlay')).toBeVisible();
     await expect(inspector.getByText('Geometry')).toBeVisible();
@@ -1270,7 +1355,7 @@ test.describe('ICANCad foundation', () => {
     await expect(page.locator('.sketch-entity-row')).toHaveCount(1);
     await expect(constraints).toContainText('Horizontal');
   });
-  test('moves the timeline to the edited sketch and locks it', async ({ page }) => {
+  test('shows the state before the edited sketch and locks the timeline', async ({ page }) => {
     await openApp(page);
     await page.getByRole('button', { name: 'Sketch', exact: true }).click();
     await page.getByRole('menuitem', { name: 'XY plane' }).click();
@@ -1547,6 +1632,7 @@ test.describe('ICANCad foundation', () => {
       await page.locator('.tree-row').first().locator('.tree-main').click();
       await inspector.getByText('Face 1').click();
       await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
+      await commitOperation(page);
       // Bounds are shown for the created body, not for the operation.
       await page
         .locator('.tree-row')
@@ -1665,6 +1751,7 @@ test.describe('ICANCad foundation', () => {
       .locator('.panel-section')
       .filter({ hasText: 'Apply to bodies' });
     await bodiesSection.getByRole('button', { name: 'Pick bodies in the view' }).click();
+    await page.waitForTimeout(800);
     await page
       .getByTestId('left')
       .locator('.tree-row')
@@ -1737,9 +1824,10 @@ test.describe('ICANCad foundation', () => {
     await sketchFaces.nth(2).click({ modifiers: ['Shift'] });
     await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
     await expect(page.locator('.tree-row')).toHaveCount(2);
+    await expect(page.locator('.timeline-op.error')).toHaveCount(0);
+    await commitOperation(page);
     const bodyRows = page.getByTestId('left').locator('.tree-row').filter({ hasText: 'Body' });
     await expect(bodyRows).toHaveCount(1);
-    await expect(page.locator('.timeline-op.error')).toHaveCount(0);
     // The fused body has a single top and a single bottom face, not the three
     // sketch regions that produced it, so it can be extruded again as one face.
     await bodyRows.first().locator('.tree-main').click();
@@ -1809,9 +1897,9 @@ test.describe('ICANCad foundation', () => {
 
     // Leaving picking makes the list read-only again.
     await inspector.getByRole('button', { name: 'Finish picking' }).click();
-    await expect(
-      objects.first().getByRole('button', { name: 'Remove from extrude' }),
-    ).toHaveCount(0);
+    await expect(objects.first().getByRole('button', { name: 'Remove from extrude' })).toHaveCount(
+      0,
+    );
 
     // A body target list sits before the faces list; empty means every body.
     const bodiesSection = inspector
@@ -1823,6 +1911,8 @@ test.describe('ICANCad foundation', () => {
     await expect.poll(async () => inspector.innerText()).not.toContain('no solid geometry');
 
     await bodiesSection.getByRole('button', { name: 'Pick bodies in the view' }).click();
+    // Wait for the preview rebuild: picking is ignored while the model is busy.
+    await page.waitForTimeout(800);
     // Picking happens in 3D and must not replace the selected operation.
     await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
     const targets = bodiesSection.locator('.selection-item');
@@ -1837,9 +1927,7 @@ test.describe('ICANCad foundation', () => {
 
     // Body rows are read-only outside body picking too.
     await bodiesSection.getByRole('button', { name: 'Finish picking' }).click();
-    await expect(
-      bodiesSection.getByRole('button', { name: 'Remove from extrude' }),
-    ).toHaveCount(0);
+    await expect(bodiesSection.getByRole('button', { name: 'Remove from extrude' })).toHaveCount(0);
 
     const reverse = inspector.getByRole('button', { name: 'Reverse direction' });
     await reverse.click();
@@ -1890,6 +1978,7 @@ test.describe('ICANCad foundation', () => {
     await offset.fill('40');
     await offset.press('Enter');
     await page.waitForTimeout(300);
+    await commitOperation(page);
 
     await page.locator('.tree-row').last().locator('.tree-main').click();
     await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
@@ -1926,16 +2015,19 @@ test.describe('ICANCad foundation', () => {
     await expect(errorOp.locator('.tree-badge')).toHaveCount(0);
 
     const carets = page.locator('.timeline-caret');
+    // Editing the failed operation does not move the document cursor, so it
+    // stays where the user left it: the red barrier straight after the failure.
     const blocked = carets.nth(3);
     await expect(blocked).toHaveClass(/error/);
-    await expect(blocked).toHaveClass(/active/);
     await expect(blocked).toBeDisabled();
-    await expect(carets.nth(2)).not.toHaveClass(/error/);
+    await expect(blocked).toHaveAttribute('aria-pressed', 'true');
+    await expect(carets.nth(2)).not.toHaveClass(/active/);
 
     // An operation after the failure gets a plain inactive cursor, not red.
     await page.getByRole('button', { name: 'Add object' }).click();
     await page.getByRole('menuitem', { name: 'Box' }).click();
     await expect(page.locator('.timeline-op')).toHaveCount(4);
+    await commitOperation(page);
     const past = page.locator('.timeline-caret').nth(4);
     await expect(past).not.toHaveClass(/error/);
     await expect(past).not.toHaveClass(/active/);

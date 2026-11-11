@@ -1,6 +1,6 @@
 import { KernelClient, type HealthResult } from '@icancad/kernel';
 import { useKernelStore } from '../stores/kernelStore';
-import { abortRebuild } from './rebuild';
+import { abortRebuild, resetRebuildCache } from './rebuild';
 import { kernelTaskQueue } from './scheduler';
 
 let client: KernelClient | null = null;
@@ -48,6 +48,7 @@ export function cancelKernelWork(): void {
   client?.terminate();
   client = null;
   bootPromise = null;
+  resetRebuildCache();
   useKernelStore.getState().clearScene();
   void bootKernel();
 }
@@ -58,6 +59,7 @@ export function retryKernel(): Promise<void> {
   client?.terminate();
   client = null;
   bootPromise = null;
+  resetRebuildCache();
   useKernelStore.getState().clearScene();
   return bootKernel();
 }

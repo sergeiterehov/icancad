@@ -12,7 +12,7 @@ import {
 } from '@icancad/model';
 import { faceFrame, sketchTopology } from '@icancad/sketch';
 import { computeSketchFrame, sketchFrameOf, sketchPlaneReady, sketchSectionPlane } from '../sketch/sectionPlane';
-import { useDocumentStore } from '../stores/documentStore';
+import { useDocumentStore, useViewProject } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
 import { isModelRebuilding, useKernelStore } from '../stores/kernelStore';
 import { directBodyIds, linkedBodyIds } from '../stores/selection';
@@ -44,7 +44,7 @@ export function Viewport() {
   const navCubeRef = useRef<NavCube | null>(null);
   const previousCount = useRef(0);
 
-  const project = useDocumentStore((state) => state.project);
+  const project = useViewProject();
   const bodies = bodiesInHistory(project);
   const sectionPlanes = project.view.sectionPlanes;
   const sectionEnabled = useUiStore((state) => state.sectionEnabled);
@@ -60,6 +60,7 @@ export function Viewport() {
   const sketchSelectionIds = useUiStore((state) => state.sketchSelectionIds);
   const selection = useDocumentStore((state) => state.selection);
   const meshes = useKernelStore((state) => state.meshes);
+  const preview = useKernelStore((state) => state.preview);
   const sketchFrames = useKernelStore((state) => state.sketchFrames);
   const featureBodyErrors = useKernelStore((state) => state.featureBodyErrors);
   const featureErrors = useKernelStore((state) => state.featureErrors);
@@ -331,16 +332,45 @@ export function Viewport() {
     const controller = controllerRef.current;
     if (!controller) return;
 
+    const marks = new Map((preview?.bodies ?? []).map((mark) => [mark.id, mark]));
     const sceneBodies: SceneBody[] = [];
     for (const body of bodies) {
       const mesh = meshes[body.id];
       if (!mesh) continue;
+      const mark = marks.get(body.id);
       sceneBodies.push({
         id: body.id,
         kind: body.kind,
         mesh,
         color: body.color,
         visible: body.visible,
+        ...(mark
+          ? {
+              ghost: mark.kind,
+              translucent: mark.translucent !== false,
+              // Interaction stays on the input model while the preview is drawn.
+              ...(mark.baseMesh ? { hitMesh: mark.baseMesh } : {}),
+            }
+          : {}),
+      });
+    }
+    // Bodies the edited operation will create are shown translucent and cannot
+    // be picked: they are not part of the document yet.
+    for (const mark of preview?.bodies ?? []) {
+      if (mark.kind !== 'added') continue;
+      if (bodies.some((body) => body.id === mark.id)) continue;
+      const mesh = meshes[mark.id];
+      if (!mesh) continue;
+      const ref = project.bodies.find((body) => body.id === mark.id);
+      const resolved = ref ? resolveBody(project, ref) : undefined;
+      sceneBodies.push({
+        id: mark.id,
+        kind: resolved?.kind ?? 'solid',
+        mesh,
+        color: resolved?.color ?? mark.color,
+        visible: resolved?.visible ?? true,
+        ghost: 'added',
+        interactive: false,
       });
     }
 
@@ -357,11 +387,12 @@ export function Viewport() {
       [...new Set([...linkedBodyIds(selection, project), ...targetBodyIds])],
       errorBodyIds,
     );
+    controller.setGhosts(preview?.ghosts ?? []);
     if (!activeSketchId && previousCount.current === 0 && sceneBodies.length > 0) {
       controller.fit();
     }
     previousCount.current = sceneBodies.length;
-  }, [activeSketchId, bodies, meshes, project, selection, featureBodyErrors]);
+  }, [activeSketchId, bodies, meshes, preview, project, selection, featureBodyErrors]);
 
   // Faces of the edited operation are highlighted in 3D, and the one under the
   // cursor is highlighted while objects are being picked.
@@ -425,11 +456,14 @@ export function Viewport() {
 
   useEffect(() => {
     const ids = activeFeatureIds(project);
+    // The edited operation is previewed on top of the cursor state, so a sketch
+    // that is being configured or edited is drawn from that preview.
+    const previewedId = preview?.featureId ?? null;
     const sketches = project.features
       .filter(
         (feature): feature is SketchFeature =>
           feature.type === 'sketch' &&
-          ids.has(feature.id) &&
+          (ids.has(feature.id) || feature.id === previewedId) &&
           sketchPlaneReady(feature) &&
           !featureErrors[feature.id] &&
           (feature.id !== activeSketchId || activeSketchReady) &&
@@ -482,6 +516,7 @@ export function Viewport() {
     sketchFrames,
     activeSketchReady,
     meshes,
+    preview,
   ]);
 
   useEffect(() => {
@@ -494,7 +529,7 @@ export function Viewport() {
   const hasActiveSketches = project.features.some(
     (feature) =>
       feature.type === 'sketch' &&
-      activeFeatureIds(project).has(feature.id) &&
+      (activeFeatureIds(project).has(feature.id) || feature.id === preview?.featureId) &&
       sketchPlaneReady(feature) &&
       !featureErrors[feature.id],
   );

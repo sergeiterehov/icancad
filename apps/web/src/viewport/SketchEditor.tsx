@@ -201,14 +201,14 @@ export function SketchEditor() {
   }, [activeSketchId, sketch, featureErrors, setActiveSketch]);
 
   // Editing a sketch happens at its own place in the timeline: the cursor moves
-  // to the sketch so only geometry that existed then is visible. The camera and
-  // sketch are oriented only after that rebuild has been applied.
-  const historyEndBeforeSketch = useRef<string | null | undefined>(undefined);
+  // in front of the sketch, so the model is exactly its input, and the sketch
+  // itself is drawn from the operation preview. The camera and sketch are
+  // oriented only after that rebuild has been applied.
   useEffect(() => {
     if (!activeSketchId) return;
-    const store = useDocumentStore.getState();
-    historyEndBeforeSketch.current = store.project.historyEnd;
-    store.rollHistoryTo(activeSketchId);
+    // The sketch editor is an operation edit: the cursor rolls in front of the
+    // sketch and is restored when the sketch is finished.
+    useDocumentStore.getState().beginFeatureEdit(activeSketchId);
     alignedFrame.current = '';
     let cancelled = false;
     let unsubscribe: () => void = () => undefined;
@@ -216,14 +216,14 @@ export function SketchEditor() {
     if (useKernelStore.getState().status !== 'ready') {
       setActiveSketchReady(true);
     } else {
-      // Trigger the rebuild at this timeline position and wait until the kernel
-      // publishes a scene for it. A rebuild that was already running for an
-      // older position does not satisfy this condition.
+      // Trigger the rebuild and wait until the kernel publishes the preview of
+      // this sketch. A rebuild that was already running for an older state does
+      // not satisfy this condition.
       void rebuildScene(useDocumentStore.getState().project, i18n.t('status.rebuild')).catch(
         () => undefined,
       );
       unsubscribe = useKernelStore.subscribe((state) => {
-        if (state.sceneVersion > startVersion && state.sceneHistoryEnd === activeSketchId) {
+        if (state.sceneVersion > startVersion && state.preview?.featureId === activeSketchId) {
           unsubscribe();
           if (!cancelled) setActiveSketchReady(true);
         }
@@ -232,10 +232,7 @@ export function SketchEditor() {
     return () => {
       cancelled = true;
       unsubscribe();
-      const previous = historyEndBeforeSketch.current;
-      historyEndBeforeSketch.current = undefined;
-      if (previous === undefined) return;
-      useDocumentStore.getState().rollHistoryTo(previous);
+      useDocumentStore.getState().endFeatureEdit();
     };
   }, [activeSketchId, setActiveSketchReady, i18n]);
 

@@ -50,7 +50,10 @@
     "hide": "Hide",
     "addObject": "Add object",
     "import": "Import",
-    "emptyObjects": "No objects yet"
+    "emptyObjects": "No objects yet",
+    "previewAdded": "Added by the operation being edited",
+    "previewModified": "Changed by the operation being edited",
+    "previewRemoved": "Removed by the operation being edited"
   },
   "inspector": {
     "project": "Project",
@@ -104,7 +107,7 @@
     "feature": "Feature",
     "rollbackHint": "Show the model as it was after this operation. Later operations are kept.",
     "goTo": "Go to operation #{{index}}",
-    "locked": "Finish the sketch to move along the timeline"
+    "locked": "Finish editing the operation to move along the timeline"
   },
   "status": {
     "kernelLoading": "Loading OCCT kernel…",
@@ -183,7 +186,8 @@
   },
   "context": {
     "deleteOperation": "Delete operation",
-    "deleteObject": "Delete object"
+    "deleteObject": "Delete object",
+    "rebuildFromHere": "Rebuild from here"
   },
   "nav": {
     "cube": "Orientation cube",

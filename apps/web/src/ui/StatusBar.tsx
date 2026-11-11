@@ -12,7 +12,7 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { setLocale, type Locale } from '../i18n';
 import { cancelKernelWork } from '../kernel/client';
-import { useDocumentStore } from '../stores/documentStore';
+import { useDocumentStore, useViewProject } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { useThemeStore } from '../stores/themeStore';
 import { Button, IconButton } from './Controls';
@@ -34,11 +34,10 @@ export function StatusBar() {
   const ratio = useKernelStore((state) => state.ratio);
   const version = useKernelStore((state) => state.version);
   const loadMs = useKernelStore((state) => state.loadMs);
-  const featureCount = useDocumentStore((state) => state.project.features.length);
-  const bodyCount = useDocumentStore((state) => solidBodiesInHistory(state.project).length);
-  const meshCount = useDocumentStore(
-    (state) => bodiesInHistory(state.project).filter((body) => body.kind === 'mesh').length,
-  );
+  const project = useViewProject();
+  const featureCount = project.features.length;
+  const bodyCount = solidBodiesInHistory(project).length;
+  const meshCount = bodiesInHistory(project).filter((body) => body.kind === 'mesh').length;
   const saveState = useDocumentStore((state) => state.saveState);
   const theme = useThemeStore((state) => state.theme);
   const toggleTheme = useThemeStore((state) => state.toggle);

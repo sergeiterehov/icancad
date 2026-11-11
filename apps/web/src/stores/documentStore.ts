@@ -24,6 +24,7 @@ import {
   type ExtrudeFeature,
   type DeleteBodyFeature,
 } from '@icancad/model';
+import { useMemo } from 'react';
 import { create } from 'zustand';
 import { i18n } from '../i18n';
 import { useKernelStore, isModelRebuilding } from './kernelStore';
@@ -45,6 +46,12 @@ interface DocumentState {
   selection: SelectionItem[];
   hydrated: boolean;
   saveState: SaveState;
+  /**
+   * Operation whose settings are open. The document keeps the user's cursor;
+   * the scene is rendered and rebuilt against the operation's input state
+   * instead (see `projectForView`).
+   */
+  editingFeatureId: string | null;
   apply: (...commands: Command[]) => boolean;
   preview: (...commands: Command[]) => void;
   commitPreview: (before: Project) => void;
@@ -52,6 +59,13 @@ interface DocumentState {
   redo: () => void;
   hydrate: (project: Project) => void;
   select: (item: SelectionItem | null, options?: { additive?: boolean }) => void;
+  /**
+   * Opens an operation for editing without touching the selection. Used by the
+   * sketch editor, which owns the selection itself.
+   */
+  beginFeatureEdit: (featureId: string) => void;
+  /** Ends operation editing, so the model returns to the user's cursor. */
+  endFeatureEdit: () => void;
   setSaveState: (state: SaveState) => void;
   addPrimitiveBox: (name: string) => void;
   addSketch: (name: string, plane: 'XY' | 'XZ' | 'YZ') => string | null;
@@ -77,13 +91,9 @@ interface DocumentState {
   confirmRemoveFeature: (featureId: string) => void;
   deleteBody: (bodyId: string, name: string) => void;
   /** Reconciles body refs with the bodies the kernel actually produced. */
-  syncCreatedBodies: (
-    bodies: Map<string, string[]>,
-    blockedFeatureId?: string | null,
-  ) => void;
+  syncCreatedBodies: (bodies: Map<string, string[]>, blockedFeatureId?: string | null) => void;
   renameProject: (name: string) => void;
   setHistoryEnd: (featureId: string | null) => void;
-  rollHistoryTo: (featureId: string | null) => void;
   toggleBodyVisibility: (bodyId: string) => void;
 }
 
@@ -125,7 +135,7 @@ function addFeatureCommands(project: Project, feature: Feature): Command[] {
 
 // Body numbers are kept in the metadata of every body ever created, so a new
 // body never reuses the number of an existing one.
-function nextBodyNumber(project: Project): number {
+export function nextBodyNumber(project: Project): number {
   let highest = 0;
   for (const metadata of Object.values(project.metadata)) {
     if (typeof metadata.bodyIndex === 'number') highest = Math.max(highest, metadata.bodyIndex);
@@ -133,7 +143,7 @@ function nextBodyNumber(project: Project): number {
   return highest + 1;
 }
 
-function exists(project: Project, item: SelectionItem): boolean {
+function exists(project: Project, item: SelectionItem, editingFeatureId: string | null): boolean {
   switch (item.kind) {
     case 'body':
     case 'mesh': {
@@ -142,30 +152,126 @@ function exists(project: Project, item: SelectionItem): boolean {
       return item.kind === (isMeshObject(body) ? 'mesh' : 'body');
     }
     case 'feature':
-      return isFeatureInHistory(project, item.id);
+      return item.id === editingFeatureId || isFeatureInHistory(project, item.id);
     case 'sketch':
       return project.features.some(
         (feature) =>
-          feature.id === item.id && feature.type === 'sketch' && isFeatureInHistory(project, item.id),
+          feature.id === item.id &&
+          feature.type === 'sketch' &&
+          isFeatureInHistory(project, item.id),
       );
     case 'face': {
       const [sketchId] = item.id.split('#');
       return Boolean(
         sketchId &&
-          project.features.some(
-            (feature) =>
-              feature.id === sketchId &&
-              feature.type === 'sketch' &&
-              isFeatureInHistory(project, sketchId),
-          ),
+        project.features.some(
+          (feature) =>
+            feature.id === sketchId &&
+            feature.type === 'sketch' &&
+            isFeatureInHistory(project, sketchId),
+        ),
       );
     }
   }
 }
 
-function sanitizeSelection(project: Project, selection: SelectionItem[]): SelectionItem[] {
-  const next = selection.filter((item) => exists(project, item));
+// The operation being edited is selected while it sits just after the cursor,
+// and the bodies it will produce only exist in the preview scene.
+function sanitizeSelection(
+  project: Project,
+  selection: SelectionItem[],
+  editingFeatureId: string | null,
+): SelectionItem[] {
+  const next = selection.filter((item) => exists(project, item, editingFeatureId));
   return next.length === selection.length ? selection : next;
+}
+
+function withHistoryEnd(project: Project, historyEnd: string | null): Project {
+  return project.historyEnd === historyEnd ? project : { ...project, historyEnd };
+}
+
+// A hidden sketch cannot be configured, so it is shown while its operation is
+// open. This is a view override only: the stored visibility is left alone, so
+// the sketch is hidden again once the operation is dismissed.
+function withVisibleSketch(project: Project, editingFeatureId: string): Project {
+  const feature = project.features.find(
+    (candidate): candidate is SketchFeature =>
+      candidate.id === editingFeatureId && candidate.type === 'sketch',
+  );
+  if (!feature) return project;
+  const objectId = sketchObjectId(feature.id);
+  if (objectVisible(project, objectId)) return project;
+  return {
+    ...project,
+    metadata: {
+      ...project.metadata,
+      [objectId]: { ...project.metadata[objectId], visible: true },
+    },
+  };
+}
+
+// An operation is configured against the model that existed when it was
+// created, so the cursor it is rendered at is the one in front of it. The
+// document keeps the user's cursor untouched: the input position is derived,
+// never written back. That keeps the timeline caret where the user left it and
+// keeps autosave and project export at the user's position.
+export function projectForView(project: Project, editingFeatureId: string | null): Project {
+  if (editingFeatureId === null) return project;
+  const index = project.features.findIndex((feature) => feature.id === editingFeatureId);
+  if (index < 0) return project;
+  const inputCursor: string | null =
+    index === 0 ? HISTORY_START : (project.features[index - 1]?.id ?? HISTORY_START);
+  return withVisibleSketch(withHistoryEnd(project, inputCursor), editingFeatureId);
+}
+
+function leaveEditMode(state: DocumentState): Partial<DocumentState> {
+  if (state.editingFeatureId === null) return {};
+  return { editingFeatureId: null };
+}
+
+function editModeFor(
+  state: DocumentState,
+  project: Project,
+  selection: SelectionItem[],
+): Partial<DocumentState> {
+  // While the sketch editor is open it owns the selection.
+  if (useUiStore.getState().activeSketchId) return {};
+  const single = selection.length === 1 ? selection[0] : undefined;
+  const feature =
+    single?.kind === 'feature'
+      ? project.features.find((candidate) => candidate.id === single.id)
+      : undefined;
+  return { editingFeatureId: feature ? feature.id : null };
+}
+
+// Newly created operations open their settings immediately, exactly like
+// selecting one in the timeline.
+function selectFeatureForEditing(
+  featureId: string,
+  set: (update: (state: DocumentState) => Partial<DocumentState>) => void,
+): void {
+  set((state) => {
+    const selection: SelectionItem[] = [{ kind: 'feature', id: featureId }];
+    return { selection, ...editModeFor(state, state.project, selection) };
+  });
+}
+
+// Undo, redo and deletions can remove the operation that is being edited.
+function reconcileEditMode(
+  state: DocumentState,
+  project: Project,
+  selection: SelectionItem[],
+): Partial<DocumentState> {
+  // The sketch editor drives the selection itself; an inner selection change
+  // must not end sketch editing.
+  if (useUiStore.getState().activeSketchId) return {};
+  const editing = state.editingFeatureId;
+  if (editing === null) return {};
+  const stillThere = project.features.some((feature) => feature.id === editing);
+  if (!stillThere) return { ...leaveEditMode(state), selection: [] };
+  const stillSelected = selection.length === 1 && selection[0]?.id === editing;
+  if (stillSelected) return {};
+  return leaveEditMode(state);
 }
 
 export const useDocumentStore = create<DocumentState>((set, get) => ({
@@ -175,16 +281,23 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   selection: [],
   hydrated: false,
   saveState: 'idle',
+  editingFeatureId: null,
 
   apply: (...commands) => {
     const state = get();
     try {
       const project = applyCommands(state.project, commands);
+      const selection = sanitizeSelection(
+        projectForView(project, state.editingFeatureId),
+        state.selection,
+        state.editingFeatureId,
+      );
       set({
         project,
         past: [...state.past, state.project].slice(-HISTORY_LIMIT),
         future: [],
-        selection: sanitizeSelection(project, state.selection),
+        selection,
+        ...reconcileEditMode(state, project, selection),
       });
       return true;
     } catch (error) {
@@ -198,7 +311,16 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     const state = get();
     try {
       const project = applyCommands(state.project, commands);
-      set({ project, selection: sanitizeSelection(project, state.selection) });
+      const selection = sanitizeSelection(
+        projectForView(project, state.editingFeatureId),
+        state.selection,
+        state.editingFeatureId,
+      );
+      set({
+        project,
+        selection,
+        ...reconcileEditMode(state, project, selection),
+      });
     } catch {
       // Preview commands are transient; invalid intermediate geometry is ignored.
     }
@@ -215,11 +337,17 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     const state = get();
     const previous = state.past[state.past.length - 1];
     if (!previous) return;
+    const selection = sanitizeSelection(
+      projectForView(previous, state.editingFeatureId),
+      state.selection,
+      state.editingFeatureId,
+    );
     set({
       project: previous,
       past: state.past.slice(0, -1),
       future: [state.project, ...state.future].slice(0, HISTORY_LIMIT),
-      selection: sanitizeSelection(previous, state.selection),
+      selection,
+      ...reconcileEditMode(state, previous, selection),
     });
   },
 
@@ -227,11 +355,17 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     const state = get();
     const next = state.future[0];
     if (!next) return;
+    const selection = sanitizeSelection(
+      projectForView(next, state.editingFeatureId),
+      state.selection,
+      state.editingFeatureId,
+    );
     set({
       project: next,
       past: [...state.past, state.project].slice(-HISTORY_LIMIT),
       future: state.future.slice(1),
-      selection: sanitizeSelection(next, state.selection),
+      selection,
+      ...reconcileEditMode(state, next, selection),
     });
   },
 
@@ -241,6 +375,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       past: [],
       future: [],
       selection: [],
+      editingFeatureId: null,
       hydrated: true,
       saveState: 'saved',
     });
@@ -278,27 +413,41 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       return;
     }
 
+    const state = get();
+    let selection: SelectionItem[];
     if (!item) {
-      set({ selection: [] });
-      return;
-    }
-    const selection = get().selection;
-    if (!options?.additive) {
-      set({ selection: [item] });
-      return;
-    }
-    const index = selection.findIndex(
-      (candidate) => candidate.kind === item.kind && candidate.id === item.id,
-    );
-    if (index >= 0) {
-      set({ selection: selection.filter((_, i) => i !== index) });
+      selection = [];
+    } else if (!options?.additive) {
+      selection = [item];
     } else {
-      set({ selection: [...selection, item] });
+      const index = state.selection.findIndex(
+        (candidate) => candidate.kind === item.kind && candidate.id === item.id,
+      );
+      selection =
+        index >= 0 ? state.selection.filter((_, i) => i !== index) : [...state.selection, item];
     }
+    set({ selection, ...editModeFor(state, state.project, selection) });
   },
+
+  beginFeatureEdit: (featureId) => {
+    const state = get();
+    const feature = state.project.features.find((candidate) => candidate.id === featureId);
+    if (!feature) return;
+    set({ editingFeatureId: featureId });
+  },
+
+  endFeatureEdit: () => {
+    const state = get();
+    if (state.editingFeatureId === null) return;
+    set({ selection: [], ...leaveEditMode(state) });
+  },
+
   setSaveState: (saveState) => set({ saveState }),
 
   addPrimitiveBox: (name) => {
+    // Creating an object commits whatever operation was being configured: the
+    // new operation belongs at the user's cursor, not in the middle of an edit.
+    get().endFeatureEdit();
     const state = get();
     const featureId = createId('feat');
     const feature: PrimitiveFeature = {
@@ -312,21 +461,26 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     };
     const body: BodyRef = { id: featureBodyId(featureId), createdBy: featureId };
     if (
-      state.apply(...addFeatureCommands(state.project, feature), { type: 'body/add', body }, {
-        type: 'metadata/patch',
-        objectId: body.id,
-        patch: {
-          name,
-          color: BODY_COLORS[state.project.bodies.length % BODY_COLORS.length] ?? '#6ea8fe',
-          visible: true,
+      state.apply(
+        ...addFeatureCommands(state.project, feature),
+        { type: 'body/add', body },
+        {
+          type: 'metadata/patch',
+          objectId: body.id,
+          patch: {
+            name,
+            color: BODY_COLORS[state.project.bodies.length % BODY_COLORS.length] ?? '#6ea8fe',
+            visible: true,
+          },
         },
-      })
+      )
     ) {
-      set({ selection: [{ kind: 'feature', id: featureId }] });
+      selectFeatureForEditing(featureId, set);
     }
   },
 
   addSketch: (name, plane) => {
+    get().endFeatureEdit();
     const featureId = createId('feat');
     const feature: SketchFeature = {
       id: featureId,
@@ -352,6 +506,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   addSketchOnFace: (name) => {
+    get().endFeatureEdit();
     const featureId = createId('feat');
     const feature: SketchFeature = {
       id: featureId,
@@ -374,12 +529,13 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     }
     // The face is still missing, so the operation is selected instead of the
     // sketch object; the inspector shows its placement and face picker.
-    set({ selection: [{ kind: 'feature', id: featureId }] });
+    selectFeatureForEditing(featureId, set);
     return featureId;
   },
 
   // The operation can be created empty and pointed at objects afterwards.
   addExtrude: (name, input) => {
+    get().endFeatureEdit();
     const project = get().project;
     if (input) {
       const sketch = project.features.find(
@@ -413,7 +569,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       joinRegions: true,
     };
     if (!get().apply(...addFeatureCommands(project, feature))) return null;
-    set({ selection: [{ kind: 'feature', id: featureId }] });
+    selectFeatureForEditing(featureId, set);
     return featureId;
   },
 
@@ -546,6 +702,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   addImportedMesh: (name, featureId, format) => {
+    get().endFeatureEdit();
     const state = get();
     const feature: ImportMeshFeature = {
       id: featureId,
@@ -559,37 +716,40 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     };
     const body: BodyRef = { id: featureBodyId(featureId), createdBy: featureId, kind: 'mesh' };
     if (
-      state.apply(...addFeatureCommands(state.project, feature), { type: 'body/add', body }, {
-        type: 'metadata/patch',
-        objectId: body.id,
-        patch: {
-          name,
-          color:
-            BODY_COLORS[
-              state.project.bodies.filter((candidate) => !isMeshObject(candidate)).length %
-                BODY_COLORS.length
-            ] ?? '#6ea8fe',
-          visible: true,
+      state.apply(
+        ...addFeatureCommands(state.project, feature),
+        { type: 'body/add', body },
+        {
+          type: 'metadata/patch',
+          objectId: body.id,
+          patch: {
+            name,
+            color:
+              BODY_COLORS[
+                state.project.bodies.filter((candidate) => !isMeshObject(candidate)).length %
+                  BODY_COLORS.length
+              ] ?? '#6ea8fe',
+            visible: true,
+          },
         },
-      })
+      )
     ) {
-      set({ selection: [{ kind: 'feature', id: featureId }] });
+      selectFeatureForEditing(featureId, set);
     }
   },
 
   toggleSketchVisibility: (sketchId) => {
-    const project = get().project;
-    const feature = project.features.find(
+    const state = get();
+    const feature = state.project.features.find(
       (candidate): candidate is SketchFeature =>
         candidate.id === sketchId && candidate.type === 'sketch',
     );
     if (!feature) return;
     const objectId = sketchObjectId(sketchId);
-    get().apply({
-      type: 'metadata/patch',
-      objectId,
-      patch: { visible: !objectVisible(project, objectId) },
-    });
+    // The eye follows what is on screen, so a sketch that is only shown because
+    // its operation is open hides again when the user asks for it.
+    const shown = objectVisible(projectForView(state.project, state.editingFeatureId), objectId);
+    get().apply({ type: 'metadata/patch', objectId, patch: { visible: !shown } });
   },
 
   setSectionPlanes: (planes) => {
@@ -628,6 +788,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   // Deleting an object is itself an operation: the body disappears from this
   // point in the timeline while its creating operation stays editable.
   deleteBody: (bodyId, name) => {
+    get().endFeatureEdit();
     const body = get().project.bodies.find((candidate) => candidate.id === bodyId);
     if (!body) return;
     const feature: DeleteBodyFeature = {
@@ -653,9 +814,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     const blockedIndex = blockedFeatureId
       ? project.features.findIndex((feature) => feature.id === blockedFeatureId)
       : -1;
-    const featureIndices = new Map(
-      project.features.map((feature, index) => [feature.id, index]),
-    );
+    const featureIndices = new Map(project.features.map((feature, index) => [feature.id, index]));
     const staleBodies = new Set(
       blockedIndex >= 0
         ? project.bodies
@@ -707,26 +866,25 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     } catch {
       return;
     }
-    set({ project: next, selection: sanitizeSelection(next, state.selection) });
+    set({
+      project: next,
+      selection: sanitizeSelection(
+        projectForView(next, state.editingFeatureId),
+        state.selection,
+        state.editingFeatureId,
+      ),
+    });
   },
 
   renameProject: (name) => {
     get().apply({ type: 'project/rename', name });
   },
 
+  // Moving the cursor is an explicit navigation action: it ends operation
+  // editing and places the cursor where the user asked.
   setHistoryEnd: (featureId) => {
+    if (get().editingFeatureId !== null) set({ editingFeatureId: null });
     get().apply({ type: 'history/set-end', featureId });
-  },
-
-  // Moves the history cursor without creating an undo step. Used when entering
-  // and leaving a sketch, which is a navigation action rather than an edit.
-  rollHistoryTo: (featureId) => {
-    const project = get().project;
-    const known =
-      featureId === null ||
-      featureId === HISTORY_START ||
-      project.features.some((feature) => feature.id === featureId);
-    set({ project: { ...project, historyEnd: known ? featureId : null } });
   },
 
   toggleBodyVisibility: (bodyId) => {
@@ -740,3 +898,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     });
   },
 }));
+
+/**
+ * The document with the history cursor placed at the input state of the
+ * operation whose settings are open. Everything that draws or reports the model
+ * reads this, while the document itself keeps the user's cursor.
+ */
+export function useViewProject(): Project {
+  const project = useDocumentStore((state) => state.project);
+  const editingFeatureId = useDocumentStore((state) => state.editingFeatureId);
+  return useMemo(() => projectForView(project, editingFeatureId), [project, editingFeatureId]);
+}

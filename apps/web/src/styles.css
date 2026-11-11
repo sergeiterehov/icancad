@@ -1379,6 +1379,48 @@ button:disabled {
   color: var(--text);
 }
 
+/* Phantom delta of the operation being edited. */
+.tree-row.preview-added {
+  background: rgba(74, 222, 128, 0.12);
+  color: var(--text-dim);
+  opacity: 0.75;
+  cursor: default;
+}
+
+.tree-row.preview-added:hover {
+  background: rgba(74, 222, 128, 0.12);
+  color: var(--text-dim);
+}
+
+.tree-row.preview-modified {
+  background: rgba(250, 204, 21, 0.14);
+  color: var(--text);
+}
+
+.tree-row.preview-removed {
+  background: rgba(239, 68, 68, 0.16);
+  color: var(--text);
+}
+
+.tree-preview-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+}
+
+.tree-preview-icon.added {
+  color: #4ade80;
+}
+
+.tree-preview-icon.modified {
+  color: #eab308;
+}
+
+.tree-preview-icon.removed {
+  color: #ef4444;
+}
+
 .selection-list {
   display: flex;
   flex-direction: column;

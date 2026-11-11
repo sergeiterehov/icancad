@@ -65,6 +65,9 @@ export function useRebuildScene(): void {
   const features = useDocumentStore((state) => state.project.features);
   const bodies = useDocumentStore((state) => state.project.bodies);
   const historyEnd = useDocumentStore((state) => state.project.historyEnd);
+  // Selecting an operation previews it on top of the rolled-back state, so the
+  // rebuild also has to follow the operation being edited.
+  const editingFeatureId = useDocumentStore((state) => state.editingFeatureId);
   const hydrated = useDocumentStore((state) => state.hydrated);
   const kernelStatus = useKernelStore((state) => state.status);
 
@@ -76,5 +79,5 @@ export function useRebuildScene(): void {
       );
     }, 50);
     return () => clearTimeout(timer);
-  }, [features, bodies, historyEnd, hydrated, kernelStatus, t]);
+  }, [features, bodies, historyEnd, editingFeatureId, hydrated, kernelStatus, t]);
 }

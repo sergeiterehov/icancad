@@ -13,11 +13,14 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { SketchSnap } from '../sketch/snap';
+import type { PreviewMarkKind, SceneGhost } from '../stores/kernelStore';
 import { CAMERA_FOV_DEGREES, easeInOut, fitDistance, shortestAngle } from './cameraFit';
 import type { ScenePick, SceneSketch, SketchPick, ViewName, ViewportCamera } from './handle';
 import { isPlanarFace } from './planarFace';
 
 const HATCH_SPACING_PX = 6;
+/** Screen distance over which a through-cut ghost fades out. */
+const GHOST_FADE_PX = 100;
 
 export interface SceneBody {
   id: string;
@@ -25,6 +28,17 @@ export interface SceneBody {
   mesh: TessellationResult;
   color: string;
   visible: boolean;
+  /** Phantom delta of the operation being edited. */
+  ghost?: PreviewMarkKind;
+  /** Draw the ghost translucent; opaque moves stay solid so holes read as cuts. */
+  translucent?: boolean;
+  /** Objects the operation adds are shown but cannot be picked. */
+  interactive?: boolean;
+  /**
+   * Tessellation used for picking. During a preview it is the body before the
+   * edited operation, so interaction always targets the input model.
+   */
+  hitMesh?: TessellationResult;
 }
 
 interface BodyEntry {
@@ -36,6 +50,14 @@ interface BodyEntry {
   edges: THREE.LineSegments | null;
   edgeGeometry: THREE.BufferGeometry | null;
   meshRef: TessellationResult;
+  /** Mesh and tessellation used for picking (the input model during a preview). */
+  hitMesh: THREE.Mesh;
+  hitGeometry: THREE.BufferGeometry | null;
+  hitRef: TessellationResult;
+  color: string;
+  ghost: PreviewMarkKind | null;
+  translucent: boolean;
+  interactive: boolean;
 }
 
 const FOV_DEGREES = CAMERA_FOV_DEGREES;
@@ -65,18 +87,14 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 // Mirrors the basis three.js derives in `lookAt` for our orbit camera.
-function cameraBasis(
-  azimuth: number,
-  polar: number,
-): { right: THREE.Vector3; up: THREE.Vector3 } {
+function cameraBasis(azimuth: number, polar: number): { right: THREE.Vector3; up: THREE.Vector3 } {
   const offset = new THREE.Vector3(
     Math.sin(polar) * Math.cos(azimuth),
     Math.sin(polar) * Math.sin(azimuth),
     Math.cos(polar),
   );
-  const upHint = Math.abs(Math.cos(polar)) > 0.999
-    ? new THREE.Vector3(0, 1, 0)
-    : new THREE.Vector3(0, 0, 1);
+  const upHint =
+    Math.abs(Math.cos(polar)) > 0.999 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
   const right = new THREE.Vector3().crossVectors(upHint, offset).normalize();
   const up = new THREE.Vector3().crossVectors(offset, right).normalize();
   return { right, up };
@@ -170,6 +188,13 @@ export class SceneController {
     active: boolean;
   }[] = [];
   private readonly facePickMeshes: THREE.Mesh[] = [];
+  /** Translucent volumes that only exist in the operation preview. */
+  private readonly ghostGroup = new THREE.Group();
+  private readonly ghostEntries = new Map<
+    string,
+    { mesh: THREE.Mesh; material: THREE.MeshStandardMaterial; geometry: THREE.BufferGeometry }
+  >();
+  private ghostSources: readonly SceneGhost[] = [];
   /** Highlight surfaces for picked faces, keyed by `s:`/`b:` refs. */
   private readonly sketchFaceMaterials = new Map<string, THREE.MeshBasicMaterial>();
   private readonly bodyFaceOverlays = new Map<
@@ -266,6 +291,8 @@ export class SceneController {
 
     this.grid = this.createGrid();
     this.scene.add(this.grid);
+    this.ghostGroup.renderOrder = 5;
+    this.scene.add(this.ghostGroup);
     this.faceOverlayGroup.renderOrder = 6;
     this.scene.add(this.faceOverlayGroup);
 
@@ -307,10 +334,14 @@ export class SceneController {
         sectionChanged = true;
       }
 
+      this.syncHitMesh(entry, body);
       if (entry.group.visible !== body.visible) sectionChanged = true;
       entry.group.visible = body.visible;
       entry.kind = body.kind;
-      entry.material.color.set(body.color);
+      entry.color = body.color;
+      entry.ghost = body.ghost ?? null;
+      entry.translucent = body.translucent !== false;
+      entry.interactive = body.interactive !== false;
     }
 
     for (const id of [...this.bodies.keys()]) {
@@ -328,22 +359,59 @@ export class SceneController {
   }
 
   private applyBodyMaterials(): void {
-    for (const [id, entry] of this.bodies) {
-      const isError = this.bodyStyles.errored.has(id);
-      const isSelected = !isError && this.bodyStyles.selected.has(id);
-      const isHovered = !isError && !isSelected && this.hoveredBodyId === id;
-      const isHighlighted = !isError && !isSelected && !isHovered && this.bodyStyles.highlighted.has(id);
-      entry.material.emissive.setHex(
-        isError
-          ? 0x7a1a1a
-          : isSelected || isHovered
-            ? 0x2a4a8a
-            : isHighlighted
-              ? 0x24406e
-              : 0x000000,
-      );
-      entry.material.emissiveIntensity = isError || isSelected || isHovered || isHighlighted ? 1 : 0;
+    for (const entry of this.bodies.values()) {
+      if (entry.ghost) {
+        this.applyGhostBody(entry);
+        continue;
+      }
+      this.applySolidMaterial(entry);
     }
+  }
+
+  // Objects an operation adds or changes are shown translucent; objects it
+  // deletes stay visible in red until the operation is dismissed.
+  private applyGhostBody(entry: BodyEntry): void {
+    const removed = entry.ghost === 'removed';
+    if (!removed && !entry.translucent) {
+      // A cut keeps its result solid: the hole itself is the feedback.
+      this.applySolidMaterial(entry);
+      return;
+    }
+    entry.material.transparent = true;
+    entry.material.depthWrite = false;
+    entry.material.side = THREE.DoubleSide;
+    entry.material.opacity = removed ? 0.45 : 0.38;
+    entry.material.color.set(removed ? '#ef4444' : entry.color);
+    entry.material.emissive.setHex(removed ? 0x5c1212 : 0x000000);
+    entry.material.emissiveIntensity = removed ? 1 : 0;
+    if (entry.edges) {
+      entry.edges.visible = removed;
+      (entry.edges.material as THREE.LineBasicMaterial).color.setHex(
+        removed ? 0xef4444 : this.edgeColor,
+      );
+    }
+  }
+
+  private applySolidMaterial(entry: BodyEntry): void {
+    const id = entry.mesh.userData.bodyId as string;
+    entry.material.transparent = false;
+    entry.material.depthWrite = true;
+    entry.material.opacity = 1;
+    entry.material.side = THREE.FrontSide;
+    entry.material.color.set(entry.color);
+    if (entry.edges) {
+      entry.edges.visible = true;
+      (entry.edges.material as THREE.LineBasicMaterial).color.setHex(this.edgeColor);
+    }
+    const isError = this.bodyStyles.errored.has(id);
+    const isSelected = !isError && this.bodyStyles.selected.has(id);
+    const isHovered = !isError && !isSelected && this.hoveredBodyId === id;
+    const isHighlighted =
+      !isError && !isSelected && !isHovered && this.bodyStyles.highlighted.has(id);
+    entry.material.emissive.setHex(
+      isError ? 0x7a1a1a : isSelected || isHovered ? 0x2a4a8a : isHighlighted ? 0x24406e : 0x000000,
+    );
+    entry.material.emissiveIntensity = isError || isSelected || isHovered || isHighlighted ? 1 : 0;
   }
 
   setFaceHighlights(state: FaceHighlightState): void {
@@ -363,13 +431,129 @@ export class SceneController {
     this.invalidate();
   }
 
+  /** Volumes shown only for the operation preview, such as the shape a cut removes. */
+  setGhosts(ghosts: readonly SceneGhost[]): void {
+    if (this.ghostSources === ghosts) return;
+    if (ghosts.length === 0 && this.ghostSources.length === 0) return;
+    this.ghostSources = ghosts;
+    for (const [id, entry] of this.ghostEntries) {
+      this.ghostGroup.remove(entry.mesh);
+      entry.geometry.dispose();
+      entry.material.dispose();
+      this.ghostEntries.delete(id);
+    }
+    for (const ghost of ghosts) {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(ghost.mesh.positions, 3));
+      geometry.setAttribute('normal', new THREE.BufferAttribute(ghost.mesh.normals, 3));
+      geometry.setIndex(new THREE.BufferAttribute(ghost.mesh.indices, 1));
+      geometry.computeBoundingBox();
+      geometry.computeBoundingSphere();
+      const material = this.createGhostMaterial(ghost);
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.renderOrder = 5;
+      this.ghostGroup.add(mesh);
+      this.ghostEntries.set(ghost.id, { mesh, material, geometry });
+    }
+    this.updateGhostFades();
+    this.invalidate();
+  }
+
+  private createGhostMaterial(ghost: SceneGhost): THREE.MeshStandardMaterial {
+    const material = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(ghost.color),
+      roughness: 0.6,
+      metalness: 0,
+      transparent: true,
+      opacity: 0.4,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const fade = ghost.fade ?? [];
+    if (fade.length === 0) return material;
+
+    // The ghost ends a short distance past the material, so the fade is capped
+    // to what is left: a fade longer than the ghost would be cut off as a hard
+    // edge instead of dissolving.
+    const spanOf = (axis: readonly [number, number, number], start: number): number => {
+      const positions = ghost.mesh.positions;
+      let far = -Infinity;
+      for (let index = 0; index < positions.length; index += 3) {
+        const value =
+          positions[index]! * axis[0] +
+          positions[index + 1]! * axis[1] +
+          positions[index + 2]! * axis[2];
+        if (value > far) far = value;
+      }
+      return Number.isFinite(far) ? Math.max(1e-3, far - start) : 1e-3;
+    };
+    const uniforms = {
+      uFade0: { value: new THREE.Vector4(...(fade[0]?.axis ?? [0, 0, 0]), fade[0]?.start ?? 0) },
+      uFade1: { value: new THREE.Vector4(...(fade[1]?.axis ?? [0, 0, 0]), fade[1]?.start ?? 0) },
+      uFade0Span: { value: fade[0] ? spanOf(fade[0].axis, fade[0].start) : 1 },
+      uFade1Span: { value: fade[1] ? spanOf(fade[1].axis, fade[1].start) : 1 },
+      uFadeCount: { value: fade.length },
+      uFadeLength: { value: 1 },
+    };
+    material.userData.fadeUniforms = uniforms;
+    material.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, uniforms);
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vGhostPosition;')
+        .replace(
+          '#include <project_vertex>',
+          '#include <project_vertex>\n  vGhostPosition = (modelMatrix * vec4(transformed, 1.0)).xyz;',
+        );
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          '#include <common>',
+          [
+            '#include <common>',
+            'uniform vec4 uFade0;',
+            'uniform vec4 uFade1;',
+            'uniform float uFade0Span;',
+            'uniform float uFade1Span;',
+            'uniform float uFadeCount;',
+            'uniform float uFadeLength;',
+            'varying vec3 vGhostPosition;',
+          ].join('\n'),
+        )
+        .replace(
+          '#include <opaque_fragment>',
+          [
+            '#include <opaque_fragment>',
+            'float ghostFade = 1.0;',
+            'float fadeLength0 = min(uFadeLength, uFade0Span);',
+            'float fadeLength1 = min(uFadeLength, uFade1Span);',
+            'if (uFadeCount > 0.5) ghostFade *= 1.0 - smoothstep(uFade0.w, uFade0.w + fadeLength0, dot(vGhostPosition, uFade0.xyz));',
+            'if (uFadeCount > 1.5) ghostFade *= 1.0 - smoothstep(uFade1.w, uFade1.w + fadeLength1, dot(vGhostPosition, uFade1.xyz));',
+            'gl_FragColor.a *= ghostFade;',
+          ].join('\n'),
+        );
+    };
+    material.customProgramCacheKey = () => 'ghost-fade';
+    return material;
+  }
+
+  // The fade distance follows the zoom so the soft edge stays 100 screen pixels.
+  private updateGhostFades(): void {
+    if (this.ghostEntries.size === 0) return;
+    const worldPerPixel = (this.camera.top - this.camera.bottom) / Math.max(1, this.height);
+    const length = GHOST_FADE_PX * worldPerPixel;
+    for (const entry of this.ghostEntries.values()) {
+      const uniforms = entry.material.userData.fadeUniforms as
+        { uFadeLength: { value: number } } | undefined;
+      if (uniforms) uniforms.uFadeLength.value = length;
+    }
+  }
+
   setTheme(theme: Theme): void {
     if (this.theme === theme) return;
     this.theme = theme;
     this.edgeColor = theme === 'dark' ? 0x0d1015 : 0x5f6876;
 
     for (const entry of this.bodies.values()) {
-      if (entry.edges) {
+      if (entry.edges && entry.ghost !== 'removed') {
         (entry.edges.material as THREE.LineBasicMaterial).color.setHex(this.edgeColor);
       }
     }
@@ -719,7 +903,8 @@ export class SceneController {
       if (!bodyId || faceId === undefined) continue;
       const entry = this.bodies.get(bodyId);
       if (!entry || !entry.group.visible) continue;
-      const geometry = faceGeometry(entry.meshRef, Number(faceId));
+      // Picked faces belong to the input model, so they are drawn on its mesh.
+      const geometry = faceGeometry(entry.hitRef, Number(faceId));
       if (!geometry) continue;
       const invalid = this.faceHighlights.invalid.has(key);
       const selected = this.faceHighlights.selected.has(key);
@@ -856,7 +1041,6 @@ export class SceneController {
     if (progress >= 1) this.transition = null;
     this.updateCamera();
   }
-
 
   pickSketch(
     clientX: number,
@@ -1332,6 +1516,12 @@ export class SceneController {
     this.unbindEvents();
 
     for (const id of [...this.bodies.keys()]) this.removeEntry(id);
+    for (const entry of this.ghostEntries.values()) {
+      this.ghostGroup.remove(entry.mesh);
+      entry.geometry.dispose();
+      entry.material.dispose();
+    }
+    this.ghostEntries.clear();
     for (const { mesh, material } of this.bodyFaceOverlays.values()) {
       this.faceOverlayGroup.remove(mesh);
       mesh.geometry.dispose();
@@ -1389,7 +1579,56 @@ export class SceneController {
       group.add(edges);
     }
 
-    return { group, kind: body.kind, mesh, geometry, material, edges, edgeGeometry, meshRef: body.mesh };
+    const entry: BodyEntry = {
+      group,
+      kind: body.kind,
+      mesh,
+      geometry,
+      material,
+      edges,
+      edgeGeometry,
+      meshRef: body.mesh,
+      hitMesh: mesh,
+      hitGeometry: null,
+      hitRef: body.mesh,
+      color: body.color,
+      ghost: body.ghost ?? null,
+      translucent: body.translucent !== false,
+      interactive: body.interactive !== false,
+    };
+    this.syncHitMesh(entry, body);
+    return entry;
+  }
+
+  /**
+   * Picking always happens against the state before the edited operation, so a
+   * previewed body keeps an invisible hit mesh built from its input shape.
+   */
+  private syncHitMesh(entry: BodyEntry, body: SceneBody): void {
+    const target = body.hitMesh ?? body.mesh;
+    if (entry.hitRef === target) return;
+    // Drop a previous dedicated hit mesh before attaching a new one.
+    if (entry.hitMesh !== entry.mesh) {
+      this.scene.remove(entry.hitMesh);
+      entry.hitGeometry?.dispose();
+      (entry.hitMesh.material as THREE.Material).dispose();
+      entry.hitMesh = entry.mesh;
+      entry.hitGeometry = null;
+    }
+    entry.hitRef = target;
+    if (target === body.mesh) return;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(target.positions, 3));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(target.normals, 3));
+    geometry.setIndex(new THREE.BufferAttribute(target.indices, 1));
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+    const hit = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ visible: false }));
+    hit.visible = false;
+    hit.userData.bodyId = body.id;
+    this.scene.add(hit);
+    entry.hitMesh = hit;
+    entry.hitGeometry = geometry;
   }
 
   private removeEntry(id: string): void {
@@ -1400,6 +1639,11 @@ export class SceneController {
     entry.material.dispose();
     entry.edgeGeometry?.dispose();
     if (entry.edges) (entry.edges.material as THREE.Material).dispose();
+    if (entry.hitMesh !== entry.mesh) {
+      this.scene.remove(entry.hitMesh);
+      entry.hitGeometry?.dispose();
+      (entry.hitMesh.material as THREE.Material).dispose();
+    }
     this.bodies.delete(id);
   }
 
@@ -1451,6 +1695,7 @@ export class SceneController {
       ).uniforms.dashScale.value = dashScale;
     }
     this.onCameraChange?.(this.azimuth, this.polar, this.distance);
+    this.updateGhostFades();
     this.invalidate();
   }
 
@@ -1501,10 +1746,7 @@ export class SceneController {
       if (Math.hypot(movedX, movedY) > 4) this.pointerMoved = true;
     }
     if (!this.dragMode) {
-      if (
-        (this.faceHighlights.picking || this.faceHighlights.bodyPicking) &&
-        event.buttons === 0
-      ) {
+      if ((this.faceHighlights.picking || this.faceHighlights.bodyPicking) && event.buttons === 0) {
         this.scheduleHover(event.clientX, event.clientY);
       }
       return;
@@ -1571,8 +1813,8 @@ export class SceneController {
   ): ScenePick | null {
     const raycaster = this.pointerToRay(clientX, clientY);
     const bodyMeshes = [...this.bodies.values()]
-      .filter((entry) => entry.group.visible)
-      .map((entry) => entry.mesh);
+      .filter((entry) => entry.group.visible && entry.interactive)
+      .map((entry) => entry.hitMesh);
     const faceHit =
       faces && !bodyFacesOnly
         ? raycaster.intersectObjects(this.facePickMeshes, false)[0]
@@ -1582,15 +1824,14 @@ export class SceneController {
     // face stays clickable after it has been extruded.
     if (faces && faceHit) {
       const face = faceHit.object.userData.sketchFace as
-        | { sketchId: string; faceId: string }
-        | undefined;
+        { sketchId: string; faceId: string } | undefined;
       if (face) return { kind: 'face', sketchId: face.sketchId, faceId: face.faceId };
     }
     if (bodyHit) {
       const bodyId = bodyHit.object.userData.bodyId as string | undefined;
       if (bodyId && faces) {
         const entry = this.bodies.get(bodyId);
-        const faceId = entry?.meshRef.faceIds[bodyHit.faceIndex ?? -1];
+        const faceId = entry?.hitRef.faceIds[bodyHit.faceIndex ?? -1];
         if (entry && entry.kind === 'solid' && faceId !== undefined) {
           const normal = bodyHit.face?.normal;
           return {
@@ -1599,21 +1840,18 @@ export class SceneController {
             faceId: String(faceId),
             normal: normal ? [normal.x, normal.y, normal.z] : [0, 0, 1],
             origin: [bodyHit.point.x, bodyHit.point.y, bodyHit.point.z],
-            planar: isPlanarFace(entry.meshRef, faceId),
+            planar: isPlanarFace(entry.hitRef, faceId),
           };
         }
       }
       if (bodyId) {
         const entry = this.bodies.get(bodyId);
-        return entry?.kind === 'mesh'
-          ? { kind: 'mesh', id: bodyId }
-          : { kind: 'body', id: bodyId };
+        return entry?.kind === 'mesh' ? { kind: 'mesh', id: bodyId } : { kind: 'body', id: bodyId };
       }
     }
     if (faceHit) {
       const face = faceHit.object.userData.sketchFace as
-        | { sketchId: string; faceId: string }
-        | undefined;
+        { sketchId: string; faceId: string } | undefined;
       if (face) return { kind: 'face', sketchId: face.sketchId, faceId: face.faceId };
     }
     return null;
@@ -1634,10 +1872,7 @@ export class SceneController {
     if (this.hoverFrame) return;
     this.hoverFrame = requestAnimationFrame(() => {
       this.hoverFrame = 0;
-      if (
-        !this.hoverPoint ||
-        (!this.faceHighlights.picking && !this.faceHighlights.bodyPicking)
-      ) {
+      if (!this.hoverPoint || (!this.faceHighlights.picking && !this.faceHighlights.bodyPicking)) {
         return;
       }
       this.updateHover(this.hoverPoint.x, this.hoverPoint.y);
@@ -1658,12 +1893,7 @@ export class SceneController {
       return;
     }
 
-    const pick = this.pickSceneAt(
-      clientX,
-      clientY,
-      true,
-      this.faceHighlights.bodyFacesOnly,
-    );
+    const pick = this.pickSceneAt(clientX, clientY, true, this.faceHighlights.bodyFacesOnly);
     const key =
       pick?.kind === 'face'
         ? `s:${pick.sketchId}#${pick.faceId}`
@@ -1693,9 +1923,13 @@ export class SceneController {
       new THREE.Vector3(nx, ny, nz),
     );
     for (const face of sketch.faces) {
-      const shape = new THREE.Shape(face.outline.map((point) => new THREE.Vector2(point[0], point[1])));
+      const shape = new THREE.Shape(
+        face.outline.map((point) => new THREE.Vector2(point[0], point[1])),
+      );
       for (const hole of face.holes) {
-        shape.holes.push(new THREE.Path(hole.map((point) => new THREE.Vector2(point[0], point[1]))));
+        shape.holes.push(
+          new THREE.Path(hole.map((point) => new THREE.Vector2(point[0], point[1]))),
+        );
       }
       const material = new THREE.MeshBasicMaterial({
         color: this.sketchHighlightColor(),
