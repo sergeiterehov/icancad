@@ -224,6 +224,10 @@
     "hide": "Hide plane",
     "axis": "Plane orientation",
     "axisAlong": "Plane along {{axis}} axis",
+    "axisFace": "Plane on a face",
+    "face": "Face {{index}}",
+    "selectFace": "Select face",
+    "invert": "Flip cut direction",
     "remove": "Remove plane",
     "offset": "Offset"
   },

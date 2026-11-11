@@ -207,6 +207,7 @@ export function ObjectPickerField({
   invalid,
   onClick,
   testId,
+  compact = false,
 }: {
   label: string;
   value?: string;
@@ -216,26 +217,29 @@ export function ObjectPickerField({
   invalid?: boolean;
   onClick: () => void;
   testId?: string;
+  /** Sits in a row of controls instead of a labelled form field. */
+  compact?: boolean;
 }) {
-  return (
-    <Field label={label}>
-      <button
-        type="button"
-        className="picker-field"
-        data-active={active ? 'true' : undefined}
-        data-invalid={invalid ? 'true' : undefined}
-        data-testid={testId}
-        onClick={onClick}
-      >
-        <span className="picker-field-icon" aria-hidden="true">
-          {icon}
-        </span>
-        <span className={clsx('picker-field-value', !value && 'placeholder')}>
-          {value ?? placeholder}
-        </span>
-      </button>
-    </Field>
+  const button = (
+    <button
+      type="button"
+      className="picker-field"
+      aria-label={compact ? label : undefined}
+      data-active={active ? 'true' : undefined}
+      data-invalid={invalid ? 'true' : undefined}
+      data-testid={testId}
+      onClick={onClick}
+    >
+      <span className="picker-field-icon" aria-hidden="true">
+        {icon}
+      </span>
+      <span className={clsx('picker-field-value', !value && 'placeholder')}>
+        {value ?? placeholder}
+      </span>
+    </button>
   );
+  if (compact) return button;
+  return <Field label={label}>{button}</Field>;
 }
 
 export function DimensionField({

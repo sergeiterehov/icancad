@@ -95,6 +95,15 @@ async function addBox(page: Page) {
   await commitOperation(page);
 }
 
+/** Camera views animate; clicks on precise points wait for the move to land. */
+async function waitForRightView(page: Page) {
+  const cube = page.getByTestId('nav-cube');
+  await expect.poll(() => cube.getAttribute('data-azimuth'), { timeout: 15_000 }).toBe('0');
+  await expect
+    .poll(() => cube.getAttribute('data-polar'), { timeout: 15_000 })
+    .toBe(String(Math.PI / 2));
+}
+
 /** The inspector names the type of the selected object in its header. */
 function inspectorTitle(page: Page) {
   return page.getByTestId('inspector').locator('.panel-header > span').first();
@@ -588,6 +597,91 @@ test.describe('ICANCad foundation', () => {
     await expect(sectionTool).not.toHaveAttribute('data-active', 'true');
     await expect(planes).toHaveCount(0);
   });
+
+  test('does not pick the material a section removes', async ({ page }) => {
+    await openApp(page);
+    await addBox(page);
+
+    // Looking from the right, +Y runs right and +Z up, so a section along Y
+    // hides the left half of the box.
+    await page.getByTestId('nav-cube').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Right' }).click();
+    await waitForRightView(page);
+
+    await page.getByRole('button', { name: 'Section', exact: true }).click();
+    const offset = page.locator('.section-plane').first().getByRole('textbox', { name: 'Offset' });
+    await offset.fill('10');
+    await offset.press('Enter');
+    await page.waitForTimeout(800);
+
+    const canvas = page.getByTestId('viewport-canvas');
+    const view = await canvas.boundingBox();
+    const centerX = view!.x + view!.width / 2;
+    const centerY = view!.y + view!.height / 2;
+
+    await page.mouse.click(centerX + 60, centerY);
+    await expect(page.locator('.tree-row.selected')).toHaveCount(1);
+
+    // The cut-away half is empty, so a click there must not bring the body
+    // back through the material the section hides.
+    await page.mouse.click(centerX - 60, centerY);
+    await expect(page.locator('.tree-row.selected')).toHaveCount(0);
+
+    // While the plane waits for its face it cuts nothing, so the half the
+    // section was hiding is back and a click there picks its face.
+    const plane = page.locator('.section-plane').first();
+    const picker = page.getByTestId('section-face-picker');
+    await plane.getByRole('button', { name: 'Plane on a face' }).click();
+    await expect(picker).toHaveAttribute('data-active', 'true');
+    await page.waitForTimeout(600);
+    await page.mouse.click(centerX - 60, centerY);
+    await expect(picker).toContainText('Face');
+    await expect(picker).not.toHaveAttribute('data-active', 'true');
+  });
+
+  test('sections along a face and flips its direction', async ({ page }) => {
+    await openApp(page);
+    await addBox(page);
+
+    await page.getByRole('button', { name: 'Section', exact: true }).click();
+    const plane = page.locator('.section-plane').first();
+    const picker = page.getByTestId('section-face-picker');
+    await expect(picker).toHaveCount(0);
+
+    // The face tab brings up the picker and starts the pick by itself.
+    await plane.getByRole('button', { name: 'Plane on a face' }).click();
+    await expect(picker).toBeVisible();
+    await expect(picker).toHaveAttribute('data-active', 'true');
+
+    const canvas = page.getByTestId('viewport-canvas');
+    const view = await canvas.boundingBox();
+    await page.mouse.click(view!.x + view!.width / 2, view!.y + view!.height / 2);
+    await expect(picker).toContainText('Face');
+    await expect(picker).not.toHaveAttribute('data-active', 'true');
+    await expect(picker).not.toHaveAttribute('data-invalid', 'true');
+
+    // The offset now runs into the body from the picked face.
+    const offset = plane.getByRole('textbox', { name: 'Offset' });
+    await offset.fill('8');
+    await offset.press('Enter');
+    await expect(offset).toHaveValue('8');
+
+    // The direction button stays dark until the cut is inverted.
+    const invert = plane.getByRole('button', { name: 'Flip cut direction' });
+    await expect(invert).not.toHaveAttribute('data-active', 'true');
+    await invert.click();
+    await expect(invert).toHaveAttribute('data-active', 'true');
+    await expect(page.getByTestId('save-state')).toHaveAttribute('data-state', 'saved');
+
+    // An axis tab drops the face link, so the picker goes away again.
+    await plane.getByRole('button', { name: 'Plane along Z axis' }).click();
+    await expect(picker).toHaveCount(0);
+    await expect(plane.getByRole('button', { name: 'Plane along Z axis' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
   test('imports OBJ meshes', async ({ page }) => {
     await openApp(page);
     await page.setInputFiles('[data-testid="import-mesh"]', {

@@ -143,3 +143,56 @@ export function sketchSectionPlane(
     visible: true,
   };
 }
+
+export interface ResolvedSectionPlane extends SectionPlane {
+  /** False when the linked face is gone and the stored pose is used instead. */
+  faceLinked: boolean;
+}
+
+/** Centre and normal of a planar face, or null when the face is missing or curved. */
+export function sectionFaceFrame(
+  mesh: TessellationResult | undefined,
+  topoId: string | undefined,
+): { origin: Vec3; normal: Vec3 } | null {
+  if (!mesh || !topoId) return null;
+  const faceId = Number(topoId);
+  if (!Number.isInteger(faceId) || faceId < 0) return null;
+  if (!isPlanarFace(mesh, faceId)) return null;
+  const frame = faceFrameFromMesh(mesh, faceId);
+  return frame ? { origin: frame.origin, normal: frame.normal } : null;
+}
+
+// Keeps zeroes positive, so a flipped axis still reads as `[0, 0, 1]`.
+export function flipNormal(normal: Vec3): Vec3 {
+  return normal.map((value) => (value === 0 ? 0 : -value)) as Vec3;
+}
+
+/**
+ * A plane that follows a face only cuts once the face is there: until then it
+ * has no pose the user asked for.
+ */
+export function sectionPlaneActive(plane: SectionPlane): boolean {
+  return plane.face !== null;
+}
+
+/**
+ * A face-bound section keeps the material behind the picked face, so its normal
+ * points into the body and the offset cuts deeper. The pose stored in the
+ * project is already in that form, which is what a lost face falls back to.
+ */
+export function resolveSectionPlane(
+  plane: SectionPlane,
+  meshes: Record<string, TessellationResult>,
+): ResolvedSectionPlane {
+  const frame = plane.face ? sectionFaceFrame(meshes[plane.face.bodyId], plane.face.topoId) : null;
+  const base = frame ? flipNormal(frame.normal) : plane.normal;
+  // Inverting swaps which side survives without moving the plane, so the offset
+  // runs the other way as well.
+  return {
+    ...plane,
+    origin: frame?.origin ?? plane.origin,
+    normal: plane.inverted ? flipNormal(base) : base,
+    offset: plane.inverted && plane.offset !== 0 ? -plane.offset : plane.offset,
+    faceLinked: frame !== null,
+  };
+}

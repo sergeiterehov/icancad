@@ -327,6 +327,8 @@ const sectionPlane = z.object({
   normal: vec3,
   offset: z.number(),
   visible: z.boolean(),
+  face: z.object({ bodyId: z.string().min(1), topoId: z.string().min(1) }).nullish(),
+  inverted: z.boolean().optional(),
 });
 
 const viewState = z.object({

@@ -313,6 +313,11 @@ export interface ObjectMetadata {
   showConstruction?: boolean;
 }
 
+export interface SectionFaceRef {
+  bodyId: string;
+  topoId: string;
+}
+
 export interface SectionPlane {
   id: string;
   name: string;
@@ -320,6 +325,14 @@ export interface SectionPlane {
   normal: Vec3;
   offset: number;
   visible: boolean;
+  /**
+   * Face the plane follows, or `null` while the face mode is on and nothing has
+   * been picked yet. `origin` and `normal` keep the last pose, which is the
+   * fallback once the face is gone.
+   */
+  face?: SectionFaceRef | null;
+  /** Cut away the side the normal points to instead of the one behind it. */
+  inverted?: boolean;
 }
 
 export interface CameraState {

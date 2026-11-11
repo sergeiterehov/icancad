@@ -14,7 +14,16 @@ import {
   type SketchFeature,
 } from '@icancad/model';
 import { faceFrame, sketchTopology } from '@icancad/sketch';
-import { computeSketchFrame, sketchFrameOf, sketchPlaneReady, sketchSectionPlane } from '../sketch/sectionPlane';
+import {
+  computeSketchFrame,
+  flipNormal,
+  resolveSectionPlane,
+  sectionFaceFrame,
+  sectionPlaneActive,
+  sketchFrameOf,
+  sketchPlaneReady,
+  sketchSectionPlane,
+} from '../sketch/sectionPlane';
 import { useDocumentStore, useViewProject } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
 import { isModelRebuilding, useKernelStore } from '../stores/kernelStore';
@@ -66,6 +75,7 @@ export function Viewport() {
   const pickingExtrude = useUiStore((state) => state.pickingExtrude);
   const pickingExtrudeBodies = useUiStore((state) => state.pickingExtrudeBodies);
   const pickingSketchPlane = useUiStore((state) => state.pickingSketchPlane);
+  const pickingSectionFace = useUiStore((state) => state.pickingSectionFace);
   const sketchSectionEnabled = useUiStore((state) => state.sketchSectionEnabled);
   const sketchConstraintId = useUiStore((state) => state.sketchConstraintId);
   const sketchFrozenEntityIds = useUiStore((state) => state.sketchFrozenEntityIds);
@@ -179,6 +189,45 @@ export function Viewport() {
           }
           return;
         }
+        if (ui.pickingSectionFace) {
+          if (pick?.kind !== 'body-face') return;
+          if (!pick.planar) {
+            ui.showToast('errors.FACE_NOT_PLANAR', 'error');
+            return;
+          }
+          const planes = store.project.view.sectionPlanes;
+          const plane = planes.find((candidate) => candidate.id === ui.pickingSectionFace);
+          if (!plane) {
+            ui.setPickingSectionFace(null);
+            return;
+          }
+          // The face is remembered together with the pose it has right now, so a
+          // face that later disappears still leaves the section where it was.
+          const frame = sectionFaceFrame(
+            useKernelStore.getState().meshes[pick.bodyId],
+            pick.faceId,
+          ) ?? {
+            origin: pick.origin,
+            normal: pick.normal,
+          };
+          store.setSectionPlanes(
+            planes.map((candidate) =>
+              candidate.id === plane.id
+                ? {
+                    ...candidate,
+                    face: { bodyId: pick.bodyId, topoId: pick.faceId },
+                    origin: frame.origin,
+                    // The material behind the face is what stays, so the plane
+                    // looks into the body and the offset cuts deeper.
+                    normal: flipNormal(frame.normal),
+                    offset: 0,
+                  }
+                : candidate,
+            ),
+          );
+          ui.setPickingSectionFace(null);
+          return;
+        }
         const picking = ui.pickingExtrude;
         if (picking) {
           if (!pick) return;
@@ -266,7 +315,13 @@ export function Viewport() {
       (pick) => {
         const ui = useUiStore.getState();
         // Selection controls own the mouse while they are active.
-        if (ui.activeSketchId || ui.pickingExtrude || ui.pickingExtrudeBodies || ui.pickingSketchPlane) {
+        if (
+          ui.activeSketchId ||
+          ui.pickingExtrude ||
+          ui.pickingExtrudeBodies ||
+          ui.pickingSketchPlane ||
+          ui.pickingSectionFace
+        ) {
           return;
         }
         if (isModelRebuilding(useKernelStore.getState())) return;
@@ -480,9 +535,9 @@ export function Viewport() {
     controller.setFaceHighlights({
       selected,
       invalid,
-      picking: Boolean(pickingExtrude) || Boolean(pickingSketchPlane),
+      picking: Boolean(pickingExtrude) || Boolean(pickingSketchPlane) || Boolean(pickingSectionFace),
       bodyPicking: Boolean(pickingExtrudeBodies),
-      bodyFacesOnly: Boolean(pickingSketchPlane),
+      bodyFacesOnly: Boolean(pickingSketchPlane) || Boolean(pickingSectionFace),
     });
   }, [
     selection,
@@ -491,6 +546,7 @@ export function Viewport() {
     pickingExtrude,
     pickingExtrudeBodies,
     pickingSketchPlane,
+    pickingSectionFace,
   ]);
 
   useEffect(() => {
@@ -499,11 +555,17 @@ export function Viewport() {
   }, [theme]);
 
   useEffect(() => {
-    // The sketch plane joins the section set while a sketch is being edited; the
-    // serialized key keeps the effect from re-running on every render.
-    const planes = sketchSection ? [sketchSection, ...sectionPlanes] : sectionPlanes;
+    // A plane bound to a face follows the current tessellation, so the sections
+    // are resolved against the rebuilt meshes; a plane still waiting for its
+    // face cuts nothing. The sketch plane joins the set while a sketch is being
+    // edited, and the serialized key keeps the effect from re-running on every
+    // render.
+    const resolved = sectionPlanes
+      .filter(sectionPlaneActive)
+      .map((plane) => resolveSectionPlane(plane, meshes));
+    const planes = sketchSection ? [sketchSection, ...resolved] : resolved;
     controllerRef.current?.setSection(sectionEnabled ? planes : []);
-  }, [sketchSectionKey, sectionEnabled, sectionPlanes]);
+  }, [sketchSectionKey, sectionEnabled, sectionPlanes, meshes]);
 
   useEffect(() => {
     const ids = activeFeatureIds(project);

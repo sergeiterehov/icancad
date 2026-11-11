@@ -397,7 +397,11 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     // or the sketch face list feed that control instead of replacing the
     // selection and closing the control.
     const ui = useUiStore.getState();
-    const pickingGeometry = ui.pickingExtrude ?? ui.pickingExtrudeBodies ?? ui.pickingSketchPlane;
+    const pickingGeometry =
+      ui.pickingExtrude ??
+      ui.pickingExtrudeBodies ??
+      ui.pickingSketchPlane ??
+      ui.pickingSectionFace;
     if (
       pickingGeometry &&
       item &&

@@ -1816,6 +1816,7 @@ button.selection-item[data-active='true'][data-error='true'] {
 
 .section-plane {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   padding: 4px 5px;
@@ -1875,6 +1876,20 @@ button.selection-item[data-active='true'][data-error='true'] {
 .section-axis button[data-active='true'] {
   background: var(--panel-3);
   color: var(--text);
+}
+
+.section-face {
+  /* The picker needs a full row of its own; `order` keeps it between the axis
+     tabs and the offset in the reading order. */
+  order: 1;
+  flex: 1 0 100%;
+  min-width: 0;
+}
+
+.section-face .picker-field {
+  height: 26px;
+  padding: 0 6px;
+  font-size: 11.5px;
 }
 
 .section-offset {

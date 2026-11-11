@@ -25,6 +25,8 @@ interface UiState {
   pickingExtrudeBodies: string | null;
   /** Sketch operation waiting for its plane face to be picked in the 3D view. */
   pickingSketchPlane: string | null;
+  /** Section plane waiting for the face it should follow. */
+  pickingSectionFace: string | null;
   /** Face pick started from the sketch tool: open the editor after a pick. */
   sketchPlanePickThenEdit: string | null;
   sectionEnabled: boolean;
@@ -45,6 +47,7 @@ interface UiState {
   setPickingExtrude: (featureId: string | null) => void;
   setPickingExtrudeBodies: (featureId: string | null) => void;
   setPickingSketchPlane: (featureId: string | null) => void;
+  setPickingSectionFace: (planeId: string | null) => void;
   startSketchPlanePicking: (featureId: string, enterEdit: boolean) => void;
   cancelDelete: () => void;
   showToast: (key: string, kind?: 'info' | 'error', params?: Record<string, unknown>) => void;
@@ -93,6 +96,7 @@ export const useUiStore = create<UiState>((set) => ({
   pickingExtrude: null,
   pickingExtrudeBodies: null,
   pickingSketchPlane: null,
+  pickingSectionFace: null,
   sketchPlanePickThenEdit: null,
   sectionEnabled: loadSectionEnabled(),
   sketchSectionEnabled: true,
@@ -115,13 +119,23 @@ export const useUiStore = create<UiState>((set) => ({
   setPickingExtrude: (pickingExtrude) =>
     set(
       pickingExtrude
-        ? { pickingExtrude, pickingExtrudeBodies: null, pickingSketchPlane: null }
+        ? {
+            pickingExtrude,
+            pickingExtrudeBodies: null,
+            pickingSketchPlane: null,
+            pickingSectionFace: null,
+          }
         : { pickingExtrude },
     ),
   setPickingExtrudeBodies: (pickingExtrudeBodies) =>
     set(
       pickingExtrudeBodies
-        ? { pickingExtrudeBodies, pickingExtrude: null, pickingSketchPlane: null }
+        ? {
+            pickingExtrudeBodies,
+            pickingExtrude: null,
+            pickingSketchPlane: null,
+            pickingSectionFace: null,
+          }
         : { pickingExtrudeBodies },
     ),
   setPickingSketchPlane: (pickingSketchPlane) =>
@@ -132,8 +146,21 @@ export const useUiStore = create<UiState>((set) => ({
             sketchPlanePickThenEdit: null,
             pickingExtrude: null,
             pickingExtrudeBodies: null,
+            pickingSectionFace: null,
           }
         : { pickingSketchPlane, sketchPlanePickThenEdit: null },
+    ),
+  setPickingSectionFace: (pickingSectionFace) =>
+    set(
+      pickingSectionFace
+        ? {
+            pickingSectionFace,
+            pickingExtrude: null,
+            pickingExtrudeBodies: null,
+            pickingSketchPlane: null,
+            sketchPlanePickThenEdit: null,
+          }
+        : { pickingSectionFace },
     ),
   startSketchPlanePicking: (sketchPlanePickThenEdit, enterEdit) =>
     set({
@@ -141,6 +168,7 @@ export const useUiStore = create<UiState>((set) => ({
       sketchPlanePickThenEdit: enterEdit ? sketchPlanePickThenEdit : null,
       pickingExtrude: null,
       pickingExtrudeBodies: null,
+      pickingSectionFace: null,
     }),
   cancelDelete: () => set({ deleteRequest: null }),
   setActiveSketch: (activeSketchId) =>
@@ -198,6 +226,7 @@ export const useUiStore = create<UiState>((set) => ({
     }
     set((state) => ({
       sectionEnabled,
+      pickingSectionFace: sectionEnabled ? state.pickingSectionFace : null,
       // Turning sections on shows the sketch plane by default.
       sketchSectionEnabled: sectionEnabled ? true : state.sketchSectionEnabled,
     }));

@@ -17,6 +17,7 @@ import type { PreviewMarkKind, SceneGhost } from '../stores/kernelStore';
 import { CAMERA_FOV_DEGREES, easeInOut, fitDistance, shortestAngle } from './cameraFit';
 import type { ScenePick, SceneSketch, SketchPick, ViewName, ViewportCamera } from './handle';
 import { isPlanarFace } from './planarFace';
+import { firstUnclippedHit } from './sectionPick';
 
 const HATCH_SPACING_PX = 6;
 /** Screen distance over which a through-cut ghost fades out. */
@@ -1849,7 +1850,13 @@ export class SceneController {
       faces && !bodyFacesOnly
         ? raycaster.intersectObjects(this.facePickMeshes, false)[0]
         : undefined;
-    const bodyHit = raycaster.intersectObjects(bodyMeshes, false)[0];
+    // A section hides material without touching the tessellation, so the ray
+    // must skip hits the clip planes removed. What is left is either a wall the
+    // section exposes, such as the inside of a cavity, or nothing at all.
+    const bodyHit = firstUnclippedHit(
+      raycaster.intersectObjects(bodyMeshes, false),
+      this.sectionClipPlanes,
+    );
     // While faces are being picked they win over the solids they produced, so a
     // face stays clickable after it has been extruded.
     if (faces && faceHit && !preferBody) {
