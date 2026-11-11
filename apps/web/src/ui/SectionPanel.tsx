@@ -156,6 +156,12 @@ export function SectionPanel() {
         {planes.map((plane) => {
           const face = plane.face ?? null;
           const linked = face ? resolveSectionPlane(plane, meshes).faceLinked : false;
+          // A face whose body has no mesh yet is still loading, not lost.
+          const loading =
+            face !== null &&
+            !meshes[face.bodyId] &&
+            project.bodies.some((body) => body.id === face.bodyId);
+          const invalid = Boolean(face) && !linked && !loading;
           return (
             <div key={plane.id} className="section-plane">
               <IconButton
@@ -212,7 +218,7 @@ export function SectionPanel() {
                     placeholder={t('section.selectFace')}
                     icon={<Hexagon size={12} />}
                     active={pickingSectionFace === plane.id}
-                    invalid={Boolean(face) && !linked}
+                    invalid={invalid}
                     onClick={() =>
                       setPickingSectionFace(pickingSectionFace === plane.id ? null : plane.id)
                     }

@@ -12,7 +12,7 @@ import { ConfirmDialog } from './ui/ConfirmDialog';
 import { ContextMenuHost } from './ui/ContextMenu';
 import { Inspector } from './ui/Inspector';
 import { LeftPanel } from './ui/LeftPanel';
-import { Splash } from './ui/Splash';
+import { AppSkeleton } from './ui/Skeleton';
 import { StatusBar } from './ui/StatusBar';
 import { Timeline } from './ui/Timeline';
 import { Toast } from './ui/Toast';
@@ -29,37 +29,39 @@ export default function App() {
 
   const hydrated = useDocumentStore((state) => state.hydrated);
 
-  if (!hydrated) return <Splash />;
-
   return (
     <div className="app-shell">
       <TopBar />
       <div className="app-body">
-        <Group orientation="horizontal">
-          <Panel id="left" defaultSize="17%" minSize="170px" maxSize="32%" className="pane-fill">
-            <LeftPanel />
-          </Panel>
+        {hydrated ? (
+          <Group orientation="horizontal">
+            <Panel id="left" defaultSize="17%" minSize="170px" maxSize="32%" className="pane-fill">
+              <LeftPanel />
+            </Panel>
 
-          <Separator className="resize-handle" />
+            <Separator className="resize-handle" />
 
-          <Panel id="center" defaultSize="57%" minSize="280px" className="pane-fill">
-            <Group orientation="vertical">
-              <Panel id="viewport" defaultSize="76%" minSize="30%" className="pane-fill">
-                <Viewport />
-              </Panel>
-              <Separator className="resize-handle" />
-              <Panel id="timeline" defaultSize="38px" minSize="38px" maxSize="38px" className="pane-fill">
-                <Timeline />
-              </Panel>
-            </Group>
-          </Panel>
+            <Panel id="center" defaultSize="57%" minSize="280px" className="pane-fill">
+              <Group orientation="vertical">
+                <Panel id="viewport" defaultSize="76%" minSize="30%" className="pane-fill">
+                  <Viewport />
+                </Panel>
+                <Separator className="resize-handle" />
+                <Panel id="timeline" defaultSize="38px" minSize="38px" maxSize="38px" className="pane-fill">
+                  <Timeline />
+                </Panel>
+              </Group>
+            </Panel>
 
-          <Separator className="resize-handle" />
+            <Separator className="resize-handle" />
 
-          <Panel id="right" defaultSize="26%" minSize="250px" maxSize="38%" className="pane-fill">
-            <Inspector />
-          </Panel>
-        </Group>
+            <Panel id="right" defaultSize="26%" minSize="250px" maxSize="38%" className="pane-fill">
+              <Inspector />
+            </Panel>
+          </Group>
+        ) : (
+          <AppSkeleton />
+        )}
       </div>
       <StatusBar />
       <ContextMenuHost />

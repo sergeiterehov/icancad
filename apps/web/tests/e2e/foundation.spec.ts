@@ -1,10 +1,14 @@
 import { expect, test, type Page } from '@playwright/test';
 
+/** The workspace shows skeletons until the project and the kernel are ready. */
+async function waitForWorkspace(page: Page) {
+  await expect(page.getByTestId('app-skeleton')).toHaveCount(0, { timeout: 120_000 });
+  await expect(page.getByTestId('viewport-skeleton')).toHaveCount(0, { timeout: 120_000 });
+}
+
 async function openApp(page: Page) {
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'Geometry pipeline check' })).toBeVisible({
-    timeout: 120_000,
-  });
+  await waitForWorkspace(page);
 }
 
 function cubeStl(size: number): Buffer {
@@ -167,9 +171,7 @@ test.describe('ICANCad foundation', () => {
     await page.waitForTimeout(1000);
 
     await page.reload();
-    await expect(page.getByRole('heading', { name: 'Geometry pipeline check' })).toBeHidden({
-      timeout: 120_000,
-    });
+    await waitForWorkspace(page);
     await page.locator('.timeline-op').last().click();
     await expect(page.getByRole('textbox', { name: 'Width (X)' })).toHaveValue('30');
   });
@@ -192,9 +194,7 @@ test.describe('ICANCad foundation', () => {
 
     await expect(page.getByTestId('save-state')).toHaveAttribute('data-state', 'saved');
     await page.reload();
-    await expect(page.getByRole('heading', { name: 'Geometry pipeline check' })).toBeHidden({
-      timeout: 120_000,
-    });
+    await waitForWorkspace(page);
     // Not on the operation that was open, but where the user was.
     await expect(page.locator('.timeline-caret').last()).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('.tree-row')).toHaveCount(2);
@@ -272,9 +272,7 @@ test.describe('ICANCad foundation', () => {
     await positionX.press('Enter');
     await expect(page.getByTestId('save-state')).toHaveAttribute('data-state', 'saved');
     await page.reload();
-    await expect(page.getByRole('heading', { name: 'Geometry pipeline check' })).toBeHidden({
-      timeout: 120_000,
-    });
+    await waitForWorkspace(page);
     await page.locator('.timeline-op').first().click();
     await expect(inspector.getByRole('textbox', { name: 'Position X · mm' })).toHaveValue('-15');
   });

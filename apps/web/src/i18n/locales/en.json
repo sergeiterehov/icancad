@@ -132,13 +132,10 @@
     "taskQueued": "waiting",
     "cancel": "Cancel operation",
     "ms": "{{ms}} ms",
-    "detailsHint": "Kernel status and task queue"
+    "detailsHint": "Kernel status and task queue",
+    "openingProject": "Opening the project and restoring operation history…"
   },
   "empty": {
-    "title": "Geometry pipeline check",
-    "description": "Use + in the Bodies list to create the first body. OCCT runs in a Web Worker, so the interface stays responsive.",
-    "loadingTitle": "Loading geometry kernel",
-    "loadingDescription": "Downloading and compiling OpenCascade (OCCT). This happens once and is cached by the browser.",
     "retry": "Retry",
     "errorTitle": "Geometry kernel error"
   },
@@ -230,9 +227,6 @@
     "invert": "Flip cut direction",
     "remove": "Remove plane",
     "offset": "Offset"
-  },
-  "splash": {
-    "loading": "Opening the project and restoring operation history…"
   },
   "sketch": {
     "title": "Sketch",

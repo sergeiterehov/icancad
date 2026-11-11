@@ -41,6 +41,7 @@ import {
   objectTargets,
   visibilityMenuItem,
 } from '../ui/objectMenu';
+import { SkeletonStage } from '../ui/Skeleton';
 import { Tooltip } from '../ui/Tooltip';
 import { NavCube, type NavFace } from './NavCube';
 import { SceneController, type SceneBody } from './SceneController';
@@ -88,7 +89,6 @@ export function Viewport() {
   const featureBodyErrors = useKernelStore((state) => state.featureBodyErrors);
   const featureErrors = useKernelStore((state) => state.featureErrors);
   const status = useKernelStore((state) => state.status);
-  const ratio = useKernelStore((state) => state.ratio);
   const error = useKernelStore((state) => state.error);
   const theme = useThemeStore((state) => state.theme);
   const openMenu = useContextMenuStore((state) => state.open);
@@ -638,17 +638,8 @@ export function Viewport() {
     navCubeRef.current?.setLabels(navLabels);
   }, [t]);
 
-  const meshCount = Object.keys(meshes).length;
   const showLoading = status === 'idle' || status === 'loading';
   const showError = status === 'error';
-  const hasActiveSketches = project.features.some(
-    (feature) =>
-      feature.type === 'sketch' &&
-      (activeFeatureIds(project).has(feature.id) || feature.id === preview?.featureId) &&
-      sketchPlaneReady(feature) &&
-      !featureErrors[feature.id],
-  );
-  const showEmpty = status === 'ready' && meshCount === 0 && !activeSketchId && !hasActiveSketches;
 
   return (
     <div className="viewport-wrap" ref={containerRef}>
@@ -665,21 +656,9 @@ export function Viewport() {
         </Tooltip>
       </div>
 
+      {/* The kernel reports its own progress in the status bar. */}
       {showLoading && (
-        <div className="empty-card">
-          <h2>{t('empty.loadingTitle')}</h2>
-          <p>{t('empty.loadingDescription')}</p>
-          <div className="progress">
-            <div
-              className="progress-fill"
-              data-indeterminate={ratio === undefined}
-              style={ratio !== undefined ? { width: `${Math.round(ratio * 100)}%` } : undefined}
-            />
-          </div>
-          {ratio !== undefined && (
-            <span className="progress-label">{Math.round(ratio * 100)}%</span>
-          )}
-        </div>
+        <SkeletonStage action={t('status.kernelLoading')} testId="viewport-skeleton" />
       )}
 
       {showError && (
@@ -689,13 +668,6 @@ export function Viewport() {
           <Button variant="primary" onClick={() => void retryKernel()}>
             {t('empty.retry')}
           </Button>
-        </div>
-      )}
-
-      {showEmpty && (
-        <div className="empty-card">
-          <h2>{t('empty.title')}</h2>
-          <p>{t('empty.description')}</p>
         </div>
       )}
 
