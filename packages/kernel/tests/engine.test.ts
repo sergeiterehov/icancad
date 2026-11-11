@@ -43,6 +43,17 @@ describe('OCCT kernel engine', () => {
     expect(result.stats).toEqual({ faces: 6, edges: 12, solids: 1 });
   });
 
+  it('creates a box at the requested position', () => {
+    engine.makeBox({ shapeId: 'box-offset', dx: 2, dy: 3, dz: 4, at: [10, -20, 30] });
+    const mesh = engine.tessellate('box-offset');
+    expect(mesh.bbox.min[0]).toBeCloseTo(10, 5);
+    expect(mesh.bbox.min[1]).toBeCloseTo(-20, 5);
+    expect(mesh.bbox.min[2]).toBeCloseTo(30, 5);
+    expect(mesh.bbox.max[0]).toBeCloseTo(12, 5);
+    expect(mesh.bbox.max[1]).toBeCloseTo(-17, 5);
+    expect(mesh.bbox.max[2]).toBeCloseTo(34, 5);
+  });
+
   it('tessellates a box into a closed mesh', () => {
     const mesh = engine.tessellate('box-1');
     expect(mesh.triangleCount).toBe(12);

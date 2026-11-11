@@ -77,6 +77,8 @@ interface KernelState {
   featureObjectErrors: Record<string, Record<string, string>>;
   /** Operation preview, or null when the scene shows the document as is. */
   preview: ScenePreview | null;
+  /** Operation whose evaluation produced each body's current shape. */
+  bodyOperations: Record<string, string>;
   tasks: KernelTask[];
   /** Caret position of the operation currently being rebuilt. */
   rebuildCursor: number | null;
@@ -96,6 +98,7 @@ interface KernelState {
     sketchFrames: Record<string, SketchFrame>,
     preview: ScenePreview | null,
   ) => void;
+  setBodyOperations: (bodyOperations: Record<string, string>) => void;
   clearScene: () => void;
   clearFeatureError: (featureId: string) => void;
 }
@@ -117,6 +120,7 @@ export const useKernelStore = create<KernelState>((set) => ({
   featureBodyErrors: {},
   featureObjectErrors: {},
   preview: null,
+  bodyOperations: {},
   tasks: [],
   rebuildCursor: null,
 
@@ -176,6 +180,8 @@ export const useKernelStore = create<KernelState>((set) => ({
       preview,
     })),
 
+  setBodyOperations: (bodyOperations) => set({ bodyOperations }),
+
   clearScene: () =>
     set((state) => ({
       meshes: {},
@@ -188,6 +194,7 @@ export const useKernelStore = create<KernelState>((set) => ({
       featureBodyErrors: {},
       featureObjectErrors: {},
       preview: null,
+      bodyOperations: {},
       rebuildCursor: null,
     })),
   clearFeatureError: (featureId) =>

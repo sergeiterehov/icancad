@@ -317,6 +317,7 @@ const objectMetadata = z.object({
   color: z.string().min(1).optional(),
   visible: z.boolean().optional(),
   bodyIndex: z.number().int().optional(),
+  showConstruction: z.boolean().optional(),
 });
 
 const sectionPlane = z.object({

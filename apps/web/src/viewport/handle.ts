@@ -13,6 +13,10 @@ export interface SceneSketchFace {
 export interface SceneSketch {
   id: string;
   frame: SketchFrame;
+  /** Line colour of the object; the sketch being edited keeps the theme colours. */
+  color?: string;
+  /** Construction geometry is a helper, so it is only drawn when asked for. */
+  showConstruction?: boolean;
   entities: SketchEntity[];
   faces: SceneSketchFace[];
   /** Faces are offered for picking, so they are shown faintly. */

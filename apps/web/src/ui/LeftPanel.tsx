@@ -1,8 +1,11 @@
 import {
   activeFeatureIds,
+  BODY_COLORS,
   bodiesInHistory,
   createId,
+  objectColor,
   objectVisible,
+  SKETCH_COLOR,
   sketchObjectId,
   type BodyObject,
   type MeshFormat,
@@ -15,6 +18,7 @@ import {
   EyeOff,
   FileUp,
   PawPrint,
+  Pencil,
   PencilRuler,
   Plus,
   SquareMinus,
@@ -22,7 +26,7 @@ import {
   SquarePlus,
   Trash2,
 } from 'lucide-react';
-import { useRef, type ChangeEvent, type MouseEvent, type ReactNode } from 'react';
+import { useRef, useState, type ChangeEvent, type MouseEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { saveAsset } from '../persistence/db';
 import { canEditSketch, sketchPlaneReady } from '../sketch/sectionPlane';
@@ -31,8 +35,7 @@ import { useKernelStore, type PreviewMarkKind } from '../stores/kernelStore';
 import { isDirectlySelected, linkedBodyIds } from '../stores/selection';
 import { useUiStore } from '../stores/uiStore';
 import { IconButton } from './Controls';
-import { showContextMenu, useContextMenuStore } from './ContextMenu';
-import { formatNumber } from './format';
+import { showContextMenu, useContextMenuStore, type ContextMenuItem } from './ContextMenu';
 import { Tooltip } from './Tooltip';
 
 const MESH_ACCEPT = '.stl,.obj,.ply,.glb';
@@ -51,9 +54,48 @@ const MESH_MIME: Record<MeshFormat, string> = {
   glb: 'model/gltf-binary',
 };
 
+// The tree renames in place; committing happens on Enter or on blur.
+function RenameInput({
+  label,
+  value,
+  onCommit,
+  onCancel,
+}: {
+  label: string;
+  value: string;
+  onCommit: (name: string) => void;
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const commit = () => {
+    const next = draft.trim();
+    if (next && next !== value) onCommit(next);
+    else onCancel();
+  };
+  return (
+    <input
+      className="tree-rename"
+      aria-label={label}
+      value={draft}
+      autoFocus
+      onFocus={(event) => event.currentTarget.select()}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') event.currentTarget.blur();
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          onCancel();
+        }
+      }}
+    />
+  );
+}
+
 export function LeftPanel() {
-  const { t, i18n } = useTranslation();
-  const locale = i18n.resolvedLanguage ?? 'en';
+  const { t } = useTranslation();
   const project = useViewProject();
   const bodies = bodiesInHistory(project);
   const activeIds = activeFeatureIds(project);
@@ -64,7 +106,6 @@ export function LeftPanel() {
   const removeFeature = useDocumentStore((state) => state.removeFeature);
   const deleteBody = useDocumentStore((state) => state.deleteBody);
   const addBox = useDocumentStore((state) => state.addPrimitiveBox);
-  const meshes = useKernelStore((state) => state.meshes);
   const featureErrors = useKernelStore((state) => state.featureErrors);
   const preview = useKernelStore((state) => state.preview);
   const kernelReady = useKernelStore((state) => state.status === 'ready');
@@ -72,6 +113,30 @@ export function LeftPanel() {
   const showToast = useUiStore((state) => state.showToast);
   const setActiveSketch = useUiStore((state) => state.setActiveSketch);
   const meshInput = useRef<HTMLInputElement>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+
+  // Renaming happens in the tree: double click on an object row, or the context
+  // menu. A sketch row is the operation that creates it, so its name is stored
+  // on the feature instead of in the object metadata.
+  const renameObject = (objectId: string, name: string) => {
+    useDocumentStore.getState().apply({ type: 'metadata/patch', objectId, patch: { name } });
+  };
+  const renameSketch = (feature: SketchFeature, name: string) => {
+    useDocumentStore
+      .getState()
+      .apply({ type: 'feature/replace', feature: { ...feature, name } });
+  };
+  const colorSwatch = (color: string) => (
+    <span className="context-menu-swatch" style={{ background: color }} />
+  );
+  const colorMenu = (objectId: string, color: string): ContextMenuItem => ({
+    id: 'color',
+    label: t('context.color'),
+    icon: colorSwatch(color),
+    palette: BODY_COLORS,
+    value: color,
+    onPick: (next: string) => useDocumentStore.getState().setObjectColor(objectId, next),
+  });
 
   const highlightedBodyIds = linkedBodyIds(selection, project);
   const hasSketches = project.features.some(
@@ -138,7 +203,6 @@ export function LeftPanel() {
   };
 
   const renderBody = (body: BodyObject): ReactNode => {
-    const mesh = meshes[body.id];
     const kind = body.kind === 'mesh' ? 'mesh' : 'body';
     const direct = isDirectlySelected(selection, kind, body.id);
     const linked = !direct && highlightedBodyIds.includes(body.id);
@@ -156,6 +220,13 @@ export function LeftPanel() {
         onContextMenu={(event) =>
           showContextMenu(event, [
             {
+              id: 'rename',
+              label: t('context.rename'),
+              icon: <Pencil size={14} />,
+              onSelect: () => setRenaming(body.id),
+            },
+            colorMenu(body.id, body.color),
+            {
               id: 'visibility',
               label: body.visible ? t('tree.hide') : t('tree.show'),
               icon: body.visible ? <EyeOff size={14} /> : <Eye size={14} />,
@@ -171,22 +242,39 @@ export function LeftPanel() {
           ])
         }
       >
-        <button
-          type="button"
-          className="tree-main"
-          onClick={(event) =>
-            select(
-              { kind, id: body.id },
-              { additive: event.metaKey || event.ctrlKey || event.shiftKey },
-            )
-          }
-        >
-          <span className="tree-icon" style={{ color: body.color }}>
-            {body.kind === 'mesh' ? <PawPrint size={14} /> : <Box size={14} />}
+        {renaming === body.id ? (
+          <span className="tree-main">
+            <span className="tree-icon" style={{ color: body.color }}>
+              {body.kind === 'mesh' ? <PawPrint size={14} /> : <Box size={14} />}
+            </span>
+            <RenameInput
+              label={t('context.rename')}
+              value={body.name}
+              onCommit={(name) => {
+                setRenaming(null);
+                renameObject(body.id, name);
+              }}
+              onCancel={() => setRenaming(null)}
+            />
           </span>
-          <span className="tree-name">{body.name}</span>
-          {mesh && <span className="tree-meta">{formatNumber(mesh.triangleCount, locale, 0)}</span>}
-        </button>
+        ) : (
+          <button
+            type="button"
+            className="tree-main"
+            onClick={(event) =>
+              select(
+                { kind, id: body.id },
+                { additive: event.metaKey || event.ctrlKey || event.shiftKey },
+              )
+            }
+            onDoubleClick={() => setRenaming(body.id)}
+          >
+            <span className="tree-icon" style={{ color: body.color }}>
+              {body.kind === 'mesh' ? <PawPrint size={14} /> : <Box size={14} />}
+            </span>
+            <span className="tree-name">{body.name}</span>
+          </button>
+        )}
         {mark && (
           <Tooltip content={markLabel(mark.kind)}>
             <span className={clsx('tree-preview-icon', mark.kind)} aria-label={markLabel(mark.kind)}>
@@ -215,13 +303,13 @@ export function LeftPanel() {
           aria-label={t('tree.previewAdded')}
         >
           <span className="tree-main">
-            <span className="tree-icon">
+            <span
+              className="tree-icon"
+              style={{ color: objectColor(project, sketchObjectId(feature.id), SKETCH_COLOR) }}
+            >
               <PencilRuler size={14} />
             </span>
             <span className="tree-name">{feature.name}</span>
-            <span className="tree-meta">
-              {formatNumber(feature.entities.length, locale, 0)}
-            </span>
           </span>
           <span className="tree-preview-icon added" aria-hidden="true">
             <SquarePlus size={13} />
@@ -253,6 +341,13 @@ export function LeftPanel() {
               disabled: !canEditSketch(feature, featureErrors),
             },
             {
+              id: 'rename',
+              label: t('context.rename'),
+              icon: <Pencil size={14} />,
+              onSelect: () => setRenaming(feature.id),
+            },
+            colorMenu(objectId, objectColor(project, objectId, SKETCH_COLOR)),
+            {
               id: 'delete',
               label: t('context.deleteObject'),
               icon: <Trash2 size={14} />,
@@ -262,25 +357,47 @@ export function LeftPanel() {
           ])
         }
       >
-        <button
-          type="button"
-          className="tree-main"
-          onClick={(event) =>
-            select(
-              { kind: 'sketch', id: feature.id },
-              { additive: event.metaKey || event.ctrlKey || event.shiftKey },
-            )
-          }
-          onDoubleClick={() => {
-            if (canEditSketch(feature, featureErrors)) setActiveSketch(feature.id);
-          }}
-        >
-          <span className="tree-icon">
-            <PencilRuler size={14} />
+        {renaming === feature.id ? (
+          <span className="tree-main">
+            <span
+              className="tree-icon"
+              style={{ color: objectColor(project, objectId, SKETCH_COLOR) }}
+            >
+              <PencilRuler size={14} />
+            </span>
+            <RenameInput
+              label={t('context.rename')}
+              value={feature.name}
+              onCommit={(name) => {
+                setRenaming(null);
+                renameSketch(feature, name);
+              }}
+              onCancel={() => setRenaming(null)}
+            />
           </span>
-          <span className="tree-name">{feature.name}</span>
-          <span className="tree-meta">{formatNumber(feature.entities.length, locale, 0)}</span>
-        </button>
+        ) : (
+          <button
+            type="button"
+            className="tree-main"
+            onClick={(event) =>
+              select(
+                { kind: 'sketch', id: feature.id },
+                { additive: event.metaKey || event.ctrlKey || event.shiftKey },
+              )
+            }
+            onDoubleClick={() => {
+              if (canEditSketch(feature, featureErrors)) setActiveSketch(feature.id);
+            }}
+          >
+            <span
+              className="tree-icon"
+              style={{ color: objectColor(project, objectId, SKETCH_COLOR) }}
+            >
+              <PencilRuler size={14} />
+            </span>
+            <span className="tree-name">{feature.name}</span>
+          </button>
+        )}
         <IconButton
           label={visible ? t('tree.hide') : t('tree.show')}
           className="tiny"

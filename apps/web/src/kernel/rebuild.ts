@@ -120,6 +120,8 @@ function transformImportedMesh(mesh: ParsedMesh, feature: ImportMeshFeature): Te
 interface RebuildState {
   bodyShapes: Map<string, string>;
   bodyOwner: Map<string, string>;
+  /** Operation whose evaluation last produced each body's shape. */
+  bodySource: Map<string, string>;
   /** Tessellated triangles of each body, keyed by body id. */
   meshes: Record<string, TessellationResult>;
   /** Face/edge/solid counts of each body shape, keyed by body id. */
@@ -174,6 +176,7 @@ function emptyState(): RebuildState {
   return {
     bodyShapes: new Map(),
     bodyOwner: new Map(),
+    bodySource: new Map(),
     meshes: {},
     bodyStats: {},
     meshStats: {},
@@ -199,6 +202,7 @@ function cloneState(state: RebuildState): RebuildState {
   return {
     bodyShapes: new Map(state.bodyShapes),
     bodyOwner: new Map(state.bodyOwner),
+    bodySource: new Map(state.bodySource),
     // Tessellations and statistics are immutable values shared between
     // snapshots; only the containers are copied.
     meshes: { ...state.meshes },
@@ -369,6 +373,9 @@ async function runRebuild(
       scene.sketchFrames,
       preview,
     );
+  // Which operation produced each body's current shape, so a face can lead back
+  // to the operation that made it.
+  useKernelStore.getState().setBodyOperations(Object.fromEntries(scene.bodySource));
 
   for (const checkpoint of produced) rebuildCache.store(checkpoint);
   useDocumentStore.getState().syncCreatedBodies(base.createdBodies, base.blockedFeatureId);
@@ -510,6 +517,7 @@ async function evaluateFeature(
       const bodyId = featureBodyId(feature.id);
       state.meshes[bodyId] = transformImportedMesh(parsed, feature);
       state.bodyOwner.set(bodyId, feature.id);
+      state.bodySource.set(bodyId, feature.id);
       state.meshStats[feature.id] = parsed.stats;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'IMPORT_FAILED';
@@ -526,13 +534,14 @@ async function evaluateFeature(
       const shapeId = trackShape(`feat:${feature.id}`);
       const result = await client.request<MakeBoxResult>({
         type: 'make-box',
-        params: { shapeId, ...feature.params },
+        params: { shapeId, ...feature.params, at: feature.transform.translation },
       });
       if (epoch !== rebuildEpoch) return;
       const mesh = await client.request<TessellationResult>({ type: 'tessellate', shapeId });
       if (epoch !== rebuildEpoch) return;
       state.bodyShapes.set(bodyId, shapeId);
       state.bodyOwner.set(bodyId, feature.id);
+      state.bodySource.set(bodyId, feature.id);
       state.bodyStats[bodyId] = result.stats;
       state.meshes[bodyId] = mesh;
     } catch (error) {
@@ -590,6 +599,7 @@ async function applyExtrude(
     sketchFrames,
     bodyShapes,
     bodyOwner,
+    bodySource,
     meshes,
     bodyStats,
     createdBodies,
@@ -714,6 +724,7 @@ async function applyExtrude(
         if (epoch !== rebuildEpoch) return;
         bodyShapes.set(bodyId, shapeId);
         bodyOwner.set(bodyId, feature.id);
+        bodySource.set(bodyId, feature.id);
         const mesh = await client.request<TessellationResult>({ type: 'tessellate', shapeId });
         if (epoch !== rebuildEpoch) return;
         meshes[bodyId] = mesh;
@@ -745,6 +756,7 @@ async function applyExtrude(
       if (epoch !== rebuildEpoch) return;
       bodyShapes.set(bodyId, shapeId);
       bodyOwner.set(bodyId, feature.id);
+      bodySource.set(bodyId, feature.id);
       const mesh = await client.request<TessellationResult>({ type: 'tessellate', shapeId });
       if (epoch !== rebuildEpoch) return;
       meshes[bodyId] = mesh;
@@ -917,6 +929,7 @@ async function applyExtrude(
       }
 
       bodyShapes.set(bodyId, currentShapeId);
+      bodySource.set(bodyId, feature.id);
       const mesh = await client.request<TessellationResult>({
         type: 'tessellate',
         shapeId: currentShapeId,
@@ -945,6 +958,7 @@ async function applyExtrude(
     });
     if (epoch !== rebuildEpoch) return;
     bodyShapes.set(bodyId, resultShapeId);
+    bodySource.set(bodyId, feature.id);
     const mesh = await client.request<TessellationResult>({
       type: 'tessellate',
       shapeId: resultShapeId,

@@ -81,6 +81,12 @@ export interface OcctShapeMaker {
 
 export interface OcctBindings {
   BRepPrimAPI_MakeBox_1: new (dx: number, dy: number, dz: number) => OcctShapeMaker;
+  BRepPrimAPI_MakeBox_2: new (
+    origin: OcctPoint3,
+    dx: number,
+    dy: number,
+    dz: number,
+  ) => OcctShapeMaker;
   BRepMesh_IncrementalMesh_2: new (
     shape: OcctShape,
     linearDeflection: number,

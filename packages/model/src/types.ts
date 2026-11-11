@@ -309,6 +309,8 @@ export interface ObjectMetadata {
   visible?: boolean;
   /** Number in a body name, kept so numbering never repeats (ADR 0009). */
   bodyIndex?: number;
+  /** Sketches: draw construction geometry in the 3D view (hidden by default). */
+  showConstruction?: boolean;
 }
 
 export interface SectionPlane {

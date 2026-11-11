@@ -240,15 +240,20 @@ export function ObjectPickerField({
 
 export function DimensionField({
   axis,
+  icon,
   label,
   value,
   suffix,
+  allowNegative,
   onCommit,
 }: {
-  axis: string;
+  axis?: string;
+  icon?: ReactNode;
   label: string;
   value: number;
   suffix?: string;
+  /** Positions are signed and may be zero; sizes are positive lengths. */
+  allowNegative?: boolean;
   onCommit: (value: number) => void;
 }) {
   const [draft, setDraft] = useState(String(value));
@@ -259,7 +264,8 @@ export function DimensionField({
 
   const commit = () => {
     const parsed = Number(draft.replace(',', '.'));
-    if (Number.isFinite(parsed) && parsed > 0) {
+    const valid = Number.isFinite(parsed) && (allowNegative || parsed > 0);
+    if (valid) {
       if (parsed !== value) onCommit(parsed);
       else setDraft(String(value));
     } else {
@@ -270,7 +276,13 @@ export function DimensionField({
   return (
     <Tooltip content={label}>
       <label className="dimension-field">
-        <span className="dimension-axis">{axis}</span>
+        {icon ? (
+          <span className="dimension-axis" aria-hidden="true">
+            {icon}
+          </span>
+        ) : (
+          <span className="dimension-axis">{axis}</span>
+        )}
         <input
           className="dimension-input"
           inputMode="decimal"

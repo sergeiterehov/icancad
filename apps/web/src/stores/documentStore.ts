@@ -85,6 +85,12 @@ interface DocumentState {
   setExtrudeReversed: (featureId: string, reversed: boolean) => void;
   toggleExtrudeSketch: (featureId: string, sketchId: string) => void;
   toggleSketchVisibility: (sketchId: string) => void;
+  /** Colour of a volumetric object, stored in its metadata. */
+  setObjectColor: (objectId: string, color: string) => void;
+  /** Sketches: whether construction geometry is drawn in the 3D view. */
+  setConstructionVisible: (sketchId: string, visible: boolean) => void;
+  /** Colour of every body an operation creates. */
+  setCreatedBodiesColor: (featureId: string, color: string) => void;
   addImportedMesh: (name: string, featureId: string, format: MeshFormat) => void;
   setSectionPlanes: (planes: SectionPlane[]) => void;
   removeFeature: (featureId: string) => void;
@@ -885,6 +891,28 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   setHistoryEnd: (featureId) => {
     if (get().editingFeatureId !== null) set({ editingFeatureId: null });
     get().apply({ type: 'history/set-end', featureId });
+  },
+
+  setObjectColor: (objectId, color) => {
+    get().apply({ type: 'metadata/patch', objectId, patch: { color } });
+  },
+
+  setConstructionVisible: (sketchId, visible) => {
+    get().apply({
+      type: 'metadata/patch',
+      objectId: sketchObjectId(sketchId),
+      patch: { showConstruction: visible },
+    });
+  },
+
+  setCreatedBodiesColor: (featureId, color) => {
+    const bodies = get().project.bodies.filter((body) => body.createdBy === featureId);
+    if (bodies.length === 0) return;
+    get().apply(
+      ...bodies.map(
+        (body): Command => ({ type: 'metadata/patch', objectId: body.id, patch: { color } }),
+      ),
+    );
   },
 
   toggleBodyVisibility: (bodyId) => {

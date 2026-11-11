@@ -5,8 +5,11 @@ import { retryKernel } from '../kernel/client';
 import {
   activeFeatureIds,
   bodiesInHistory,
+  objectColor,
+  objectShowConstruction,
   objectVisible,
   resolveBody,
+  SKETCH_COLOR,
   sketchObjectId,
   type SketchFeature,
 } from '@icancad/model';
@@ -236,6 +239,29 @@ export function Viewport() {
           navCubeCanvasRef.current.dataset.polar = String(polar);
           navCubeCanvasRef.current.dataset.distance = String(distance);
         }
+      },
+      // A double click on a face opens the operation that produced it: the
+      // shape a body currently has comes from the operation that last built it,
+      // and a sketch face comes from the sketch operation itself.
+      (pick) => {
+        const ui = useUiStore.getState();
+        // Selection controls own the mouse while they are active.
+        if (ui.activeSketchId || ui.pickingExtrude || ui.pickingExtrudeBodies || ui.pickingSketchPlane) {
+          return;
+        }
+        if (isModelRebuilding(useKernelStore.getState())) return;
+        const store = useDocumentStore.getState();
+        const project = store.project;
+        const featureId =
+          pick.kind === 'body-face'
+            ? (useKernelStore.getState().bodyOperations[pick.bodyId] ??
+              project.bodies.find((body) => body.id === pick.bodyId)?.createdBy)
+            : pick.kind === 'face'
+              ? pick.sketchId
+              : undefined;
+        if (!featureId) return;
+        if (!project.features.some((feature) => feature.id === featureId)) return;
+        store.select({ kind: 'feature', id: featureId });
       },
     );
     controllerRef.current = controller;
@@ -471,6 +497,8 @@ export function Viewport() {
       )
       .map((feature) => ({
         id: feature.id,
+        color: objectColor(project, sketchObjectId(feature.id), SKETCH_COLOR),
+        showConstruction: objectShowConstruction(project, sketchObjectId(feature.id)),
         faces: sketchTopology(feature.entities).faces.map((face) => ({
           id: face.id,
           outline: face.outline,

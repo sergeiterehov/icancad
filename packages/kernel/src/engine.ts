@@ -101,7 +101,10 @@ export class KernelEngine {
         throw new KernelOpError('INVALID_PARAMS', `Box ${name} must be a positive number`);
       }
     }
-    const shape = new oc.BRepPrimAPI_MakeBox_1(dx, dy, dz).Shape();
+    const at = params.at;
+    const shape = at
+      ? new oc.BRepPrimAPI_MakeBox_2(new oc.gp_Pnt_3(at[0], at[1], at[2]), dx, dy, dz).Shape()
+      : new oc.BRepPrimAPI_MakeBox_1(dx, dy, dz).Shape();
     this.shapes.set(shapeId, shape);
     return { shapeId, stats: this.countTopology(shape) };
   }

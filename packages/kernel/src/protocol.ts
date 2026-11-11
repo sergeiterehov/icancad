@@ -37,6 +37,8 @@ export interface BoxParams {
   dx: number;
   dy: number;
   dz: number;
+  /** Corner the box grows from; the origin when omitted. */
+  at?: [number, number, number];
 }
 
 export interface MakeBoxResult {

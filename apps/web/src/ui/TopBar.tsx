@@ -13,6 +13,7 @@ import { loadAsset, saveAsset, setSetting } from '../persistence/db';
 import { queueProjectSave } from '../persistence/saveQueue';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
+import { MOD_KEY } from '../hooks/useShortcuts';
 import { directBodyIds } from '../stores/selection';
 import { useContextMenuStore } from './ContextMenu';
 import { useUiStore } from '../stores/uiStore';
@@ -158,10 +159,20 @@ export function TopBar() {
       <div className="topbar-center">{activeSketchId ? <SketchToolRail /> : <ToolRail />}</div>
 
       <div className="topbar-right">
-        <IconButton label={t('topbar.undo')} disabled={!canUndo} onClick={undo}>
+        <IconButton
+          label={t('topbar.undo')}
+          tooltip={t('topbar.undoShortcut', { shortcut: `${MOD_KEY}Z` })}
+          disabled={!canUndo}
+          onClick={undo}
+        >
           <Undo2 size={16} />
         </IconButton>
-        <IconButton label={t('topbar.redo')} disabled={!canRedo} onClick={redo}>
+        <IconButton
+          label={t('topbar.redo')}
+          tooltip={t('topbar.redoShortcut', { shortcut: `${MOD_KEY}⇧Z` })}
+          disabled={!canRedo}
+          onClick={redo}
+        >
           <Redo2 size={16} />
         </IconButton>
 

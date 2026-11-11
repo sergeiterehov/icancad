@@ -350,6 +350,15 @@ button:disabled {
   border-bottom: 1px solid var(--border);
 }
 
+.inspector-field {
+  padding: 10px 8px 2px;
+}
+
+.panel-properties {
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
 .inspector-actions {
   display: flex;
   align-items: center;
@@ -440,6 +449,30 @@ button:disabled {
   background: transparent;
   color: inherit;
   text-align: left;
+}
+
+.tree-rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.tree-rename:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.context-menu-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 30%);
 }
 
 .tree-row.selected {
@@ -2326,3 +2359,40 @@ button.selection-item[data-active='true'][data-error='true'] {
   justify-content: flex-end;
   gap: 8px;
 }
+
+.context-menu-sub {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+/* A nested menu sits next to its parent item, not at the pointer. */
+.context-submenu {
+  position: absolute;
+  left: calc(100% + 4px);
+  top: -5px;
+  min-width: 0;
+  padding: 6px;
+}
+
+.context-palette {
+  display: grid;
+  grid-template-columns: repeat(6, 22px);
+  gap: 6px;
+}
+
+.context-palette-swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid rgb(0 0 0 / 25%);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.context-palette-swatch:hover,
+.context-palette-swatch[data-active='true'] {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+

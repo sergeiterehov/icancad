@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { Check } from 'lucide-react';
+import { Check, ChevronRight } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { create } from 'zustand';
@@ -20,6 +20,28 @@ export type ContextMenuItem =
       disabled?: boolean;
       checked?: boolean;
       onSelect: () => void;
+    }
+  | {
+      id: string;
+      separator?: false;
+      heading?: undefined;
+      label: string;
+      icon?: ReactNode;
+      disabled?: boolean;
+      /** Nested items, opened by hovering or clicking this one. */
+      submenu: ContextMenuItem[];
+    }
+  | {
+      id: string;
+      separator?: false;
+      heading?: undefined;
+      label: string;
+      icon?: ReactNode;
+      disabled?: boolean;
+      /** Palette opened from this item, as a grid of swatches. */
+      palette: readonly string[];
+      value?: string;
+      onPick: (color: string) => void;
     };
 
 interface OpenMenu {
@@ -54,6 +76,11 @@ export function ContextMenuHost() {
   const close = useContextMenuStore((state) => state.close);
   const ref = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+  const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
+
+  useEffect(() => {
+    setOpenSubmenu(null);
+  }, [menu]);
 
   useLayoutEffect(() => {
     if (!menu) {
@@ -114,14 +141,127 @@ export function ContextMenuHost() {
       className="context-menu"
       style={position ?? { left: -9999, top: -9999 }}
     >
-      {menu.items.map((item) =>
-        'separator' in item && item.separator ? (
-          <div key={item.id} className="context-menu-separator" />
-        ) : 'heading' in item ? (
-          <div key={item.id} className="context-menu-heading">
-            {item.heading}
-          </div>
-        ) : (
+      {menu.items.map((item) => {
+        if ('separator' in item && item.separator) {
+          return <div key={item.id} className="context-menu-separator" />;
+        }
+        if ('heading' in item) {
+          return (
+            <div key={item.id} className="context-menu-heading">
+              {item.heading}
+            </div>
+          );
+        }
+        if ('palette' in item) {
+          const palette = item.palette;
+          return (
+            <div
+              key={item.id}
+              className="context-menu-sub"
+              onPointerEnter={() => setOpenSubmenu(item.id)}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                aria-haspopup="menu"
+                aria-expanded={openSubmenu === item.id}
+                disabled={item.disabled}
+                className="context-menu-item"
+                onClick={() => setOpenSubmenu(openSubmenu === item.id ? null : item.id)}
+              >
+                {item.icon && <span className="context-menu-icon">{item.icon}</span>}
+                <span className="context-menu-label">{item.label}</span>
+                <span className="context-menu-hint">
+                  <ChevronRight size={13} />
+                </span>
+              </button>
+              {openSubmenu === item.id && (
+                <div className="context-menu context-submenu" role="menu" aria-label={item.label}>
+                  <div className="context-palette">
+                    {palette.map((color) => (
+                      <button
+                        key={color}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={color === item.value}
+                        aria-label={color}
+                        className="context-palette-swatch"
+                        data-active={color === item.value ? 'true' : undefined}
+                        style={{ background: color }}
+                        onClick={() => {
+                          close();
+                          item.onPick(color);
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        }
+        if ('submenu' in item) {
+          return (
+            <div
+              key={item.id}
+              className="context-menu-sub"
+              onPointerEnter={() => setOpenSubmenu(item.id)}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                aria-haspopup="menu"
+                aria-expanded={openSubmenu === item.id}
+                disabled={item.disabled}
+                className="context-menu-item"
+                onClick={() => setOpenSubmenu(openSubmenu === item.id ? null : item.id)}
+              >
+                {item.icon && <span className="context-menu-icon">{item.icon}</span>}
+                <span className="context-menu-label">{item.label}</span>
+                <span className="context-menu-hint">
+                  <ChevronRight size={13} />
+                </span>
+              </button>
+              {openSubmenu === item.id && (
+                <div className="context-menu context-submenu" role="menu" aria-label={item.label}>
+                  {item.submenu.map((child) =>
+                    'separator' in child && child.separator ? (
+                      <div key={child.id} className="context-menu-separator" />
+                    ) : 'heading' in child ? (
+                      <div key={child.id} className="context-menu-heading">
+                        {child.heading}
+                      </div>
+                    ) : 'onSelect' in child ? (
+                      <button
+                        key={child.id}
+                        type="button"
+                        role="menuitem"
+                        aria-label={child.ariaLabel}
+                        disabled={child.disabled}
+                        className={clsx('context-menu-item', child.danger && 'danger')}
+                        onClick={() => {
+                          close();
+                          child.onSelect();
+                        }}
+                      >
+                        {child.checked !== undefined ? (
+                          <span className="context-menu-icon">
+                            {child.checked ? <Check size={14} /> : null}
+                          </span>
+                        ) : (
+                          child.icon && <span className="context-menu-icon">{child.icon}</span>
+                        )}
+                        <span className="context-menu-label">{child.label}</span>
+                        {child.hint && <span className="context-menu-hint">{child.hint}</span>}
+                      </button>
+                    ) : null,
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        }
+        return (
           <button
             key={item.id}
             type="button"
@@ -142,8 +282,8 @@ export function ContextMenuHost() {
             <span className="context-menu-label">{item.label}</span>
             {item.hint && <span className="context-menu-hint">{item.hint}</span>}
           </button>
-        ),
-      )}
+        );
+      })}
     </div>,
     document.body,
   );

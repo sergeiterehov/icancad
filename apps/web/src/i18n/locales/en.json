@@ -20,7 +20,9 @@
     "projectName": "Project name",
     "exportStl": "STL",
     "exportProject": "Project",
-    "exportStlSelected": "STL, {{count}} selected"
+    "exportStlSelected": "STL, {{count}} selected",
+    "undoShortcut": "Undo ({{shortcut}})",
+    "redoShortcut": "Redo ({{shortcut}})"
   },
   "panels": {
     "model": "Model",
@@ -66,7 +68,6 @@
     "width": "Width (X)",
     "height": "Height (Y)",
     "depth": "Depth (Z)",
-    "statistics": "Statistics",
     "faces": "Faces",
     "edges": "Edges",
     "triangles": "Triangles",
@@ -97,7 +98,17 @@
     "surfaceArea": "Surface area",
     "components": "Components",
     "sketch": "Sketch",
-    "points": "Points"
+    "points": "Points",
+    "display": "Display",
+    "showConstruction": "Show construction geometry",
+    "position": "Position",
+    "positionX": "Position X",
+    "positionY": "Position Y",
+    "positionZ": "Position Z",
+    "box": "Box",
+    "extrude": "Extrusion",
+    "metrics": "Metrics",
+    "objects": "Objects"
   },
   "timeline": {
     "blockedByError": "Cannot move past the failed operation",
@@ -187,7 +198,9 @@
   "context": {
     "deleteOperation": "Delete operation",
     "deleteObject": "Delete object",
-    "rebuildFromHere": "Rebuild from here"
+    "rebuildFromHere": "Rebuild from here",
+    "color": "Colour",
+    "rename": "Rename"
   },
   "nav": {
     "cube": "Orientation cube",

@@ -20,7 +20,9 @@
     "projectName": "Название проекта",
     "exportStl": "STL",
     "exportProject": "Проект",
-    "exportStlSelected": "STL, выбрано {{count}}"
+    "exportStlSelected": "STL, выбрано {{count}}",
+    "undoShortcut": "Отменить ({{shortcut}})",
+    "redoShortcut": "Повторить ({{shortcut}})"
   },
   "panels": {
     "model": "Модель",
@@ -66,7 +68,6 @@
     "width": "Ширина (X)",
     "height": "Высота (Y)",
     "depth": "Глубина (Z)",
-    "statistics": "Статистика",
     "faces": "Грани",
     "edges": "Рёбра",
     "triangles": "Треугольники",
@@ -97,7 +98,17 @@
     "surfaceArea": "Площадь",
     "components": "Компоненты",
     "sketch": "Скетч",
-    "points": "Точки"
+    "points": "Точки",
+    "display": "Отображение",
+    "showConstruction": "Показывать конструкционную геометрию",
+    "position": "Положение",
+    "positionX": "Положение X",
+    "positionY": "Положение Y",
+    "positionZ": "Положение Z",
+    "box": "Куб",
+    "extrude": "Выдавливание",
+    "metrics": "Метрики",
+    "objects": "Объекты"
   },
   "timeline": {
     "blockedByError": "Нельзя перейти дальше проблемной операции",
@@ -187,7 +198,9 @@
   "context": {
     "deleteOperation": "Удалить операцию",
     "deleteObject": "Удалить объект",
-    "rebuildFromHere": "Перестроить отсюда"
+    "rebuildFromHere": "Перестроить отсюда",
+    "color": "Цвет",
+    "rename": "Переименовать"
   },
   "nav": {
     "cube": "Куб ориентации",

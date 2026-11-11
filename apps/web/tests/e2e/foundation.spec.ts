@@ -95,6 +95,11 @@ async function addBox(page: Page) {
   await commitOperation(page);
 }
 
+/** The inspector names the type of the selected object in its header. */
+function inspectorTitle(page: Page) {
+  return page.getByTestId('inspector').locator('.panel-header > span').first();
+}
+
 const PREVIEW_MARKS =
   '.tree-row.preview-added, .tree-row.preview-modified, .tree-row.preview-removed';
 
@@ -210,6 +215,78 @@ test.describe('ICANCad foundation', () => {
     ).toBeVisible();
   });
 
+  test('edits object properties and undoes them with the keyboard', async ({ page }) => {
+    await openApp(page);
+    await addBox(page);
+
+    const inspector = page.getByTestId('inspector');
+    const canvas = page.getByTestId('viewport-canvas');
+    const canvasBox = await canvas.boundingBox();
+    const bodyRow = page.locator('.tree-row').first();
+    await bodyRow.locator('.tree-main').click();
+    await expect(inspectorTitle(page)).toHaveText('Body');
+    await expect(inspector.getByText('Metrics')).toBeVisible();
+
+    // The tree owns naming: a double click renames in place.
+    await bodyRow.locator('.tree-main').dblclick();
+    const rename = bodyRow.getByRole('textbox', { name: 'Rename' });
+    await rename.fill('Base plate');
+    await rename.press('Enter');
+    await expect(bodyRow).toContainText('Base plate');
+
+    // The colour comes from the context menu as a palette, and reaches the
+    // object tree and the 3D view.
+    await bodyRow.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Colour' }).hover();
+    await expect(page.getByRole('menu').nth(1).locator('.context-palette-swatch')).toHaveCount(24);
+    await page.getByRole('menuitemradio', { name: '#f7a072' }).click();
+    await expect(bodyRow.locator('.tree-icon')).toHaveAttribute(
+      'style',
+      /rgb\(247, 160, 114\)/,
+    );
+
+    // Undo and redo work from the keyboard, not just the toolbar buttons.
+    await page.mouse.click(canvasBox!.x + 10, canvasBox!.y + 10);
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect(page.locator('.tree-row').first().locator('.tree-icon')).not.toHaveAttribute(
+      'style',
+      /rgb\(247, 160, 114\)/,
+    );
+    await page.keyboard.press('ControlOrMeta+Shift+z');
+    await expect(page.locator('.tree-row').first().locator('.tree-icon')).toHaveAttribute(
+      'style',
+      /rgb\(247, 160, 114\)/,
+    );
+
+    // A box exposes its corner position, which accepts negative values and
+    // survives a reload.
+    await page.locator('.timeline-op').first().click();
+    const positionX = inspector.getByRole('textbox', { name: 'Position X · mm' });
+    await positionX.fill('-15');
+    await positionX.press('Enter');
+    await expect(page.getByTestId('save-state')).toHaveAttribute('data-state', 'saved');
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Geometry pipeline check' })).toBeHidden({
+      timeout: 120_000,
+    });
+    await page.locator('.timeline-op').first().click();
+    await expect(inspector.getByRole('textbox', { name: 'Position X · mm' })).toHaveValue('-15');
+  });
+
+  test('opens the operation that produced a face on a double click', async ({ page }) => {
+    await openApp(page);
+    await addBox(page);
+    await expect(page.locator('.timeline-op.selected')).toHaveCount(0);
+
+    const canvas = page.getByTestId('viewport-canvas');
+    const box = await canvas.boundingBox();
+    await page.mouse.dblclick(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    // Navigating from a face selects its operation, which opens its settings.
+    await expect(page.locator('.timeline-op.selected')).toHaveCount(1);
+    await expect(page.locator('.tree-row.preview-added')).toHaveCount(1);
+    await expect(inspectorTitle(page)).toHaveText('Box');
+  });
+
   test('imports and exports STL meshes', async ({ page }) => {
     await openApp(page);
     await page.setInputFiles('[data-testid="import-mesh"]', {
@@ -300,8 +377,10 @@ test.describe('ICANCad foundation', () => {
     await page.getByRole('menuitem', { name: 'Top' }).click();
     await expect.poll(async () => Number(await cube.getAttribute('data-polar'))).toBeLessThan(0.01);
     await page.locator('.timeline-op').last().click();
-    await expect(page.locator('.dimension-field')).toHaveCount(3);
-    await expect(page.locator('.dimension-unit')).toHaveCount(3);
+    // A box exposes its corner position and its three sizes.
+    await expect(page.locator('.dimension-field')).toHaveCount(6);
+    await expect(page.locator('.dimension-unit')).toHaveCount(6);
+    await expect(inspectorTitle(page)).toHaveText('Box');
     await commitOperation(page);
 
     const bodyRows = page.locator('.tree-row');
@@ -342,7 +421,7 @@ test.describe('ICANCad foundation', () => {
 
     await page.getByRole('button', { name: 'Language' }).click();
     await page.getByRole('menuitem', { name: 'Русский' }).click();
-    await expect(page.getByText('Инспектор')).toBeVisible();
+    await expect(inspectorTitle(page)).toHaveText('Проект');
     await expect(page.getByRole('button', { name: 'Отменить', exact: true })).toBeVisible();
 
     await page.getByRole('button', { name: 'Светлая' }).click();
@@ -360,9 +439,10 @@ test.describe('ICANCad foundation', () => {
       canvasBox!.x + canvasBox!.width / 2,
       canvasBox!.y + canvasBox!.height / 2,
     );
-    await expect(page.getByTestId('right').getByText('Выбрано', { exact: true })).toBeVisible();
+    // The panel header names the type of the selected object.
+    await expect(inspectorTitle(page)).toHaveText('Тело');
     await page.mouse.click(canvasBox!.x + 18, canvasBox!.y + 18);
-    await expect(page.getByTestId('right').getByText('Проект', { exact: true })).toBeVisible();
+    await expect(inspectorTitle(page)).toHaveText('Проект');
   });
   test('adds and controls multiple section planes', async ({ page }) => {
     await openApp(page);
@@ -502,7 +582,7 @@ test.describe('ICANCad foundation', () => {
     const box = await canvas.boundingBox();
     await page.mouse.click(box!.x + 260, box!.y + 320);
     await page.mouse.click(box!.x + 470, box!.y + 440);
-    await expect(page.locator('.tree-row').first()).toContainText('1');
+    await expect(page.locator('.tree-row').first()).toContainText('Sketch');
 
     const topbar = page.locator('.topbar');
     await topbar.getByRole('button', { name: 'Select', exact: true }).click();
@@ -515,7 +595,7 @@ test.describe('ICANCad foundation', () => {
 
     await page.getByRole('button', { name: 'Finish sketch' }).click();
     await expect(page.locator('.sketch-overlay')).toHaveCount(0);
-    await expect(page.locator('.tree-row').first()).toContainText('1');
+    await expect(page.locator('.tree-row').first()).toContainText('Sketch');
     await expect
       .poll(async () => Math.abs(Number(await cube.getAttribute('data-azimuth')) - azimuthBefore))
       .toBeLessThan(0.001);
@@ -523,20 +603,25 @@ test.describe('ICANCad foundation', () => {
       .poll(async () => Math.abs(Number(await cube.getAttribute('data-polar')) - polarBefore))
       .toBeLessThan(0.001);
 
+    // The sketch object is renamed from its tree row, and the operation that
+    // created it takes the same name.
     const sketchRow = page.locator('.tree-row').first();
-    const sketchNameField = page.getByTestId('inspector').getByRole('textbox', { name: 'Name' });
-    await sketchRow.locator('.tree-main').click();
-    await sketchNameField.fill('Profile');
-    await sketchNameField.press('Enter');
+    await sketchRow.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Rename' }).click();
+    const rename = sketchRow.getByRole('textbox', { name: 'Rename' });
+    await rename.fill('Profile');
+    await rename.press('Enter');
     await expect(sketchRow).toContainText('Profile');
     await expect(page.locator('.timeline-op').first()).toHaveAttribute('aria-label', 'Profile');
 
+    // The operation keeps its own name field, which renames the same feature.
     await page.locator('.timeline-op').first().click();
-    await sketchNameField.fill('Outline');
-    await sketchNameField.press('Enter');
+    const operationName = page.getByTestId('inspector').getByRole('textbox', { name: 'Name' });
+    await operationName.fill('Outline');
+    await operationName.press('Enter');
+    await commitOperation(page);
     await expect(sketchRow).toContainText('Outline');
     await expect(page.locator('.timeline-op').first()).toHaveAttribute('aria-label', 'Outline');
-    await commitOperation(page);
     await expect(sketchRow).not.toHaveClass(/preview-added/);
 
     await sketchRow.getByRole('button', { name: 'Hide', exact: true }).click();
@@ -545,7 +630,6 @@ test.describe('ICANCad foundation', () => {
 
     await sketchRow.locator('.tree-main').dblclick();
     await expect(page.locator('.sketch-overlay')).toBeVisible();
-    await expect(sketchRow).toContainText('1');
   });
 
   test('creates a sketch on a planar face', async ({ page }) => {
@@ -886,13 +970,22 @@ test.describe('ICANCad foundation', () => {
     await expect(inspector.getByText('Face 1')).toBeVisible();
     await expect(inspector.getByText('Edge 1')).toBeVisible();
     await expect(inspector.getByText('Point 4')).toBeVisible();
-    await expect(inspector.getByText('Geometry')).toHaveCount(0);
+    await expect(
+      inspector.locator('.panel-section-title').filter({ hasText: 'Geometry' }),
+    ).toHaveCount(0);
     await expect(inspector.getByText('Placement')).toHaveCount(0);
+    // A sketch object can show its construction geometry, which is hidden in
+    // the 3D view until the switch is turned on.
+    await expect(
+      inspector.getByRole('switch', { name: 'Show construction geometry' }),
+    ).toHaveAttribute('aria-checked', 'false');
 
     // The timeline chip selects the operation: placement and geometry.
     await page.locator('.timeline-op').first().click();
     await expect(inspector.getByText('Placement')).toBeVisible();
-    await expect(inspector.getByText('Geometry')).toBeVisible();
+    await expect(
+      inspector.locator('.panel-section-title').filter({ hasText: 'Geometry' }),
+    ).toBeVisible();
     await expect(inspector.getByText('Faces')).toHaveCount(0);
 
     // Editing also targets the operation, because the recipe is what changes.

@@ -21,6 +21,8 @@ import { isPlanarFace } from './planarFace';
 const HATCH_SPACING_PX = 6;
 /** Screen distance over which a through-cut ghost fades out. */
 const GHOST_FADE_PX = 100;
+const DOUBLE_CLICK_MS = 350;
+const DOUBLE_CLICK_SLOP_PX = 6;
 
 export interface SceneBody {
   id: string;
@@ -252,6 +254,8 @@ export class SceneController {
   private lastY = 0;
   private pointerDown: { x: number; y: number } | null = null;
   private pointerMoved = false;
+  /** Previous click, so a second one on the same spot reads as a double click. */
+  private lastClick: { time: number; x: number; y: number } | null = null;
   private readonly raycaster = new THREE.Raycaster();
   private transition: {
     from: CameraPose;
@@ -267,6 +271,8 @@ export class SceneController {
     private readonly onPick?: (pick: ScenePick | null, additive: boolean) => void,
     private readonly onBodyContextMenu?: (bodyId: string | null, x: number, y: number) => void,
     private readonly onCameraChange?: (azimuth: number, polar: number, distance: number) => void,
+    /** A double click on a face asks for the operation that produced it. */
+    private readonly onDoublePick?: (pick: ScenePick) => void,
   ) {
     this.renderer = new THREE.WebGLRenderer({
       canvas,
@@ -834,7 +840,12 @@ export class SceneController {
         set.add(Number(index));
         selectedPoints.set(entityId, set);
       }
+      // Construction geometry is a modelling helper: it is only drawn when the
+      // object asks for it, or while that sketch itself is being edited.
+      const showConstruction = sketch.active || Boolean(sketch.showConstruction);
+      const tint = sketch.color ? new THREE.Color(sketch.color).getHex() : null;
       for (const entity of sketch.entities) {
+        if (entity.construction && !showConstruction) continue;
         this.addSketchEntity(
           group,
           entity,
@@ -846,6 +857,7 @@ export class SceneController {
           highlighted.has(entity.id),
           highlightedPoints.get(entity.id) ?? new Set<number>(),
           editingSketch && !sketch.active,
+          sketch.active ? null : tint,
         );
       }
       this.addSketchFacePickers(group, sketch);
@@ -1186,6 +1198,7 @@ export class SceneController {
     highlighted: boolean,
     highlightedPoints: ReadonlySet<number>,
     background: boolean,
+    tint: number | null,
   ): void {
     const color = selected
       ? this.sketchSelectedColor()
@@ -1195,7 +1208,7 @@ export class SceneController {
           ? this.sketchFrozenLineColor()
           : entity.construction
             ? this.sketchConstructionColor()
-            : this.sketchColor();
+            : (tint ?? this.sketchColor());
     // Sketches that are not being edited are drawn thinner so they cannot be
     // mistaken for the sketch in progress.
     const width = selected ? 3 : highlighted ? 3 : background ? 1 : 2;
@@ -1784,6 +1797,22 @@ export class SceneController {
       this.pointerDown = null;
       this.pointerMoved = false;
       if (shouldPick) {
+        const now = performance.now();
+        const previous = this.lastClick;
+        const double =
+          previous !== null &&
+          now - previous.time < DOUBLE_CLICK_MS &&
+          Math.hypot(event.clientX - previous.x, event.clientY - previous.y) <= DOUBLE_CLICK_SLOP_PX;
+        this.lastClick = double ? null : { time: now, x: event.clientX, y: event.clientY };
+        if (double) {
+          // The pair means "open what made this face", so it must not also
+          // re-select the object the first click already selected.
+          // A face of a solid wins over a sketch lying on it: the sketch face is
+          // a picker, not something the user aims at.
+          const pick = this.pickSceneAt(event.clientX, event.clientY, true, false, true);
+          if (pick) this.onDoublePick?.(pick);
+          return;
+        }
         const pick = this.pickSceneAt(
           event.clientX,
           event.clientY,
@@ -1810,6 +1839,7 @@ export class SceneController {
     clientY: number,
     faces = false,
     bodyFacesOnly = false,
+    preferBody = false,
   ): ScenePick | null {
     const raycaster = this.pointerToRay(clientX, clientY);
     const bodyMeshes = [...this.bodies.values()]
@@ -1822,7 +1852,7 @@ export class SceneController {
     const bodyHit = raycaster.intersectObjects(bodyMeshes, false)[0];
     // While faces are being picked they win over the solids they produced, so a
     // face stays clickable after it has been extruded.
-    if (faces && faceHit) {
+    if (faces && faceHit && !preferBody) {
       const face = faceHit.object.userData.sketchFace as
         { sketchId: string; faceId: string } | undefined;
       if (face) return { kind: 'face', sketchId: face.sketchId, faceId: face.faceId };

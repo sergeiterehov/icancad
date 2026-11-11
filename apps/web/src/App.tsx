@@ -1,4 +1,5 @@
 import { Group, Panel, Separator } from 'react-resizable-panels';
+import { useShortcuts } from './hooks/useShortcuts';
 import { useApplyTheme } from './hooks/useTheme';
 import {
   useAutosave,
@@ -24,6 +25,7 @@ export default function App() {
   useAutosave();
   useRebuildScene();
   useApplyTheme();
+  useShortcuts();
 
   const hydrated = useDocumentStore((state) => state.hydrated);
 

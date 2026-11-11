@@ -4,6 +4,7 @@ import {
   bodiesInHistory,
   featureBodyId,
   objectName,
+  objectShowConstruction,
   objectVisible,
   resolveBody,
   sketchObjectId,
@@ -21,13 +22,18 @@ import {
   Box,
   Check,
   ChevronsUpDown,
+  Eye,
+  EyeOff,
   Hexagon,
   Infinity as InfinityIcon,
+  LayerArrowUp,
   MoveVertical,
   PawPrint,
   PencilRuler,
   Pencil,
   Spline,
+  SquareArrowRightExit,
+  SquareArrowUpExit,
   X,
 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
@@ -275,6 +281,22 @@ function isPrimitive(feature: Feature | undefined): feature is PrimitiveFeature 
   return feature?.type === 'primitive';
 }
 
+/** Type of an operation, used as the panel title. */
+function featureTypeLabel(t: (key: string) => string, feature: Feature): string {
+  switch (feature.type) {
+    case 'sketch':
+      return t('inspector.sketch');
+    case 'primitive':
+      return t('inspector.box');
+    case 'extrude':
+      return t('inspector.extrude');
+    case 'import-mesh':
+      return t('inspector.mesh');
+    default:
+      return t('inspector.operation');
+  }
+}
+
 interface ResolvedItem {
   key: string;
   kind: 'body' | 'mesh' | 'feature' | 'sketch';
@@ -451,6 +473,9 @@ export function Inspector() {
   const toggleExtrudeBodyFace = useDocumentStore((state) => state.toggleExtrudeBodyFace);
   const toggleExtrudeBodyTarget = useDocumentStore((state) => state.toggleExtrudeBodyTarget);
   const setExtrudeReversed = useDocumentStore((state) => state.setExtrudeReversed);
+  const toggleBodyVisibility = useDocumentStore((state) => state.toggleBodyVisibility);
+  const toggleSketchVisibility = useDocumentStore((state) => state.toggleSketchVisibility);
+  const setConstructionVisible = useDocumentStore((state) => state.setConstructionVisible);
   const picking = useUiStore((state) => state.pickingExtrude);
   const pickingBodies = useUiStore((state) => state.pickingExtrudeBodies);
   const pickingSketchPlane = useUiStore((state) => state.pickingSketchPlane);
@@ -732,8 +757,15 @@ export function Inspector() {
     });
   };
 
-  const renameObject = (objectId: string, name: string) => {
-    apply({ type: 'metadata/patch', objectId, patch: { name } });
+  // A box grows from its corner, so the position is the corner itself.
+  const updatePrimitivePosition = (axis: number, value: number) => {
+    if (!isPrimitive(feature)) return;
+    const translation: [number, number, number] = [...feature.transform.translation];
+    translation[axis] = value;
+    apply({
+      type: 'feature/replace',
+      feature: { ...feature, transform: { ...feature.transform, translation } },
+    });
   };
 
   const boundsOf = (candidate: typeof mesh) =>
@@ -825,17 +857,48 @@ export function Inspector() {
     )} × ${formatNumber(max[2]! - min[2]!, locale)} mm`;
   })();
 
+  // The panel is the parameters of one object, so the header names what is
+  // selected and carries the visibility toggle of that object.
+  const headerTitle =
+    resolved.length > 1
+      ? `${t('inspector.selection')} · ${resolved.length}`
+      : sketchObject
+        ? t('inspector.sketch')
+        : feature
+          ? featureTypeLabel((key) => t(key as never), feature)
+          : body
+            ? body.kind === 'mesh'
+              ? t('inspector.mesh')
+              : t('inspector.body')
+            : t('inspector.project');
+  const visibility = sketchObject
+    ? {
+        visible: objectVisible(project, sketchObjectId(sketchObject.id)),
+        toggle: () => toggleSketchVisibility(sketchObject.id),
+      }
+    : body
+      ? { visible: body.visible, toggle: () => toggleBodyVisibility(body.id) }
+      : undefined;
   return (
     <div className="panel" data-testid="inspector">
       <header className="panel-header">
-        <span>{t('panels.inspector')}</span>
+        <span>{headerTitle}</span>
+        {visibility && (
+          <IconButton
+            label={visibility.visible ? t('tree.hide') : t('tree.show')}
+            className="tiny"
+            onClick={visibility.toggle}
+          >
+            {visibility.visible ? <Eye size={13} /> : <EyeOff size={13} />}
+          </IconButton>
+        )}
       </header>
 
       <div className="panel-body">
         <SectionPanel />
         {resolved.length > 0 ? (
           <>
-            <PanelSection title={t('inspector.selection')} count={resolved.length}>
+            <PanelSection title={t('inspector.objects')} count={resolved.length}>
               <div className="selection-list">
                 {resolved.map((item) => (
                   <div key={item.key} className="selection-item">
@@ -857,7 +920,7 @@ export function Inspector() {
               </div>
             </PanelSection>
 
-            <PanelSection title={t('inspector.statistics')}>
+            <PanelSection title={t('inspector.metrics')}>
               <StatRow
                 label={t('inspector.triangles')}
                 value={formatNumber(multiTriangles, locale, 0)}
@@ -867,18 +930,15 @@ export function Inspector() {
           </>
         ) : sketchObject && sketchGeometry ? (
           <>
-            <PanelSection title={t('inspector.selection')}>
-              <TextField
-                label={t('inspector.name')}
-                value={sketchObject.name}
-                onCommit={(name) =>
-                  apply({ type: 'feature/replace', feature: { ...sketchObject, name } })
-                }
-              />
-              <StatRow
-                label={t('inspector.visibility')}
-                value={objectVisible(project, sketchObjectId(sketchObject.id)) ? '✓' : '—'}
-              />
+            <PanelSection title={t('inspector.display')}>
+              <div className="stat-row">
+                <span className="stat-label">{t('inspector.showConstruction')}</span>
+                <Switch
+                  label={t('inspector.showConstruction')}
+                  checked={objectShowConstruction(project, sketchObjectId(sketchObject.id))}
+                  onChange={(visible) => setConstructionVisible(sketchObject.id, visible)}
+                />
+              </div>
             </PanelSection>
 
             {sketchGeometry.faces.length > 0 && (
@@ -953,7 +1013,7 @@ export function Inspector() {
               </PanelSection>
             )}
 
-            <PanelSection title={t('inspector.statistics')}>
+            <PanelSection title={t('inspector.metrics')}>
               <StatRow label={t('inspector.bounds')} value={sketchExtent(sketchObject, locale)} />
             </PanelSection>
 
@@ -969,7 +1029,7 @@ export function Inspector() {
           </>
         ) : feature ? (
           <>
-            <PanelSection title={t('inspector.selection')}>
+            <div className="inspector-field">
               <TextField
                 label={t('inspector.name')}
                 value={feature.name}
@@ -977,7 +1037,7 @@ export function Inspector() {
                   apply({ type: 'feature/replace', feature: { ...feature, name } })
                 }
               />
-            </PanelSection>
+            </div>
 
             {feature.type === 'sketch' && (
               <PanelSection title={t('sketch.placement')}>
@@ -1234,31 +1294,48 @@ export function Inspector() {
             )}
 
             {isPrimitive(feature) && (
-              <PanelSection title={t('inspector.size')}>
-                <div className="dimension-row">
-                  <DimensionField
-                    axis="X"
-                    label={`${t('inspector.width')} · mm`}
-                    suffix="mm"
-                    value={feature.params.dx}
-                    onCommit={(dx) => updatePrimitive({ dx })}
-                  />
-                  <DimensionField
-                    axis="Y"
-                    label={`${t('inspector.height')} · mm`}
-                    suffix="mm"
-                    value={feature.params.dy}
-                    onCommit={(dy) => updatePrimitive({ dy })}
-                  />
-                  <DimensionField
-                    axis="Z"
-                    label={`${t('inspector.depth')} · mm`}
-                    suffix="mm"
-                    value={feature.params.dz}
-                    onCommit={(dz) => updatePrimitive({ dz })}
-                  />
-                </div>
-              </PanelSection>
+              <>
+                <PanelSection title={t('inspector.position')}>
+                  <div className="dimension-row">
+                    {(['X', 'Y', 'Z'] as const).map((axis, index) => (
+                      <DimensionField
+                        key={axis}
+                        axis={axis}
+                        allowNegative
+                        label={`${t(`inspector.position${axis}` as never)} · mm`}
+                        suffix="mm"
+                        value={feature.transform.translation[index]!}
+                        onCommit={(value) => updatePrimitivePosition(index, value)}
+                      />
+                    ))}
+                  </div>
+                </PanelSection>
+                <PanelSection title={t('inspector.size')}>
+                  <div className="dimension-row">
+                    <DimensionField
+                      icon={<SquareArrowRightExit size={13} />}
+                      label={`${t('inspector.width')} · mm`}
+                      suffix="mm"
+                      value={feature.params.dx}
+                      onCommit={(dx) => updatePrimitive({ dx })}
+                    />
+                    <DimensionField
+                      icon={<SquareArrowUpExit size={13} />}
+                      label={`${t('inspector.height')} · mm`}
+                      suffix="mm"
+                      value={feature.params.dy}
+                      onCommit={(dy) => updatePrimitive({ dy })}
+                    />
+                    <DimensionField
+                      icon={<LayerArrowUp size={13} />}
+                      label={`${t('inspector.depth')} · mm`}
+                      suffix="mm"
+                      value={feature.params.dz}
+                      onCommit={(dz) => updatePrimitive({ dz })}
+                    />
+                  </div>
+                </PanelSection>
+              </>
             )}
 
             {feature.type !== 'extrude' && featureError && (
@@ -1267,19 +1344,8 @@ export function Inspector() {
               </div>
             )}
           </>
-        ) : body ? (
-          <PanelSection
-            title={body.kind === 'mesh' ? t('inspector.mesh') : t('inspector.selection')}
-          >
-            <TextField
-              label={t('inspector.name')}
-              value={body.name}
-              onCommit={(name) => renameObject(body.id, name)}
-            />
-            <StatRow label={t('inspector.visibility')} value={body.visible ? '✓' : '—'} />
-          </PanelSection>
-        ) : (
-          <PanelSection title={t('inspector.project')}>
+        ) : body ? null : (
+          <div className="panel-properties">
             <TextField label={t('inspector.name')} value={project.name} onCommit={renameProject} />
             <StatRow label={t('inspector.units')} value={project.units} />
             <StatRow label={t('inspector.features')} value={project.features.length} />
@@ -1289,11 +1355,11 @@ export function Inspector() {
               value={bodiesInHistory(project).filter((body) => body.kind === 'mesh').length}
             />
             {project.historyEnd && <p className="hint">{t('inspector.rolledBack')}</p>}
-          </PanelSection>
+          </div>
         )}
 
         {((feature && feature.type !== 'sketch' && feature.type !== 'extrude') || body) && (
-          <PanelSection title={t('inspector.statistics')}>
+          <PanelSection title={t('inspector.metrics')}>
             {importedStats ? (
               <>
                 <StatRow
