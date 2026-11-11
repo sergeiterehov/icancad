@@ -42,6 +42,7 @@ import { useUiStore } from '../stores/uiStore';
 import {
   DimensionField,
   IconButton,
+  ObjectPickerField,
   PanelSection,
   Segmented,
   SegmentedTab,
@@ -55,6 +56,7 @@ import { ExtrudeOpIcon, PointIcon } from './featureIcons';
 import { SectionPanel } from './SectionPanel';
 import { referenceMenuItems } from '../sketch/referenceMenu';
 import { measureInfo, measuresForEntity } from '../sketch/measure';
+import { sketchPlaneReady } from '../sketch/sectionPlane';
 import { SketchConstraints } from './SketchConstraints';
 import { Tooltip } from './Tooltip';
 import { translate } from './translate';
@@ -450,8 +452,10 @@ export function Inspector() {
   const setExtrudeReversed = useDocumentStore((state) => state.setExtrudeReversed);
   const picking = useUiStore((state) => state.pickingExtrude);
   const pickingBodies = useUiStore((state) => state.pickingExtrudeBodies);
+  const pickingSketchPlane = useUiStore((state) => state.pickingSketchPlane);
   const setPickingExtrude = useUiStore((state) => state.setPickingExtrude);
   const setPickingExtrudeBodies = useUiStore((state) => state.setPickingExtrudeBodies);
+  const setPickingSketchPlane = useUiStore((state) => state.setPickingSketchPlane);
   const meshes = useKernelStore((state) => state.meshes);
   const shapeStats = useKernelStore((state) => state.shapeStats);
   const meshStats = useKernelStore((state) => state.meshStats);
@@ -488,7 +492,11 @@ export function Inspector() {
 
   const sketchGeometry = sketchObject ? sketchTopology(sketchObject.entities) : undefined;
   const sketchOffset =
-    feature?.type === 'sketch' && feature.plane.type === 'datum' ? feature.plane.offset : 0;
+    feature?.type === 'sketch'
+      ? feature.plane.type === 'datum'
+        ? feature.plane.offset
+        : (feature.plane.offset ?? 0)
+      : 0;
   // One operation can own several bodies, so an operation shows the bounds of
   // all of them together.
   const ownedBodies = feature
@@ -514,7 +522,32 @@ export function Inspector() {
   useEffect(() => {
     if (picking && picking !== feature?.id) setPickingExtrude(null);
     if (pickingBodies && pickingBodies !== feature?.id) setPickingExtrudeBodies(null);
-  }, [picking, pickingBodies, feature?.id, setPickingExtrude, setPickingExtrudeBodies]);
+    if (
+      pickingSketchPlane &&
+      (pickingSketchPlane !== feature?.id ||
+        feature?.type !== 'sketch' ||
+        feature.plane.type !== 'face')
+    ) {
+      setPickingSketchPlane(null);
+    }
+  }, [
+    picking,
+    pickingBodies,
+    pickingSketchPlane,
+    feature,
+    setPickingExtrude,
+    setPickingExtrudeBodies,
+    setPickingSketchPlane,
+  ]);
+
+  useEffect(() => {
+    if (!pickingSketchPlane) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPickingSketchPlane(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [pickingSketchPlane, setPickingSketchPlane]);
 
   const extrudeFeature = feature?.type === 'extrude' ? feature : undefined;
   const setExtrudeEnd = (featureId: string, end: ExtrudeFeature['end']) =>
@@ -936,43 +969,85 @@ export function Inspector() {
 
             {feature.type === 'sketch' && (
               <PanelSection title={t('sketch.placement')}>
-                <div className="sketch-plane-row">
-                  <Segmented ariaLabel={t('sketch.plane')}>
-                    {(['XY', 'XZ', 'YZ'] as const).map((plane) => (
+                <div className="section-stack">
+                  <div className="sketch-plane-row">
+                    <Segmented ariaLabel={t('sketch.plane')}>
+                      {(['XY', 'XZ', 'YZ'] as const).map((plane) => (
+                        <SegmentedTab
+                          key={plane}
+                          label={plane}
+                          active={feature.plane.type === 'datum' && feature.plane.plane === plane}
+                          onClick={() =>
+                            apply({
+                              type: 'feature/replace',
+                              feature: {
+                                ...feature,
+                                plane: { type: 'datum', plane, offset: sketchOffset },
+                              },
+                            })
+                          }
+                        />
+                      ))}
                       <SegmentedTab
-                        key={plane}
-                        label={plane}
-                        active={feature.plane.type === 'datum' && feature.plane.plane === plane}
-                        onClick={() =>
+                        label={t('sketch.planeFace')}
+                        icon={<Hexagon size={12} />}
+                        active={feature.plane.type === 'face'}
+                        onClick={() => {
+                          if (feature.plane.type === 'face') return;
                           apply({
                             type: 'feature/replace',
                             feature: {
                               ...feature,
-                              plane: { type: 'datum', plane, offset: sketchOffset },
+                              plane: { type: 'face', offset: sketchOffset },
                             },
-                          })
-                        }
+                          });
+                        }}
                       />
-                    ))}
-                  </Segmented>
-                  <SketchOffsetField
-                    label={t('sketch.offset')}
-                    value={sketchOffset}
-                    unit="mm"
-                    onCommit={(offset) =>
-                      apply({
-                        type: 'feature/replace',
-                        feature: {
-                          ...feature,
-                          plane: {
-                            type: 'datum',
-                            plane: feature.plane.type === 'datum' ? feature.plane.plane : 'XY',
-                            offset,
+                    </Segmented>
+                    <SketchOffsetField
+                      label={t('sketch.offset')}
+                      value={sketchOffset}
+                      unit="mm"
+                      onCommit={(offset) =>
+                        apply({
+                          type: 'feature/replace',
+                          feature: {
+                            ...feature,
+                            plane:
+                              feature.plane.type === 'datum'
+                                ? {
+                                    type: 'datum',
+                                    plane: feature.plane.plane,
+                                    offset,
+                                  }
+                                : { ...feature.plane, offset },
                           },
-                        },
-                      })
-                    }
-                  />
+                        })
+                      }
+                    />
+                  </div>
+                  {feature.plane.type === 'face' && (
+                    <ObjectPickerField
+                      label={t('sketch.planeFace')}
+                      value={
+                        sketchPlaneReady(feature)
+                          ? t('sketch.face', {
+                              index: Number(feature.plane.topoId) + 1,
+                            })
+                          : undefined
+                      }
+                      placeholder={t('sketch.selectFace')}
+                      icon={<Hexagon size={14} />}
+                      active={pickingSketchPlane === feature.id}
+                      invalid={!sketchPlaneReady(feature) || Boolean(featureErrors[feature.id])}
+                      onClick={() =>
+                        setPickingSketchPlane(
+                          pickingSketchPlane === feature.id ? null : feature.id,
+                        )
+                      }
+                      testId="sketch-face-picker"
+                    />
+                  )}
                 </div>
               </PanelSection>
             )}

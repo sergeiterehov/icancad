@@ -21,9 +21,15 @@ interface UiState {
   pickingExtrude: string | null;
   /** Operation waiting for target bodies to be picked in the 3D view. */
   pickingExtrudeBodies: string | null;
+  /** Sketch operation waiting for its plane face to be picked in the 3D view. */
+  pickingSketchPlane: string | null;
+  /** Face pick started from the sketch tool: open the editor after a pick. */
+  sketchPlanePickThenEdit: string | null;
   sectionEnabled: boolean;
   sketchSectionEnabled: boolean;
   activeSketchId: string | null;
+  /** False while the rebuild for the sketch's timeline position is running. */
+  activeSketchReady: boolean;
   sketchSelectionIds: string[];
   sketchConstraintId: string | null;
   sketchFrozenEntityIds: string[];
@@ -36,12 +42,15 @@ interface UiState {
   requestDelete: (request: DeleteRequest) => void;
   setPickingExtrude: (featureId: string | null) => void;
   setPickingExtrudeBodies: (featureId: string | null) => void;
+  setPickingSketchPlane: (featureId: string | null) => void;
+  startSketchPlanePicking: (featureId: string, enterEdit: boolean) => void;
   cancelDelete: () => void;
   showToast: (key: string, kind?: 'info' | 'error', params?: Record<string, unknown>) => void;
   dismissToast: () => void;
   setSectionEnabled: (enabled: boolean) => void;
   setSketchSectionEnabled: (enabled: boolean) => void;
   setActiveSketch: (sketchId: string | null) => void;
+  setActiveSketchReady: (ready: boolean) => void;
   setSketchSelection: (ids: string[]) => void;
   selectSketchConstraint: (id: string | null) => void;
   setSketchFrozen: (ids: string[]) => void;
@@ -81,9 +90,12 @@ export const useUiStore = create<UiState>((set) => ({
   deleteRequest: null,
   pickingExtrude: null,
   pickingExtrudeBodies: null,
+  pickingSketchPlane: null,
+  sketchPlanePickThenEdit: null,
   sectionEnabled: loadSectionEnabled(),
   sketchSectionEnabled: true,
   activeSketchId: null,
+  activeSketchReady: true,
   sketchSelectionIds: [],
   sketchConstraintId: null,
   sketchFrozenEntityIds: [],
@@ -99,13 +111,40 @@ export const useUiStore = create<UiState>((set) => ({
   requestDelete: (deleteRequest) => set({ deleteRequest }),
   // Face and body picking are mutually exclusive.
   setPickingExtrude: (pickingExtrude) =>
-    set(pickingExtrude ? { pickingExtrude, pickingExtrudeBodies: null } : { pickingExtrude }),
+    set(
+      pickingExtrude
+        ? { pickingExtrude, pickingExtrudeBodies: null, pickingSketchPlane: null }
+        : { pickingExtrude },
+    ),
   setPickingExtrudeBodies: (pickingExtrudeBodies) =>
-    set(pickingExtrudeBodies ? { pickingExtrudeBodies, pickingExtrude: null } : { pickingExtrudeBodies }),
+    set(
+      pickingExtrudeBodies
+        ? { pickingExtrudeBodies, pickingExtrude: null, pickingSketchPlane: null }
+        : { pickingExtrudeBodies },
+    ),
+  setPickingSketchPlane: (pickingSketchPlane) =>
+    set(
+      pickingSketchPlane
+        ? {
+            pickingSketchPlane,
+            sketchPlanePickThenEdit: null,
+            pickingExtrude: null,
+            pickingExtrudeBodies: null,
+          }
+        : { pickingSketchPlane, sketchPlanePickThenEdit: null },
+    ),
+  startSketchPlanePicking: (sketchPlanePickThenEdit, enterEdit) =>
+    set({
+      pickingSketchPlane: sketchPlanePickThenEdit,
+      sketchPlanePickThenEdit: enterEdit ? sketchPlanePickThenEdit : null,
+      pickingExtrude: null,
+      pickingExtrudeBodies: null,
+    }),
   cancelDelete: () => set({ deleteRequest: null }),
   setActiveSketch: (activeSketchId) =>
     set({
       activeSketchId,
+      activeSketchReady: activeSketchId === null,
       sketchSelectionIds: [],
       sketchConstraintId: null,
       sketchFrozenEntityIds: [],
@@ -113,6 +152,7 @@ export const useUiStore = create<UiState>((set) => ({
       sketchProblemConstraintIds: [],
       sketchTool: 'select',
     }),
+  setActiveSketchReady: (activeSketchReady) => set({ activeSketchReady }),
   setSketchSelection: (sketchSelectionIds) =>
     set({ sketchSelectionIds, sketchConstraintId: null, sketchAutoHighlightIds: [] }),
   selectSketchConstraint: (sketchConstraintId) =>

@@ -49,6 +49,8 @@ export interface FaceHighlightState {
   picking: boolean;
   /** Bodies are being picked as operation targets. */
   bodyPicking: boolean;
+  /** Ignore sketch face pickers and only accept solid-body faces. */
+  bodyFacesOnly?: boolean;
 }
 
 interface CameraPose {
@@ -180,11 +182,13 @@ export class SceneController {
     invalid: Set<string>;
     picking: boolean;
     bodyPicking: boolean;
+    bodyFacesOnly: boolean;
   } = {
     selected: new Set(),
     invalid: new Set(),
     picking: false,
     bodyPicking: false,
+    bodyFacesOnly: false,
   };
   private bodyStyles: {
     selected: Set<string>;
@@ -348,6 +352,7 @@ export class SceneController {
       invalid: new Set(state.invalid),
       picking: state.picking,
       bodyPicking: state.bodyPicking,
+      bodyFacesOnly: Boolean(state.bodyFacesOnly),
     };
     if (!state.picking) this.hoveredFaceKey = null;
     if (!state.bodyPicking && this.hoveredBodyId !== null) {
@@ -767,18 +772,11 @@ export class SceneController {
 
   alignSketch(frame: SketchFrame, entities: readonly SketchEntity[] = []): void {
     const [nx, ny, nz] = frame.normal;
-    let azimuth: number;
-    let polar: number;
-    if (Math.abs(nz) >= Math.abs(nx) && Math.abs(nz) >= Math.abs(ny)) {
-      azimuth = -Math.PI / 2;
-      polar = 0.001;
-    } else if (Math.abs(ny) >= Math.abs(nx)) {
-      azimuth = -Math.PI / 2;
-      polar = Math.PI / 2;
-    } else {
-      azimuth = 0;
-      polar = Math.PI / 2;
-    }
+    const length = Math.hypot(nx, ny, nz) || 1;
+    // Look straight along the sketch normal, including tilted faces. The tiny
+    // clamps avoid the singular poles where the orbit basis flips.
+    const azimuth = Math.atan2(ny / length, nx / length);
+    const polar = clamp(Math.acos(nz / length), 0.001, Math.PI - 0.001);
     this.transitionTo(this.sketchPose(frame, entities, azimuth, polar));
   }
 
@@ -1548,6 +1546,7 @@ export class SceneController {
           event.clientX,
           event.clientY,
           this.faceHighlights.picking,
+          this.faceHighlights.bodyFacesOnly,
         );
         this.onPick?.(pick, event.metaKey || event.ctrlKey || event.shiftKey);
       }
@@ -1564,12 +1563,20 @@ export class SceneController {
     return this.raycaster;
   }
 
-  private pickSceneAt(clientX: number, clientY: number, faces = false): ScenePick | null {
+  private pickSceneAt(
+    clientX: number,
+    clientY: number,
+    faces = false,
+    bodyFacesOnly = false,
+  ): ScenePick | null {
     const raycaster = this.pointerToRay(clientX, clientY);
     const bodyMeshes = [...this.bodies.values()]
       .filter((entry) => entry.group.visible)
       .map((entry) => entry.mesh);
-    const faceHit = faces ? raycaster.intersectObjects(this.facePickMeshes, false)[0] : undefined;
+    const faceHit =
+      faces && !bodyFacesOnly
+        ? raycaster.intersectObjects(this.facePickMeshes, false)[0]
+        : undefined;
     const bodyHit = raycaster.intersectObjects(bodyMeshes, false)[0];
     // While faces are being picked they win over the solids they produced, so a
     // face stays clickable after it has been extruded.
@@ -1651,7 +1658,12 @@ export class SceneController {
       return;
     }
 
-    const pick = this.pickSceneAt(clientX, clientY, true);
+    const pick = this.pickSceneAt(
+      clientX,
+      clientY,
+      true,
+      this.faceHighlights.bodyFacesOnly,
+    );
     const key =
       pick?.kind === 'face'
         ? `s:${pick.sketchId}#${pick.faceId}`

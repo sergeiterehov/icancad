@@ -161,8 +161,9 @@ const sketchPlaneRef = z.union([
   }),
   z.object({
     type: z.literal('face'),
-    bodyId: z.string().min(1),
-    topoId: z.string().min(1),
+    bodyId: z.string().min(1).optional(),
+    topoId: z.string().min(1).optional(),
+    offset: z.number().optional(),
     frame: z
       .object({
         origin: vec3,

@@ -137,6 +137,7 @@
     "meshImported": "Mesh imported",
     "stlExported": "STL exported",
     "importFailed": "Could not import mesh",
+    "pickAfterRebuild": "Selection will be available after the model finishes recalculating",
     "noGeometry": "Nothing to export"
   },
   "errors": {
@@ -158,6 +159,7 @@
     "NO_TARGET_BODY": "No body to apply this operation to",
     "TARGET_FAILED": "The operation could not be applied to the selected bodies",
     "BODY_NOT_SOLID": "The body has no solid geometry",
+    "INVALID_SKETCH_PLANE": "Pick a flat face for the sketch plane",
     "FACE_NOT_PLANAR": "Only planar faces can be extruded. Pick a flat face.",
     "DISJOINT_UNION": "Add cannot create a disconnected body: the extrusion does not touch the target body.",
     "MISSING_ASSET": "Imported mesh data is missing",
@@ -192,7 +194,8 @@
     "top": "Top",
     "bottom": "Bottom",
     "iso": "Isometric",
-    "hint": "Drag the cube to orbit · MMB orbit · Shift+MMB pan · Wheel zoom"
+    "hint": "Drag the cube to orbit · MMB orbit · Shift+MMB pan · Wheel zoom",
+    "orientToSketch": "Orient to sketch"
   },
   "section": {
     "title": "Section",
@@ -214,6 +217,12 @@
     "planeXY": "XY plane",
     "planeXZ": "XZ plane",
     "planeYZ": "YZ plane",
+    "planeFace": "Face",
+    "chooseFace": "Select face",
+    "selectFace": "Select a face",
+    "sideFront": "Front",
+    "sideTop": "Top",
+    "sideRight": "Right",
     "plane": "Plane",
     "placement": "Placement",
     "offset": "Offset",

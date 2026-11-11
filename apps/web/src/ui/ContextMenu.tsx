@@ -14,6 +14,8 @@ export type ContextMenuItem =
       label: string;
       icon?: ReactNode;
       hint?: ReactNode;
+      /** Overrides the visible label for assistive technology. */
+      ariaLabel?: string;
       danger?: boolean;
       disabled?: boolean;
       checked?: boolean;
@@ -124,6 +126,7 @@ export function ContextMenuHost() {
             key={item.id}
             type="button"
             role="menuitem"
+            aria-label={item.ariaLabel}
             disabled={item.disabled}
             className={clsx('context-menu-item', item.danger && 'danger')}
             onClick={() => {

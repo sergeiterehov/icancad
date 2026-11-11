@@ -1,8 +1,8 @@
 import type { SketchFeature } from '@icancad/model';
-import { datumFrame } from '@icancad/sketch';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { applyConstraintValue, ConstraintSolveError } from '../sketch/constraintModel';
+import { computeSketchFrame } from '../sketch/sectionPlane';
 import {
   dimensionAnnotations,
   referenceAnnotations,
@@ -10,6 +10,7 @@ import {
   type ReferenceAnnotation,
 } from '../sketch/dimensions';
 import { useDocumentStore } from '../stores/documentStore';
+import { useKernelStore } from '../stores/kernelStore';
 import { useUiStore } from '../stores/uiStore';
 import { getViewport } from './handle';
 
@@ -39,12 +40,14 @@ export function SketchAnnotations() {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? 'en';
   const activeSketchId = useUiStore((state) => state.activeSketchId);
+  const activeSketchReady = useUiStore((state) => state.activeSketchReady);
   const selectionKeys = useUiStore((state) => state.sketchSelectionIds);
   const selectedConstraintId = useUiStore((state) => state.sketchConstraintId);
   const selectConstraint = useUiStore((state) => state.selectSketchConstraint);
   const showToast = useUiStore((state) => state.showToast);
   const project = useDocumentStore((state) => state.project);
   const apply = useDocumentStore((state) => state.apply);
+  const meshes = useKernelStore((state) => state.meshes);
   const [positions, setPositions] = useState<Record<string, Position>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -55,12 +58,16 @@ export function SketchAnnotations() {
     (candidate): candidate is SketchFeature =>
       candidate.id === activeSketchId && candidate.type === 'sketch',
   );
-  const frame = useMemo(() => {
-    if (!feature) return null;
-    return feature.plane.type === 'datum'
-      ? datumFrame(feature.plane.plane, feature.plane.offset)
-      : (feature.plane.frame ?? datumFrame('XY', 0));
-  }, [feature]);
+  const frame = useMemo(
+    () =>
+      feature
+        ? computeSketchFrame(
+            feature,
+            feature.plane.type === 'face' ? meshes[feature.plane.bodyId ?? ''] : undefined,
+          )
+        : null,
+    [feature, meshes],
+  );
   const annotations = useMemo(
     () => (feature ? dimensionAnnotations(feature, locale) : []),
     [feature, locale],
@@ -118,7 +125,7 @@ export function SketchAnnotations() {
     return () => cancelAnimationFrame(frame);
   }, [editingId]);
 
-  if (!feature) return null;
+  if (!feature || !activeSketchReady) return null;
 
   const selectedEntityIds = new Set(
     selectionKeys.map((key) => key.split('#')[0]).filter((id): id is string => Boolean(id)),

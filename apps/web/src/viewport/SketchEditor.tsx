@@ -8,24 +8,26 @@ import {
   type SketchFrame,
 } from '@icancad/model';
 import {
-  datumFrame,
   entityControlPointRefs,
   entityControlPoints,
   moveEntityControlPoint,
   translateEntity,
   type Point2,
 } from '@icancad/sketch';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { solveSketch } from '../sketch/client';
+import { rebuildScene } from '../kernel/rebuild';
 import { autoConstraintsForEntity, isNearAxis, snapHighlightIds } from '../sketch/autoConstraints';
 import { diagnoseSketch, removeSketchEntities } from '../sketch/constraintModel';
+import { canEditSketch, computeSketchFrame, sketchFrameOf } from '../sketch/sectionPlane';
 import { solveDrag } from '../sketch/dragSolve';
 import { liveMeasures, measureInfo } from '../sketch/measure';
 import { referenceMenuItems } from '../sketch/referenceMenu';
 import type { SketchSnap, SketchSnapInput, SketchSnapMode } from '../sketch/snap';
 import type { SketchTool } from '../sketch/tool';
 import { useDocumentStore } from '../stores/documentStore';
+import { useKernelStore } from '../stores/kernelStore';
 import { useUiStore } from '../stores/uiStore';
 import { useContextMenuStore } from '../ui/ContextMenu';
 import { getViewport, type ViewportCamera } from './handle';
@@ -125,19 +127,31 @@ export function SketchEditor() {
   const setSketchProblems = useUiStore((state) => state.setSketchProblems);
   const magnetEnabled = useUiStore((state) => state.sketchMagnetEnabled);
   const tool = useUiStore((state) => state.sketchTool);
+  const activeSketchReady = useUiStore((state) => state.activeSketchReady);
+  const setActiveSketchReady = useUiStore((state) => state.setActiveSketchReady);
   const project = useDocumentStore((state) => state.project);
   const apply = useDocumentStore((state) => state.apply);
   const preview = useDocumentStore((state) => state.preview);
   const commitPreview = useDocumentStore((state) => state.commitPreview);
+  const featureErrors = useKernelStore((state) => state.featureErrors);
+  const sketchFrames = useKernelStore((state) => state.sketchFrames);
+  const meshes = useKernelStore((state) => state.meshes);
   const sketch = project.features.find(
     (feature): feature is SketchFeature =>
       feature.id === activeSketchId && feature.type === 'sketch',
   );
-  const frame = sketch
-    ? sketch.plane.type === 'datum'
-      ? datumFrame(sketch.plane.plane, sketch.plane.offset)
-      : (sketch.plane.frame ?? datumFrame('XY', 0))
-    : null;
+  const frame = useMemo(
+    () =>
+      sketch
+        ? activeSketchReady
+          ? computeSketchFrame(
+              sketch,
+              sketch.plane.type === 'face' ? meshes[sketch.plane.bodyId ?? ''] : undefined,
+            )
+          : sketchFrameOf(sketch, sketchFrames[sketch.id])
+        : null,
+    [sketch, activeSketchReady, meshes, sketchFrames],
+  );
 
   const [draft, setDraft] = useState<DraftPoint[]>([]);
   // The ref mirrors the draft synchronously, so a tool switch can clear it
@@ -165,6 +179,13 @@ export function SketchEditor() {
     setSketchAutoHighlight(ids);
   };
 
+  // The view before the first sketch is remembered across sketch switches and
+  // restored once editing finishes. The frame is only aligned after the
+  // rebuild at the sketch's timeline position has finished.
+  const cameraBeforeSketch = useRef<ViewportCamera | null>(null);
+  const editedSketch = useRef<string | null>(null);
+  const alignedFrame = useRef('');
+
   useEffect(() => {
     updateDraft([]);
     setHover(null);
@@ -175,24 +196,48 @@ export function SketchEditor() {
   }, [activeSketchId, tool, sketchToolNonce]);
 
   useEffect(() => {
-    if (activeSketchId && !sketch) setActiveSketch(null);
-  }, [activeSketchId, sketch, setActiveSketch]);
+    if (!activeSketchId) return;
+    if (!sketch || !canEditSketch(sketch, featureErrors)) setActiveSketch(null);
+  }, [activeSketchId, sketch, featureErrors, setActiveSketch]);
 
   // Editing a sketch happens at its own place in the timeline: the cursor moves
-  // to the sketch so only geometry that existed then is visible.
+  // to the sketch so only geometry that existed then is visible. The camera and
+  // sketch are oriented only after that rebuild has been applied.
   const historyEndBeforeSketch = useRef<string | null | undefined>(undefined);
   useEffect(() => {
     if (!activeSketchId) return;
     const store = useDocumentStore.getState();
     historyEndBeforeSketch.current = store.project.historyEnd;
     store.rollHistoryTo(activeSketchId);
+    alignedFrame.current = '';
+    let cancelled = false;
+    let unsubscribe: () => void = () => undefined;
+    const startVersion = useKernelStore.getState().sceneVersion;
+    if (useKernelStore.getState().status !== 'ready') {
+      setActiveSketchReady(true);
+    } else {
+      // Trigger the rebuild at this timeline position and wait until the kernel
+      // publishes a scene for it. A rebuild that was already running for an
+      // older position does not satisfy this condition.
+      void rebuildScene(useDocumentStore.getState().project, i18n.t('status.rebuild')).catch(
+        () => undefined,
+      );
+      unsubscribe = useKernelStore.subscribe((state) => {
+        if (state.sceneVersion > startVersion && state.sceneHistoryEnd === activeSketchId) {
+          unsubscribe();
+          if (!cancelled) setActiveSketchReady(true);
+        }
+      });
+    }
     return () => {
+      cancelled = true;
+      unsubscribe();
       const previous = historyEndBeforeSketch.current;
       historyEndBeforeSketch.current = undefined;
       if (previous === undefined) return;
       useDocumentStore.getState().rollHistoryTo(previous);
     };
-  }, [activeSketchId]);
+  }, [activeSketchId, setActiveSketchReady, i18n]);
 
   // Re-solve once on entry so sketches saved with a violated constraint get
   // repaired before the user starts dragging.
@@ -227,37 +272,24 @@ export function SketchEditor() {
   }, [activeSketchId, sketch?.constraints, sketch?.entities]);
 
   // The view before the first sketch is remembered across sketch switches and
-  // restored once editing finishes.
-  const cameraBeforeSketch = useRef<ViewportCamera | null>(null);
-  const editedSketch = useRef<string | null>(null);
-  const alignedFrame = useRef('');
+  // restored once editing finishes. Preparing the editor runs once per entry;
+  // frame changes only re-align the camera.
   useEffect(() => {
-    if (!activeSketchId || !frame) return;
-    const feature = useDocumentStore
-      .getState()
-      .project.features.find(
-        (candidate): candidate is SketchFeature =>
-          candidate.id === activeSketchId && candidate.type === 'sketch',
-      );
-    const viewport = getViewport();
-    cameraBeforeSketch.current ??= viewport?.getCameraState() ?? null;
-    viewport?.alignSketch(frame, feature?.entities ?? []);
-    alignedFrame.current = frameKeyOf(frame);
+    if (!activeSketchId || !activeSketchReady) return;
+    cameraBeforeSketch.current ??= getViewport()?.getCameraState() ?? null;
     // While the sketch is open the inspector shows the operation being edited:
     // its placement, composition and constraints.
     editedSketch.current = activeSketchId;
     useDocumentStore.getState().select({ kind: 'feature', id: activeSketchId });
-  }, [activeSketchId]);
+  }, [activeSketchId, activeSketchReady]);
 
-  // Changing the plane of the sketch being edited moves it in space, so the view
-  // follows it instead of leaving the sketch edge-on.
   useEffect(() => {
-    if (!activeSketchId || !frame) return;
+    if (!activeSketchId || !frame || !activeSketchReady) return;
     const key = frameKeyOf(frame);
     if (alignedFrame.current === key) return;
     alignedFrame.current = key;
     getViewport()?.alignSketch(frame, sketch?.entities ?? []);
-  }, [activeSketchId, frame, sketch?.entities]);
+  }, [activeSketchId, frame, sketch?.entities, activeSketchReady]);
 
   useEffect(() => {
     if (activeSketchId) return;
@@ -956,7 +988,7 @@ export function SketchEditor() {
     return () => window.removeEventListener('keydown', onKeyDown);
   });
 
-  if (!sketch || !activeSketchId) return null;
+  if (!sketch || !activeSketchId || !activeSketchReady) return null;
 
   const hint =
     tool === 'line'

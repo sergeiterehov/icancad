@@ -13,6 +13,7 @@ import { Box, Eye, EyeOff, FileUp, PawPrint, PencilRuler, Plus, Trash2 } from 'l
 import { useRef, type ChangeEvent, type MouseEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { saveAsset } from '../persistence/db';
+import { canEditSketch, sketchPlaneReady } from '../sketch/sectionPlane';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { isDirectlySelected, linkedBodyIds } from '../stores/selection';
@@ -51,6 +52,7 @@ export function LeftPanel() {
   const deleteBody = useDocumentStore((state) => state.deleteBody);
   const addBox = useDocumentStore((state) => state.addPrimitiveBox);
   const meshes = useKernelStore((state) => state.meshes);
+  const featureErrors = useKernelStore((state) => state.featureErrors);
   const kernelReady = useKernelStore((state) => state.status === 'ready');
   const openMenu = useContextMenuStore((state) => state.open);
   const showToast = useUiStore((state) => state.showToast);
@@ -59,7 +61,11 @@ export function LeftPanel() {
 
   const highlightedBodyIds = linkedBodyIds(selection, project);
   const hasSketches = project.features.some(
-    (feature) => feature.type === 'sketch' && activeIds.has(feature.id),
+    (feature) =>
+      feature.type === 'sketch' &&
+      activeIds.has(feature.id) &&
+      sketchPlaneReady(feature) &&
+      !featureErrors[feature.id],
   );
   const isEmpty = bodies.length === 0 && !hasSketches;
 
@@ -182,6 +188,7 @@ export function LeftPanel() {
               label: t('sketch.edit'),
               icon: <PencilRuler size={14} />,
               onSelect: () => setActiveSketch(feature.id),
+              disabled: !canEditSketch(feature, featureErrors),
             },
             {
               id: 'delete',
@@ -202,7 +209,9 @@ export function LeftPanel() {
               { additive: event.metaKey || event.ctrlKey || event.shiftKey },
             )
           }
-          onDoubleClick={() => setActiveSketch(feature.id)}
+          onDoubleClick={() => {
+            if (canEditSketch(feature, featureErrors)) setActiveSketch(feature.id);
+          }}
         >
           <span className="tree-icon">
             <PencilRuler size={14} />
@@ -232,7 +241,9 @@ export function LeftPanel() {
 
   for (const feature of project.features) {
     if (!activeIds.has(feature.id)) continue;
-    if (feature.type === 'sketch') rows.push(renderSketch(feature));
+    if (feature.type === 'sketch') {
+      if (sketchPlaneReady(feature) && !featureErrors[feature.id]) rows.push(renderSketch(feature));
+    }
     for (const body of bodiesByCreator.get(feature.id) ?? []) {
       rows.push(renderBody(body));
       placedBodies.add(body.id);

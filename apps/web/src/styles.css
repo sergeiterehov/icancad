@@ -549,6 +549,69 @@ button:disabled {
   pointer-events: none;
 }
 
+.picker-field {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.picker-field:hover {
+  border-color: var(--border-strong);
+}
+
+.picker-field[data-active='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.picker-field[data-invalid='true'] {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.picker-field[data-invalid='true'] .picker-field-icon,
+.picker-field[data-invalid='true'] .picker-field-value {
+  color: var(--danger);
+}
+
+.picker-field[data-active='true'][data-invalid='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.picker-field[data-active='true'][data-invalid='true'] .picker-field-icon,
+.picker-field[data-active='true'][data-invalid='true'] .picker-field-value {
+  color: var(--text);
+}
+
+.picker-field-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+
+.picker-field-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-field-value.placeholder {
+  color: var(--text-faint);
+}
+
 .btn {
   height: 28px;
   padding: 0 10px;
@@ -1063,6 +1126,45 @@ button:disabled {
 
 .timeline-caret.error.active::before {
   height: 24px;
+}
+
+/* While a rebuild runs, the target cursor becomes a dashed line that flows
+   upwards at 10 px/s (6 px pattern / 0.6 s). It keeps the caret colour: blue
+   when active, red at the error barrier, muted when the caret would be hidden. */
+.timeline-caret.calculating::before {
+  height: 16px;
+  background: repeating-linear-gradient(
+    to top,
+    var(--text-faint) 0 3px,
+    transparent 3px 6px
+  );
+  animation: timeline-caret-flow 0.6s linear infinite;
+}
+
+.timeline-caret.calculating.active::before {
+  height: 24px;
+  background: repeating-linear-gradient(
+    to top,
+    var(--accent) 0 3px,
+    transparent 3px 6px
+  );
+}
+
+.timeline-caret.calculating.error::before {
+  background: repeating-linear-gradient(
+    to top,
+    var(--danger) 0 3px,
+    transparent 3px 6px
+  );
+}
+
+@keyframes timeline-caret-flow {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 0 -6px;
+  }
 }
 
 .timeline-tooltip {

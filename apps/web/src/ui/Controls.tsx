@@ -196,6 +196,48 @@ export function TextField({
   );
 }
 
+// An input-like control for picking one object in the viewport. The value is
+// optional: an empty picker is only marked invalid when the caller says so.
+export function ObjectPickerField({
+  label,
+  value,
+  placeholder,
+  icon,
+  active,
+  invalid,
+  onClick,
+  testId,
+}: {
+  label: string;
+  value?: string;
+  placeholder: string;
+  icon: ReactNode;
+  active?: boolean;
+  invalid?: boolean;
+  onClick: () => void;
+  testId?: string;
+}) {
+  return (
+    <Field label={label}>
+      <button
+        type="button"
+        className="picker-field"
+        data-active={active ? 'true' : undefined}
+        data-invalid={invalid ? 'true' : undefined}
+        data-testid={testId}
+        onClick={onClick}
+      >
+        <span className="picker-field-icon" aria-hidden="true">
+          {icon}
+        </span>
+        <span className={clsx('picker-field-value', !value && 'placeholder')}>
+          {value ?? placeholder}
+        </span>
+      </button>
+    </Field>
+  );
+}
+
 export function DimensionField({
   axis,
   label,

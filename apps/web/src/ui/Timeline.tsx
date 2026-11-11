@@ -6,6 +6,7 @@ import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { isDirectlySelected, selectedFeatureIds } from '../stores/selection';
+import { canEditSketch } from '../sketch/sectionPlane';
 import { showContextMenu } from './ContextMenu';
 import { ExtrudeOpIcon } from './featureIcons';
 import { Tooltip } from './Tooltip';
@@ -36,6 +37,7 @@ function RollbackCaret({
   disabled,
   blocked,
   pastFailure,
+  calculating,
   onSelect,
 }: {
   index: number;
@@ -45,6 +47,7 @@ function RollbackCaret({
   blocked?: boolean;
   /** A position beyond the barrier: inactive, but not red. */
   pastFailure?: boolean;
+  calculating?: boolean;
   onSelect: () => void;
 }) {
   const { t } = useTranslation();
@@ -62,7 +65,12 @@ function RollbackCaret({
     >
       <button
         type="button"
-        className={clsx('timeline-caret', active && 'active', blocked && 'error')}
+        className={clsx(
+          'timeline-caret',
+          active && 'active',
+          blocked && 'error',
+          calculating && 'calculating',
+        )}
         aria-label={outsideHistory ? t('timeline.blockedByError') : label}
         aria-pressed={active}
         disabled={disabled || outsideHistory}
@@ -80,6 +88,7 @@ export function Timeline() {
   const setHistoryEnd = useDocumentStore((state) => state.setHistoryEnd);
   const removeFeature = useDocumentStore((state) => state.removeFeature);
   const featureErrors = useKernelStore((state) => state.featureErrors);
+  const rebuildCursor = useKernelStore((state) => state.rebuildCursor);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
   const setActiveSketch = useUiStore((state) => state.setActiveSketch);
   const locked = activeSketchId !== null;
@@ -143,6 +152,7 @@ export function Timeline() {
                     disabled={locked}
                     blocked={barrierPosition(index)}
                     pastFailure={pastFailurePosition(index)}
+                    calculating={rebuildCursor === index}
                     onSelect={() => goTo(index)}
                   />
                   <Tooltip content={timelineTooltip(feature, featureErrors[feature.id])}>
@@ -182,7 +192,9 @@ export function Timeline() {
                         )
                       }
                       onDoubleClick={() => {
-                        if (feature.type === 'sketch') setActiveSketch(feature.id);
+                        if (feature.type === 'sketch' && canEditSketch(feature, featureErrors)) {
+                          setActiveSketch(feature.id);
+                        }
                       }}
                     >
                       <FeatureIcon feature={feature} />
@@ -200,6 +212,7 @@ export function Timeline() {
               disabled={locked}
               blocked={barrierPosition(project.features.length)}
               pastFailure={pastFailurePosition(project.features.length)}
+              calculating={rebuildCursor === project.features.length}
               onSelect={() => goTo(project.features.length)}
             />
           </div>

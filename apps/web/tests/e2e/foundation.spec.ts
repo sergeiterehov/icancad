@@ -469,6 +469,244 @@ test.describe('ICANCad foundation', () => {
     await expect(page.locator('.sketch-overlay')).toBeVisible();
     await expect(sketchRow).toContainText('1');
   });
+
+  test('creates a sketch on a planar face', async ({ page }) => {
+    await openApp(page);
+    await addBox(page);
+
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await page.getByRole('button', { name: 'Finish sketch' }).click();
+    await page.locator('.timeline-op').last().click();
+
+    const inspector = page.getByTestId('inspector');
+    const placement = inspector.locator('.panel-section').filter({ hasText: 'Placement' });
+    await placement.getByRole('button', { name: 'Face', exact: true }).click();
+
+    const picker = inspector.getByTestId('sketch-face-picker');
+    await expect(picker).toBeVisible();
+    await expect(picker).toHaveAttribute('data-invalid', 'true');
+    // Without a face the sketch object is not built and editing is unavailable.
+    await expect(page.locator('.tree-row')).toHaveCount(1);
+    await expect(page.locator('.timeline-op.error')).toHaveCount(1);
+    await page.locator('.timeline-op').last().dblclick();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+
+    await picker.click();
+    await expect(picker).toHaveAttribute('data-active', 'true');
+    const canvas = page.getByTestId('viewport-canvas');
+    const canvasBox = await canvas.boundingBox();
+    await page.mouse.click(
+      canvasBox!.x + canvasBox!.width / 2,
+      canvasBox!.y + canvasBox!.height / 2,
+    );
+
+    await expect(picker).not.toHaveAttribute('data-active', 'true');
+    await expect(picker).not.toHaveAttribute('data-invalid', 'true');
+    await expect(page.locator('.tree-row')).toHaveCount(2);
+    await expect(page.locator('.timeline-op.error')).toHaveCount(0);
+
+    const sketchRow = page.locator('.tree-row').filter({ hasText: 'Sketch' });
+    await sketchRow.locator('.tree-main').dblclick();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+  });
+
+  test('starts a face sketch from the sketch tool', async ({ page }) => {
+    await openApp(page);
+    await addBox(page);
+
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await expect(page.getByRole('menuitem').first()).toContainText('Select face');
+    await expect(page.getByRole('menuitem', { name: 'Top' })).toContainText('XY');
+    await expect(page.getByRole('menuitem', { name: 'Front' })).toContainText('XZ');
+    await expect(page.getByRole('menuitem', { name: 'Right' })).toContainText('YZ');
+
+    await page.getByRole('menuitem', { name: 'Select face' }).click();
+    const picker = page.getByTestId('inspector').getByTestId('sketch-face-picker');
+    await expect(picker).toBeVisible();
+    await expect(picker).toHaveAttribute('data-active', 'true');
+
+    const canvas = page.getByTestId('viewport-canvas');
+    const canvasBox = await canvas.boundingBox();
+    await page.mouse.click(
+      canvasBox!.x + canvasBox!.width / 2,
+      canvasBox!.y + canvasBox!.height / 2,
+    );
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+  });
+
+  test('switches camera orientation between sketches', async ({ page }) => {
+    await openApp(page);
+    const cube = page.getByTestId('nav-cube');
+    const tools = page.getByRole('navigation', { name: 'Tools' });
+
+    const makeSketch = async (plane: 'XY plane' | 'XZ plane') => {
+      await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+      await page.getByRole('menuitem', { name: plane }).click();
+      await expect(page.locator('.sketch-overlay')).toBeVisible();
+      await page.waitForTimeout(700);
+      await page.getByRole('button', { name: 'Finish sketch' }).click();
+    };
+
+    await makeSketch('XY plane');
+    await makeSketch('XZ plane');
+
+    const rows = page.locator('.tree-row');
+    await expect(rows).toHaveCount(2);
+
+    await rows.first().locator('.tree-main').dblclick();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await expect
+      .poll(async () => Number(await cube.getAttribute('data-polar')))
+      .toBeLessThan(0.01);
+    await page.getByRole('button', { name: 'Finish sketch' }).click();
+
+    await rows.nth(1).locator('.tree-main').dblclick();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await expect
+      .poll(async () => Number(await cube.getAttribute('data-polar')))
+      .toBeGreaterThan(1.5);
+    await expect
+      .poll(async () => Number(await cube.getAttribute('data-azimuth')))
+      .toBeCloseTo(-Math.PI / 2, 1);
+
+    // The earlier sketch is still in the rolled-back tree, so it can be opened
+    // directly while the second one is being edited.
+    await rows.first().locator('.tree-main').dblclick();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await expect
+      .poll(async () => Number(await cube.getAttribute('data-polar')))
+      .toBeLessThan(0.01);
+    await page.getByRole('button', { name: 'Finish sketch' }).click();
+
+    await rows.nth(1).locator('.tree-main').dblclick();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await expect
+      .poll(async () => Number(await cube.getAttribute('data-polar')))
+      .toBeGreaterThan(1.5);
+  });
+
+  test('returns to a face sketch orientation after a datum sketch', async ({ page }) => {
+    await openApp(page);
+    await addBox(page);
+    const cube = page.getByTestId('nav-cube');
+    const tools = page.getByRole('navigation', { name: 'Tools' });
+    const canvas = page.getByTestId('viewport-canvas');
+
+    await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Select face' }).click();
+    const picker = page.getByTestId('inspector').getByTestId('sketch-face-picker');
+    await expect(picker).toHaveAttribute('data-active', 'true');
+    const box = await canvas.boundingBox();
+    await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await page.waitForTimeout(700);
+    const facePolar = Number(await cube.getAttribute('data-polar'));
+    const faceAzimuth = Number(await cube.getAttribute('data-azimuth'));
+    await page.getByRole('button', { name: 'Finish sketch' }).click();
+
+    await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XZ plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await expect
+      .poll(async () => Number(await cube.getAttribute('data-polar')))
+      .toBeGreaterThan(1.5);
+    await page.getByRole('button', { name: 'Finish sketch' }).click();
+
+    const sketchRows = page.locator('.tree-row').filter({ hasText: 'Sketch' });
+    await sketchRows.first().locator('.tree-main').dblclick();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await expect
+      .poll(async () => Number(await cube.getAttribute('data-polar')))
+      .toBeCloseTo(facePolar, 1);
+    await expect
+      .poll(async () => Number(await cube.getAttribute('data-azimuth')))
+      .toBeCloseTo(faceAzimuth, 1);
+  });
+
+  test('switches from a datum sketch to a face sketch while editing', async ({ page }) => {
+    await openApp(page);
+    const tools = page.getByRole('navigation', { name: 'Tools' });
+    const canvas = page.getByTestId('viewport-canvas');
+    const cube = page.getByTestId('nav-cube');
+
+    await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'YZ plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await page.waitForTimeout(600);
+
+    const canvasBox = await canvas.boundingBox();
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    const corners: [number, number][] = [
+      [300, 250],
+      [520, 250],
+      [520, 420],
+      [300, 420],
+    ];
+    for (let index = 0; index < corners.length; index += 1) {
+      const start = corners[index]!;
+      const end = corners[(index + 1) % corners.length]!;
+      await page.mouse.click(canvasBox!.x + start[0], canvasBox!.y + start[1]);
+      await page.waitForTimeout(320);
+      await page.mouse.click(canvasBox!.x + end[0], canvasBox!.y + end[1]);
+      await page.waitForTimeout(320);
+    }
+    await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await page.locator('.tree-row').first().locator('.tree-main').click();
+    await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
+    await expect(page.locator('.tree-row')).toHaveCount(2);
+
+    await cube.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Isometric' }).click();
+    await page.waitForTimeout(600);
+    await cube.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Fit view' }).click();
+    await page.waitForTimeout(700);
+
+    // Second sketch on a face of the extruded body.
+    await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Select face' }).click();
+    const picker = page.getByTestId('inspector').getByTestId('sketch-face-picker');
+    await expect(picker).toHaveAttribute('data-active', 'true');
+    await page.waitForTimeout(200);
+    await page.mouse.click(
+      canvasBox!.x + canvasBox!.width / 2,
+      canvasBox!.y + canvasBox!.height * 0.3,
+    );
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await expect
+      .poll(async () => Number(await cube.getAttribute('data-polar')))
+      .toBeLessThan(0.2);
+    const facePolar = Number(await cube.getAttribute('data-polar'));
+    const faceAzimuth = Number(await cube.getAttribute('data-azimuth'));
+    await page.getByRole('button', { name: 'Finish sketch' }).click();
+
+    const operations = page.locator('.timeline-op');
+    await expect(operations).toHaveCount(3);
+    await operations.nth(0).dblclick();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await expect
+      .poll(async () => Number(await cube.getAttribute('data-polar')))
+      .toBeGreaterThan(1.5);
+    await expect
+      .poll(async () => Number(await cube.getAttribute('data-azimuth')))
+      .toBeCloseTo(0, 1);
+    await cube.click({ button: 'right' });
+    await expect(page.getByRole('menuitem').first()).toContainText('Orient to sketch');
+    await page.getByRole('menuitem', { name: 'Orient to sketch' }).click();
+
+    // Switch to the face sketch without leaving the first editor.
+    await operations.nth(2).dblclick();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await expect
+      .poll(async () => Number(await cube.getAttribute('data-polar')))
+      .toBeCloseTo(facePolar, 1);
+    await expect
+      .poll(async () => Number(await cube.getAttribute('data-azimuth')))
+      .toBeCloseTo(faceAzimuth, 1);
+  });
+
   test('extrudes a sketch and turns the result into a body', async ({ page }) => {
     await openApp(page);
     const tools = page.getByRole('navigation', { name: 'Tools' });

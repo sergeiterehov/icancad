@@ -26,6 +26,7 @@ import {
 } from '@icancad/model';
 import { create } from 'zustand';
 import { i18n } from '../i18n';
+import { useKernelStore, isModelRebuilding } from './kernelStore';
 import { useUiStore } from './uiStore';
 
 export type SelectionKind = 'body' | 'mesh' | 'feature' | 'sketch' | 'face';
@@ -54,6 +55,7 @@ interface DocumentState {
   setSaveState: (state: SaveState) => void;
   addPrimitiveBox: (name: string) => void;
   addSketch: (name: string, plane: 'XY' | 'XZ' | 'YZ') => string | null;
+  addSketchOnFace: (name: string) => string | null;
   addExtrude: (name: string, input?: ExtrudeInput) => string | null;
   setExtrudeOp: (featureId: string, op: ExtrudeFeature['op']) => void;
   setExtrudeInput: (featureId: string, input: ExtrudeInput | null) => void;
@@ -249,6 +251,16 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     // or the sketch face list feed that control instead of replacing the
     // selection and closing the control.
     const ui = useUiStore.getState();
+    const pickingGeometry = ui.pickingExtrude ?? ui.pickingExtrudeBodies ?? ui.pickingSketchPlane;
+    if (
+      pickingGeometry &&
+      item &&
+      item.kind !== 'feature' &&
+      isModelRebuilding(useKernelStore.getState())
+    ) {
+      ui.showToast('toast.pickAfterRebuild');
+      return;
+    }
     if (ui.pickingExtrude) {
       if (item?.kind === 'face') {
         const [sketchId, faceId] = item.id.split('#');
@@ -336,6 +348,33 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       return null;
     }
     set({ selection: [{ kind: 'sketch', id: featureId }] });
+    return featureId;
+  },
+
+  addSketchOnFace: (name) => {
+    const featureId = createId('feat');
+    const feature: SketchFeature = {
+      id: featureId,
+      name,
+      suppressed: false,
+      type: 'sketch',
+      plane: { type: 'face' },
+      entities: [],
+      constraints: [],
+      references: [],
+    };
+    if (
+      !get().apply(...addFeatureCommands(get().project, feature), {
+        type: 'metadata/patch',
+        objectId: sketchObjectId(featureId),
+        patch: { visible: true },
+      })
+    ) {
+      return null;
+    }
+    // The face is still missing, so the operation is selected instead of the
+    // sketch object; the inspector shows its placement and face picker.
+    set({ selection: [{ kind: 'feature', id: featureId }] });
     return featureId;
   },
 

@@ -1,4 +1,4 @@
-import { LayersArrowUp, PencilRuler, Square } from 'lucide-react';
+import { Hexagon, LayersArrowUp, PencilRuler, Square } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDocumentStore } from '../stores/documentStore';
@@ -31,7 +31,9 @@ export function ToolRail() {
   const { t } = useTranslation();
   const activeSketchId = useUiStore((state) => state.activeSketchId);
   const setActiveSketch = useUiStore((state) => state.setActiveSketch);
+  const startSketchPlanePicking = useUiStore((state) => state.startSketchPlanePicking);
   const addSketch = useDocumentStore((state) => state.addSketch);
+  const addSketchOnFace = useDocumentStore((state) => state.addSketchOnFace);
   const addExtrude = useDocumentStore((state) => state.addExtrude);
   const project = useDocumentStore((state) => state.project);
   const selection = useDocumentStore((state) => state.selection);
@@ -40,19 +42,29 @@ export function ToolRail() {
 
   const openSketchMenu = (event: MouseEvent<HTMLButtonElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
-    openMenu(
-      rect.left,
-      rect.bottom + 6,
-      (['XY', 'XZ', 'YZ'] as const).map((plane) => ({
+    const sideHint = { XY: 'sideTop', XZ: 'sideFront', YZ: 'sideRight' } as const;
+    openMenu(rect.left, rect.bottom + 6, [
+      {
+        id: 'face',
+        label: t('sketch.chooseFace'),
+        icon: <Hexagon size={14} />,
+        onSelect: () => {
+          const sketchId = addSketchOnFace(t('features.sketch'));
+          if (sketchId) startSketchPlanePicking(sketchId, true);
+        },
+      },
+      ...(['XY', 'XZ', 'YZ'] as const).map((plane) => ({
         id: plane,
-        label: t(`sketch.plane${plane}`),
+        label: t(`sketch.${sideHint[plane]}`),
+        hint: plane,
+        ariaLabel: `${t(`sketch.${sideHint[plane]}`)} · ${t(`sketch.plane${plane}`)}`,
         icon: <Square size={14} />,
         onSelect: () => {
           const sketchId = addSketch(t('features.sketch'), plane);
           if (sketchId) setActiveSketch(sketchId);
         },
       })),
-    );
+    ]);
   };
 
   return (

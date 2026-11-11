@@ -33,6 +33,8 @@ lucide's `Icon` wrapper. Both packages are dependencies of the web app.
 | Sketch tools | Spline / Bezier | `LineSquiggle` |
 | Sketch tools | Construction geometry | `LineStyle` |
 | Sketch tools | Constraints | `Ruler` |
+| Sketch placement | Face plane tab and face picker | `Hexagon` |
+| Sketch tool menu | Select a face | `Hexagon` |
 | Sketch object sections | Faces | `Hexagon` |
 | Sketch object sections | Edges | `Spline` |
 | Sketch object sections | Points | `CrosshairPlusDot` (Lucide Lab) |

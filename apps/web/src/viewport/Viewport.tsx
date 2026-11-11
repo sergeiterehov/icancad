@@ -1,4 +1,4 @@
-import { Eye, EyeOff, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, ScanBox, ScanSquare, Trash2 } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { retryKernel } from '../kernel/client';
@@ -10,11 +10,11 @@ import {
   sketchObjectId,
   type SketchFeature,
 } from '@icancad/model';
-import { datumFrame, sketchTopology } from '@icancad/sketch';
-import { sketchSectionPlane } from '../sketch/sectionPlane';
+import { faceFrame, sketchTopology } from '@icancad/sketch';
+import { computeSketchFrame, sketchFrameOf, sketchPlaneReady, sketchSectionPlane } from '../sketch/sectionPlane';
 import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
-import { useKernelStore } from '../stores/kernelStore';
+import { isModelRebuilding, useKernelStore } from '../stores/kernelStore';
 import { directBodyIds, linkedBodyIds } from '../stores/selection';
 import { useThemeStore } from '../stores/themeStore';
 import { Button } from '../ui/Controls';
@@ -49,8 +49,10 @@ export function Viewport() {
   const sectionPlanes = project.view.sectionPlanes;
   const sectionEnabled = useUiStore((state) => state.sectionEnabled);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
+  const activeSketchReady = useUiStore((state) => state.activeSketchReady);
   const pickingExtrude = useUiStore((state) => state.pickingExtrude);
   const pickingExtrudeBodies = useUiStore((state) => state.pickingExtrudeBodies);
+  const pickingSketchPlane = useUiStore((state) => state.pickingSketchPlane);
   const sketchSectionEnabled = useUiStore((state) => state.sketchSectionEnabled);
   const sketchConstraintId = useUiStore((state) => state.sketchConstraintId);
   const sketchFrozenEntityIds = useUiStore((state) => state.sketchFrozenEntityIds);
@@ -58,7 +60,9 @@ export function Viewport() {
   const sketchSelectionIds = useUiStore((state) => state.sketchSelectionIds);
   const selection = useDocumentStore((state) => state.selection);
   const meshes = useKernelStore((state) => state.meshes);
+  const sketchFrames = useKernelStore((state) => state.sketchFrames);
   const featureBodyErrors = useKernelStore((state) => state.featureBodyErrors);
+  const featureErrors = useKernelStore((state) => state.featureErrors);
   const status = useKernelStore((state) => state.status);
   const ratio = useKernelStore((state) => state.ratio);
   const error = useKernelStore((state) => state.error);
@@ -72,7 +76,20 @@ export function Viewport() {
       )
     : undefined;
   const sketchSection =
-    activeSketch && sketchSectionEnabled ? sketchSectionPlane(activeSketch) : null;
+    activeSketch &&
+    activeSketchReady &&
+    sketchSectionEnabled &&
+    sketchPlaneReady(activeSketch)
+      ? sketchSectionPlane(
+          activeSketch,
+          computeSketchFrame(
+            activeSketch,
+            activeSketch.plane.type === 'face'
+              ? meshes[activeSketch.plane.bodyId ?? '']
+              : undefined,
+          ),
+        )
+      : null;
   const sketchSectionKey = sketchSection ? JSON.stringify(sketchSection) : '';
 
   const navLabels: Record<NavFace, string> = {
@@ -103,9 +120,48 @@ export function Viewport() {
         if (useUiStore.getState().activeSketchId) return;
         const store = useDocumentStore.getState();
         const ui = useUiStore.getState();
+        if (pick && isModelRebuilding(useKernelStore.getState())) {
+          ui.showToast('toast.pickAfterRebuild');
+          return;
+        }
         if (ui.pickingExtrudeBodies) {
           if (pick?.kind === 'body') {
             store.select({ kind: 'body', id: pick.id });
+          }
+          return;
+        }
+        if (ui.pickingSketchPlane) {
+          if (pick?.kind !== 'body-face') return;
+          if (!pick.planar) {
+            ui.showToast('errors.FACE_NOT_PLANAR', 'error');
+            return;
+          }
+          const feature = store.project.features.find(
+            (candidate): candidate is SketchFeature =>
+              candidate.id === ui.pickingSketchPlane &&
+              candidate.type === 'sketch',
+          );
+          if (!feature) return;
+          store.apply({
+            type: 'feature/replace',
+            feature: {
+              ...feature,
+              plane: {
+                type: 'face',
+                bodyId: pick.bodyId,
+                topoId: pick.faceId,
+                offset: feature.plane.type === 'face' ? (feature.plane.offset ?? 0) : 0,
+                frame: faceFrame(pick.origin, pick.normal),
+              },
+            },
+          });
+          const enterEdit = ui.sketchPlanePickThenEdit === feature.id;
+          ui.setPickingSketchPlane(null);
+          if (enterEdit) {
+            // A valid planar face replaces the previous invalid plane, so the
+            // editor must not close on the stale rebuild error.
+            useKernelStore.getState().clearFeatureError(feature.id);
+            ui.setActiveSketch(feature.id);
           }
           return;
         }
@@ -190,10 +246,41 @@ export function Viewport() {
       onOrbit: (deltaX, deltaY) => controller.orbitBy(deltaX, deltaY),
       onContextMenu: (x, y) => {
         const labels = translationRef.current;
+        const sketchId = useUiStore.getState().activeSketchId;
+        const sketchFeature = sketchId
+          ? useDocumentStore
+              .getState()
+              .project.features.find(
+                (feature): feature is SketchFeature =>
+                  feature.type === 'sketch' && feature.id === sketchId,
+              )
+          : undefined;
         openMenuRef.current(x, y, [
+          ...(sketchFeature
+            ? [
+                {
+                  id: 'orient-sketch',
+                  label: labels('nav.orientToSketch'),
+                  icon: <ScanSquare size={14} />,
+                  onSelect: () =>
+                    controller.alignSketch(
+                      computeSketchFrame(
+                        sketchFeature,
+                        sketchFeature.plane.type === 'face'
+                          ? useKernelStore.getState().meshes[
+                              sketchFeature.plane.bodyId ?? ''
+                            ]
+                          : undefined,
+                      ),
+                      sketchFeature.entities,
+                    ),
+                },
+              ]
+            : []),
           {
             id: 'fit',
             label: labels('topbar.fit'),
+            icon: <ScanBox size={14} />,
             onSelect: () => controller.fit(),
           },
           {
@@ -270,11 +357,11 @@ export function Viewport() {
       [...new Set([...linkedBodyIds(selection, project), ...targetBodyIds])],
       errorBodyIds,
     );
-    if (previousCount.current === 0 && sceneBodies.length > 0) {
+    if (!activeSketchId && previousCount.current === 0 && sceneBodies.length > 0) {
       controller.fit();
     }
     previousCount.current = sceneBodies.length;
-  }, [bodies, meshes, project, selection, featureBodyErrors]);
+  }, [activeSketchId, bodies, meshes, project, selection, featureBodyErrors]);
 
   // Faces of the edited operation are highlighted in 3D, and the one under the
   // cursor is highlighted while objects are being picked.
@@ -304,13 +391,25 @@ export function Viewport() {
         else selected.push(key);
       }
     }
+    const planeSketch = selectedFeature?.type === 'sketch' ? selectedFeature : undefined;
+    if (planeSketch?.plane.type === 'face' && planeSketch.plane.bodyId && planeSketch.plane.topoId) {
+      selected.push(`b:${planeSketch.plane.bodyId}#${planeSketch.plane.topoId}`);
+    }
     controller.setFaceHighlights({
       selected,
       invalid,
-      picking: Boolean(pickingExtrude),
+      picking: Boolean(pickingExtrude) || Boolean(pickingSketchPlane),
       bodyPicking: Boolean(pickingExtrudeBodies),
+      bodyFacesOnly: Boolean(pickingSketchPlane),
     });
-  }, [selection, project, featureBodyErrors, pickingExtrude, pickingExtrudeBodies]);
+  }, [
+    selection,
+    project,
+    featureBodyErrors,
+    pickingExtrude,
+    pickingExtrudeBodies,
+    pickingSketchPlane,
+  ]);
 
   useEffect(() => {
     controllerRef.current?.setTheme(theme);
@@ -331,6 +430,9 @@ export function Viewport() {
         (feature): feature is SketchFeature =>
           feature.type === 'sketch' &&
           ids.has(feature.id) &&
+          sketchPlaneReady(feature) &&
+          !featureErrors[feature.id] &&
+          (feature.id !== activeSketchId || activeSketchReady) &&
           (objectVisible(project, sketchObjectId(feature.id)) || feature.id === activeSketchId),
       )
       .map((feature) => ({
@@ -342,9 +444,12 @@ export function Viewport() {
         })),
         facesPicking: Boolean(pickingExtrude),
         frame:
-          feature.plane.type === 'datum'
-            ? datumFrame(feature.plane.plane, feature.plane.offset)
-            : (feature.plane.frame ?? datumFrame('XY', 0)),
+          feature.id === activeSketchId && activeSketchReady
+            ? computeSketchFrame(
+                feature,
+                feature.plane.type === 'face' ? meshes[feature.plane.bodyId ?? ''] : undefined,
+              )
+            : sketchFrameOf(feature, sketchFrames[feature.id]),
         entities: feature.entities,
         selectionKeys: feature.id === activeSketchId ? sketchSelectionIds : [],
         dimmedEntityIds:
@@ -373,6 +478,10 @@ export function Viewport() {
     sketchFrozenEntityIds,
     sketchAutoHighlightIds,
     pickingExtrude,
+    featureErrors,
+    sketchFrames,
+    activeSketchReady,
+    meshes,
   ]);
 
   useEffect(() => {
@@ -383,7 +492,11 @@ export function Viewport() {
   const showLoading = status === 'idle' || status === 'loading';
   const showError = status === 'error';
   const hasActiveSketches = project.features.some(
-    (feature) => feature.type === 'sketch' && activeFeatureIds(project).has(feature.id),
+    (feature) =>
+      feature.type === 'sketch' &&
+      activeFeatureIds(project).has(feature.id) &&
+      sketchPlaneReady(feature) &&
+      !featureErrors[feature.id],
   );
   const showEmpty = status === 'ready' && meshCount === 0 && !activeSketchId && !hasActiveSketches;
 

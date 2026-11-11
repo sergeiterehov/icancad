@@ -88,7 +88,9 @@ function referencedBodyIds(feature: Feature): string[] {
     case 'convert-to-solid':
       return [feature.sourceBodyId];
     case 'sketch':
-      return feature.plane.type === 'face' ? [feature.plane.bodyId] : [];
+      return feature.plane.type === 'face' && feature.plane.bodyId
+        ? [feature.plane.bodyId]
+        : [];
     case 'extrude':
       return [...feature.bodyIds, ...(feature.faceRefs ?? []).map((ref) => ref.bodyId)];
     case 'shell':

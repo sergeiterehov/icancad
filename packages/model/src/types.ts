@@ -134,7 +134,15 @@ export interface SketchFrame {
 
 export type SketchPlaneRef =
   | { type: 'datum'; plane: 'XY' | 'XZ' | 'YZ'; offset: number }
-  | { type: 'face'; bodyId: string; topoId: string; frame?: SketchFrame };
+  | {
+      type: 'face';
+      /** Absent until a face is picked; such a sketch is invalid. */
+      bodyId?: string;
+      topoId?: string;
+      /** Distance along the face normal, away from the face. */
+      offset?: number;
+      frame?: SketchFrame;
+    };
 
 export type SketchMeasure = 'length' | 'angle' | 'radius' | 'diameter' | 'x' | 'y' | 'rx' | 'ry';
 

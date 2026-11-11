@@ -9,8 +9,9 @@ import {
   type ImportMeshFeature,
   type Project,
   type SketchFeature,
+  type SketchFrame,
 } from '@icancad/model';
-import { sketchFrameOf } from '../sketch/sectionPlane';
+import { computeSketchFrame, faceSketchValid } from '../sketch/sectionPlane';
 import type { MeshFormat, MeshStats, ParsedMesh } from '@icancad/io';
 import { loadAsset } from '../persistence/db';
 import { useDocumentStore } from '../stores/documentStore';
@@ -101,6 +102,7 @@ function transformImportedMesh(mesh: ParsedMesh, feature: ImportMeshFeature): Te
 
 export function abortRebuild(): void {
   rebuildEpoch += 1;
+  useKernelStore.getState().setRebuildCursor(null);
 }
 
 export function rebuildScene(project: Project, label: string): Promise<void> {
@@ -141,12 +143,30 @@ async function runRebuild(project: Project): Promise<void> {
   const bodyOwner = new Map<string, string>();
   const createdBodies = new Map<string, string[]>();
   const sketches = new Map<string, SketchFeature>();
+  /** Sketch id -> frame frozen when that operation was evaluated. */
+  const sketchFrames: Record<string, SketchFrame> = {};
   /** The first failed operation: nothing after it is built. */
   let blockedFeatureId: string | null = null;
+  useKernelStore.getState().setRebuildCursor(0);
 
   for (const feature of activeFeatures) {
     if (epoch !== rebuildEpoch) return;
+    // The dashed caret sits after the operation that is being computed.
+    const progress = project.features.findIndex((candidate) => candidate.id === feature.id);
+    if (progress >= 0) useKernelStore.getState().setRebuildCursor(progress + 1);
     if (feature.type === 'sketch') {
+      if (feature.plane.type === 'face') {
+        const bodyId = feature.plane.bodyId ?? '';
+        if (!bodyShapes.has(bodyId) || !faceSketchValid(feature, meshes[bodyId])) {
+          featureErrors[feature.id] = 'INVALID_SKETCH_PLANE';
+          blockedFeatureId = feature.id;
+          break;
+        }
+      }
+      sketchFrames[feature.id] = computeSketchFrame(
+        feature,
+        feature.plane.type === 'face' ? meshes[feature.plane.bodyId ?? ''] : undefined,
+      );
       sketches.set(feature.id, feature);
       continue;
     }
@@ -201,6 +221,7 @@ async function runRebuild(project: Project): Promise<void> {
       try {
         await applyExtrude(feature, {
           sketches,
+          sketchFrames,
           bodyShapes,
           bodyOwner,
           shapeIds,
@@ -249,6 +270,7 @@ async function runRebuild(project: Project): Promise<void> {
     };
   }
   if (epoch !== rebuildEpoch) return;
+  useKernelStore.getState().setRebuildCursor(null);
 
   useKernelStore
     .getState()
@@ -260,6 +282,8 @@ async function runRebuild(project: Project): Promise<void> {
       featureErrors,
       featureBodyErrors,
       featureObjectErrors,
+      sketchFrames,
+      project.historyEnd,
     );
   useDocumentStore.getState().syncCreatedBodies(createdBodies, blockedFeatureId);
 
@@ -280,6 +304,7 @@ function kernelErrorCode(error: unknown): string {
 
 interface ExtrudeContext {
   sketches: Map<string, SketchFeature>;
+  sketchFrames: Record<string, SketchFrame>;
   bodyShapes: Map<string, string>;
   bodyOwner: Map<string, string>;
   shapeIds: string[];
@@ -296,6 +321,7 @@ interface ExtrudeContext {
 async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): Promise<void> {
   const {
     sketches,
+    sketchFrames,
     bodyShapes,
     bodyOwner,
     shapeIds,
@@ -327,7 +353,9 @@ async function applyExtrude(feature: ExtrudeFeature, context: ExtrudeContext): P
     if (selected.length === 0) throw new Error('NO_PROFILE');
   }
 
-  const frame = sketch ? sketchFrameOf(sketch) : null;
+  const frame = sketch
+    ? (sketchFrames[sketch.id] ?? computeSketchFrame(sketch))
+    : null;
   const markBodyError = (bodyId: string, code: string) => {
     const errors = featureBodyErrors[feature.id] ?? {};
     errors[bodyId] = code;
