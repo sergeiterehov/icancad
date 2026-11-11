@@ -427,7 +427,6 @@ button:disabled {
   gap: 7px;
   height: 28px;
   padding: 0 7px;
-  border-radius: 6px;
   color: var(--text-dim);
   user-select: none;
 }

@@ -1,4 +1,4 @@
-import { Eye, EyeOff, ScanBox, ScanSquare, Trash2 } from 'lucide-react';
+import { ScanBox, ScanSquare } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { retryKernel } from '../kernel/client';
@@ -21,7 +21,17 @@ import { isModelRebuilding, useKernelStore } from '../stores/kernelStore';
 import { directBodyIds, linkedBodyIds } from '../stores/selection';
 import { useThemeStore } from '../stores/themeStore';
 import { Button } from '../ui/Controls';
-import { showContextMenu, useContextMenuStore } from '../ui/ContextMenu';
+import {
+  showContextMenu,
+  useContextMenuStore,
+  type ContextMenuItem,
+} from '../ui/ContextMenu';
+import {
+  colorMenuItem,
+  deleteMenuItem,
+  objectTargets,
+  visibilityMenuItem,
+} from '../ui/objectMenu';
 import { Tooltip } from '../ui/Tooltip';
 import { NavCube, type NavFace } from './NavCube';
 import { SceneController, type SceneBody } from './SceneController';
@@ -214,23 +224,33 @@ export function Viewport() {
         const store = useDocumentStore.getState();
         const ref = store.project.bodies.find((candidate) => candidate.id === bodyId);
         if (!ref) return;
-        const body = resolveBody(store.project, ref);
+        // The menu acts on the selection when the body is part of it, and on the
+        // clicked body otherwise.
+        const selected = store.selection.some(
+          (item) => (item.kind === 'body' || item.kind === 'mesh') && item.id === bodyId,
+        );
+        if (!selected) store.select({ kind: resolveBody(store.project, ref).kind === 'mesh' ? 'mesh' : 'body', id: bodyId });
+        const targets = objectTargets(
+          store.project,
+          useDocumentStore.getState().selection,
+        );
         const labels = translationRef.current;
-        showContextMenu({ clientX: x, clientY: y, preventDefault: () => undefined }, [
-          {
-            id: 'visibility',
-            label: body.visible ? labels('tree.hide') : labels('tree.show'),
-            icon: body.visible ? <EyeOff size={14} /> : <Eye size={14} />,
-            onSelect: () => store.toggleBodyVisibility(body.id),
-          },
-          {
-            id: 'delete',
-            label: labels('context.deleteObject'),
-            icon: <Trash2 size={14} />,
-            danger: true,
-            onSelect: () => store.deleteBody(body.id, labels('context.deleteObject')),
-          },
-        ]);
+        const items: ContextMenuItem[] = [];
+        const color = colorMenuItem(targets, labels('context.color'));
+        if (color) items.push(color);
+        const visibility = visibilityMenuItem(targets, {
+          hide: labels('tree.hide'),
+          show: labels('tree.show'),
+        });
+        if (visibility) items.push(visibility);
+        const remove = deleteMenuItem(
+          targets,
+          targets.length > 1
+            ? labels('context.deleteSelected')
+            : labels('context.deleteObject'),
+        );
+        if (remove) items.push(remove);
+        showContextMenu({ clientX: x, clientY: y, preventDefault: () => undefined }, items);
       },
       (azimuth, polar, distance) => {
         navCubeRef.current?.sync(azimuth, polar);
@@ -252,9 +272,14 @@ export function Viewport() {
         if (isModelRebuilding(useKernelStore.getState())) return;
         const store = useDocumentStore.getState();
         const project = store.project;
+        const kernel = useKernelStore.getState();
         const featureId =
           pick.kind === 'body-face'
-            ? (useKernelStore.getState().bodyOperations[pick.bodyId] ??
+            ? // The face itself knows which operation made it: a boolean keeps
+              // the faces it does not touch, so an untouched face still leads to
+              // the operation that first created it.
+              (kernel.faceOperations[pick.bodyId]?.[Number(pick.faceId)] ??
+              kernel.bodyOperations[pick.bodyId] ??
               project.bodies.find((body) => body.id === pick.bodyId)?.createdBy)
             : pick.kind === 'face'
               ? pick.sketchId

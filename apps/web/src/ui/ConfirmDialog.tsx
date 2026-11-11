@@ -21,7 +21,11 @@ export function ConfirmDialog() {
         onClick={(event) => event.stopPropagation()}
       >
         <h2 className="dialog-title">{t('delete.title')}</h2>
-        <p className="dialog-text">{t('delete.text', { name: request.name })}</p>
+        <p className="dialog-text">
+          {request.featureIds.length > 1
+            ? t('delete.textMultiple', { count: request.featureIds.length })
+            : t('delete.text', { name: request.name })}
+        </p>
         <ul className="dialog-list">
           {request.dependents.map((dependent) => (
             <li key={dependent.id}>{dependent.name}</li>
@@ -31,7 +35,7 @@ export function ConfirmDialog() {
           <Button variant="ghost" onClick={cancel}>
             {t('common.cancel')}
           </Button>
-          <Button variant="primary" onClick={() => confirm(request.featureId)}>
+          <Button variant="primary" onClick={() => confirm(request.featureIds)}>
             {t('delete.confirm')}
           </Button>
         </div>

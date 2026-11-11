@@ -205,7 +205,11 @@ export class KernelEngine {
     const fused = this.boolean(base, tool, op);
     const shape = op === 'fuse' ? this.unify(fused) : fused;
     this.shapes.set(shapeId, shape);
-    return { shapeId, stats: this.countTopology(shape) };
+    const result: MakeBoxResult = { shapeId, stats: this.countTopology(shape) };
+    // A fuse merges coplanar faces, which replaces their identity, so only the
+    // boolean itself can be asked where a face came from.
+    if (params.trackFaces) result.facesFromBase = this.facesFromBase(shape, base);
+    return result;
   }
 
   tessellate(shapeId: string, quality: TessellationQuality = DEFAULT_TESSELLATION_QUALITY): TessellationResult {
@@ -458,6 +462,45 @@ export class KernelEngine {
       throw new KernelOpError('OP_FAILED', `Boolean ${op} produced an empty shape`);
     }
     return shape;
+  }
+
+  /**
+   * For every face of `result`, in shape order, the index of the face of `base`
+   * it is: a boolean keeps the faces it does not touch, so identity survives.
+   * Modified and new faces report -1.
+   */
+  private facesFromBase(result: OcctShape, base: OcctShape): number[] {
+    const oc = this.requireOc();
+    const baseFaces: OcctShape[] = [];
+    const baseExplorer = new oc.TopExp_Explorer_2(
+      base,
+      oc.TopAbs_ShapeEnum.TopAbs_FACE,
+      oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+    );
+    while (baseExplorer.More()) {
+      baseFaces.push(baseExplorer.Current());
+      baseExplorer.Next();
+    }
+
+    const map: number[] = [];
+    const explorer = new oc.TopExp_Explorer_2(
+      result,
+      oc.TopAbs_ShapeEnum.TopAbs_FACE,
+      oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+    );
+    while (explorer.More()) {
+      const face = explorer.Current();
+      let index = -1;
+      for (let candidate = 0; candidate < baseFaces.length; candidate += 1) {
+        if (baseFaces[candidate]!.IsSame(face)) {
+          index = candidate;
+          break;
+        }
+      }
+      map.push(index);
+      explorer.Next();
+    }
+    return map;
   }
 
   private countTopology(shape: OcctShape): ShapeStats {

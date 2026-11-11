@@ -79,6 +79,8 @@ interface KernelState {
   preview: ScenePreview | null;
   /** Operation whose evaluation produced each body's current shape. */
   bodyOperations: Record<string, string>;
+  /** Operation that created each face of a body, in shape order. */
+  faceOperations: Record<string, string[]>;
   tasks: KernelTask[];
   /** Caret position of the operation currently being rebuilt. */
   rebuildCursor: number | null;
@@ -99,6 +101,7 @@ interface KernelState {
     preview: ScenePreview | null,
   ) => void;
   setBodyOperations: (bodyOperations: Record<string, string>) => void;
+  setFaceOperations: (faceOperations: Record<string, string[]>) => void;
   clearScene: () => void;
   clearFeatureError: (featureId: string) => void;
 }
@@ -121,6 +124,7 @@ export const useKernelStore = create<KernelState>((set) => ({
   featureObjectErrors: {},
   preview: null,
   bodyOperations: {},
+  faceOperations: {},
   tasks: [],
   rebuildCursor: null,
 
@@ -182,6 +186,8 @@ export const useKernelStore = create<KernelState>((set) => ({
 
   setBodyOperations: (bodyOperations) => set({ bodyOperations }),
 
+  setFaceOperations: (faceOperations) => set({ faceOperations }),
+
   clearScene: () =>
     set((state) => ({
       meshes: {},
@@ -195,6 +201,7 @@ export const useKernelStore = create<KernelState>((set) => ({
       featureObjectErrors: {},
       preview: null,
       bodyOperations: {},
+      faceOperations: {},
       rebuildCursor: null,
     })),
   clearFeatureError: (featureId) =>

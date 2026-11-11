@@ -347,6 +347,25 @@ describe('OCCT kernel engine', () => {
     expect(result.stats.faces).toBe(6);
   });
 
+  it('reports which faces a cut left untouched', () => {
+    engine.makeBox({ shapeId: 'face-base', dx: 20, dy: 20, dz: 5, at: [-10, -10, 0] });
+    engine.makeBox({ shapeId: 'face-tool', dx: 4, dy: 4, dz: 5, at: [-2, -2, 0] });
+    const result = engine.booleanShape({
+      shapeId: 'face-cut',
+      baseShapeId: 'face-base',
+      toolShapeId: 'face-tool',
+      op: 'cut',
+      trackFaces: true,
+    });
+    const map = result.facesFromBase;
+    expect(map).toBeDefined();
+    expect(map).toHaveLength(result.stats.faces);
+    // The four sides of the plate survive the hole; its top and bottom are
+    // rebuilt because their boundary changes, and the four walls are new.
+    expect(map!.filter((index) => index >= 0)).toHaveLength(4);
+    expect(map!.filter((index) => index < 0)).toHaveLength(6);
+  });
+
   it('cuts one solid with another', () => {
     engine.makePrism({
       shapeId: 'plate',

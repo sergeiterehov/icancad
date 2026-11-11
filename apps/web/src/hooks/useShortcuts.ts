@@ -1,5 +1,7 @@
 import { useEffect } from 'react';
 import { useDocumentStore } from '../stores/documentStore';
+import { useUiStore } from '../stores/uiStore';
+import { useContextMenuStore } from '../ui/ContextMenu';
 
 /** Modifier shown in tooltips: ⌘ on Apple platforms, Ctrl everywhere else. */
 export const MOD_KEY =
@@ -13,13 +15,27 @@ function isTextEntry(target: EventTarget | null): boolean {
 }
 
 /**
- * Document-wide shortcuts. Undo and redo work everywhere except in text fields,
- * where the browser's own editing history is the expected behaviour.
+ * Document-wide shortcuts: undo, redo and Escape. The sketch editor, the context
+ * menu and the delete dialog own Escape while they are open, and text fields
+ * keep the browser's own editing history.
  */
 export function useShortcuts(): void {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (isTextEntry(event.target)) return;
+      if (event.key === 'Escape') {
+        const ui = useUiStore.getState();
+        if (ui.activeSketchId || useContextMenuStore.getState().menu) return;
+        if (ui.deleteRequest) {
+          ui.cancelDelete();
+          return;
+        }
+        const store = useDocumentStore.getState();
+        if (store.selection.length === 0 && store.editingFeatureId === null) return;
+        event.preventDefault();
+        store.select(null);
+        return;
+      }
       if (!(event.metaKey || event.ctrlKey)) return;
       const key = event.key.toLowerCase();
       if (key === 'z' && !event.shiftKey) {

@@ -63,7 +63,15 @@ export function dependentFeatures(
   project: Project,
   featureId: string,
 ): { id: string; name: string }[] {
-  const removed = new Set([featureId]);
+  return dependentFeaturesOf(project, [featureId]);
+}
+
+/** Features that would break if any of the given features disappeared. */
+export function dependentFeaturesOf(
+  project: Project,
+  featureIds: readonly string[],
+): { id: string; name: string }[] {
+  const removed = new Set(featureIds);
   const found: { id: string; name: string }[] = [];
   let changed = true;
   while (changed) {

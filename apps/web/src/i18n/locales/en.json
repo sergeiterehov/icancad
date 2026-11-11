@@ -200,7 +200,8 @@
     "deleteObject": "Delete object",
     "rebuildFromHere": "Rebuild from here",
     "color": "Colour",
-    "rename": "Rename"
+    "rename": "Rename",
+    "deleteSelected": "Delete {{count}} objects"
   },
   "nav": {
     "cube": "Orientation cube",
@@ -361,6 +362,7 @@
   "delete": {
     "title": "Delete operation?",
     "text": "\"{{name}}\" is used by other operations. They will be deleted too:",
-    "confirm": "Delete all"
+    "confirm": "Delete all",
+    "textMultiple": "Deleting these {{count}} operations also removes everything that depends on them:"
   }
 }

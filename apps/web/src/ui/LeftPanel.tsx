@@ -1,6 +1,5 @@
 import {
   activeFeatureIds,
-  BODY_COLORS,
   bodiesInHistory,
   createId,
   objectColor,
@@ -24,17 +23,26 @@ import {
   SquareMinus,
   SquarePen,
   SquarePlus,
-  Trash2,
 } from 'lucide-react';
 import { useRef, useState, type ChangeEvent, type MouseEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { saveAsset } from '../persistence/db';
 import { canEditSketch, sketchPlaneReady } from '../sketch/sectionPlane';
-import { useDocumentStore, useViewProject } from '../stores/documentStore';
+import {
+  useDocumentStore,
+  useViewProject,
+  type SelectionKind,
+} from '../stores/documentStore';
 import { useKernelStore, type PreviewMarkKind } from '../stores/kernelStore';
 import { isDirectlySelected, linkedBodyIds } from '../stores/selection';
 import { useUiStore } from '../stores/uiStore';
 import { IconButton } from './Controls';
+import {
+  colorMenuItem,
+  deleteMenuItem,
+  objectTargets,
+  visibilityMenuItem,
+} from './objectMenu';
 import { showContextMenu, useContextMenuStore, type ContextMenuItem } from './ContextMenu';
 import { Tooltip } from './Tooltip';
 
@@ -103,8 +111,6 @@ export function LeftPanel() {
   const select = useDocumentStore((state) => state.select);
   const toggleBodyVisibility = useDocumentStore((state) => state.toggleBodyVisibility);
   const toggleSketchVisibility = useDocumentStore((state) => state.toggleSketchVisibility);
-  const removeFeature = useDocumentStore((state) => state.removeFeature);
-  const deleteBody = useDocumentStore((state) => state.deleteBody);
   const addBox = useDocumentStore((state) => state.addPrimitiveBox);
   const featureErrors = useKernelStore((state) => state.featureErrors);
   const preview = useKernelStore((state) => state.preview);
@@ -126,17 +132,41 @@ export function LeftPanel() {
       .getState()
       .apply({ type: 'feature/replace', feature: { ...feature, name } });
   };
-  const colorSwatch = (color: string) => (
-    <span className="context-menu-swatch" style={{ background: color }} />
-  );
-  const colorMenu = (objectId: string, color: string): ContextMenuItem => ({
-    id: 'color',
-    label: t('context.color'),
-    icon: colorSwatch(color),
-    palette: BODY_COLORS,
-    value: color,
-    onPick: (next: string) => useDocumentStore.getState().setObjectColor(objectId, next),
-  });
+  // The context menu acts on the whole selection: right-clicking a row that is
+  // not selected selects it first.
+  const ensureSelected = (kind: SelectionKind, id: string) => {
+    const state = useDocumentStore.getState();
+    if (state.selection.some((item) => item.kind === kind && item.id === id)) return;
+    state.select({ kind, id });
+  };
+
+  const objectMenu = (renameTargetId?: string): ContextMenuItem[] => {
+    const state = useDocumentStore.getState();
+    const targets = objectTargets(state.project, state.selection);
+    const single = targets.length === 1;
+    const items: ContextMenuItem[] = [];
+    if (single && renameTargetId) {
+      items.push({
+        id: 'rename',
+        label: t('context.rename'),
+        icon: <Pencil size={14} />,
+        onSelect: () => setRenaming(renameTargetId),
+      });
+    }
+    const color = colorMenuItem(targets, t('context.color'));
+    if (color) items.push(color);
+    const visibility = visibilityMenuItem(targets, {
+      hide: t('tree.hide'),
+      show: t('tree.show'),
+    });
+    if (visibility) items.push(visibility);
+    const remove = deleteMenuItem(
+      targets,
+      single ? t('context.deleteObject') : t('context.deleteSelected', { count: targets.length }),
+    );
+    if (remove) items.push(remove);
+    return items;
+  };
 
   const highlightedBodyIds = linkedBodyIds(selection, project);
   const hasSketches = project.features.some(
@@ -217,30 +247,10 @@ export function LeftPanel() {
           !body.visible && 'muted',
           mark && `preview-${mark.kind}`,
         )}
-        onContextMenu={(event) =>
-          showContextMenu(event, [
-            {
-              id: 'rename',
-              label: t('context.rename'),
-              icon: <Pencil size={14} />,
-              onSelect: () => setRenaming(body.id),
-            },
-            colorMenu(body.id, body.color),
-            {
-              id: 'visibility',
-              label: body.visible ? t('tree.hide') : t('tree.show'),
-              icon: body.visible ? <EyeOff size={14} /> : <Eye size={14} />,
-              onSelect: () => toggleBodyVisibility(body.id),
-            },
-            {
-              id: 'delete',
-              label: t('context.deleteObject'),
-              icon: <Trash2 size={14} />,
-              danger: true,
-              onSelect: () => deleteBody(body.id, t('context.deleteObject')),
-            },
-          ])
-        }
+        onContextMenu={(event) => {
+          ensureSelected(kind, body.id);
+          showContextMenu(event, objectMenu(body.id));
+        }}
       >
         {renaming === body.id ? (
           <span className="tree-main">
@@ -331,7 +341,8 @@ export function LeftPanel() {
           linked && 'linked',
           !visible && 'muted',
         )}
-        onContextMenu={(event) =>
+        onContextMenu={(event) => {
+          ensureSelected('sketch', feature.id);
           showContextMenu(event, [
             {
               id: 'edit',
@@ -340,22 +351,9 @@ export function LeftPanel() {
               onSelect: () => setActiveSketch(feature.id),
               disabled: !canEditSketch(feature, featureErrors),
             },
-            {
-              id: 'rename',
-              label: t('context.rename'),
-              icon: <Pencil size={14} />,
-              onSelect: () => setRenaming(feature.id),
-            },
-            colorMenu(objectId, objectColor(project, objectId, SKETCH_COLOR)),
-            {
-              id: 'delete',
-              label: t('context.deleteObject'),
-              icon: <Trash2 size={14} />,
-              danger: true,
-              onSelect: () => removeFeature(feature.id),
-            },
-          ])
-        }
+            ...objectMenu(feature.id),
+          ]);
+        }}
       >
         {renaming === feature.id ? (
           <span className="tree-main">

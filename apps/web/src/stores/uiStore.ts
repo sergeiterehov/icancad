@@ -2,7 +2,9 @@ import { create } from 'zustand';
 import type { SketchTool } from '../sketch/tool';
 
 export interface DeleteRequest {
-  featureId: string;
+  /** Operations the user asked to delete, without their dependents. */
+  featureIds: string[];
+  /** Name of the operation, or of the first one when several were selected. */
   name: string;
   dependents: { id: string; name: string }[];
 }

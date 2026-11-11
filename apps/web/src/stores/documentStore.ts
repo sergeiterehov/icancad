@@ -5,7 +5,8 @@ import {
   CommandError,
   createId,
   createProject,
-  dependentFeatures,
+  dependentFeaturesOf,
+  objectName,
   objectVisible,
   sketchObjectId,
   featureBodyId,
@@ -85,17 +86,21 @@ interface DocumentState {
   setExtrudeReversed: (featureId: string, reversed: boolean) => void;
   toggleExtrudeSketch: (featureId: string, sketchId: string) => void;
   toggleSketchVisibility: (sketchId: string) => void;
-  /** Colour of a volumetric object, stored in its metadata. */
-  setObjectColor: (objectId: string, color: string) => void;
+  /** Colour of one or more objects in a single undoable step. */
+  setObjectColors: (entries: { objectId: string; color: string }[]) => void;
+  /** Visibility of one or more objects in a single undoable step. */
+  setObjectsVisible: (entries: { objectId: string; visible: boolean }[]) => void;
   /** Sketches: whether construction geometry is drawn in the 3D view. */
   setConstructionVisible: (sketchId: string, visible: boolean) => void;
-  /** Colour of every body an operation creates. */
-  setCreatedBodiesColor: (featureId: string, color: string) => void;
   addImportedMesh: (name: string, featureId: string, format: MeshFormat) => void;
   setSectionPlanes: (planes: SectionPlane[]) => void;
+  /** Removes operations together with everything that depends on them. */
   removeFeature: (featureId: string) => void;
-  confirmRemoveFeature: (featureId: string) => void;
+  removeFeatures: (featureIds: string[]) => void;
+  confirmRemoveFeature: (featureIds: string[]) => void;
   deleteBody: (bodyId: string, name: string) => void;
+  /** Deletes the selected objects: bodies become delete operations. */
+  deleteObjects: (targets: SelectionItem[]) => void;
   /** Reconciles body refs with the bodies the kernel actually produced. */
   syncCreatedBodies: (bodies: Map<string, string[]>, blockedFeatureId?: string | null) => void;
   renameProject: (name: string) => void;
@@ -769,21 +774,32 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   removeFeature: (featureId) => {
-    const project = get().project;
-    const feature = project.features.find((candidate) => candidate.id === featureId);
-    if (!feature) return;
-    const dependents = dependentFeatures(project, featureId);
-    if (dependents.length > 0) {
-      useUiStore.getState().requestDelete({ featureId, name: feature.name, dependents });
-      return;
-    }
-    get().confirmRemoveFeature(featureId);
+    get().removeFeatures([featureId]);
   },
 
-  confirmRemoveFeature: (featureId) => {
+  removeFeatures: (featureIds) => {
     const project = get().project;
-    const dependents = dependentFeatures(project, featureId);
-    const ids = [...dependents.map((entry) => entry.id), featureId];
+    const selected = new Set(featureIds);
+    const features = project.features.filter((candidate) => selected.has(candidate.id));
+    if (features.length === 0) return;
+    const dependents = dependentFeaturesOf(project, featureIds);
+    if (dependents.length > 0) {
+      useUiStore.getState().requestDelete({
+        featureIds: features.map((feature) => feature.id),
+        name: features[0]!.name,
+        dependents,
+      });
+      return;
+    }
+    get().confirmRemoveFeature(features.map((feature) => feature.id));
+  },
+
+  confirmRemoveFeature: (featureIds) => {
+    const project = get().project;
+    // Dependents of the whole set, so a chain that only survives one of the
+    // deleted operations goes as well.
+    const dependents = dependentFeaturesOf(project, featureIds);
+    const ids = [...new Set([...featureIds, ...dependents.map((entry) => entry.id)])];
     if (!get().apply(...ids.map((id) => ({ type: 'feature/remove' as const, featureId: id })))) {
       return;
     }
@@ -805,6 +821,47 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       bodyId,
     };
     get().apply(...addFeatureCommands(get().project, feature));
+  },
+
+  // Deleting a mixed selection is two kinds of edit: bodies disappear through
+  // delete operations of their own, sketch objects take the operations that
+  // depend on them with them.
+  deleteObjects: (targets) => {
+    const state = get();
+    const project = state.project;
+    const bodyIds: string[] = [];
+    const featureIds: string[] = [];
+    for (const target of targets) {
+      if (target.kind === 'body' || target.kind === 'mesh') {
+        if (project.bodies.some((body) => body.id === target.id)) bodyIds.push(target.id);
+      } else if (target.kind === 'sketch') {
+        if (project.features.some((feature) => feature.id === target.id)) {
+          featureIds.push(target.id);
+        }
+      }
+    }
+    if (bodyIds.length === 0 && featureIds.length === 0) return;
+    if (bodyIds.length > 0) {
+      get().endFeatureEdit();
+      const commands: Command[] = [];
+      let current = get().project;
+      for (const bodyId of bodyIds) {
+        const body = current.bodies.find((candidate) => candidate.id === bodyId);
+        if (!body) continue;
+        const feature: DeleteBodyFeature = {
+          id: createId('feat'),
+          name: objectName(current, bodyId, 'Body'),
+          suppressed: false,
+          type: 'delete-body',
+          bodyId,
+        };
+        const batch = addFeatureCommands(current, feature);
+        commands.push(...batch);
+        current = applyCommands(current, batch);
+      }
+      get().apply(...commands);
+    }
+    if (featureIds.length > 0) get().removeFeatures(featureIds);
   },
 
   // Bodies are objects derived from the geometry an operation produced (ADR
@@ -893,8 +950,30 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     get().apply({ type: 'history/set-end', featureId });
   },
 
-  setObjectColor: (objectId, color) => {
-    get().apply({ type: 'metadata/patch', objectId, patch: { color } });
+  setObjectColors: (entries) => {
+    if (entries.length === 0) return;
+    get().apply(
+      ...entries.map(
+        (entry): Command => ({
+          type: 'metadata/patch',
+          objectId: entry.objectId,
+          patch: { color: entry.color },
+        }),
+      ),
+    );
+  },
+
+  setObjectsVisible: (entries) => {
+    if (entries.length === 0) return;
+    get().apply(
+      ...entries.map(
+        (entry): Command => ({
+          type: 'metadata/patch',
+          objectId: entry.objectId,
+          patch: { visible: entry.visible },
+        }),
+      ),
+    );
   },
 
   setConstructionVisible: (sketchId, visible) => {
@@ -903,16 +982,6 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       objectId: sketchObjectId(sketchId),
       patch: { showConstruction: visible },
     });
-  },
-
-  setCreatedBodiesColor: (featureId, color) => {
-    const bodies = get().project.bodies.filter((body) => body.createdBy === featureId);
-    if (bodies.length === 0) return;
-    get().apply(
-      ...bodies.map(
-        (body): Command => ({ type: 'metadata/patch', objectId: body.id, patch: { color } }),
-      ),
-    );
   },
 
   toggleBodyVisibility: (bodyId) => {

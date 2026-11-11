@@ -44,6 +44,11 @@ export interface BoxParams {
 export interface MakeBoxResult {
   shapeId: string;
   stats: ShapeStats;
+  /**
+   * With `trackFaces`: index of the base-shape face each result face came from,
+   * in shape order, or -1 for a face this operation created.
+   */
+  facesFromBase?: number[];
 }
 
 export interface ProfileLine {
@@ -111,6 +116,12 @@ export interface BooleanParams {
   baseShapeId: string;
   toolShapeId: string;
   op: 'fuse' | 'cut' | 'common';
+  /**
+   * Report which base face every result face came from. Faces an operation does
+   * not touch keep their identity, so this is what tells a created face from a
+   * face that was already there.
+   */
+  trackFaces?: boolean;
 }
 
 export type KernelStatusPhase = 'loading-occt' | 'ready' | 'error';

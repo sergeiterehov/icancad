@@ -240,10 +240,7 @@ test.describe('ICANCad foundation', () => {
     await page.getByRole('menuitem', { name: 'Colour' }).hover();
     await expect(page.getByRole('menu').nth(1).locator('.context-palette-swatch')).toHaveCount(24);
     await page.getByRole('menuitemradio', { name: '#f7a072' }).click();
-    await expect(bodyRow.locator('.tree-icon')).toHaveAttribute(
-      'style',
-      /rgb\(247, 160, 114\)/,
-    );
+    await expect(bodyRow.locator('.tree-icon')).toHaveAttribute('style', /rgb\(247, 160, 114\)/);
 
     // Undo and redo work from the keyboard, not just the toolbar buttons.
     await page.mouse.click(canvasBox!.x + 10, canvasBox!.y + 10);
@@ -271,6 +268,84 @@ test.describe('ICANCad foundation', () => {
     });
     await page.locator('.timeline-op').first().click();
     await expect(inspector.getByRole('textbox', { name: 'Position X · mm' })).toHaveValue('-15');
+  });
+
+  test('leads a face back to the operation that made it', async ({ page }) => {
+    await openApp(page);
+    const tools = page.getByRole('navigation', { name: 'Tools' });
+    const inspector = page.getByTestId('right');
+    const canvas = page.getByTestId('viewport-canvas');
+    await addBox(page);
+
+    // Sketch on a face of the box and cut a hole through it, so the body comes
+    // from two operations: the box and the cut.
+    await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Select face' }).click();
+    const view = await canvas.boundingBox();
+    await page.mouse.click(view!.x + view!.width / 2, view!.y + view!.height / 2 - 60);
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await page.waitForTimeout(800);
+
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    const centered = await canvas.boundingBox();
+    const originX = centered!.x + centered!.width / 2;
+    const originY = centered!.y + centered!.height / 2;
+    const corners: [number, number][] = [
+      [originX - 50, originY - 50],
+      [originX + 50, originY - 50],
+      [originX + 50, originY + 50],
+      [originX - 50, originY + 50],
+    ];
+    for (let index = 0; index < corners.length; index += 1) {
+      const start = corners[index]!;
+      const end = corners[(index + 1) % corners.length]!;
+      await page.mouse.click(start[0], start[1]);
+      await page.waitForTimeout(320);
+      await page.mouse.click(end[0], end[1]);
+      await page.waitForTimeout(320);
+    }
+    await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+
+    await page
+      .locator('.tree-row')
+      .filter({ hasText: 'Sketch' })
+      .first()
+      .locator('.tree-main')
+      .click();
+    await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
+    await inspector.getByRole('button', { name: 'Cut', exact: true }).click();
+    await inspector.getByRole('button', { name: 'Through all', exact: true }).click();
+    await commitOperation(page);
+    await expect(page.locator('.timeline-op')).toHaveCount(3);
+
+    const opAt = async () => {
+      const ops = page.locator('.timeline-op');
+      for (let index = 0; index < (await ops.count()); index += 1) {
+        const className = (await ops.nth(index).getAttribute('class')) ?? '';
+        if (className.includes('selected')) return ops.nth(index).getAttribute('aria-label');
+      }
+      return 'none';
+    };
+    const probe = async (view: 'Front' | 'Top', dx: number, dy: number) => {
+      const cube = page.getByTestId('nav-cube');
+      await cube.click({ button: 'right' });
+      await page.getByRole('menuitem', { name: view }).click();
+      await page.waitForTimeout(900);
+      const box = await canvas.boundingBox();
+      await page.mouse.dblclick(box!.x + box!.width / 2 + dx, box!.y + box!.height / 2 + dy);
+      await expect.poll(opAt).not.toBe('none');
+      const result = (await opAt()) ?? 'none';
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(400);
+      return result;
+    };
+
+    // A face the cut did not touch still leads to the operation that created
+    // the body; the face the hole passes through leads to the cut.
+    const front = await probe('Front', 0, -60);
+    const top = await probe('Top', 90, 0);
+    expect(new Set([front, top])).toEqual(new Set(['Box', 'Extrude']));
   });
 
   test('opens the operation that produced a face on a double click', async ({ page }) => {
@@ -396,11 +471,24 @@ test.describe('ICANCad foundation', () => {
     await bodyRows.nth(1).click({ modifiers: ['Meta'] });
     await expect(page.locator('.selection-item')).toHaveCount(2);
 
+    // The menu belongs to the selection, so it deletes both objects at once and
+    // offers no rename for a multi-selection.
     await bodyRows.first().click({ button: 'right' });
     await expect(page.getByRole('menu')).toBeVisible();
-    await expect(page.getByRole('menuitem', { name: 'Delete object' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Delete 2 objects' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Rename' })).toHaveCount(0);
     await page.keyboard.press('Escape');
     await expect(page.getByRole('menu')).toBeHidden();
+
+    // A single selection offers both, and Escape clears the selection.
+    await bodyRows.first().click();
+    await bodyRows.first().click({ button: 'right' });
+    await expect(page.getByRole('menuitem', { name: 'Delete object' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Rename' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu')).toBeHidden();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.tree-row.selected')).toHaveCount(0);
 
     const caret = page.locator('.timeline-caret').nth(1);
     await caret.hover();

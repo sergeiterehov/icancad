@@ -122,6 +122,8 @@ interface RebuildState {
   bodyOwner: Map<string, string>;
   /** Operation whose evaluation last produced each body's shape. */
   bodySource: Map<string, string>;
+  /** Which operation created each face of a body, in shape order. */
+  faceOwners: Map<string, string[]>;
   /** Tessellated triangles of each body, keyed by body id. */
   meshes: Record<string, TessellationResult>;
   /** Face/edge/solid counts of each body shape, keyed by body id. */
@@ -177,6 +179,7 @@ function emptyState(): RebuildState {
     bodyShapes: new Map(),
     bodyOwner: new Map(),
     bodySource: new Map(),
+    faceOwners: new Map(),
     meshes: {},
     bodyStats: {},
     meshStats: {},
@@ -203,6 +206,7 @@ function cloneState(state: RebuildState): RebuildState {
     bodyShapes: new Map(state.bodyShapes),
     bodyOwner: new Map(state.bodyOwner),
     bodySource: new Map(state.bodySource),
+    faceOwners: new Map(state.faceOwners),
     // Tessellations and statistics are immutable values shared between
     // snapshots; only the containers are copied.
     meshes: { ...state.meshes },
@@ -376,6 +380,7 @@ async function runRebuild(
   // Which operation produced each body's current shape, so a face can lead back
   // to the operation that made it.
   useKernelStore.getState().setBodyOperations(Object.fromEntries(scene.bodySource));
+  useKernelStore.getState().setFaceOperations(Object.fromEntries(scene.faceOwners));
 
   for (const checkpoint of produced) rebuildCache.store(checkpoint);
   useDocumentStore.getState().syncCreatedBodies(base.createdBodies, base.blockedFeatureId);
@@ -544,6 +549,7 @@ async function evaluateFeature(
       state.bodySource.set(bodyId, feature.id);
       state.bodyStats[bodyId] = result.stats;
       state.meshes[bodyId] = mesh;
+      ownAllFaces(state.faceOwners, bodyId, result.stats.faces, feature.id);
     } catch (error) {
       state.featureErrors[feature.id] = kernelErrorCode(error);
       state.blockedFeatureId = feature.id;
@@ -588,6 +594,29 @@ function kernelErrorCode(error: unknown): string {
   return /^[A-Z][A-Z0-9_]+$/.test(error.message) ? error.message : 'OP_FAILED';
 }
 
+/** Every face of a freshly built body belongs to the operation that built it. */
+function ownAllFaces(owners: Map<string, string[]>, bodyId: string, faces: number, id: string) {
+  owners.set(bodyId, Array.from({ length: Math.max(0, faces) }, () => id));
+}
+
+/**
+ * Applies a boolean face map to the owners of the body: a face the boolean kept
+ * stays with the operation that made it, a new or rebuilt face belongs to this
+ * operation.
+ */
+function applyFaceMap(
+  owners: Map<string, string[]>,
+  bodyId: string,
+  map: number[],
+  id: string,
+): void {
+  const previous = owners.get(bodyId) ?? [];
+  owners.set(
+    bodyId,
+    map.map((from) => (from >= 0 ? (previous[from] ?? id) : id)),
+  );
+}
+
 async function applyExtrude(
   feature: ExtrudeFeature,
   state: RebuildState,
@@ -600,6 +629,7 @@ async function applyExtrude(
     bodyShapes,
     bodyOwner,
     bodySource,
+    faceOwners,
     meshes,
     bodyStats,
     createdBodies,
@@ -730,6 +760,7 @@ async function applyExtrude(
         meshes[bodyId] = mesh;
         bodyStats[bodyId] = await client.request<ShapeStats>({ type: 'topology', shapeId });
         if (epoch !== rebuildEpoch) return;
+        ownAllFaces(faceOwners, bodyId, bodyStats[bodyId]!.faces, feature.id);
         bodies.push(bodyId);
         slot += 1;
         continue;
@@ -762,6 +793,7 @@ async function applyExtrude(
       meshes[bodyId] = mesh;
       bodyStats[bodyId] = await client.request<ShapeStats>({ type: 'topology', shapeId });
       if (epoch !== rebuildEpoch) return;
+      ownAllFaces(faceOwners, bodyId, bodyStats[bodyId]!.faces, feature.id);
       bodies.push(bodyId);
       slot += 1;
     }
@@ -896,25 +928,31 @@ async function applyExtrude(
 
       for (const [index, part] of toolParts.entries()) {
         const resultShapeId = trackShape(`${bodyId}:${feature.id}:part-${index}`);
-        await client.request({
+        const fused = await client.request<MakeBoxResult>({
           type: 'boolean',
           params: {
             shapeId: resultShapeId,
             baseShapeId: currentShapeId,
             toolShapeId: part.shapeId,
             op: 'fuse',
+            trackFaces: true,
           },
         });
         if (epoch !== rebuildEpoch) return;
-        const after = await client.request<ShapeStats>({
-          type: 'topology',
-          shapeId: resultShapeId,
-        });
-        if (epoch !== rebuildEpoch) return;
+        const after = fused.stats;
         if (after.solids > solidCount) {
           liveShapes.delete(resultShapeId);
           void client.request({ type: 'dispose', shapeId: resultShapeId }).catch(() => undefined);
           continue;
+        }
+        // Each part adds to the previous result, so its map applies to the
+        // owners the chain has accumulated so far.
+        if (fused.facesFromBase) {
+          const previous = faceOwners.get(bodyId) ?? [];
+          faceOwners.set(
+            bodyId,
+            fused.facesFromBase.map((from) => (from >= 0 ? (previous[from] ?? feature.id) : feature.id)),
+          );
         }
         currentShapeId = resultShapeId;
         solidCount = after.solids;
@@ -947,16 +985,22 @@ async function applyExtrude(
 
     const resultShapeId = trackShape(`${bodyId}:${feature.id}`);
     const booleanOp = feature.op === 'subtract' ? 'cut' : 'common';
-    await client.request({
+    const operated = await client.request<MakeBoxResult>({
       type: 'boolean',
       params: {
         shapeId: resultShapeId,
         baseShapeId,
         toolShapeId,
         op: booleanOp,
+        trackFaces: true,
       },
     });
     if (epoch !== rebuildEpoch) return;
+    if (operated.facesFromBase) {
+      applyFaceMap(faceOwners, bodyId, operated.facesFromBase, feature.id);
+    } else {
+      ownAllFaces(faceOwners, bodyId, operated.stats.faces, feature.id);
+    }
     bodyShapes.set(bodyId, resultShapeId);
     bodySource.set(bodyId, feature.id);
     const mesh = await client.request<TessellationResult>({
