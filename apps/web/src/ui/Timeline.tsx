@@ -37,6 +37,7 @@ function FeatureIcon({ feature }: { feature: Feature }) {
       return <FileUp size={16} />;
     case 'delete-body':
       return <Trash2 size={16} />;
+    // The history names the concrete operation, so it shows the kind's icon.
     case 'edge-treatment':
       return feature.kind === 'chamfer' ? (
         <ChamferIcon size={16} />

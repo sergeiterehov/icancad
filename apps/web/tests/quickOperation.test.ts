@@ -50,7 +50,9 @@ const labels = {
   distance: 'Distance',
   secondDistance: 'Second distance',
   edgeTreatment: 'Edge',
-  edgeTreatmentTooltip: 'Edge — right rounds, left cuts',
+  edgeTreatmentTooltip: 'Edge — drag to chamfer',
+  edgeTreatmentRadiusTooltip: 'Corner radius',
+  edgeTreatmentDistanceTooltip: 'Chamfer distance',
 };
 
 function handles(context: {
@@ -62,9 +64,9 @@ function handles(context: {
     project: context.project,
     selection: context.selection,
     meshes: context.meshes ?? {},
+    baseMeshes: {},
     sketchFrames: {},
     bodies: [],
-    limits: {},
     labels,
   });
 }

@@ -51,6 +51,8 @@ interface UiState {
   setPickingExtrudeBodies: (featureId: string | null) => void;
   setPickingSketchPlane: (featureId: string | null) => void;
   setPickingSectionFace: (planeId: string | null) => void;
+  /** Leaves whichever picker is open; every operation shares one. */
+  endPicking: () => void;
   startSketchPlanePicking: (featureId: string, enterEdit: boolean) => void;
   cancelDelete: () => void;
   showToast: (key: string, kind?: 'info' | 'error', params?: Record<string, unknown>) => void;
@@ -190,6 +192,15 @@ export const useUiStore = create<UiState>((set) => ({
       pickingExtrudeBodies: null,
       pickingEdges: null,
       pickingSectionFace: null,
+    }),
+  endPicking: () =>
+    set({
+      pickingExtrude: null,
+      pickingExtrudeBodies: null,
+      pickingEdges: null,
+      pickingSketchPlane: null,
+      pickingSectionFace: null,
+      sketchPlanePickThenEdit: null,
     }),
   cancelDelete: () => set({ deleteRequest: null }),
   setActiveSketch: (activeSketchId) =>

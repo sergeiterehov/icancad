@@ -39,6 +39,37 @@ function distance(a: Vec3, b: Vec3): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
 
+/** Distance from a point to the polyline of an edge. */
+function distanceToEdge(points: readonly number[], point: Vec3): number {
+  let best = Infinity;
+  for (let index = 0; index + 5 < points.length; index += 3) {
+    const ax = points[index]!;
+    const ay = points[index + 1]!;
+    const az = points[index + 2]!;
+    const bx = points[index + 3]!;
+    const by = points[index + 4]!;
+    const bz = points[index + 5]!;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const dz = bz - az;
+    const lengthSquared = dx * dx + dy * dy + dz * dz;
+    const t =
+      lengthSquared < 1e-12
+        ? 0
+        : Math.max(
+            0,
+            Math.min(1, ((point[0] - ax) * dx + (point[1] - ay) * dy + (point[2] - az) * dz) / lengthSquared),
+          );
+    const distance = Math.hypot(
+      point[0] - (ax + dx * t),
+      point[1] - (ay + dy * t),
+      point[2] - (az + dz * t),
+    );
+    if (distance < best) best = distance;
+  }
+  return best;
+}
+
 /** How far an edge is from the stored pose, or null when it does not match. */
 export function edgeMatchDistance(
   edge: { points: number[] },
@@ -52,13 +83,23 @@ export function edgeMatchDistance(
     direction[1] * refDirection[1] +
     direction[2] * refDirection[2];
   if (Math.abs(alignment) < DIRECTION_DOT) return null;
-  // Both the start and the middle have to agree, which keeps two edges that
-  // share a line but not a span apart.
+  // The middle pins the span and one of the ends pins it along the line: a
+  // rebuilt edge may list its points the other way round, so either end will do.
   const pose = edgePose(edge.points);
-  if (distance(pose.mid, ref.mid) > POSITION_TOLERANCE) return null;
-  const startDistance = distance(pose.start, ref.start);
-  if (startDistance > POSITION_TOLERANCE) return null;
-  return startDistance;
+  const starts: Vec3[] = [pose.start, pose.end];
+  const exact =
+    distance(pose.mid, ref.mid) <= POSITION_TOLERANCE &&
+    starts.some((start) => distance(start, ref.start) <= POSITION_TOLERANCE);
+  if (exact) return distance(pose.mid, ref.mid);
+
+  // The edge may have been picked on a shape where an earlier operation of the
+  // same body had already trimmed it, so the stored span is only a piece of the
+  // edge that is really there. That piece still says which edge was meant.
+  const contained = Math.max(
+    distanceToEdge(edge.points, ref.start),
+    distanceToEdge(edge.points, ref.mid),
+  );
+  return contained <= POSITION_TOLERANCE ? POSITION_TOLERANCE : null;
 }
 
 /**

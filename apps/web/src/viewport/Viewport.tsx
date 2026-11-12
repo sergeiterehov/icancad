@@ -1,3 +1,4 @@
+import type { TessellationResult } from '@icancad/kernel';
 import { ScanBox, ScanSquare } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -49,10 +50,14 @@ import {
   type OperationHandle,
   type OperationHandleDrag,
 } from '../quick/operationHandles';
+import { resolveEdgeRef } from '../kernel/edgeLookup';
+import {
+  edgeTreatmentEdgeRef,
+  edgeTreatmentFaceRef,
+} from '../quick/edgeTreatment';
 import { findBoundExtrude, quickTargetFromSelection } from '../quick/target';
 import { formatNumber } from '../ui/format';
 import { SceneController, type SceneBody } from './SceneController';
-import { edgeBisector, edgePose } from '../kernel/edgeTreatment';
 import { resolveSelectionHit } from './selectionPick';
 import { SketchAnnotations } from './SketchAnnotations';
 import { SketchEditor } from './SketchEditor';
@@ -113,7 +118,6 @@ export function Viewport() {
   const sketchFrames = useKernelStore((state) => state.sketchFrames);
   const featureBodyErrors = useKernelStore((state) => state.featureBodyErrors);
   const featureErrors = useKernelStore((state) => state.featureErrors);
-  const featureLimits = useKernelStore((state) => state.featureLimits);
   const status = useKernelStore((state) => state.status);
   const error = useKernelStore((state) => state.error);
   const theme = useThemeStore((state) => state.theme);
@@ -133,6 +137,15 @@ export function Viewport() {
       }),
     [bodies, meshes],
   );
+  // Bodies as they are before the edited operation: its own refs are read
+  // against them, because the result no longer holds the edge it treated.
+  const baseMeshes = useMemo(() => {
+    const result: Record<string, TessellationResult> = {};
+    for (const mark of preview?.bodies ?? []) {
+      if (mark.baseMesh) result[mark.id] = mark.baseMesh;
+    }
+    return result;
+  }, [preview]);
   const quickBlocked =
     Boolean(activeSketchId) ||
     Boolean(pickingExtrude) ||
@@ -152,7 +165,9 @@ export function Viewport() {
       distance: t('quick.distanceTooltip'),
       secondDistance: t('quick.secondDistanceTooltip'),
       edgeTreatment: t('features.edgeTreatment'),
-      edgeTreatmentTooltip: t('edgeTreatment.tooltip'),
+      edgeTreatmentTooltip: t('edgeTreatment.dragTooltip'),
+      edgeTreatmentRadiusTooltip: t('edgeTreatment.radiusTooltip'),
+      edgeTreatmentDistanceTooltip: t('edgeTreatment.distanceTooltip'),
     }),
     [t],
   );
@@ -165,9 +180,9 @@ export function Viewport() {
             project,
             selection,
             meshes,
+            baseMeshes,
             sketchFrames,
             bodies: quickBodies,
-            limits: featureLimits,
             labels: handleLabels,
           }),
     [
@@ -175,9 +190,9 @@ export function Viewport() {
       project,
       selection,
       meshes,
+      baseMeshes,
       sketchFrames,
       quickBodies,
-      featureLimits,
       handleLabels,
     ],
   );
@@ -185,13 +200,11 @@ export function Viewport() {
     () =>
       operationHandleList.map((handle) => ({
         id: handle.id,
-        kind: handle.kind === 'track' ? ('track' as const) : ('arrow' as const),
         origin: handle.origin,
         direction: handle.direction,
         value: handle.value,
-        limit: handle.limit,
-        leader: handle.leader,
         enabled: handle.enabled,
+        thickness: handle.thickness,
         tooltip: handle.tooltip,
       })),
     [operationHandleList],
@@ -349,18 +362,20 @@ export function Viewport() {
         const edgePicking = ui.pickingEdges;
         if (edgePicking) {
           if (!pick) return;
+          if (pick.kind !== 'body-edge' && pick.kind !== 'body-face') return;
+          // Picking runs against the input of the edited operation, so the
+          // reference has to be measured on that same mesh. Its own result has
+          // renumbered faces and edges that no longer match the input. This
+          // callback outlives a render, so the preview is read from the store.
+          const kernelState = useKernelStore.getState();
+          const mark = kernelState.preview?.bodies.find(
+            (candidate) => candidate.id === pick.bodyId,
+          );
+          const mesh = mark?.baseMesh ?? kernelState.meshes[pick.bodyId];
           if (pick.kind === 'body-edge') {
-            const mesh = useKernelStore.getState().meshes[pick.bodyId];
-            const edge = mesh?.edges?.find((candidate) => candidate.id === pick.edgeId);
-            const bisector = mesh && edge ? edgeBisector(mesh, edge.faceIds) : null;
-            if (!mesh || !edge || !bisector) return;
-            store.toggleEdgeTreatmentEdge(edgePicking, {
-              bodyId: pick.bodyId,
-              edgeId: pick.edgeId,
-              faceIds: [...edge.faceIds],
-              ...edgePose(edge.points),
-              bisector,
-            });
+            const ref = mesh ? edgeTreatmentEdgeRef(mesh, pick.bodyId, pick.edgeId) : null;
+            if (!ref) return;
+            store.toggleEdgeTreatmentEdge(edgePicking, ref);
             return;
           }
           if (pick.kind === 'body-face') {
@@ -368,12 +383,14 @@ export function Viewport() {
               ui.showToast('errors.FACE_NOT_PLANAR', 'error');
               return;
             }
-            store.toggleEdgeTreatmentFace(edgePicking, {
-              bodyId: pick.bodyId,
-              faceId: pick.faceId,
-              normal: pick.normal,
-              origin: pick.origin,
-            });
+            if (!mesh) return;
+            store.toggleEdgeTreatmentFace(
+              edgePicking,
+              edgeTreatmentFaceRef(mesh, pick.bodyId, pick.faceId, {
+                centroid: pick.origin,
+                normal: pick.normal,
+              }),
+            );
           }
           return;
         }
@@ -522,7 +539,7 @@ export function Viewport() {
           const drag = quickDragRef.current;
           if (!drag) return;
           if (event.phase === 'move') {
-            drag.update(event.value);
+            drag.update(event.value, event.shift);
             setQuickChip({
               x: event.x,
               y: event.y,
@@ -796,11 +813,22 @@ export function Viewport() {
         : undefined;
     const treatment =
       selectedFeature?.type === 'edge-treatment' ? selectedFeature : undefined;
+    // A stored edge ref names the edge as it was picked; the highlight needs the
+    // edge that exists in the mesh the scene shows, which is the input of the
+    // operation.
+    const picked = { ...meshes, ...baseMeshes };
+    const treated = (treatment?.edgeRefs ?? []).flatMap((ref) => {
+      const resolved = resolveEdgeRef(
+        { bodyShapes: new Map([[ref.bodyId, ref.bodyId]]), meshes: picked },
+        ref,
+      );
+      return resolved ? [`${resolved.bodyId}#${resolved.edgeId}`] : [];
+    });
     controllerRef.current?.setEdgeHighlights([
       ...selection.filter((item) => item.kind === 'edge').map((item) => item.id),
-      ...(treatment?.edgeRefs ?? []).map((ref) => `${ref.bodyId}#${ref.edgeId}`),
+      ...treated,
     ]);
-  }, [selection, meshes, project]);
+  }, [selection, meshes, baseMeshes, project]);
 
   useEffect(() => {
     controllerRef.current?.setTheme(theme);

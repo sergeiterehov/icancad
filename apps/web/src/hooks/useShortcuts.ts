@@ -30,6 +30,19 @@ export function useShortcuts(): void {
           ui.cancelDelete();
           return;
         }
+        // One picker serves every operation, so Escape leaves it wherever it
+        // was opened from.
+        if (
+          ui.pickingExtrude ||
+          ui.pickingExtrudeBodies ||
+          ui.pickingEdges ||
+          ui.pickingSketchPlane ||
+          ui.pickingSectionFace
+        ) {
+          event.preventDefault();
+          ui.endPicking();
+          return;
+        }
         const store = useDocumentStore.getState();
         if (store.selection.length === 0 && store.editingFeatureId === null) return;
         event.preventDefault();

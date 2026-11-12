@@ -11,6 +11,7 @@ import { snapLength } from './handleDrag';
 import {
   buildQuickEdgeTreatment,
   MIN_EDGE_TREATMENT,
+  treatmentSizeForOffset,
   type EdgeTreatmentGeometry,
 } from './edgeTreatment';
 import { predictBodyFaceOp, predictSketchOp } from './predict';
@@ -260,10 +261,11 @@ export class QuickExtrudeDrag {
 }
 
 /**
- * One track drag on an edge treatment. The first drag creates the operation:
- * the side the track is pulled to says whether the corners get rounded or cut,
- * and the kind is locked when the pointer is released. Later drags of the same
- * operation only change the size.
+ * One drag of the edge treatment arrow. The first drag creates the operation: a
+ * plain grab cuts a chamfer, holding shift rounds the corner, and the kind is
+ * locked when the pointer is released. Later drags only change the size. The
+ * arrow length is the offset of the created face, which is what the pointer
+ * follows; the operation stores the radius or the leg distance.
  */
 export class QuickEdgeTreatmentDrag {
   private before: Project | null = null;
@@ -272,8 +274,10 @@ export class QuickEdgeTreatmentDrag {
   private created = false;
   private locked = false;
   private changed = false;
-  private currentValue = 0;
+  private currentSize = 0;
   private currentKind: EdgeTreatmentKind | null = null;
+  /** Kind of the operation being edited; a fresh grab picks it every move. */
+  private originalKind: EdgeTreatmentKind | null = null;
 
   constructor(
     private readonly geometry: EdgeTreatmentGeometry,
@@ -281,9 +285,9 @@ export class QuickEdgeTreatmentDrag {
     private readonly featureIdHint?: string,
   ) {}
 
-  /** Signed size along the track: positive rounds, negative cuts. */
+  /** The radius or leg distance the operation has; the chip shows it. */
   get value(): number {
-    return this.currentValue;
+    return this.currentSize;
   }
 
   get op(): PredictedExtrudeOp | null {
@@ -315,35 +319,39 @@ export class QuickEdgeTreatmentDrag {
       this.featureId = bound.id;
       this.originalFeature = bound;
       this.locked = true;
+      this.originalKind = bound.kind;
       this.currentKind = bound.kind;
-      // A chamfer sits on the negative side, so its arrow points into the
-      // corner and pulling further that way still grows it.
-      this.currentValue = bound.kind === 'fillet' ? bound.size : -bound.size;
+      this.currentSize = bound.size;
       return;
     }
     this.featureId = null;
     this.originalFeature = null;
     this.locked = false;
+    this.originalKind = null;
     this.currentKind = null;
-    this.currentValue = 0;
+    this.currentSize = 0;
   }
 
-  update(value: number): void {
+  update(offset: number, shift = false): void {
     if (!this.before) return;
-    this.currentValue = value;
-    if (Math.abs(value) < MIN_EDGE_TREATMENT) {
+    // The arrow only grows into the corner; pulling it back past the edge is a
+    // drag below the threshold, not a negative treatment.
+    if (offset < MIN_EDGE_TREATMENT) {
       this.restore();
       return;
     }
-    const kind: EdgeTreatmentKind = this.locked
-      ? (this.currentKind ?? (value < 0 ? 'chamfer' : 'fillet'))
-      : value < 0
-        ? 'chamfer'
-        : 'fillet';
+    // An operation keeps its kind; a grab that has not been released yet can
+    // still follow shift.
+    const kind: EdgeTreatmentKind = this.originalKind ?? (shift ? 'fillet' : 'chamfer');
     this.currentKind = kind;
-    // A handle cannot resolve better than a tenth of a millimetre, and the
-    // operation reads better without a long float in its field.
-    const size = snapLength(Math.abs(value));
+    // The pointer moves the created face, so the size follows from where that
+    // face lands. A handle cannot resolve better than a tenth of a millimetre,
+    // and the operation reads better without a long float in its field.
+    const size = Math.max(
+      0.001,
+      snapLength(treatmentSizeForOffset(kind, offset, this.geometry.wedge)),
+    );
+    this.currentSize = size;
 
     if (!this.featureId) {
       const feature = buildQuickEdgeTreatment(
@@ -372,11 +380,7 @@ export class QuickEdgeTreatmentDrag {
     }
     state.preview({
       type: 'feature/replace',
-      feature: {
-        ...feature,
-        kind: this.locked ? feature.kind : kind,
-        size: Math.max(0.001, size),
-      },
+      feature: { ...feature, kind, size },
     });
     this.changed = true;
   }
@@ -387,8 +391,8 @@ export class QuickEdgeTreatmentDrag {
     const changed = this.changed;
     if (changed && featureId) {
       useDocumentStore.getState().commitPreview(this.before);
-      // The kind is part of the operation from now on: the side the user pulled
-      // to cannot change it any more.
+      // The kind is part of the operation from now on: the modifier that was
+      // held during the first grab cannot change it any more.
       this.locked = true;
     }
     this.reset(false);
@@ -426,7 +430,8 @@ export class QuickEdgeTreatmentDrag {
     this.changed = false;
     if (clearKind) {
       this.locked = false;
-      this.currentValue = 0;
+      this.originalKind = null;
+      this.currentSize = 0;
       this.currentKind = null;
     }
   }

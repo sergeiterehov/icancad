@@ -264,6 +264,9 @@ const edgeTreatmentFeature = z.object({
       faceId: z.string().min(1),
       normal: vec3,
       origin: vec3,
+      handle: z
+        .object({ origin: vec3, direction: vec3, wedge: z.number().positive() })
+        .optional(),
     }),
   ),
   edgeRefs: z.array(
@@ -275,6 +278,8 @@ const edgeTreatmentFeature = z.object({
       mid: vec3,
       end: vec3,
       bisector: vec3,
+      wedge: z.number().positive().optional(),
+      convex: z.boolean().optional(),
     }),
   ),
   size: z.number().positive(),

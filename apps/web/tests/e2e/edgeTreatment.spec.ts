@@ -34,12 +34,16 @@ async function addBox(page: Page) {
 
 interface HandleScreen {
   id: string;
-  kind: 'arrow' | 'track';
   originX: number;
   originY: number;
   tipX: number;
   tipY: number;
   value: number;
+}
+
+/** The treatment arrow, the only handle an edge or a face offers here. */
+async function treatmentHandle(page: Page): Promise<HandleScreen | undefined> {
+  return (await handleScreens(page)).find((handle) => handle.id.startsWith('edge-treatment:'));
 }
 
 async function handleScreens(page: Page): Promise<HandleScreen[]> {
@@ -182,21 +186,28 @@ async function selectFace(page: Page) {
   });
 }
 
-/** Drag the radial track sideways: right rounds, left chamfers. */
-async function dragTrack(page: Page, dx: number) {
-  const track = (await handleScreens(page)).find((handle) => handle.kind === 'track');
-  expect(track).toBeTruthy();
-  // The knob starts at the apex of the arc; an edge keeps it away from the edge
-  // itself, which is where the handle's `origin` is.
-  const grabX = track!.tipX;
-  const grabY = track!.tipY;
-  await page.mouse.move(grabX, grabY);
+/** Pull the treatment arrow along itself by `pixels`, holding shift if asked. */
+async function dragArrow(page: Page, pixels: number, shift = false) {
+  const handle = await treatmentHandle(page);
+  expect(handle).toBeTruthy();
+  const dx = handle!.tipX - handle!.originX;
+  const dy = handle!.tipY - handle!.originY;
+  const length = Math.hypot(dx, dy) || 1;
+  const ux = (dx / length) * Math.sign(pixels);
+  const uy = (dy / length) * Math.sign(pixels);
+  const distance = Math.abs(pixels);
+  if (shift) await page.keyboard.down('Shift');
+  await page.mouse.move(handle!.tipX, handle!.tipY);
   await page.mouse.down();
   for (let step = 1; step <= 8; step += 1) {
-    await page.mouse.move(grabX + (dx * step) / 8, grabY);
+    await page.mouse.move(
+      handle!.tipX + (ux * distance * step) / 8,
+      handle!.tipY + (uy * distance * step) / 8,
+    );
     await page.waitForTimeout(40);
   }
   await page.mouse.up();
+  if (shift) await page.keyboard.up('Shift');
 }
 
 interface TreatmentInfo {
@@ -294,37 +305,37 @@ async function previewMarks(page: Page) {
 }
 
 test.describe('edge treatment', () => {
-  test('rounds an edge by dragging the track to the right', async ({ page }) => {
+  test('chamfers an edge by pulling the arrow into the corner', async ({ page }) => {
     await openApp(page);
     await addBox(page);
     await waitForEdges(page);
     await selectEdge(page);
 
     const handles = await handleScreens(page);
-    // An edge offers the track only; extrusion has nothing to work on.
-    expect(handles.filter((handle) => handle.kind === 'arrow')).toHaveLength(0);
-    expect(handles.filter((handle) => handle.kind === 'track')).toHaveLength(1);
+    // An edge offers the treatment arrow only; extrusion has nothing to work on.
+    expect(handles).toHaveLength(1);
+    expect(handles[0]?.id.startsWith('edge-treatment:')).toBe(true);
 
-    await dragTrack(page, 70);
-    await expect.poll(async () => (await lastTreatment(page))?.kind).toBe('fillet');
+    await dragArrow(page, 70);
+    await expect.poll(async () => (await lastTreatment(page))?.kind).toBe('chamfer');
 
     const treatment = await lastTreatment(page);
     expect(treatment?.size).toBeGreaterThan(0.5);
     expect(treatment?.error).toBeUndefined();
     // The operation is focused, so the inspector names its type.
-    await expect(page.getByTestId('inspector').getByText('Round', { exact: true })).toBeVisible();
+    await expect(
+      page.getByTestId('inspector').getByText('Chamfer', { exact: true }),
+    ).toBeVisible();
   });
 
-  test('chamfers an edge by dragging the track to the left', async ({ page }) => {
+  test('rounds an edge while shift is held', async ({ page }) => {
     await openApp(page);
     await addBox(page);
     await waitForEdges(page);
     await selectEdge(page);
-    await dragTrack(page, -70);
-    await expect.poll(async () => (await lastTreatment(page))?.kind).toBe('chamfer');
-    await expect(
-      page.getByTestId('inspector').getByText('Chamfer', { exact: true }),
-    ).toBeVisible();
+    await dragArrow(page, 70, true);
+    await expect.poll(async () => (await lastTreatment(page))?.kind).toBe('fillet');
+    await expect(page.getByTestId('inspector').getByText('Round', { exact: true })).toBeVisible();
   });
 
   test('rounds the rim of a round boss', async ({ page }) => {
@@ -336,7 +347,7 @@ test.describe('edge treatment', () => {
     await expect
       .poll(async () => (await handleScreens(page)).length, { timeout: 15_000 })
       .toBe(1);
-    await dragTrack(page, 70);
+    await dragArrow(page, 70, true);
     await expect.poll(async () => (await lastTreatment(page))?.kind).toBe('fillet');
     const treatment = await lastTreatment(page);
     expect(treatment?.error).toBeUndefined();
@@ -347,7 +358,7 @@ test.describe('edge treatment', () => {
     ).toBeVisible();
   });
 
-  test('offers the track next to the extrude arrow on a face', async ({ page }) => {
+  test('offers the treatment arrow next to the extrude arrow on a face', async ({ page }) => {
     await openApp(page);
     await addBox(page);
     await selectFace(page);
@@ -356,8 +367,10 @@ test.describe('edge treatment', () => {
       .poll(async () => (await handleScreens(page)).length)
       .toBe(2);
     const handles = await handleScreens(page);
-    expect(handles.filter((handle) => handle.kind === 'arrow')).toHaveLength(1);
-    expect(handles.filter((handle) => handle.kind === 'track')).toHaveLength(1);
+    expect(handles.filter((handle) => !handle.id.startsWith('edge-treatment:'))).toHaveLength(1);
+    // The treatment arrow stands on the first rim edge of the face, so the two
+    // arrows do not share an anchor.
+    expect(handles.filter((handle) => handle.id.startsWith('edge-treatment:'))).toHaveLength(1);
   });
 
   test('reduces a size the geometry cannot take', async ({ page }) => {
@@ -365,7 +378,7 @@ test.describe('edge treatment', () => {
     await addBox(page);
     await waitForEdges(page);
     await selectEdge(page);
-    await dragTrack(page, 70);
+    await dragArrow(page, 70, true);
     await expect.poll(async () => (await lastTreatment(page))?.kind).toBe('fillet');
 
     const size = page.getByTestId('inspector').getByLabel('Radius');
@@ -385,16 +398,14 @@ test.describe('edge treatment', () => {
     await addBoss(page);
     await selectClosedEdge(page);
     await expect.poll(async () => (await handleScreens(page)).length, { timeout: 15_000 }).toBe(1);
-    const [before] = await handleScreens(page);
-    expect(before?.kind).toBe('track');
+    const before = await treatmentHandle(page);
 
-    await dragTrack(page, 60);
-    await expect.poll(async () => (await lastTreatment(page))?.kind).toBe('fillet');
+    await dragArrow(page, 60);
+    await expect.poll(async () => (await lastTreatment(page))?.kind).toBe('chamfer');
     // The handle of the focused operation resolves the stored edge against the
     // input mesh, so it stays on the rim that was picked instead of jumping to
     // whichever edge took over its id in the result.
-    const [after] = await handleScreens(page);
-    expect(after?.kind).toBe('track');
+    const after = await treatmentHandle(page);
     expect(Math.abs((after?.originX ?? 0) - (before?.originX ?? 0))).toBeLessThan(3);
     expect(Math.abs((after?.originY ?? 0) - (before?.originY ?? 0))).toBeLessThan(3);
   });
@@ -404,7 +415,7 @@ test.describe('edge treatment', () => {
     await addBox(page);
     await waitForEdges(page);
     await selectEdge(page);
-    await dragTrack(page, 70);
+    await dragArrow(page, 70, true);
     await expect.poll(async () => (await lastTreatment(page))?.kind).toBe('fillet');
 
     const marks = await previewMarks(page);
@@ -421,19 +432,19 @@ test.describe('edge treatment', () => {
     );
   });
 
-  test('starts a new operation on every track drag', async ({ page }) => {
+  test('starts a new operation on every arrow drag', async ({ page }) => {
     await openApp(page);
     await addBox(page);
     await waitForEdges(page);
     await selectEdge(page);
-    await dragTrack(page, 60);
+    await dragArrow(page, 60);
     await expect.poll(() => treatmentCount(page)).toBe(1);
 
-    // Picking the same edge again offers the selection track, which never
+    // Picking the same edge again offers the selection arrow, which never
     // adopts the operation that already sits on those edges.
     await selectEdge(page);
-    await dragTrack(page, -40);
+    await dragArrow(page, 40, true);
     await expect.poll(() => treatmentCount(page)).toBe(2);
-    await expect.poll(async () => (await lastTreatment(page))?.kind).toBe('chamfer');
+    await expect.poll(async () => (await lastTreatment(page))?.kind).toBe('fillet');
   });
 });

@@ -1303,6 +1303,9 @@ async function applyEdgeTreatment(
       });
     } catch (error) {
       markBodyError(bodyId, kernelErrorCode(error));
+      // Nothing of this operation is on the body any more, so the colours of
+      // an earlier attempt would lie about what is there.
+      dropFaceMarks(state, feature.id, bodyId);
       continue;
     }
     if (epoch !== rebuildEpoch) return;
@@ -1338,10 +1341,20 @@ async function applyEdgeTreatment(
   if (appliedAny) {
     state.featureLimits[feature.id] = { requested: feature.size, applied };
   }
+  for (const bodyId of Object.keys(featureBodyErrors[feature.id] ?? {})) {
+    dropFaceMarks(state, feature.id, bodyId);
+  }
   const bodyErrors = Object.values(featureBodyErrors[feature.id] ?? {});
   if (!appliedAny || bodyErrors.length > 0) {
     state.featureErrors[feature.id] = bodyErrors[0] ?? 'TARGET_FAILED';
   }
+}
+
+/** Forgets the coloured faces a treatment had on one body. */
+function dropFaceMarks(state: RebuildState, featureId: string, bodyId: string): void {
+  const marks = state.featureFaceMarks[featureId];
+  if (!marks) return;
+  state.featureFaceMarks[featureId] = marks.filter((mark) => mark.bodyId !== bodyId);
 }
 
 /**

@@ -1,7 +1,7 @@
 import type { TessellationResult } from '@icancad/kernel';
 import { createProject, type Project } from '@icancad/model';
 import { describe, expect, it } from 'vitest';
-import { edgeBisector, edgePose, treatedEdges } from '../src/kernel/edgeTreatment';
+import { edgeBisector, edgeCorner, edgePose, treatedEdges } from '../src/kernel/edgeTreatment';
 import {
   edgeTreatmentGeometry,
   edgeTreatmentLimit,
@@ -58,16 +58,17 @@ describe('edge treatment targets', () => {
     expect(bisector[2]).toBeCloseTo(-Math.SQRT1_2, 9);
   });
 
-  it('turns selected edges into a target with a leader geometry', () => {
+  it('turns selected edges into an arrow that points into the corner', () => {
     const mesh = edgedCube(SIZE);
     const target = targetFor(mesh, ['0']);
     const geometry = edgeTreatmentGeometry(target);
-    expect(geometry?.leader).toBe(true);
     expect(geometry?.origin[0]).toBeCloseTo(SIZE / 2, 9);
     expect(geometry?.origin[1]).toBeCloseTo(0, 9);
     expect(geometry?.origin[2]).toBeCloseTo(0, 9);
-    expect(geometry?.direction[1]).toBeCloseTo(-Math.SQRT1_2, 9);
-    expect(geometry?.direction[2]).toBeCloseTo(-Math.SQRT1_2, 9);
+    // The bisector points away from the material, the arrow back into it.
+    expect(geometry?.direction[1]).toBeCloseTo(Math.SQRT1_2, 9);
+    expect(geometry?.direction[2]).toBeCloseTo(Math.SQRT1_2, 9);
+    expect(geometry?.wedge).toBeCloseTo(Math.PI / 2, 9);
   });
 
   it('turns a selected face into a target anchored at the face', () => {
@@ -81,9 +82,12 @@ describe('edge treatment targets', () => {
     expect(resolved?.faceRefs[0]?.origin[0]).toBeCloseTo(SIZE / 2, 6);
     expect(resolved?.faceRefs[0]?.origin[1]).toBeCloseTo(SIZE / 2, 6);
     expect(resolved?.faceRefs[0]?.origin[2]).toBeCloseTo(SIZE, 6);
+    // A face is treated along its rim, so the arrow stands on the first rim
+    // edge and points into the body, where the chamfer or round appears.
     const geometry = edgeTreatmentGeometry(resolved!);
-    expect(geometry?.leader).toBe(false);
-    expect(geometry?.direction).toEqual([0, 0, 1]);
+    expect(geometry?.origin[2]).toBeCloseTo(SIZE, 6);
+    expect(geometry?.direction[2]).toBeLessThan(-0.5);
+    expect(geometry?.wedge).toBeCloseTo(Math.PI / 2, 6);
   });
 
   it('takes the rim of a face as the treated edges', () => {
@@ -174,5 +178,155 @@ describe('edge treatment size limit', () => {
       ),
     ).not.toBeNull();
     expect(edgeTreatmentLimit({ faceRefs: [], edgeRefs: [] }, { 'body-1': mesh })).toBeNull();
+  });
+});
+
+/** Closed L-shaped solid, the simplest body with a concave edge. */
+function notchMesh(size = 20): TessellationResult {
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const indices: number[] = [];
+  const faceIds: number[] = [];
+  const triangle = (points: Array<[number, number, number]>, normal: [number, number, number], faceId: number) => {
+    const base = positions.length / 3;
+    for (const point of points) {
+      positions.push(...point);
+      normals.push(...normal);
+    }
+    indices.push(base, base + 1, base + 2);
+    faceIds.push(faceId);
+  };
+  const half = size / 2;
+
+  // Top and bottom of the L, whose outline runs (0,0) (S,0) (S,S/2) (S/2,S/2) (S/2,S) (0,S).
+  const outline: Array<[number, number]> = [
+    [0, 0],
+    [size, 0],
+    [size, half],
+    [half, half],
+    [half, size],
+    [0, size],
+  ];
+  for (let index = 0; index < outline.length; index += 1) {
+    const [ax, ay] = outline[index]!;
+    const [bx, by] = outline[(index + 1) % outline.length]!;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const length = Math.hypot(dx, dy);
+    const normal: [number, number, number] = [dy / length, -dx / length, 0];
+    triangle(
+      [
+        [ax, ay, 0],
+        [bx, by, 0],
+        [bx, by, size],
+      ],
+      normal,
+      2 + index,
+    );
+    triangle(
+      [
+        [ax, ay, 0],
+        [bx, by, size],
+        [ax, ay, size],
+      ],
+      normal,
+      2 + index,
+    );
+  }
+  const fan = (z: number, normal: [number, number, number]) => {
+    for (let index = 1; index + 1 < outline.length; index += 1) {
+      const [ax, ay] = outline[0]!;
+      const [bx, by] = outline[index]!;
+      const [cx, cy] = outline[index + 1]!;
+      const points: Array<[number, number, number]> =
+        z === size
+          ? [
+              [ax, ay, z],
+              [bx, by, z],
+              [cx, cy, z],
+            ]
+          : [
+              [ax, ay, z],
+              [cx, cy, z],
+              [bx, by, z],
+            ];
+      triangle(points, normal, z === size ? 0 : 1);
+    }
+  };
+  fan(size, [0, 0, 1]);
+  fan(0, [0, 0, -1]);
+
+  return {
+    positions: new Float32Array(positions),
+    normals: new Float32Array(normals),
+    indices: new Uint32Array(indices),
+    faceIds: new Uint32Array(faceIds),
+    triangleCount: faceIds.length,
+    vertexCount: positions.length / 3,
+    bbox: { min: [0, 0, 0], max: [size, size, size] },
+    edges: [],
+  };
+}
+
+describe('edge corners', () => {
+  it('fills a body edge, so the new face lands inside it', () => {
+    const mesh = edgedCube(SIZE);
+    const edge = mesh.edges![0]!;
+    const corner = edgeCorner(mesh, edge.faceIds, edgePose(edge.points).mid);
+    expect(corner?.convex).toBe(true);
+    expect(corner?.wedge).toBeCloseTo(Math.PI / 2, 6);
+  });
+
+  it('leaves a notch edge empty, so the new face lands in free space', () => {
+    const mesh = notchMesh(SIZE);
+    const corner = edgeCorner(mesh, [4, 5], [SIZE / 2, SIZE / 2, SIZE / 2]);
+    expect(corner?.convex).toBe(false);
+    expect(corner?.wedge).toBeCloseTo(Math.PI / 2, 6);
+  });
+});
+
+describe('older references', () => {
+  /** A concave edge of the notch, as a document saved before the corner. */
+  function legacyRef() {
+    const mesh: TessellationResult = {
+      ...notchMesh(SIZE),
+      edges: [{ id: '7', faceIds: [4, 5], points: [10, 10, 0, 10, 10, SIZE], closed: false }],
+    };
+    const target: EdgeTreatmentTarget = {
+      faceRefs: [],
+      edgeRefs: [
+        {
+          bodyId: 'body-1',
+          edgeId: '7',
+          faceIds: [4, 5],
+          start: [10, 10, 0],
+          mid: [10, 10, SIZE / 2],
+          end: [10, 10, SIZE],
+          bisector: [Math.SQRT1_2, Math.SQRT1_2, 0],
+        },
+      ],
+    };
+    return { mesh, target };
+  }
+
+  it('reads the corner from the mesh when the reference does not carry it', () => {
+    const { mesh, target } = legacyRef();
+    const geometry = edgeTreatmentGeometry(target, { 'body-1': mesh });
+    // The notch is open, so the created face lies in the free space.
+    expect(geometry?.direction[0]).toBeCloseTo(Math.SQRT1_2, 6);
+    expect(geometry?.direction[1]).toBeCloseTo(Math.SQRT1_2, 6);
+    expect(geometry?.wedge).toBeCloseTo(Math.PI / 2, 6);
+  });
+
+  it('keeps the stored corner once the reference has one', () => {
+    const { mesh, target } = legacyRef();
+    const ref = target.edgeRefs[0]!;
+    const stored: EdgeTreatmentTarget = {
+      faceRefs: [],
+      edgeRefs: [{ ...ref, wedge: Math.PI / 2, convex: true }],
+    };
+    const geometry = edgeTreatmentGeometry(stored, { 'body-1': mesh });
+    // The stored side wins even where the mesh would say otherwise.
+    expect(geometry?.direction[0]).toBeCloseTo(-Math.SQRT1_2, 6);
   });
 });

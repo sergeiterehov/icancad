@@ -1374,10 +1374,16 @@ export function Inspector() {
                   </Segmented>
                 </PanelSection>
 
-                <PanelSection title={t('edgeTreatment.size')}>
+                <PanelSection
+                  title={t(
+                    treatmentFeature.kind === 'fillet'
+                      ? 'edgeTreatment.radius'
+                      : 'edgeTreatment.distance',
+                  )}
+                >
                   <div className="dimension-row">
                     <DimensionField
-                      icon={<ArrowLeftRight size={13} />}
+                      icon={<MoveVertical size={13} />}
                       label={t(
                         treatmentFeature.kind === 'fillet'
                           ? 'edgeTreatment.radius'

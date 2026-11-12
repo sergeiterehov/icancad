@@ -466,6 +466,262 @@ describe('OCCT kernel engine', () => {
     expect(meshSignedVolume(rounded)).toBeGreaterThan(990);
   });
 
+  it('keeps every trimmed face when two rounds meet', () => {
+    engine.makeBox({ shapeId: 'pair-box', dx: 10, dy: 10, dz: 10 });
+    const mesh = engine.tessellate('pair-box');
+    const edges = mesh.edges!;
+    const point = (edge: (typeof edges)[number], index: number) =>
+      edge.points.slice(index * 3, index * 3 + 3).join(',');
+    const first = edges[0]!;
+    // Two edges that share a corner: their rounds meet, which trims the faces
+    // between them from both sides.
+    const second = edges.find(
+      (edge) =>
+        edge !== first &&
+        [0, edge.points.length / 3 - 1].some((index) =>
+          [point(first, 0), point(first, first.points.length / 3 - 1)].includes(
+            point(edge, index),
+          ),
+        ),
+    )!;
+    const result = engine.treatEdges({
+      shapeId: 'pair-fillet',
+      sourceShapeId: 'pair-box',
+      kind: 'fillet',
+      faceIds: [],
+      edgeIds: [first.id, second.id],
+      size: 2,
+    });
+    expect(result.applied).toBe(2);
+    // No face of the box may be reported as new: every one of them still says
+    // where it came from, and only the surfaces the rounds create are new.
+    expect(result.facesFromBase.filter((from) => from >= 0).sort()).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(result.facesFromBase.filter((from) => from < 0).length).toBeGreaterThanOrEqual(2);
+    expect(result.stats.solids).toBe(1);
+  });
+
+  it('rounds a chain the kernel rejects as one set', () => {
+    // An L-shaped wall: the notch has a concave floor edge that meets a convex
+    // edge at either end. Asked for together, OCCT rejects the whole set.
+    const outline: Array<[number, number]> = [
+      [-23.5, 0.5],
+      [-23.5, -9],
+      [30, -9],
+      [30, 34],
+      [22.5, 34],
+      [22.5, 0.5],
+    ];
+    engine.makePrism({
+      shapeId: 'chain-prism',
+      origin: [0, 0, 0],
+      xAxis: [0, 1, 0],
+      yAxis: [0, 0, 1],
+      distances: [35.8],
+      regions: [
+        {
+          outer: {
+            curves: outline.map((point, index) => {
+              const next = outline[(index + 1) % outline.length]!;
+              return { type: 'line' as const, x1: point[0], y1: point[1], x2: next[0], y2: next[1] };
+            }),
+          },
+          holes: [],
+        },
+      ],
+    });
+    const mesh = engine.tessellate('chain-prism');
+    const middle = (edge: NonNullable<typeof mesh.edges>[number]) => {
+      const points = edge.points;
+      let x = 0;
+      let y = 0;
+      let z = 0;
+      for (let index = 0; index < points.length; index += 3) {
+        x += points[index]!;
+        y += points[index + 1]!;
+        z += points[index + 2]!;
+      }
+      const count = points.length / 3;
+      return [x / count, y / count, z / count];
+    };
+    const edgeThrough = (x: number, y: number, z: number) => {
+      const found = mesh.edges!.find((edge) => {
+        const [mx, my, mz] = middle(edge);
+        return Math.hypot(mx! - x, my! - y, mz! - z) < 0.5;
+      });
+      expect(found, `edge near ${x},${y},${z}`).toBeDefined();
+      return found!;
+    };
+    const chain = [
+      edgeThrough(17.9, 22.5, 0.5),
+      edgeThrough(0, -0.5, 0.5),
+      edgeThrough(35.8, -0.5, 0.5),
+    ];
+
+    const result = engine.treatEdges({
+      shapeId: 'chain-fillet',
+      sourceShapeId: 'chain-prism',
+      kind: 'fillet',
+      faceIds: [],
+      edgeIds: chain.map((edge) => edge.id),
+      size: 2,
+    });
+    expect(result.applied).toBe(2);
+    expect(result.stats.solids).toBe(1);
+    const rounded = engine.tessellate('chain-fillet');
+    const plain = meshSignedVolume(mesh);
+    expect(meshSignedVolume(rounded)).toBeLessThan(plain);
+    // Each round shaves a corner off, so the body only loses volume.
+    expect(meshSignedVolume(rounded)).toBeGreaterThan(plain * 0.95);
+
+    // A rebuild of the same selection keeps working below the limit.
+    const again = engine.treatEdges({
+      shapeId: 'chain-again',
+      sourceShapeId: 'chain-prism',
+      kind: 'fillet',
+      faceIds: [],
+      edgeIds: chain.map((edge) => edge.id),
+      size: 2.5,
+    });
+    expect(again.applied).toBe(2.5);
+
+    // A size that does not fit is still reduced rather than reported as fatal.
+    const limited = engine.treatEdges({
+      shapeId: 'chain-limited',
+      sourceShapeId: 'chain-prism',
+      kind: 'fillet',
+      faceIds: [],
+      edgeIds: chain.map((edge) => edge.id),
+      size: 40,
+    });
+    expect(limited.applied).toBeGreaterThan(7);
+    expect(limited.applied).toBeLessThan(40);
+    expect(limited.stats.solids).toBe(1);
+  });
+
+  it('reads the corner of every edge it tessellates', () => {
+    engine.makeBox({ shapeId: 'corner-box', dx: 10, dy: 10, dz: 10 });
+    const mesh = engine.tessellate('corner-box');
+    // Every edge of a box is convex and turns a right angle.
+    for (const edge of mesh.edges!) {
+      expect(edge.convex, edge.id).toBe(true);
+      expect(edge.wedge).toBeCloseTo(Math.PI / 2, 3);
+    }
+
+    engine.makePrism({
+      shapeId: 'corner-notch',
+      origin: [0, 0, 0],
+      xAxis: [0, 1, 0],
+      yAxis: [0, 0, 1],
+      distances: [35.8],
+      regions: [
+        {
+          outer: {
+            curves: [
+              [-23.5, 0.5],
+              [-23.5, -9],
+              [30, -9],
+              [30, 34],
+              [22.5, 34],
+              [22.5, 0.5],
+            ].map((point, index, all) => {
+              const next = all[(index + 1) % all.length]!;
+              return {
+                type: 'line' as const,
+                x1: point[0]!,
+                y1: point[1]!,
+                x2: next[0]!,
+                y2: next[1]!,
+              };
+            }),
+          },
+          holes: [],
+        },
+      ],
+    });
+    const notch = engine.tessellate('corner-notch');
+    // The floor of the notch is the one edge the material fills in behind.
+    const concave = notch.edges!.filter((edge) => edge.convex === false);
+    expect(concave).toHaveLength(1);
+    expect(concave[0]!.points.slice(0, 3)).toEqual([0, 22.5, 0.5]);
+    expect(concave[0]!.points.slice(-3)).toEqual([35.8, 22.5, 0.5]);
+  });
+
+  it('chamfers a chain of mixed corners in passes', () => {
+    // A chamfer cannot be built across a corner it has to both fill in and
+    // break: OCCT accepts that build and returns a chamfer folded over the
+    // body. The engine builds such a set in passes, so the result keeps the
+    // material the two kinds of chamfer leave.
+    const outline: Array<[number, number]> = [
+      [-23.5, 0.5],
+      [-23.5, -9],
+      [30, -9],
+      [30, 34],
+      [22.5, 34],
+      [22.5, 0.5],
+    ];
+    engine.makePrism({
+      shapeId: 'mixed-prism',
+      origin: [0, 0, 0],
+      xAxis: [0, 1, 0],
+      yAxis: [0, 0, 1],
+      distances: [35.8],
+      regions: [
+        {
+          outer: {
+            curves: outline.map((point, index) => {
+              const next = outline[(index + 1) % outline.length]!;
+              return { type: 'line' as const, x1: point[0], y1: point[1], x2: next[0], y2: next[1] };
+            }),
+          },
+          holes: [],
+        },
+      ],
+    });
+    const mesh = engine.tessellate('mixed-prism');
+    const plain = meshSignedVolume(mesh);
+    const chain = mesh.edges!.filter((edge) =>
+      [
+        [17.9, 22.5, 0.5],
+        [0, -0.5, 0.5],
+        [35.8, -0.5, 0.5],
+      ].some((target) => {
+        const middle = [0, 0, 0];
+        for (let index = 0; index < edge.points.length; index += 3) {
+          middle[0]! += edge.points[index]! / (edge.points.length / 3);
+          middle[1]! += edge.points[index + 1]! / (edge.points.length / 3);
+          middle[2]! += edge.points[index + 2]! / (edge.points.length / 3);
+        }
+        return (
+          Math.hypot(middle[0]! - target[0]!, middle[1]! - target[1]!, middle[2]! - target[2]!) < 0.5
+        );
+      }),
+    );
+    expect(chain).toHaveLength(3);
+
+    const size = 4;
+    const result = engine.treatEdges({
+      shapeId: 'mixed-chamfer',
+      sourceShapeId: 'mixed-prism',
+      kind: 'chamfer',
+      faceIds: [],
+      edgeIds: chain.map((edge) => edge.id),
+      size,
+    });
+    expect(result.applied).toBe(size);
+    expect(result.stats.solids).toBe(1);
+    // The concave edge fills in, the two convex ones break off: a right-angle
+    // chamfer of `size` moves size²/2 per unit of length either way.
+    const filled = (size * size * 0.5) * 35.8;
+    const broken = (size * size * 0.5) * 46 * 2;
+    const expected = plain + filled - broken;
+    const volume = meshSignedVolume(engine.tessellate('mixed-chamfer'));
+    // The corners where the chamfers meet account for a fraction of a percent.
+    expect(Math.abs(volume - expected) / expected).toBeLessThan(0.005);
+    // A build that folds a chamfer over the body loses several percent, which
+    // is what this test is here for.
+    expect(volume).toBeGreaterThan(expected * 0.99);
+  });
+
   it('rounds the rim of a cylindrical boss', () => {
     engine.makePrism({
       shapeId: 'boss',

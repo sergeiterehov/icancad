@@ -90,6 +90,8 @@ export interface OcctShapeList {
   Size(): number;
   First_1(): OcctShape;
   Last_1(): OcctShape;
+  /** The binding has no iterator, so the list is drained from the front. */
+  RemoveFirst(): void;
 }
 
 /** Shared surface of `BRepFilletAPI_MakeFillet` and `MakeChamfer`. */
@@ -104,6 +106,8 @@ export interface OcctEdgeMaker {
    * it in the result; this is the only way to keep its identity.
    */
   Modified(shape: OcctShape): OcctShapeList;
+  /** The faces a treatment surface an edge turned into. */
+  Generated(shape: OcctShape): OcctShapeList;
   IsDeleted(shape: OcctShape): boolean;
 }
 

@@ -38,7 +38,6 @@ function inspectorTitle(page: Page) {
 
 interface HandleScreen {
   id: string;
-  kind: 'arrow' | 'track';
   originX: number;
   originY: number;
   tipX: number;
@@ -62,11 +61,14 @@ async function dragHandle(
   direction: number,
   pixels: number,
   index = 0,
-  kind: 'arrow' | 'track' = 'arrow',
+  kind: 'extrude' | 'treatment' = 'extrude',
 ) {
-  // Several handles can share one anchor, so the kind is what identifies the
-  // one a test means.
-  const handles = (await handleScreens(page)).filter((handle) => handle.kind === kind);
+  // A face offers both operations, so the id tells the arrows apart.
+  const handles = (await handleScreens(page)).filter((handle) =>
+    kind === 'treatment'
+      ? handle.id.startsWith('edge-treatment:')
+      : !handle.id.startsWith('edge-treatment:'),
+  );
   const handle = handles[index];
   expect(handle).toBeTruthy();
   const dx = handle!.tipX - handle!.originX;
@@ -161,15 +163,19 @@ test.describe('quick operations', () => {
     await page.mouse.click(centerX + 60, centerY + 40);
     await expect(page.getByText('Quick operation')).toBeVisible();
 
-    // A face offers the extrusion arrow and, at the same point, the edge
-    // treatment track (ADR 0015). Handles are withheld while the model
+    // A face offers the extrusion arrow and the edge treatment arrow on its
+    // first rim edge (ADR 0015). Handles are withheld while the model
     // recalculates, so wait for them instead of reading one frame.
     await expect
       .poll(async () => (await handleScreens(page)).length, { timeout: 15_000 })
       .toBe(2);
     const faceHandles = await handleScreens(page);
-    expect(faceHandles.filter((handle) => handle.kind === 'arrow')).toHaveLength(1);
-    expect(faceHandles.filter((handle) => handle.kind === 'track')).toHaveLength(1);
+    expect(
+      faceHandles.filter((handle) => !handle.id.startsWith('edge-treatment:')),
+    ).toHaveLength(1);
+    expect(
+      faceHandles.filter((handle) => handle.id.startsWith('edge-treatment:')),
+    ).toHaveLength(1);
     await dragHandle(page, 1, 60);
     await expect(page.locator('.timeline-op')).toHaveCount(2);
     await expect(page.locator('.timeline-op.selected')).toHaveCount(1);
@@ -182,7 +188,9 @@ test.describe('quick operations', () => {
     expect(Number(firstDistance)).toBeGreaterThan(0);
 
     // The focused operation owns the handle, and its tooltip says what it edits.
-    const focused = (await handleScreens(page)).find((handle) => handle.kind === 'arrow');
+    const focused = (await handleScreens(page)).find(
+      (handle) => !handle.id.startsWith('edge-treatment:'),
+    );
     expect(focused?.id).toMatch(/^extrude:feat_/);
     await page.mouse.move(
       (focused!.tipX + focused!.originX) / 2,
@@ -229,7 +237,8 @@ test.describe('quick operations', () => {
 
     // The second direction gets its own handle, opposite the primary one.
     await inspector.getByRole('switch', { name: 'Second direction' }).click();
-    const arrows = async () => (await handleScreens(page)).filter((handle) => handle.kind === 'arrow');
+    const arrows = async () =>
+      (await handleScreens(page)).filter((handle) => !handle.id.startsWith('edge-treatment:'));
     await expect.poll(async () => (await arrows()).length).toBe(2);
     const [primary, second] = await arrows();
     expect(second!.originX).toBeCloseTo(primary!.originX);
@@ -342,7 +351,7 @@ test.describe('quick operations', () => {
     expect(await bodyInfos(page)).toHaveLength(1);
   });
 
-  test('selects an edge and offers the edge treatment track instead', async ({ page }) => {
+  test('selects an edge and offers the edge treatment arrow instead', async ({ page }) => {
     await openApp(page);
     await addBox(page);
 
@@ -380,11 +389,11 @@ test.describe('quick operations', () => {
     });
 
     await expect(
-      page.getByText('Drag the track to round or chamfer these edges.'),
+      page.getByText('Drag the arrow to chamfer these edges, hold Shift to round them.'),
     ).toBeVisible();
-    // An edge offers the edge treatment track, never an extrude arrow.
+    // An edge offers the edge treatment arrow, never an extrude arrow.
     const handles = await handleScreens(page);
     expect(handles).toHaveLength(1);
-    expect(handles[0]?.kind).toBe('track');
+    expect(handles[0]?.id.startsWith('edge-treatment:')).toBe(true);
   });
 });

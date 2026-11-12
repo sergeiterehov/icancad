@@ -175,6 +175,17 @@ export interface BodyFaceRef {
   faceId: string;
   normal: Vec3;
   origin: Vec3;
+  /** Where the treatment handle sits, measured on the rim at pick time. */
+  handle?: FaceTreatmentHandle;
+}
+
+/** Arrow of an edge treatment on a face: it stands on the first rim edge. */
+export interface FaceTreatmentHandle {
+  origin: Vec3;
+  /** Points into the corner, toward the face the treatment creates. */
+  direction: Vec3;
+  /** Angle between the two faces at that rim edge, in radians. */
+  wedge: number;
 }
 
 /**
@@ -193,6 +204,10 @@ export interface BodyEdgeRef {
   end: Vec3;
   /** Bisector of the two face normals, pointing away from the material. */
   bisector: Vec3;
+  /** Angle between the two faces at the edge, measured where the face appears. */
+  wedge?: number;
+  /** The material fills the corner, so the created face lies inside the body. */
+  convex?: boolean;
 }
 
 export interface ExtrudeFeature extends FeatureBase {

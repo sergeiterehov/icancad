@@ -96,6 +96,105 @@ function polygonClosed(points: readonly number[]): boolean {
   );
 }
 
+/** Distance from a point to a polyline stored as a flat xyz array. */
+function pointToPolyline(points: readonly number[], x: number, y: number, z: number): number {
+  let best = Infinity;
+  for (let index = 0; index + 5 < points.length; index += 3) {
+    const ax = points[index]!;
+    const ay = points[index + 1]!;
+    const az = points[index + 2]!;
+    const dx = points[index + 3]! - ax;
+    const dy = points[index + 4]! - ay;
+    const dz = points[index + 5]! - az;
+    const lengthSquared = dx * dx + dy * dy + dz * dz;
+    const t =
+      lengthSquared < 1e-12
+        ? 0
+        : Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy + (z - az) * dz) / lengthSquared));
+    const distance = Math.hypot(x - (ax + dx * t), y - (ay + dy * t), z - (az + dz * t));
+    if (distance < best) best = distance;
+  }
+  return best;
+}
+
+/** How far one polyline lies from another, in the worst place. */
+function polylineDistance(from: readonly number[], to: readonly number[]): number {
+  let worst = 0;
+  const step = Math.max(1, Math.ceil(from.length / 3 / 48)) * 3;
+  for (let index = 0; index + 2 < from.length; index += step) {
+    const distance = pointToPolyline(to, from[index]!, from[index + 1]!, from[index + 2]!);
+    if (distance > worst) worst = distance;
+  }
+  return worst;
+}
+
+/**
+ * Two tessellations of the same curve stay within their chord deflection of
+ * each other, so a rebuilt edge is still recognisable past this margin.
+ */
+const TREATMENT_EDGE_TOLERANCE = DEFAULT_TESSELLATION_QUALITY.linearDeflection * 2.5;
+
+/**
+ * The corner an edge sits in, read from the triangles of the two faces next to
+ * it. Free space between two faces meets at a convex edge; the material fills
+ * the corner when each face leaves the edge on the far side of the other's
+ * plane.
+ */
+function edgeCorner(
+  edge: BodyEdge,
+  triangleRanges: ReadonlyArray<[number, number] | undefined>,
+  buffers: TessellationBuffers,
+): { wedge: number; convex: boolean } | null {
+  const middle = Math.floor(edge.points.length / 6) * 3;
+  const at = [edge.points[middle]!, edge.points[middle + 1]!, edge.points[middle + 2]!];
+  const nearest = (faceId: number | undefined) => {
+    if (faceId === undefined) return null;
+    const range = triangleRanges[faceId];
+    if (!range) return null;
+    let best: { centroid: number[]; normal: number[]; distance: number } | null = null;
+    for (let triangle = range[0]; triangle < range[0] + range[1]; triangle += 1) {
+      const centroid = [0, 0, 0];
+      const normal = [0, 0, 0];
+      for (let corner = 0; corner < 3; corner += 1) {
+        const vertex = buffers.indices[triangle * 3 + corner]!;
+        for (let axis = 0; axis < 3; axis += 1) {
+          centroid[axis]! += buffers.positions[vertex * 3 + axis]! / 3;
+          normal[axis]! += buffers.normals[vertex * 3 + axis]! / 3;
+        }
+      }
+      const distance = Math.hypot(
+        centroid[0]! - at[0]!,
+        centroid[1]! - at[1]!,
+        centroid[2]! - at[2]!,
+      );
+      if (best && distance >= best.distance) continue;
+      best = { centroid, normal, distance };
+    }
+    return best;
+  };
+  const first = nearest(edge.faceIds[0]);
+  const second = nearest(edge.faceIds[1]);
+  if (!first || !second) return null;
+  const cosine = Math.max(
+    -1,
+    Math.min(
+      1,
+      first.normal[0]! * second.normal[0]! +
+        first.normal[1]! * second.normal[1]! +
+        first.normal[2]! * second.normal[2]!,
+    ),
+  );
+  const convex =
+    (second.centroid[0]! - at[0]!) * first.normal[0]! +
+      (second.centroid[1]! - at[1]!) * first.normal[1]! +
+      (second.centroid[2]! - at[2]!) * first.normal[2]! +
+      (first.centroid[0]! - at[0]!) * second.normal[0]! +
+      (first.centroid[1]! - at[1]!) * second.normal[1]! +
+      (first.centroid[2]! - at[2]!) * second.normal[2]! <
+    0;
+  return { wedge: Math.PI - Math.acos(cosine), convex };
+}
+
 interface TessellationBuffers {
   positions: number[];
   normals: number[];
@@ -125,6 +224,16 @@ export class KernelEngine {
    * treatment reuses them instead of walking the shape again.
    */
   private readonly shapeEdges = new Map<string, ShapeEdges>();
+  /** Counter for the throwaway ids used while a treatment is built in passes. */
+  private treatmentPass = 0;
+  /**
+   * Edge selections that only build in passes: the largest size they took and
+   * the smallest size they rejected.
+   */
+  private readonly treatmentSplits = new Map<
+    string,
+    { good: number; bad: number; index: number }
+  >();
 
   constructor(
     private readonly loader: OcctLoader,
@@ -396,6 +505,12 @@ export class KernelEngine {
     const edgeBuckets = new Map<string, Array<{ shape: OcctShape; edge: BodyEdge }>>();
     const allEdges: BodyEdge[] = [];
     const edgeShapes = new Map<string, OcctShape>();
+    // Where each face put its vertices, so an edge can ask its faces for the
+    // normals next to it once the whole shape is meshed.
+    const faceRanges: Array<[number, number]> = [];
+    // Where each face put its triangles, so an edge can look at the triangles
+    // next to it instead of at its own end vertices.
+    const triangleRanges: Array<[number, number]> = [];
     let edgeCount = 0;
 
     const explorer = new oc.TopExp_Explorer_2(
@@ -417,6 +532,8 @@ export class KernelEngine {
         const triangles = triangulation.Triangles();
         const transformation = location.Transformation();
         const base = buffers.positions.length / 3;
+        faceRanges[faceIndex] = [base, nbNodes];
+        triangleRanges[faceIndex] = [triangleCount, nbTriangles];
 
         for (let i = 1; i <= nbNodes; i += 1) {
           const point = nodes.Value(i).Transformed(transformation);
@@ -526,6 +643,13 @@ export class KernelEngine {
     // Edges are the only handle a treatment has on the shape, so they outlive
     // the tessellation for as long as the shape does.
     const keptEdges = allEdges.filter((edge) => edge.faceIds.length === 2);
+    for (const edge of keptEdges) {
+      const corner = edgeCorner(edge, triangleRanges, buffers);
+      if (corner) {
+        edge.wedge = corner.wedge;
+        edge.convex = corner.convex;
+      }
+    }
     this.shapeEdges.set(shapeId, {
       edges: keptEdges,
       shapes: new Map(
@@ -566,14 +690,48 @@ export class KernelEngine {
       throw new KernelOpError('INVALID_PARAMS', 'size must be positive');
     }
     const source = this.getShape(params.sourceShapeId);
-    const edges = this.treatmentEdges(params);
+    const { edges, chosen } = this.treatmentEdges(params);
     if (edges.length === 0) throw new KernelOpError('NO_EDGES', 'No edges to treat');
+    // A set that both fills a corner and breaks one is the one the kernel's
+    // corner blending gets wrong: it accepts the build and returns a body with
+    // a chamfer folded across it. Those sets are built in passes instead, and
+    // the concave edges go first — they are the ones a later pass would have to
+    // cut into, and starting with them keeps the size the user asked for.
+    const mixed =
+      chosen.length > 1 &&
+      chosen.some((edge) => edge.convex === false) &&
+      chosen.some((edge) => edge.convex === true);
+    if (mixed) {
+      const order = chosen
+        .map((edge, index) => ({ edge, shape: edges[index]! }))
+        .sort((a, b) => Number(a.edge.convex ?? true) - Number(b.edge.convex ?? true));
+      for (const [index, item] of order.entries()) {
+        chosen[index] = item.edge;
+        edges[index] = item.shape;
+      }
+    }
 
-    const built = this.buildTreatment(params.kind, source, edges, params.size);
-    let shape = built?.shape ?? null;
-    let maker: OcctEdgeMaker | null = built?.maker ?? null;
+    // A selection the kernel refuses as a set is refused at every size, so
+    // bisecting it again on every preview rebuild only repeats a known answer.
+    // Such a selection is remembered, and it skips the bisection next time.
+    const splitKey = `${params.sourceShapeId}|${params.kind}|${chosen
+      .map((edge) => edge.id)
+      .sort()
+      .join(',')}`;
+    const knownSplit = this.treatmentSplits.has(splitKey);
+
+    let shape: OcctShape | null = null;
+    let maker: OcctEdgeMaker | null = null;
+    let splitFirst: { shape: OcctShape; maker: OcctEdgeMaker } | null = null;
     let applied = params.size;
-    if (!shape) {
+
+    const direct = mixed
+      ? null
+      : this.buildTreatment(params.kind, source, edges, params.size);
+    if (direct) {
+      shape = direct.shape;
+      maker = direct.maker;
+    } else if (!knownSplit && !mixed) {
       // Bisect between nothing and the rejected size. Six steps are enough to
       // land within a couple of percent of the limit.
       let low = 0;
@@ -591,21 +749,56 @@ export class KernelEngine {
           high = mid;
         }
       }
-      if (!shape) {
-        throw new KernelOpError(
-          'EDGE_TREATMENT_FAILED',
-          `These edges cannot be ${params.kind === 'fillet' ? 'rounded' : 'chamfered'}`,
-        );
+    }
+
+    if (!shape) {
+      const split = this.buildTreatmentInPasses(
+        params.kind,
+        source,
+        edges,
+        chosen,
+        params.size,
+        splitKey,
+      );
+      if (split) {
+        if (this.treatmentSplits.size > 64) this.treatmentSplits.clear();
+        this.treatmentSplits.set(splitKey, {
+          good: split.applied,
+          bad: Math.max(split.failedAt, split.applied),
+          index: split.index,
+        });
+        shape = split.shape;
+        maker = split.maker;
+        splitFirst = split.first;
+        applied = split.applied;
       }
     }
 
+    if (!shape) {
+      throw new KernelOpError(
+        'EDGE_TREATMENT_FAILED',
+        `These edges cannot be ${params.kind === 'fillet' ? 'rounded' : 'chamfered'}`,
+      );
+    }
+
     this.shapes.set(params.shapeId, shape);
+    // A body built in passes went through two shapes, so where each face came
+    // from is read through both maps: the second names a face of the shape the
+    // first pass left behind, and the first names the face it came from.
+    const facesFromBase = (() => {
+      if (!maker) return this.facesFromBase(shape, source);
+      if (!splitFirst) return this.treatedFaces(maker, shape, source);
+      const passed = this.treatedFaces(splitFirst.maker, splitFirst.shape, source);
+      return this.treatedFaces(maker, shape, splitFirst.shape).map((from) =>
+        from >= 0 ? (passed[from] ?? -1) : -1,
+      );
+    })();
     return {
       shapeId: params.shapeId,
       stats: this.countTopology(shape),
       applied,
       limit: applied,
-      facesFromBase: maker ? this.treatedFaces(maker, shape, source) : this.facesFromBase(shape, source),
+      facesFromBase,
       edgeCount: edges.length,
     };
   }
@@ -641,14 +834,16 @@ export class KernelEngine {
       let mapped = false;
       try {
         const modified = maker.Modified(face);
-        const size = modified.Size();
+        let size = modified.Size();
         if (size > 0) {
-          // The binding exposes the ends of the list only, which covers a
-          // trimmed face and the halves of a face the treatment splits.
-          const ends = size > 1 ? [modified.First_1(), modified.Last_1()] : [modified.First_1()];
-          for (const candidate of ends) {
-            const index = indexOf(candidate);
+          // Two fillets can trim one face from both sides, which leaves more
+          // pieces than the ends of the list show. The binding has no iterator,
+          // so the list is drained: it is a copy, and the maker is done with it.
+          while (size > 0) {
+            const index = indexOf(modified.First_1());
+            modified.RemoveFirst();
             if (index >= 0) mapping[index] = sourceIndex;
+            size -= 1;
           }
           mapped = true;
         }
@@ -665,7 +860,10 @@ export class KernelEngine {
   }
 
   /** Explicit edges plus the boundary edges of the given faces. */
-  private treatmentEdges(params: EdgeTreatmentParams): OcctShape[] {
+  private treatmentEdges(params: EdgeTreatmentParams): {
+    edges: OcctShape[];
+    chosen: BodyEdge[];
+  } {
     const cache = this.shapeEdges.get(params.sourceShapeId);
     if (!cache) throw new KernelOpError('SHAPE_NOT_FOUND', 'Tessellate the body first');
     const picked = new Set(params.edgeIds);
@@ -683,11 +881,127 @@ export class KernelEngine {
       }
     }
     const shapes: OcctShape[] = [];
-    for (const id of chosen) {
-      const shape = cache.shapes.get(id);
-      if (shape) shapes.push(shape);
+    const records: BodyEdge[] = [];
+    for (const edge of cache.edges) {
+      if (!chosen.has(edge.id)) continue;
+      const shape = cache.shapes.get(edge.id);
+      if (!shape) continue;
+      shapes.push(shape);
+      records.push(edge);
     }
-    return shapes;
+    return { edges: shapes, chosen: records };
+  }
+
+  /**
+   * A set of edges can be rejected as a whole even though its parts build on
+   * their own — a convex round and a concave round that meet at a vertex are
+   * the usual case. Build one edge first, then the rest where they ended up
+   * after that pass, and keep the largest size both passes accept.
+   */
+  private buildTreatmentInPasses(
+    kind: EdgeTreatmentParams['kind'],
+    source: OcctShape,
+    edges: readonly OcctShape[],
+    chosen: readonly BodyEdge[],
+    size: number,
+    splitKey: string,
+  ): {
+    shape: OcctShape;
+    maker: OcctEdgeMaker;
+    applied: number;
+    failedAt: number;
+    index: number;
+    first: { shape: OcctShape; maker: OcctEdgeMaker } | null;
+  } | null {
+    if (chosen.length < 2 || edges.length !== chosen.length) return null;
+    const attempt = (index: number, at: number) => {
+      const built = this.buildTreatment(kind, source, [edges[index]!], at);
+      if (!built) return null;
+      const pending = chosen.filter((_, other) => other !== index);
+      const rest = this.edgesNear(built.shape, pending);
+      // An edge that cannot be found again was trimmed away by the first pass,
+      // and skipping it would treat less than the operation says it does.
+      if (rest.length < pending.length) return null;
+      const second = this.buildTreatment(kind, built.shape, rest, at);
+      return second ? { ...second, first: built } : null;
+    };
+    // The edge that leads the first pass decides whether the split works at
+    // all, so start from the one that worked last time.
+    const order = chosen.map((_, index) => index);
+    const previous = this.treatmentSplits.get(splitKey)?.index ?? -1;
+    if (previous >= 0 && previous < order.length) {
+      order.splice(order.indexOf(previous), 1);
+      order.unshift(previous);
+    }
+    const attemptAny = (at: number) => {
+      for (const index of order) {
+        const built = attempt(index, at);
+        if (built) return { ...built, index };
+      }
+      return null;
+    };
+
+    // A drag past the limit asks for the same impossible size over and over,
+    // so a selection already known to be too large is rebuilt at its limit.
+    const known = this.treatmentSplits.get(splitKey);
+    if (known && size >= known.bad) {
+      const full = attemptAny(known.good);
+      if (full) return { ...full, applied: known.good, failedAt: known.bad, first: full.first };
+    }
+
+    const direct = attemptAny(size);
+    if (direct) {
+      return { ...direct, applied: size, failedAt: known?.bad ?? Infinity, first: direct.first };
+    }
+
+    let best: {
+      shape: OcctShape;
+      maker: OcctEdgeMaker;
+      applied: number;
+      failedAt: number;
+      index: number;
+      first: { shape: OcctShape; maker: OcctEdgeMaker } | null;
+    } | null = null;
+    let low = known?.good ?? 0;
+    let high = Math.min(size, known?.bad ?? size);
+    for (let step = 0; step < TREATMENT_SEARCH_STEPS; step += 1) {
+      const mid = (low + high) / 2;
+      if (mid < MIN_TREATMENT_SIZE) break;
+      const built = attemptAny(mid);
+      if (built) {
+        low = mid;
+        best = { ...built, applied: mid, failedAt: high };
+      } else {
+        high = mid;
+      }
+    }
+    return best;
+  }
+
+  /** The edges of a rebuilt shape that still follow the given polyline. */
+  private edgesNear(shape: OcctShape, spans: readonly BodyEdge[]): OcctShape[] {
+    const temporaryId = `__treatment-pass-${(this.treatmentPass += 1)}`;
+    this.shapes.set(temporaryId, shape);
+    try {
+      this.tessellate(temporaryId);
+      const cache = this.shapeEdges.get(temporaryId);
+      if (!cache) return [];
+      const found: OcctShape[] = [];
+      for (const span of spans) {
+        let best: { id: string; distance: number } | null = null;
+        for (const edge of cache.edges) {
+          const distance = polylineDistance(edge.points, span.points);
+          if (distance > TREATMENT_EDGE_TOLERANCE) continue;
+          if (!best || distance < best.distance) best = { id: edge.id, distance };
+        }
+        const match = best ? cache.shapes.get(best.id) : undefined;
+        if (match) found.push(match);
+      }
+      return found;
+    } finally {
+      this.shapeEdges.delete(temporaryId);
+      this.shapes.delete(temporaryId);
+    }
   }
 
   private buildTreatment(

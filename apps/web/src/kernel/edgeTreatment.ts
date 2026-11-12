@@ -79,6 +79,98 @@ export function edgeBisector(mesh: TessellationResult, faceIds: readonly number[
   );
 }
 
+export interface EdgeCorner {
+  /** Angle between the two faces where the treatment face appears, radians. */
+  wedge: number;
+  /** The material fills the corner, as on the edge of a body. */
+  convex: boolean;
+  /** Bisector of the two faces at the edge, pointing away from the material. */
+  bisector: Vec3;
+}
+
+/** Nearest triangle of a face to a point, as its centroid and smooth normal. */
+function nearestTriangle(
+  mesh: TessellationResult,
+  faceId: number,
+  at: Vec3,
+): { centroid: Vec3; normal: Vec3 } | null {
+  const { positions, indices, faceIds, normals } = mesh;
+  let best: { centroid: Vec3; normal: Vec3 } | null = null;
+  let bestDistance = Infinity;
+  for (let triangle = 0; triangle < faceIds.length; triangle += 1) {
+    if (faceIds[triangle] !== faceId) continue;
+    const corners = [0, 1, 2].map((corner) => indices[triangle * 3 + corner]!);
+    const points = corners.map(
+      (index): Vec3 => [positions[index * 3]!, positions[index * 3 + 1]!, positions[index * 3 + 2]!],
+    );
+    const centroid: Vec3 = [
+      (points[0]![0] + points[1]![0] + points[2]![0]) / 3,
+      (points[0]![1] + points[1]![1] + points[2]![1]) / 3,
+      (points[0]![2] + points[1]![2] + points[2]![2]) / 3,
+    ];
+    const distance = Math.hypot(
+      centroid[0] - at[0],
+      centroid[1] - at[1],
+      centroid[2] - at[2],
+    );
+    if (distance >= bestDistance) continue;
+    // The vertex normals are smooth, so they follow a curved face where the
+    // area-weighted normal of the whole face would cancel out.
+    const normal = normalize(
+      corners.reduce<Vec3>(
+        (sum, index) => [
+          sum[0] + (normals[index * 3] ?? 0),
+          sum[1] + (normals[index * 3 + 1] ?? 0),
+          sum[2] + (normals[index * 3 + 2] ?? 0),
+        ],
+        [0, 0, 0],
+      ),
+    );
+    if (!normal) continue;
+    bestDistance = distance;
+    best = { centroid, normal };
+  }
+  return best;
+}
+
+/**
+ * Shape of the corner at an edge. `wedge` is the angle between the two faces on
+ * the side the new face appears, so a treatment of size `s` sits at
+ * `s·cos(wedge/2)` (chamfer) or `s(1 − sin(wedge/2))/sin(wedge/2)` (fillet) from
+ * the edge. `convex` says whether that face ends up inside the body.
+ *
+ * Both readings come from the triangles next to the edge rather than from the
+ * whole faces: a face such as the side of a cylinder has no single normal. The
+ * bisector of the two normals always points into free space, so the material
+ * side is found by asking which side of one face the other face leaves from.
+ */
+export function edgeCorner(
+  mesh: TessellationResult,
+  faceIds: readonly number[],
+  at: Vec3,
+): EdgeCorner | null {
+  const [firstId, secondId] = faceIds;
+  if (firstId === undefined || secondId === undefined) return null;
+  const first = nearestTriangle(mesh, firstId, at);
+  const second = nearestTriangle(mesh, secondId, at);
+  if (!first || !second) return null;
+  const bisector = normalize([
+    first.normal[0] + second.normal[0],
+    first.normal[1] + second.normal[1],
+    first.normal[2] + second.normal[2],
+  ]);
+  if (!bisector) return null;
+  const cosine = Math.max(-1, Math.min(1, dot(first.normal, second.normal)));
+  const wedge = Math.PI - Math.acos(cosine);
+  // Free space between two faces meets at the edge; the material fills the
+  // corner when each face leaves the edge on the far side of the other's plane.
+  const convex =
+    dot(subtract(second.centroid, at), first.normal) +
+      dot(subtract(first.centroid, at), second.normal) <
+    0;
+  return { wedge, convex, bisector };
+}
+
 /** Edges the operation will treat: picked ones plus the rim of picked faces. */
 export function treatedEdges(
   mesh: TessellationResult,

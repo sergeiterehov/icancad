@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createProject, type EdgeTreatmentFeature, type Project } from '@icancad/model';
 import { edgeMatchDistance, resolveEdgeRef } from '../src/kernel/edgeLookup';
 import { edgePose } from '../src/kernel/edgeTreatment';
-import { edgeTreatmentGeometry } from '../src/quick/edgeTreatment';
+import {
+  edgeTreatmentGeometry,
+  treatmentFaceOffset,
+  treatmentSizeForOffset,
+} from '../src/quick/edgeTreatment';
 import { QuickEdgeTreatmentDrag } from '../src/quick/controller';
 import { useDocumentStore } from '../src/stores/documentStore';
 import { edgedCube } from './edgedCube';
@@ -38,6 +42,9 @@ function edgeTarget(mesh: ReturnType<typeof edgedCube>, ids: string[]) {
         faceIds: [...edge.faceIds],
         ...edgePose(edge.points),
         bisector: [0, 0, 1] as [number, number, number],
+        // A right-angled corner: the created face sits at cos(45°) of the size.
+        wedge: Math.PI / 2,
+        convex: true,
       };
     }),
   });
@@ -57,13 +64,14 @@ describe('quick edge treatment drag', () => {
         (feature): feature is EdgeTreatmentFeature => feature.type === 'edge-treatment',
       );
 
-  it('creates a fillet when the track goes right', () => {
+  it('chamfers with a plain drag', () => {
     const drag = new QuickEdgeTreatmentDrag(edgeTarget(edgedCube(), ['0']), 'Edge');
     drag.start();
-    drag.update(2.5);
+    // The arrow is pulled 3.5 mm into the corner, which is a 5 mm leg.
+    drag.update(3.5355);
     const [feature] = treatments();
-    expect(feature).toMatchObject({ kind: 'fillet', size: 2.5 });
-    expect(drag.kind).toBe('fillet');
+    expect(feature).toMatchObject({ kind: 'chamfer', size: 5 });
+    expect(drag.kind).toBe('chamfer');
     // The grab only starts the operation; the rest belongs to it.
     expect(useDocumentStore.getState().selection).toEqual([
       { kind: 'feature', id: feature!.id },
@@ -72,20 +80,23 @@ describe('quick edge treatment drag', () => {
     expect(treatments()).toHaveLength(1);
   });
 
-  it('creates a chamfer when the track goes left', () => {
+  it('rounds the corner while shift is held', () => {
     const drag = new QuickEdgeTreatmentDrag(edgeTarget(edgedCube(), ['0']), 'Edge');
     drag.start();
-    drag.update(-1.5);
-    expect(treatments()[0]).toMatchObject({ kind: 'chamfer', size: 1.5 });
+    // A round of radius r reaches r(√2 − 1) into the corner.
+    drag.update(1.4645, true);
+    expect(treatments()[0]).toMatchObject({ kind: 'fillet', size: 3.5 });
     drag.end();
   });
 
-  it('flips the kind while the first drag has not been released', () => {
+  it('lets the kind follow shift until the pointer is released', () => {
     const drag = new QuickEdgeTreatmentDrag(edgeTarget(edgedCube(), ['0']), 'Edge');
     drag.start();
-    drag.update(2);
-    drag.update(-2);
-    expect(treatments()[0]).toMatchObject({ kind: 'chamfer', size: 2 });
+    drag.update(3.5355);
+    drag.update(3.5355, true);
+    expect(treatments()[0]).toMatchObject({ kind: 'fillet' });
+    drag.update(3.5355);
+    expect(treatments()[0]).toMatchObject({ kind: 'chamfer' });
     drag.end();
   });
 
@@ -93,43 +104,43 @@ describe('quick edge treatment drag', () => {
     const target = edgeTarget(edgedCube(), ['0']);
     const opening = new QuickEdgeTreatmentDrag(target, 'Edge');
     opening.start();
-    opening.update(-2);
+    opening.update(1.4645, true);
     opening.end();
     const [feature] = treatments();
 
     const next = new QuickEdgeTreatmentDrag(target, 'Edge', feature!.id);
     next.start();
     expect(next.isLocked).toBe(true);
-    expect(next.kind).toBe('chamfer');
-    // Pulling the other way grows the chamfer instead of rounding it.
-    next.update(3);
+    expect(next.kind).toBe('fillet');
+    // Shift cannot turn the round into a chamfer any more.
+    next.update(2.8284, false);
     next.end();
 
     expect(treatments()).toHaveLength(1);
-    expect(treatments()[0]).toMatchObject({ kind: 'chamfer', size: 3 });
+    expect(treatments()[0]).toMatchObject({ kind: 'fillet', size: 6.8 });
   });
 
-  it('always opens a new operation from the selection track', () => {
+  it('always opens a new operation from the selection arrow', () => {
     const target = edgeTarget(edgedCube(), ['0']);
     const first = new QuickEdgeTreatmentDrag(target, 'Edge');
     first.start();
-    first.update(-2);
+    first.update(2.8284);
     first.end();
 
     const second = new QuickEdgeTreatmentDrag(target, 'Edge');
     second.start();
     expect(second.isLocked).toBe(false);
-    second.update(3);
+    second.update(2.8284);
     second.end();
 
     expect(treatments()).toHaveLength(2);
   });
 
-  it('snaps the size the handle reports to a tenth of a millimetre', () => {
+  it('snaps the size to a tenth of a millimetre', () => {
     const drag = new QuickEdgeTreatmentDrag(edgeTarget(edgedCube(), ['0']), 'Edge');
     drag.start();
     drag.update(2.3456789);
-    expect(treatments()[0]?.size).toBe(2.3);
+    expect(treatments()[0]?.size).toBe(3.3);
     drag.end();
   });
 
@@ -144,9 +155,42 @@ describe('quick edge treatment drag', () => {
   it('cancels a created operation', () => {
     const drag = new QuickEdgeTreatmentDrag(edgeTarget(edgedCube(), ['0']), 'Edge');
     drag.start();
-    drag.update(2);
+    drag.update(2.8284);
     drag.cancel();
     expect(treatments()).toHaveLength(0);
+  });
+});
+
+describe('treatment face offset', () => {
+  const right = Math.PI / 2;
+
+  it('puts a chamfer face at the cosine of the leg distance', () => {
+    expect(treatmentFaceOffset('chamfer', 4, right)).toBeCloseTo(2.8284, 4);
+    expect(treatmentSizeForOffset('chamfer', 2.8284, right)).toBeCloseTo(4, 4);
+  });
+
+  it('puts a round face at the sagitta of its radius', () => {
+    // A quarter round of radius r reaches r(√2 − 1) into the corner.
+    expect(treatmentFaceOffset('fillet', 5, right)).toBeCloseTo(5 * (Math.SQRT2 - 1), 6);
+    expect(treatmentSizeForOffset('fillet', 5 * (Math.SQRT2 - 1), right)).toBeCloseTo(5, 6);
+  });
+
+  it('rounds the mapping back to the size it came from', () => {
+    for (const kind of ['chamfer', 'fillet'] as const) {
+      for (const wedge of [Math.PI / 6, Math.PI / 3, Math.PI / 2, (2 * Math.PI) / 3]) {
+        for (const size of [0.5, 2, 7.5]) {
+          const offset = treatmentFaceOffset(kind, size, wedge);
+          expect(treatmentSizeForOffset(kind, offset, wedge)).toBeCloseTo(size, 6);
+        }
+      }
+    }
+  });
+
+  it('takes the arrow to the face a flat corner would need', () => {
+    // A nearly flat corner has no room for a chamfer: the face stays put.
+    expect(treatmentFaceOffset('chamfer', 4, Math.PI - 0.01)).toBeLessThan(0.05);
+    expect(Number.isFinite(treatmentSizeForOffset('chamfer', 1, Math.PI - 0.01))).toBe(true);
+    expect(Number.isFinite(treatmentFaceOffset('fillet', 4, 0.01))).toBe(true);
   });
 });
 
@@ -216,5 +260,55 @@ describe('edge ref lookup', () => {
         },
       ),
     ).toBeNull();
+  });
+});
+
+describe('edge ref lookup by pose', () => {
+  it('finds the edge when it was tessellated the other way round', () => {
+    const mesh = edgedCube();
+    const edge = mesh.edges![0]!;
+    // The same edge, listed from its far end: the stored start is now the end.
+    const reversed = {
+      ...edge,
+      points: [20, 0, 0, 0, 0, 0],
+    };
+    const ref = {
+      bodyId: BODY,
+      edgeId: '0',
+      faceIds: [...edge.faceIds],
+      start: [0, 0, 0] as [number, number, number],
+      mid: [10, 0, 0] as [number, number, number],
+      end: [20, 0, 0] as [number, number, number],
+      bisector: [0, 0, 1] as [number, number, number],
+    };
+    expect(edgeMatchDistance(reversed, ref)).not.toBeNull();
+    expect(
+      resolveEdgeRef(
+        { bodyShapes: new Map([[BODY, 'shape-1']]), meshes: { [BODY]: { ...mesh, edges: [reversed] } } },
+        ref,
+      ),
+    ).toEqual({ bodyId: BODY, edgeId: edge.id });
+  });
+});
+
+describe('edge ref lookup by pose', () => {
+  it('matches a piece of a longer edge, as picked after an earlier round', () => {
+    const mesh = edgedCube();
+    const edge = mesh.edges![0]!;
+    // The reference remembers the part of the edge a previous round left over,
+    // which is still on the edge that the input has.
+    const ref = {
+      bodyId: BODY,
+      edgeId: '99',
+      faceIds: [...edge.faceIds],
+      start: [4, 0, 0] as [number, number, number],
+      mid: [10, 0, 0] as [number, number, number],
+      end: [16, 0, 0] as [number, number, number],
+      bisector: [0, 0, 1] as [number, number, number],
+    };
+    expect(edgeMatchDistance(edge, ref)).not.toBeNull();
+    expect(
+      resolveEdgeRef({ bodyShapes: new Map([[BODY, 'shape-1']]), meshes: { [BODY]: mesh } }, ref),
+    ).toEqual({ bodyId: BODY, edgeId: edge.id });
   });
 });

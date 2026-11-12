@@ -18,6 +18,7 @@ import {
   edgeTreatmentGeometry,
   edgeTreatmentLimit,
   edgeTreatmentTargetFromSelection,
+  treatmentFaceOffset,
   type EdgeTreatmentGeometry,
 } from './edgeTreatment';
 import {
@@ -32,14 +33,21 @@ import { quickTargetKey, type QuickTargetGeometry } from './types';
 export interface OperationHandleDrag {
   /** Extrude method while the gesture runs; the chip names it. */
   readonly op: ExtrudeFeature['op'] | null;
-  /** Edge treatment side while the gesture runs. */
+  /** Edge treatment kind while the gesture runs; the chip names it. */
   readonly kind: EdgeTreatmentKind | null;
-  /** Signed size the operation currently has. */
+  /** Value the operation currently has: the distance or the treatment size. */
   readonly value: number;
-  update(value: number): void;
+  /** `shift` asks an edge treatment for the other kind while the grab lasts. */
+  update(value: number, shift?: boolean): void;
   end(): void;
   cancel(): void;
 }
+
+/**
+ * The extrude arrow is the bigger one: extrusion is the operation the viewport
+ * offers most often, and the two arrows hang off the same faces.
+ */
+const EXTRUDE_ARROW_THICKNESS = 2;
 
 /**
  * A 3D affordance offered by an operation. The viewport only draws, hovers and
@@ -47,16 +55,13 @@ export interface OperationHandleDrag {
  */
 export interface OperationHandle {
   id: string;
-  kind: 'extrude' | 'track';
   origin: Vec3;
   direction: Vec3;
-  /** Signed distance along `direction`; zero shows the idle affordance. */
+  /** Length along `direction`; zero shows the idle affordance. */
   value: number;
-  /** Track only: the value at either end of the arc. */
-  limit?: number;
-  /** Track only: reach it from `origin` with a dashed leader. */
-  leader?: boolean;
   enabled: boolean;
+  /** How heavy the arrow is drawn, relative to the thinnest one. */
+  thickness?: number;
   tooltip: string;
   beginDrag(): OperationHandleDrag;
 }
@@ -65,10 +70,14 @@ export interface OperationHandleContext {
   project: Project;
   selection: readonly SelectionItem[];
   meshes: Record<string, TessellationResult>;
+  /**
+   * Shape of each body before the edited operation, keyed by body id. The mesh
+   * of a finished operation no longer holds the edge it treated, so its refs
+   * are read here.
+   */
+  baseMeshes: Record<string, TessellationResult>;
   sketchFrames: Record<string, SketchFrame>;
   bodies: readonly QuickBodySource[];
-  /** Size the kernel applied to an edge treatment, keyed by operation. */
-  limits: Record<string, { requested: number; applied: number }>;
   labels: {
     extrude: string;
     /** Prospective handle: what a drag will create. */
@@ -79,7 +88,11 @@ export interface OperationHandleContext {
     secondDistance: string;
     /** Name of the edge treatment operation. */
     edgeTreatment: string;
+    /** What a fresh grab will create, and the modifier that switches it. */
     edgeTreatmentTooltip: string;
+    /** What the handle of an existing operation changes. */
+    edgeTreatmentRadiusTooltip: string;
+    edgeTreatmentDistanceTooltip: string;
   };
 }
 
@@ -144,9 +157,9 @@ function extrudeHandle(
         ? `extrude:${feature.id}:second`
         : `extrude:${feature.id}`
       : `extrude:new:${quickTargetKey(geometry.target)}`,
-    kind: 'extrude',
     origin: geometry.origin,
     direction: axis === 'second' ? [0 - x, 0 - y, 0 - z] : geometry.direction,
+    thickness: EXTRUDE_ARROW_THICKNESS,
     value: feature
       ? axis === 'second'
         ? feature.secondDirection?.distance ?? 0
@@ -243,40 +256,32 @@ function featureTreatmentGeometry(
 ): EdgeTreatmentGeometry | null {
   return edgeTreatmentGeometry(
     { faceRefs: feature.faceRefs, edgeRefs: feature.edgeRefs },
-    context.meshes,
+    { ...context.meshes, ...context.baseMeshes },
   );
 }
 
+/**
+ * The arrow of an edge treatment. Its length is the distance from the edge to
+ * the face the operation creates, so the tip sits on that face and follows the
+ * pointer; the size the operation stores is the radius or the leg distance.
+ */
 function treatmentHandle(
   geometry: EdgeTreatmentGeometry,
   context: OperationHandleContext,
   feature: EdgeTreatmentFeature | undefined,
-  limit: number,
 ): OperationHandle {
-  const kind = feature?.kind ?? null;
-  // An operation that exists has no known ceiling any more: the geometry it
-  // measured against is gone. Its own size becomes the middle of the track, so
-  // the knob has room in both directions, and an operation the kernel had to
-  // reduce stays pinned at the end instead.
-  const applied = feature ? context.limits[feature.id]?.applied : undefined;
-  const span =
-    feature && applied !== undefined && applied < feature.size
-      ? feature.size
-      : feature
-        ? Math.max(feature.size * 2, 0.001)
-        : limit;
+  const tooltip = !feature
+    ? context.labels.edgeTreatmentTooltip
+    : feature.kind === 'fillet'
+      ? context.labels.edgeTreatmentRadiusTooltip
+      : context.labels.edgeTreatmentDistanceTooltip;
   return {
     id: feature ? `edge-treatment:${feature.id}` : `edge-treatment:new:${treatmentKey(geometry)}`,
-    kind: 'track',
     origin: geometry.origin,
     direction: geometry.direction,
-    // A fillet sits on the positive side of the track, a chamfer on the
-    // negative one, so the knob shows which of the two the operation is.
-    value: feature ? (kind === 'chamfer' ? -feature.size : feature.size) : 0,
-    limit: span,
-    leader: geometry.leader,
+    value: feature ? treatmentFaceOffset(feature.kind, feature.size, geometry.wedge) : 0,
     enabled: true,
-    tooltip: context.labels.edgeTreatmentTooltip,
+    tooltip,
     beginDrag: () => {
       const drag = new QuickEdgeTreatmentDrag(geometry, context.labels.edgeTreatment, feature?.id);
       drag.start();
@@ -294,29 +299,31 @@ function treatmentKey(geometry: EdgeTreatmentGeometry): string {
 }
 
 /**
- * The edge treatment offered by the selection. One track serves both kinds:
- * pulling it to the right rounds the corners, to the left it cuts them.
+ * The edge treatment offered by the selection. Dragging the arrow cuts a
+ * chamfer; holding shift rounds the corner instead, and the kind is fixed once
+ * the grab ends.
  */
 function edgeTreatmentHandles(context: OperationHandleContext): OperationHandle[] {
-  // A focused operation owns its track: dragging it changes that operation.
+  // A focused operation owns its arrow: dragging it changes that operation.
   const focused = selectedEdgeTreatment(context);
   if (focused) {
     const geometry = featureTreatmentGeometry(focused, context);
     if (!geometry) return [];
-    return [treatmentHandle(geometry, context, focused, focused.size)];
+    return [treatmentHandle(geometry, context, focused)];
   }
 
   // A selection always offers a new operation. An existing one is opened by
-  // double-clicking a face it created, which hands the operation its own track.
-  const target = edgeTreatmentTargetFromSelection(
-    context.project,
-    context.selection,
-    context.meshes,
-  );
+  // double-clicking a face it created, which hands the operation its own arrow.
+  // The selection was picked on the input of the edited operation, so its
+  // edges are read there and not on the renumbered result.
+  const target = edgeTreatmentTargetFromSelection(context.project, context.selection, {
+    ...context.meshes,
+    ...context.baseMeshes,
+  });
   if (!target) return [];
   const geometry = edgeTreatmentGeometry(target, context.meshes);
   if (!geometry) return [];
-  const limit = edgeTreatmentLimit(target, context.meshes);
-  if (limit === null) return [];
-  return [treatmentHandle(geometry, context, undefined, limit)];
+  // No arrow where no treatment fits: the operation would be invisible.
+  if (edgeTreatmentLimit(target, context.meshes) === null) return [];
+  return [treatmentHandle(geometry, context, undefined)];
 }

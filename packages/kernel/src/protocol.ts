@@ -23,6 +23,10 @@ export interface BodyEdge {
   /** Flat world-space points of the polyline. */
   points: number[];
   closed: boolean;
+  /** Angle the two faces open through, in radians. */
+  wedge?: number;
+  /** False when the material fills the corner, which is what a fillet here adds to. */
+  convex?: boolean;
 }
 
 export interface TessellationResult {

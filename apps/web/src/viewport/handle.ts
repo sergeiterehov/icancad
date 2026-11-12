@@ -53,23 +53,17 @@ export type ScenePick =
 
 /**
  * A 3D handle that belongs to an operation. The handle draws an arrow from
- * `origin` along `direction`; `value` is the signed length of the operation.
- * A `track` is a radial slider instead: the value runs along an arc around the
- * origin, so dragging right and left tell the two sides apart.
+ * `origin` along `direction`; `value` is the length of the operation it shows.
  */
 export interface SceneHandle {
   id: string;
-  /** An arrow (extrude) or a radial track; the arrow when omitted. */
-  kind?: 'arrow' | 'track';
   origin: [number, number, number];
   direction: [number, number, number];
-  /** Signed distance along `direction`; zero draws the idle affordance. */
+  /** Length along `direction`; zero draws the idle affordance. */
   value: number;
-  /** Track only: the value at either end of the arc. */
-  limit?: number;
-  /** Track only: reach the track from `origin` with a dashed leader. */
-  leader?: boolean;
   enabled: boolean;
+  /** How heavy the arrow is drawn, relative to the thinnest one. */
+  thickness?: number;
   /** Shown when the pointer hovers the handle. */
   tooltip?: string;
 }
@@ -77,8 +71,6 @@ export interface SceneHandle {
 /** Where a handle is on screen, for the drag chip and for tests. */
 export interface SceneHandleScreen {
   id: string;
-  /** What the handle draws itself as; the track is a radial slider. */
-  kind: 'arrow' | 'track';
   originX: number;
   originY: number;
   tipX: number;
