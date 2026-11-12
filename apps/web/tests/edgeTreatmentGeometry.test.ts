@@ -3,11 +3,9 @@ import { createProject, type Project } from '@icancad/model';
 import { describe, expect, it } from 'vitest';
 import { edgeBisector, edgePose, treatedEdges } from '../src/kernel/edgeTreatment';
 import {
-  buildQuickEdgeTreatment,
   edgeTreatmentGeometry,
   edgeTreatmentLimit,
   edgeTreatmentTargetFromSelection,
-  findBoundEdgeTreatment,
   treatmentSelection,
   type EdgeTreatmentTarget,
 } from '../src/quick/edgeTreatment';
@@ -176,25 +174,5 @@ describe('edge treatment size limit', () => {
       ),
     ).not.toBeNull();
     expect(edgeTreatmentLimit({ faceRefs: [], edgeRefs: [] }, { 'body-1': mesh })).toBeNull();
-  });
-});
-
-describe('bound edge treatments', () => {
-  it('finds the operation with the same inputs regardless of order', () => {
-    const mesh = edgedCube(SIZE);
-    const target = targetFor(mesh, ['0', '2']);
-    const feature = buildQuickEdgeTreatment(target, 'fillet', 2, 'Edge');
-    const withFeature: Project = { ...project(), features: [...project().features, feature] };
-    expect(findBoundEdgeTreatment(withFeature, target)?.id).toBe(feature.id);
-    expect(
-      findBoundEdgeTreatment(withFeature, targetFor(mesh, ['2', '0']))?.id,
-    ).toBe(feature.id);
-  });
-
-  it('does not bind a different edge set', () => {
-    const mesh = edgedCube(SIZE);
-    const feature = buildQuickEdgeTreatment(targetFor(mesh, ['0']), 'chamfer', 1, 'Edge');
-    const withFeature: Project = { ...project(), features: [...project().features, feature] };
-    expect(findBoundEdgeTreatment(withFeature, targetFor(mesh, ['1']))).toBeUndefined();
   });
 });

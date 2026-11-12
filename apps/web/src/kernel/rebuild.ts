@@ -29,12 +29,14 @@ import { nextBodyNumber, useDocumentStore } from '../stores/documentStore';
 import {
   useKernelStore,
   type PreviewBodyMark,
+  type PreviewFaceMark,
   type SceneGhost,
   type ScenePreview,
 } from '../stores/kernelStore';
 import { parseMeshInWorker } from '../io/client';
 import { i18n } from '../i18n';
 import { getKernelClient } from './client';
+import { faceRegion, pointInMesh } from '../quick/geometry';
 import { resolveEdgeRef } from './edgeLookup';
 import { edgeTreatmentLimit } from './edgeTreatment';
 import { resolveFaceRef } from './faceLookup';
@@ -162,6 +164,8 @@ interface RebuildState {
   featureObjectErrors: Record<string, Record<string, string>>;
   /** Size the kernel applied to each edge treatment, keyed by operation. */
   featureLimits: Record<string, { requested: number; applied: number }>;
+  /** New faces of each edge treatment, split into removed and added material. */
+  featureFaceMarks: Record<string, PreviewFaceMark[]>;
   /** The first failed operation: nothing after it is built. */
   blockedFeatureId: string | null;
 }
@@ -217,6 +221,7 @@ function emptyState(): RebuildState {
     featureBodyErrors: {},
     featureObjectErrors: {},
     featureLimits: {},
+    featureFaceMarks: {},
     blockedFeatureId: null,
   };
 }
@@ -249,6 +254,7 @@ function cloneState(state: RebuildState): RebuildState {
     featureBodyErrors: cloneErrors(state.featureBodyErrors),
     featureObjectErrors: cloneErrors(state.featureObjectErrors),
     featureLimits: { ...state.featureLimits },
+    featureFaceMarks: { ...state.featureFaceMarks },
     blockedFeatureId: state.blockedFeatureId,
   };
 }
@@ -485,15 +491,15 @@ function buildPreview(
     // A boolean against a body the tool misses still produces a new shape;
     // only a changed tessellation counts as a modification.
     if (meshSignature(before) === meshSignature(now)) continue;
-    // An edge treatment does not restyle its body: the rounded or cut edges are
-    // the feedback, and marking the body as changed would only tint the model.
-    if (feature.type === 'edge-treatment') continue;
     bodies.push({
       id: bodyId,
       kind: 'modified',
       ...describe(bodyId),
       baseMesh: before,
-      ...(keepsBodySolid ? { translucent: false } : {}),
+      ...(keepsBodySolid || feature.type === 'edge-treatment' ? { translucent: false } : {}),
+      // A treatment keeps its body as it is: the mark is only there so picking
+      // still targets the input shape, and the colour matches the real result.
+      ...(feature.type === 'edge-treatment' ? { silent: true } : {}),
       ...(ghost.mesh && ghost.addBaseBodyId === bodyId ? { renderBase: true } : {}),
     });
   }
@@ -519,7 +525,14 @@ function buildPreview(
     });
   }
 
-  return { featureId: feature.id, bodies, ghosts };
+  return {
+    featureId: feature.id,
+    bodies,
+    ghosts,
+    ...(after.featureFaceMarks[feature.id]
+      ? { faceMarks: after.featureFaceMarks[feature.id] }
+      : {}),
+  };
 }
 
 function disposeUnusedShapes(client: ReturnType<typeof getKernelClient>): void {
@@ -1314,6 +1327,12 @@ async function applyEdgeTreatment(
     meshes[bodyId] = meshAfter;
     applied = Math.min(applied, result.applied);
     appliedAny = true;
+    // The new faces say what the operation did: the ones cut into the material
+    // are red, the ones added where there was nothing are green.
+    state.featureFaceMarks[feature.id] = [
+      ...(state.featureFaceMarks[feature.id] ?? []).filter((mark) => mark.bodyId !== bodyId),
+      classifyTreatmentFaces(bodyId, mesh, meshAfter, result.facesFromBase),
+    ];
   }
 
   if (appliedAny) {
@@ -1323,6 +1342,27 @@ async function applyEdgeTreatment(
   if (!appliedAny || bodyErrors.length > 0) {
     state.featureErrors[feature.id] = bodyErrors[0] ?? 'TARGET_FAILED';
   }
+}
+
+/**
+ * Splits the faces a treatment created by what happened to the material: a face
+ * inside the body before the operation is a cut, one outside it is an addition.
+ */
+function classifyTreatmentFaces(
+  bodyId: string,
+  before: TessellationResult | undefined,
+  after: TessellationResult,
+  facesFromBase: readonly number[],
+): PreviewFaceMark {
+  const mark: PreviewFaceMark = { bodyId, red: [], green: [] };
+  for (let faceId = 0; faceId < facesFromBase.length; faceId += 1) {
+    if (facesFromBase[faceId] !== -1) continue;
+    const region = faceRegion(after, faceId);
+    if (!region) continue;
+    const removed = before ? pointInMesh(before, region.centroid) : true;
+    (removed ? mark.red : mark.green).push(faceId);
+  }
+  return mark;
 }
 
 function signedDirection(

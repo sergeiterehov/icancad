@@ -249,6 +249,50 @@ async function lastTreatment(page: Page): Promise<TreatmentInfo | null> {
   });
 }
 
+
+async function treatmentCount(page: Page): Promise<number> {
+  return page.evaluate(async () => {
+    const url = (s: string) =>
+      performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .find((name) => name.includes(s));
+    const doc = await import(url('/src/stores/documentStore.ts')!);
+    return doc.useDocumentStore
+      .getState()
+      .project.features.filter(
+        (feature: { type: string }) => feature.type === 'edge-treatment',
+      ).length;
+  });
+}
+
+/** Colour marks of the treatment being edited, split per body. */
+async function previewMarks(page: Page) {
+  return page.evaluate(async () => {
+    const url = (s: string) =>
+      performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .find((name) => name.includes(s));
+    const kernel = await import(url('/src/stores/kernelStore.ts')!);
+    const preview = kernel.useKernelStore.getState().preview as
+      | {
+          bodies: { silent?: boolean; translucent?: boolean }[];
+          faceMarks?: { red: number[]; green: number[] }[];
+        }
+      | null;
+    if (!preview) return null;
+    return {
+      silent: preview.bodies.every((body) => body.silent === true),
+      opaque: preview.bodies.every((body) => body.translucent === false),
+      marks: (preview.faceMarks ?? []).map((mark) => ({
+        red: mark.red.length,
+        green: mark.green.length,
+      })),
+    };
+  });
+}
+
 test.describe('edge treatment', () => {
   test('rounds an edge by dragging the track to the right', async ({ page }) => {
     await openApp(page);
@@ -334,5 +378,62 @@ test.describe('edge treatment', () => {
     expect(treatment?.size).toBe(500);
     expect(treatment?.applied).toBeGreaterThan(0);
     expect(treatment?.applied).toBeLessThan(500);
+  });
+
+  test('keeps the rim it was picked on after the operation exists', async ({ page }) => {
+    await openApp(page);
+    await addBoss(page);
+    await selectClosedEdge(page);
+    await expect.poll(async () => (await handleScreens(page)).length, { timeout: 15_000 }).toBe(1);
+    const [before] = await handleScreens(page);
+    expect(before?.kind).toBe('track');
+
+    await dragTrack(page, 60);
+    await expect.poll(async () => (await lastTreatment(page))?.kind).toBe('fillet');
+    // The handle of the focused operation resolves the stored edge against the
+    // input mesh, so it stays on the rim that was picked instead of jumping to
+    // whichever edge took over its id in the result.
+    const [after] = await handleScreens(page);
+    expect(after?.kind).toBe('track');
+    expect(Math.abs((after?.originX ?? 0) - (before?.originX ?? 0))).toBeLessThan(3);
+    expect(Math.abs((after?.originY ?? 0) - (before?.originY ?? 0))).toBeLessThan(3);
+  });
+
+  test('colours the faces it creates and leaves the body alone', async ({ page }) => {
+    await openApp(page);
+    await addBox(page);
+    await waitForEdges(page);
+    await selectEdge(page);
+    await dragTrack(page, 70);
+    await expect.poll(async () => (await lastTreatment(page))?.kind).toBe('fillet');
+
+    const marks = await previewMarks(page);
+    // A round on a convex edge cuts material, so the rounded surface is red.
+    expect(marks?.marks).toHaveLength(1);
+    expect(marks?.marks[0]?.red).toBe(1);
+    expect(marks?.marks[0]?.green).toBe(0);
+    // The body keeps its style: it is not a translucent ghost and the tree does
+    // not report it as changed.
+    expect(marks?.silent).toBe(true);
+    expect(marks?.opaque).toBe(true);
+    await expect(page.locator('.tree-row.preview-added, .tree-row.preview-modified')).toHaveCount(
+      0,
+    );
+  });
+
+  test('starts a new operation on every track drag', async ({ page }) => {
+    await openApp(page);
+    await addBox(page);
+    await waitForEdges(page);
+    await selectEdge(page);
+    await dragTrack(page, 60);
+    await expect.poll(() => treatmentCount(page)).toBe(1);
+
+    // Picking the same edge again offers the selection track, which never
+    // adopts the operation that already sits on those edges.
+    await selectEdge(page);
+    await dragTrack(page, -40);
+    await expect.poll(() => treatmentCount(page)).toBe(2);
+    await expect.poll(async () => (await lastTreatment(page))?.kind).toBe('chamfer');
   });
 });

@@ -697,6 +697,7 @@ export function Viewport() {
       errorBodyIds,
     );
     controller.setGhosts(preview?.ghosts ?? []);
+    controller.setTreatmentMarks(preview?.faceMarks ?? []);
     if (!activeSketchId && previousCount.current === 0 && sceneBodies.length > 0) {
       controller.fit();
     }

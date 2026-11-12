@@ -46,10 +46,6 @@ import {
 } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { selectedBodyFaces, selectedDetailBodyId, selectedEdges } from '../stores/selection';
-import {
-  edgeTreatmentTargetFromSelection,
-  findBoundEdgeTreatment,
-} from '../quick/edgeTreatment';
 import { findBoundExtrude, quickTargetFromSelection } from '../quick/target';
 import { isPlanarFace } from '../viewport/planarFace';
 import { useUiStore } from '../stores/uiStore';
@@ -529,10 +525,6 @@ export function Inspector() {
   const detailEdge = selection.length === 1 ? selectedEdges(selection)[0] : undefined;
   const quickTarget = selection.length === 1 ? quickTargetFromSelection(project, selection) : null;
   const quickExtrude = quickTarget ? findBoundExtrude(project, quickTarget) : undefined;
-  const quickTreatmentTarget = edgeTreatmentTargetFromSelection(project, selection, meshes);
-  const quickTreatment = quickTreatmentTarget
-    ? findBoundEdgeTreatment(project, quickTreatmentTarget)
-    : undefined;
   const detailMesh = detailBodyId ? meshes[detailBodyId] : undefined;
   const detailPlanar = Boolean(
     detailFace && detailMesh && isPlanarFace(detailMesh, Number(detailFace.faceId)),
@@ -1470,23 +1462,7 @@ export function Inspector() {
         ) : body ? (
           detailEdge ? (
             <PanelSection title={t('quick.operation')}>
-              {quickTreatment ? (
-                <>
-                  <StatRow
-                    label={t('edgeTreatment.kind')}
-                    value={t(`edgeTreatment.${quickTreatment.kind}`)}
-                  />
-                  <StatRow
-                    label={t('edgeTreatment.size')}
-                    value={`${formatNumber(quickTreatment.size, locale)} mm`}
-                  />
-                  <Button onClick={() => select({ kind: 'feature', id: quickTreatment.id })}>
-                    {t('quick.editOperation')}
-                  </Button>
-                </>
-              ) : (
-                <p className="hint">{t('quick.edgeHint')}</p>
-              )}
+              <p className="hint">{t('quick.edgeHint')}</p>
             </PanelSection>
           ) : detailFace ? (
             <PanelSection title={t('quick.operation')}>

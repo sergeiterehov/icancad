@@ -1,7 +1,6 @@
 import type { TessellationResult } from '@icancad/kernel';
 import {
   createId,
-  isFeatureInHistory,
   type BodyEdgeRef,
   type BodyFaceRef,
   type EdgeTreatmentFeature,
@@ -151,30 +150,6 @@ export function treatmentSelection(
       .map((ref) => Number(ref.faceId)),
     edgeIds: target.edgeRefs.filter((ref) => ref.bodyId === bodyId).map((ref) => ref.edgeId),
   };
-}
-
-/** The active edge treatment whose inputs are exactly this target, if any. */
-export function findBoundEdgeTreatment(
-  project: Project,
-  target: EdgeTreatmentTarget,
-): EdgeTreatmentFeature | undefined {
-  const faces = new Set(target.faceRefs.map((ref) => `${ref.bodyId}#${ref.faceId}`));
-  const edges = new Set(target.edgeRefs.map((ref) => `${ref.bodyId}#${ref.edgeId}`));
-  for (let index = project.features.length - 1; index >= 0; index -= 1) {
-    const feature = project.features[index];
-    if (!feature || feature.type !== 'edge-treatment' || feature.suppressed) continue;
-    if (!isFeatureInHistory(project, feature.id)) continue;
-    if (feature.faceRefs.length !== faces.size || feature.edgeRefs.length !== edges.size) {
-      continue;
-    }
-    if (
-      feature.faceRefs.every((ref) => faces.has(`${ref.bodyId}#${ref.faceId}`)) &&
-      feature.edgeRefs.every((ref) => edges.has(`${ref.bodyId}#${ref.edgeId}`))
-    ) {
-      return feature;
-    }
-  }
-  return undefined;
 }
 
 export function buildQuickEdgeTreatment(

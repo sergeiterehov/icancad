@@ -2,10 +2,7 @@ import type { SketchFeature } from '@icancad/model';
 import { Hexagon, LayersArrowUp, PencilRuler, Square } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  edgeTreatmentTargetFromSelection,
-  findBoundEdgeTreatment,
-} from '../quick/edgeTreatment';
+import { edgeTreatmentTargetFromSelection } from '../quick/edgeTreatment';
 import { sketchPlaneFromSelection } from '../sketch/facePlane';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
@@ -44,7 +41,6 @@ export function ToolRail() {
   const addSketchOnFace = useDocumentStore((state) => state.addSketchOnFace);
   const addExtrude = useDocumentStore((state) => state.addExtrude);
   const addEdgeTreatment = useDocumentStore((state) => state.addEdgeTreatment);
-  const select = useDocumentStore((state) => state.select);
   const project = useDocumentStore((state) => state.project);
   const selection = useDocumentStore((state) => state.selection);
   const sketchSelection = extrudeInput(selection, project);
@@ -137,13 +133,6 @@ export function ToolRail() {
             store.selection,
             useKernelStore.getState().meshes,
           );
-          // The same edges already belong to an operation: open it instead of
-          // stacking a second one on top.
-          const bound = input ? findBoundEdgeTreatment(store.project, input) : undefined;
-          if (bound) {
-            select({ kind: 'feature', id: bound.id });
-            return;
-          }
           const id = addEdgeTreatment(t('features.edgeTreatment'), input ?? undefined);
           if (id && !input) useUiStore.getState().setPickingEdges(id);
         }}

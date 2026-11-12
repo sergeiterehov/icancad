@@ -39,6 +39,11 @@ export interface PreviewBodyMark {
    * solid so the removed material reads as a hole, so it stays opaque.
    */
   translucent?: boolean;
+  /**
+   * The mark only says which mesh to pick against; the body keeps its style and
+   * the tree does not report it as changed.
+   */
+  silent?: boolean;
 }
 
 /** A translucent volume that only exists in the preview, such as a cut tool. */
@@ -53,11 +58,22 @@ export interface SceneGhost {
   fade?: { axis: [number, number, number]; start: number }[];
 }
 
+/** New faces of an edge treatment, split by what they do to the material. */
+export interface PreviewFaceMark {
+  bodyId: string;
+  /** Faces of the removed material. */
+  red: number[];
+  /** Faces of the added material. */
+  green: number[];
+}
+
 /** Live preview of the operation that is being edited. */
 export interface ScenePreview {
   featureId: string;
   bodies: PreviewBodyMark[];
   ghosts: SceneGhost[];
+  /** Faces the operation creates, coloured while it is being edited. */
+  faceMarks?: PreviewFaceMark[];
 }
 
 interface KernelState {

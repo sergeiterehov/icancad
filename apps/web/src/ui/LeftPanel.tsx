@@ -178,7 +178,11 @@ export function LeftPanel() {
   );
   // The operation being edited reports which objects it adds, changes or
   // removes, so the tree shows the same phantom delta as the viewport.
-  const previewMarks = new Map((preview?.bodies ?? []).map((mark) => [mark.id, mark]));
+  // A silent mark exists so picking uses the input shape; the tree says nothing
+  // about it, because the object itself does not change.
+  const previewMarks = new Map(
+    (preview?.bodies ?? []).filter((mark) => !mark.silent).map((mark) => [mark.id, mark]),
+  );
   const previewAdded = (preview?.bodies ?? []).filter((mark) => mark.kind === 'added');
   const isEmpty = bodies.length === 0 && !hasSketches && previewAdded.length === 0;
 

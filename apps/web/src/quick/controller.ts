@@ -10,7 +10,6 @@ import { useDocumentStore } from '../stores/documentStore';
 import { snapLength } from './handleDrag';
 import {
   buildQuickEdgeTreatment,
-  findBoundEdgeTreatment,
   MIN_EDGE_TREATMENT,
   type EdgeTreatmentGeometry,
 } from './edgeTreatment';
@@ -304,13 +303,14 @@ export class QuickEdgeTreatmentDrag {
     this.before = project;
     this.created = false;
     this.changed = false;
-    const target = this.geometry.target;
+    // Only the handle of an open operation edits it; a track on a selection
+    // always starts a new one.
     const bound = this.featureIdHint
       ? project.features.find(
           (feature): feature is EdgeTreatmentFeature =>
             feature.id === this.featureIdHint && feature.type === 'edge-treatment',
         )
-      : findBoundEdgeTreatment(project, target);
+      : undefined;
     if (bound) {
       this.featureId = bound.id;
       this.originalFeature = bound;

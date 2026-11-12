@@ -18,7 +18,6 @@ import {
   edgeTreatmentGeometry,
   edgeTreatmentLimit,
   edgeTreatmentTargetFromSelection,
-  findBoundEdgeTreatment,
   type EdgeTreatmentGeometry,
 } from './edgeTreatment';
 import {
@@ -307,6 +306,8 @@ function edgeTreatmentHandles(context: OperationHandleContext): OperationHandle[
     return [treatmentHandle(geometry, context, focused, focused.size)];
   }
 
+  // A selection always offers a new operation. An existing one is opened by
+  // double-clicking a face it created, which hands the operation its own track.
   const target = edgeTreatmentTargetFromSelection(
     context.project,
     context.selection,
@@ -317,6 +318,5 @@ function edgeTreatmentHandles(context: OperationHandleContext): OperationHandle[
   if (!geometry) return [];
   const limit = edgeTreatmentLimit(target, context.meshes);
   if (limit === null) return [];
-  const bound = findBoundEdgeTreatment(context.project, target);
-  return [treatmentHandle(geometry, context, bound, limit)];
+  return [treatmentHandle(geometry, context, undefined, limit)];
 }

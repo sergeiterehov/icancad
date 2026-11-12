@@ -89,20 +89,40 @@ describe('quick edge treatment drag', () => {
     drag.end();
   });
 
-  it('keeps the kind after the drag is released', () => {
-    const first = new QuickEdgeTreatmentDrag(edgeTarget(edgedCube(), ['0']), 'Edge');
+  it('keeps the kind once the grab belongs to an operation', () => {
+    const target = edgeTarget(edgedCube(), ['0']);
+    const opening = new QuickEdgeTreatmentDrag(target, 'Edge');
+    opening.start();
+    opening.update(-2);
+    opening.end();
+    const [feature] = treatments();
+
+    const next = new QuickEdgeTreatmentDrag(target, 'Edge', feature!.id);
+    next.start();
+    expect(next.isLocked).toBe(true);
+    expect(next.kind).toBe('chamfer');
+    // Pulling the other way grows the chamfer instead of rounding it.
+    next.update(3);
+    next.end();
+
+    expect(treatments()).toHaveLength(1);
+    expect(treatments()[0]).toMatchObject({ kind: 'chamfer', size: 3 });
+  });
+
+  it('always opens a new operation from the selection track', () => {
+    const target = edgeTarget(edgedCube(), ['0']);
+    const first = new QuickEdgeTreatmentDrag(target, 'Edge');
     first.start();
     first.update(-2);
     first.end();
 
-    const second = new QuickEdgeTreatmentDrag(edgeTarget(edgedCube(), ['0']), 'Edge');
+    const second = new QuickEdgeTreatmentDrag(target, 'Edge');
     second.start();
+    expect(second.isLocked).toBe(false);
     second.update(3);
     second.end();
 
-    const features = treatments();
-    expect(features).toHaveLength(1);
-    expect(features[0]).toMatchObject({ kind: 'chamfer', size: 3 });
+    expect(treatments()).toHaveLength(2);
   });
 
   it('snaps the size the handle reports to a tenth of a millimetre', () => {

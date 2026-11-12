@@ -26,11 +26,12 @@ operation, no rebuild step and no way to pick an edge.
 | Availability | Any selected edge disables extrusion. A selected face offers both the extrude arrow and the track, anchored at the same point: the arc is the smaller target, so it wins the grab unless the pointer is clearly further up the arrow. |
 | Colour | Handles are blue in both themes; selection stays purple. A handle is an affordance, not a selection. |
 | Direction | The outward direction of an edge is the sum of the two adjacent face normals, which points into free space for a convex and for a concave edge alike. Positive is therefore always "round it" and negative always "cut it", and the face normal does the same job for a face. |
-| Locking | The first drag picks the kind from the side it was pulled to and may still flip while the pointer is down. The kind is stored when the drag ends; later drags change only the size, and the inspector changes the kind explicitly. |
+| Locking | The first drag picks the kind from the side it was pulled to and may still flip while the pointer is down. The kind is stored when the drag ends; later drags of the operation's own handle change only the size, and the inspector changes the kind explicitly. |
+| Always a new operation | The track that hangs off a selection never edits: it always starts a new operation, whatever the selection already belongs to. A second drag on the same edges therefore stacks a second operation instead of silently adopting the first. Editing goes through the operation itself — its handle while it is focused, or a double click on a face it created in the viewport. |
 | Size limit | The web estimates a ceiling from the mesh: how far each adjacent face reaches away from the edge, split between the parallel picked edges of that face. The rebuild sends `min(requested, estimate)` so the common case builds once. |
 | Oversized size | The kernel never fails just because the size is too large: it builds, checks the result, and bisects down until a valid solid appears, reporting `applied`. The inspector shows a yellow mark next to the size field saying which maximum will be used. |
 | Feature identity | A treatment keeps the body it modifies: the body id, name, colour and owner stay, and only the shape changes. Every face the treatment merely trims keeps the operation that made it; only the surfaces it creates belong to the treatment. The kernel reports this through `Modified`: a trimmed face is a new B-rep face, so `IsSame` alone would hand the whole body to the last treatment. |
-| Preview style | A treatment does not restyle its body. Unlike a boolean, the result is the body the user already has, so it is drawn opaque in its own colour instead of as a translucent ghost, and the tree does not mark it as changed. The worked edges are the feedback. |
+| Preview style | A treatment does not restyle its body. Unlike a boolean, the result is the body the user already has, so it is drawn opaque in its own colour instead of as a translucent ghost, and the tree does not mark it as changed. What the operation does is shown on the faces it creates: red where it cut material away, green where it added material, opaque and lit like the model so a rounded surface still reads as curved. The body mark stays silent — it only keeps picking on the input shape, so a stored edge ref resolves against the same mesh it was picked from. |
 | Face anchor | A face is treated along its rim, so its track sits on the first rim edge and points out of the corner, at half the angle between that face and its neighbour — the same bisector an edge uses. The stored face normal is the fallback once the operation has rebuilt the face. |
 
 ## Closed edges
@@ -72,6 +73,9 @@ the corner instead of two independent cuts.
 
 - Simple work stays in the viewport: select an edge, pull the track, the
   operation is there and focused.
+- A handle is part of the operation, not a shortcut around it: the grab creates
+  the operation and focuses it, and every later change happens inside that
+  operation, so the history stays honest.
 - The kind is a property of the operation, so changing it keeps the inputs and
   the size; the history still shows two different operations.
 - A face input survives an edge renumbering because the face ref is stored, and

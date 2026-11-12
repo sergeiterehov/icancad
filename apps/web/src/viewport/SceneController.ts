@@ -13,7 +13,7 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { SketchSnap } from '../sketch/snap';
-import type { PreviewMarkKind, SceneGhost } from '../stores/kernelStore';
+import type { PreviewFaceMark, PreviewMarkKind, SceneGhost } from '../stores/kernelStore';
 import {
   CAMERA_FOV_DEGREES,
   cameraFrustum,
@@ -245,6 +245,13 @@ export class SceneController {
     { mesh: THREE.Mesh; material: THREE.MeshBasicMaterial }
   >();
   private readonly faceOverlayGroup = new THREE.Group();
+  /** New faces of the edge treatment being edited, coloured by what they do. */
+  private treatmentMarks: readonly PreviewFaceMark[] = [];
+  private readonly treatmentMarkGroup = new THREE.Group();
+  private readonly treatmentMarkMeshes: Array<{
+    mesh: THREE.Mesh;
+    material: THREE.Material;
+  }> = [];
   private faceHighlights: {
     selected: Set<string>;
     invalid: Set<string>;
@@ -403,6 +410,8 @@ export class SceneController {
     this.overlayScene.add(this.ghostGroup);
     this.faceOverlayGroup.renderOrder = RenderOrder.faceOverlayGroup;
     this.overlayScene.add(this.faceOverlayGroup);
+    this.treatmentMarkGroup.renderOrder = RenderOrder.delta;
+    this.overlayScene.add(this.treatmentMarkGroup);
     this.handleGroup.renderOrder = RenderOrder.handle;
     this.overlayScene.add(this.handleGroup);
 
@@ -1146,6 +1155,64 @@ export class SceneController {
       isError ? 0x7a1a1a : isSelected || isHovered ? 0x2a4a8a : isHighlighted ? 0x24406e : 0x000000,
     );
     entry.material.emissiveIntensity = isError || isSelected || isHovered || isHighlighted ? 1 : 0;
+  }
+
+  /**
+   * Faces the edited operation creates, coloured red where material was removed
+   * and green where it was added. They are opaque: the colour is the message.
+   */
+  setTreatmentMarks(marks: readonly PreviewFaceMark[]): void {
+    this.treatmentMarks = marks;
+    this.rebuildTreatmentMarks();
+  }
+
+  private rebuildTreatmentMarks(): void {
+    for (const { mesh, material } of this.treatmentMarkMeshes) {
+      this.treatmentMarkGroup.remove(mesh);
+      mesh.geometry.dispose();
+      material.dispose();
+    }
+    this.treatmentMarkMeshes.length = 0;
+    for (const mark of this.treatmentMarks) {
+      const entry = this.bodies.get(mark.bodyId);
+      if (!entry || !entry.group.visible) continue;
+      const faces: Array<{ ids: number[]; color: number }> = [
+        { ids: mark.red, color: 0xef4444 },
+        { ids: mark.green, color: 0x22c55e },
+      ];
+      for (const group of faces) {
+        for (const faceId of group.ids) {
+          // The faces belong to the result, which is what the scene draws.
+          const geometry = faceGeometry(entry.meshRef, faceId);
+          if (!geometry) continue;
+          const pose = outwardNormal(entry.meshRef, faceId);
+          if (pose) {
+            geometry.translate(
+              pose.normal[0] * FACE_OVERLAY_LIFT,
+              pose.normal[1] * FACE_OVERLAY_LIFT,
+              pose.normal[2] * FACE_OVERLAY_LIFT,
+            );
+          }
+          // Lit like the model so a rounded surface still reads as curved.
+          const material = new THREE.MeshStandardMaterial({
+            color: group.color,
+            roughness: 0.6,
+            metalness: 0,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+            polygonOffset: true,
+            polygonOffsetFactor: -3,
+            polygonOffsetUnits: -3,
+            clippingPlanes: this.overlayClipPlanes(),
+          });
+          const mesh = new THREE.Mesh(geometry, material);
+          mesh.renderOrder = RenderOrder.delta;
+          this.treatmentMarkGroup.add(mesh);
+          this.treatmentMarkMeshes.push({ mesh, material });
+        }
+      }
+    }
+    this.invalidate();
   }
 
   setFaceHighlights(state: FaceHighlightState): void {

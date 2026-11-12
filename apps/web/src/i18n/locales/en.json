@@ -378,7 +378,7 @@
     "body": "body",
     "sketch": "sketch",
     "edge": "Edge",
-    "edgeHint": "Drag the track to round or chamfer these edges.",
+    "edgeHint": "Drag the track to round or chamfer these edges. Double-click a face of the operation to edit it.",
     "curvedFace": "A curved face cannot be extruded yet.",
     "createTooltip": "Extrude — drag to create the operation",
     "distanceTooltip": "Extrude distance — drag to change",
