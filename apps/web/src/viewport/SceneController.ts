@@ -14,7 +14,13 @@ import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { SketchSnap } from '../sketch/snap';
 import type { PreviewMarkKind, SceneGhost } from '../stores/kernelStore';
-import { CAMERA_FOV_DEGREES, easeInOut, fitDistance, shortestAngle } from './cameraFit';
+import {
+  CAMERA_FOV_DEGREES,
+  cameraFrustum,
+  easeInOut,
+  fitDistance,
+  shortestAngle,
+} from './cameraFit';
 import type {
   SceneGhostInfo,
   SceneHandle,
@@ -2214,6 +2220,38 @@ export class SceneController {
     return this.height / Math.max(1e-6, this.camera.top - this.camera.bottom);
   }
 
+  /**
+   * Distance from the orbit target to the farthest drawn vertex. The camera
+   * keeps this much clearance behind the target instead of following the zoom,
+   * so an orthographic zoom never drives the near plane through the model, and
+   * the depth range follows the content rather than the magnification.
+   */
+  private contentRadius(): number {
+    const box = new THREE.Box3();
+    const collect = (geometry: THREE.BufferGeometry): void => {
+      if (!geometry.boundingBox) geometry.computeBoundingBox();
+      if (geometry.boundingBox) box.union(geometry.boundingBox);
+    };
+    for (const entry of this.bodies.values()) {
+      if (entry.group.visible) collect(entry.geometry);
+    }
+    for (const entry of this.ghostEntries.values()) collect(entry.geometry);
+    if (box.isEmpty()) return 100;
+
+    let radius = 0;
+    for (const x of [box.min.x, box.max.x]) {
+      for (const y of [box.min.y, box.max.y]) {
+        for (const z of [box.min.z, box.max.z]) {
+          radius = Math.max(
+            radius,
+            Math.hypot(x - this.target.x, y - this.target.y, z - this.target.z),
+          );
+        }
+      }
+    }
+    return Math.max(radius, 1);
+  }
+
   private updateCamera(): void {
     const aspect = this.width / this.height;
     const halfHeight = this.distance * Math.tan((FOV_DEGREES * Math.PI) / 180 / 2);
@@ -2222,14 +2260,15 @@ export class SceneController {
     this.camera.top = halfHeight;
     this.camera.bottom = -halfHeight;
 
-    this.camera.near = Math.max(0.01, this.distance * 0.001);
-    this.camera.far = this.distance * 100 + 10_000;
+    const { eye, near, far } = cameraFrustum(this.distance, this.contentRadius());
+    this.camera.near = near;
+    this.camera.far = far;
 
     const sinPolar = Math.sin(this.polar);
     this.camera.position.set(
-      this.target.x + this.distance * sinPolar * Math.cos(this.azimuth),
-      this.target.y + this.distance * sinPolar * Math.sin(this.azimuth),
-      this.target.z + this.distance * Math.cos(this.polar),
+      this.target.x + eye * sinPolar * Math.cos(this.azimuth),
+      this.target.y + eye * sinPolar * Math.sin(this.azimuth),
+      this.target.z + eye * Math.cos(this.polar),
     );
     this.camera.up.set(0, 0, 1);
     if (Math.abs(Math.cos(this.polar)) > 0.999) {
