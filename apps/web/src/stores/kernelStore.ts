@@ -30,6 +30,11 @@ export interface PreviewBodyMark {
   /** Tessellation of the body before the operation; 3D picking uses it. */
   baseMesh?: TessellationResult;
   /**
+   * Draw `baseMesh` instead of the result, so an added part is represented only
+   * by its translucent ghost while the original body keeps its exact look.
+   */
+  renderBase?: boolean;
+  /**
    * Whether the body is drawn as a translucent phantom. A cut shows its result
    * solid so the removed material reads as a hole, so it stays opaque.
    */

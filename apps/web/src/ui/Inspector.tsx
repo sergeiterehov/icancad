@@ -45,8 +45,12 @@ import {
   useViewProject,
 } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
+import { selectedBodyFaces, selectedDetailBodyId, selectedEdges } from '../stores/selection';
+import { findBoundExtrude, quickTargetFromSelection } from '../quick/target';
+import { isPlanarFace } from '../viewport/planarFace';
 import { useUiStore } from '../stores/uiStore';
 import {
+  Button,
   DimensionField,
   IconButton,
   ObjectPickerField,
@@ -495,12 +499,26 @@ export function Inspector() {
     selection.length === 1 && selection[0]?.kind === 'feature'
       ? project.features.find((candidate) => candidate.id === selection[0]?.id)
       : undefined;
+  // A selected face or edge keeps its body panel open: the panel is still
+  // about that object, plus the quick operation the detail offers.
+  const detailBodyId =
+    selection.length === 1 ? selectedDetailBodyId(selection[0]!) : null;
   const bodyRef =
     selection.length === 1 &&
     (selection[0]?.kind === 'body' || selection[0]?.kind === 'mesh')
       ? project.bodies.find((candidate) => candidate.id === selection[0]?.id)
-      : undefined;
+      : detailBodyId
+        ? project.bodies.find((candidate) => candidate.id === detailBodyId)
+        : undefined;
   const body = bodyRef ? resolveBody(project, bodyRef) : undefined;
+  const detailFace = selection.length === 1 ? selectedBodyFaces(selection)[0] : undefined;
+  const detailEdge = selection.length === 1 ? selectedEdges(selection)[0] : undefined;
+  const quickTarget = selection.length === 1 ? quickTargetFromSelection(project, selection) : null;
+  const quickExtrude = quickTarget ? findBoundExtrude(project, quickTarget) : undefined;
+  const detailMesh = detailBodyId ? meshes[detailBodyId] : undefined;
+  const detailPlanar = Boolean(
+    detailFace && detailMesh && isPlanarFace(detailMesh, Number(detailFace.faceId)),
+  );
   // A sketch is an object of its own: the tree selects the object, the timeline
   // chip selects the operation that created it.
   // Faces belong to their sketch, so selecting them keeps the object panel open.
@@ -1344,7 +1362,35 @@ export function Inspector() {
               </div>
             )}
           </>
-        ) : body ? null : (
+        ) : body ? (
+          detailEdge ? (
+            <PanelSection title={t('quick.operation')}>
+              <p className="hint">{t('quick.edgeHint')}</p>
+            </PanelSection>
+          ) : detailFace ? (
+            <PanelSection title={t('quick.operation')}>
+              {quickExtrude ? (
+                <>
+                  <StatRow
+                    label={t('extrude.operation')}
+                    value={t(`extrude.op_${quickExtrude.op}` as never)}
+                  />
+                  <StatRow
+                    label={t('extrude.distance')}
+                    value={`${formatNumber(quickExtrude.distance, locale)} mm`}
+                  />
+                  <Button onClick={() => select({ kind: 'feature', id: quickExtrude.id })}>
+                    {t('quick.editOperation')}
+                  </Button>
+                </>
+              ) : detailPlanar ? (
+                <p className="hint">{t('quick.noOperation', { kind: t('quick.body') })}</p>
+              ) : (
+                <p className="hint">{t('quick.curvedFace')}</p>
+              )}
+            </PanelSection>
+          ) : null
+        ) : (
           <div className="panel-properties">
             <TextField label={t('inspector.name')} value={project.name} onCommit={renameProject} />
             <StatRow label={t('inspector.units')} value={project.units} />

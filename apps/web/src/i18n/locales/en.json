@@ -362,5 +362,22 @@
     "text": "\"{{name}}\" is used by other operations. They will be deleted too:",
     "confirm": "Delete all",
     "textMultiple": "Deleting these {{count}} operations also removes everything that depends on them:"
+  },
+  "quick": {
+    "add": "Join",
+    "subtract": "Cut",
+    "new": "New body",
+    "intersect": "Intersect",
+    "operation": "Quick operation",
+    "editOperation": "Edit operation",
+    "noOperation": "Drag the arrow to extrude this {{kind}}.",
+    "body": "body",
+    "sketch": "sketch",
+    "edge": "Edge",
+    "edgeHint": "Chamfer and fillet handles will appear here.",
+    "curvedFace": "A curved face cannot be extruded yet.",
+    "createTooltip": "Extrude — drag to create the operation",
+    "distanceTooltip": "Extrude distance — drag to change",
+    "secondDistanceTooltip": "Second direction distance — drag to change"
   }
 }

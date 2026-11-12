@@ -2,6 +2,10 @@
 
 Status: accepted (M0 review)
 
+> Selection now drills from an object into its faces and edges in 3D, and
+> operations offer 3D handles for quick edits; see
+> [ADR 0014](./0014-drill-down-selection-and-quick-operations.md).
+
 ## Context
 
 The first working shell exposed conceptual ambiguity: the left panel and the bottom timeline both listed features, "history" was unclear relative to undo/redo, rollback had no explained meaning, program settings were mixed with project properties, and selection only worked from the tree. Native tooltips and selectable UI text also broke the intended Figma-like feel.

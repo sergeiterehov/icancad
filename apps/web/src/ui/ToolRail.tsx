@@ -1,7 +1,10 @@
+import type { SketchFeature } from '@icancad/model';
 import { Hexagon, LayersArrowUp, PencilRuler, Square } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
+import { sketchPlaneFromSelection } from '../sketch/facePlane';
 import { useDocumentStore } from '../stores/documentStore';
+import { useKernelStore } from '../stores/kernelStore';
 import { useContextMenuStore } from './ContextMenu';
 import { useUiStore } from '../stores/uiStore';
 import { IconButton } from './Controls';
@@ -49,8 +52,41 @@ export function ToolRail() {
         label: t('sketch.chooseFace'),
         icon: <Hexagon size={14} />,
         onSelect: () => {
+          // The new sketch takes over the selection, so read the selected face
+          // first: it becomes the plane without another pick.
+          const plane = sketchPlaneFromSelection(
+            useDocumentStore.getState().selection,
+            useKernelStore.getState().meshes,
+          );
           const sketchId = addSketchOnFace(t('features.sketch'));
-          if (sketchId) startSketchPlanePicking(sketchId, true);
+          if (!sketchId) return;
+          const store = useDocumentStore.getState();
+          const sketch = store.project.features.find(
+            (feature): feature is SketchFeature =>
+              feature.type === 'sketch' && feature.id === sketchId,
+          );
+          if (
+            !sketch ||
+            !plane ||
+            !store.apply({
+              type: 'feature/replace',
+              feature: {
+                ...sketch,
+                plane: {
+                  type: 'face',
+                  bodyId: plane.bodyId,
+                  topoId: plane.faceId,
+                  offset: 0,
+                  frame: plane.frame,
+                },
+              },
+            })
+          ) {
+            startSketchPlanePicking(sketchId, true);
+            return;
+          }
+          useKernelStore.getState().clearFeatureError(sketchId);
+          useUiStore.getState().setActiveSketch(sketchId);
         },
       },
       ...(['XY', 'XZ', 'YZ'] as const).map((plane) => ({

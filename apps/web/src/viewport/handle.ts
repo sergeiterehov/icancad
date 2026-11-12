@@ -50,6 +50,39 @@ export type ScenePick =
       planar: boolean;
     };
 
+/**
+ * A 3D handle that belongs to an operation. The handle draws an arrow from
+ * `origin` along `direction`; `value` is the signed length of the operation.
+ */
+export interface SceneHandle {
+  id: string;
+  origin: [number, number, number];
+  direction: [number, number, number];
+  /** Signed distance along `direction`; zero draws the idle affordance. */
+  value: number;
+  enabled: boolean;
+  /** Shown when the pointer hovers the handle. */
+  tooltip?: string;
+}
+
+/** Where a handle is on screen, for the drag chip and for tests. */
+export interface SceneHandleScreen {
+  id: string;
+  originX: number;
+  originY: number;
+  tipX: number;
+  tipY: number;
+  value: number;
+  enabled: boolean;
+}
+
+/** A preview ghost as the scene draws it; exposed for tests and diagnostics. */
+export interface SceneGhostInfo {
+  id: string;
+  color: string;
+  bbox: { min: [number, number, number]; max: [number, number, number] };
+}
+
 export interface SketchPick {
   point: Point2;
   entityId: string | null;
@@ -58,6 +91,8 @@ export interface SketchPick {
 
 export interface ViewportHandle {
   fit: () => void;
+  getHandles: () => SceneHandleScreen[];
+  getGhosts: () => SceneGhostInfo[];
   setView: (name: ViewName) => void;
   setSketches: (sketches: SceneSketch[]) => void;
   setSketchOverlay: (

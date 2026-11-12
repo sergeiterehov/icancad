@@ -1,5 +1,5 @@
 import { ScanBox, ScanSquare } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { retryKernel } from '../kernel/client';
 import {
@@ -27,7 +27,7 @@ import {
 import { useDocumentStore, useViewProject } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
 import { isModelRebuilding, useKernelStore } from '../stores/kernelStore';
-import { directBodyIds, linkedBodyIds } from '../stores/selection';
+import { directBodyIds, drilledBodyIds, linkedBodyIds, parseBodyFaceId } from '../stores/selection';
 import { useThemeStore } from '../stores/themeStore';
 import { Button } from '../ui/Controls';
 import {
@@ -44,7 +44,15 @@ import {
 import { SkeletonStage } from '../ui/Skeleton';
 import { Tooltip } from '../ui/Tooltip';
 import { NavCube, type NavFace } from './NavCube';
+import {
+  operationHandles,
+  type OperationHandle,
+  type OperationHandleDrag,
+} from '../quick/operationHandles';
+import { findBoundExtrude, quickTargetFromSelection } from '../quick/target';
+import { formatNumber } from '../ui/format';
 import { SceneController, type SceneBody } from './SceneController';
+import { resolveSelectionHit } from './selectionPick';
 import { SketchAnnotations } from './SketchAnnotations';
 import { SketchEditor } from './SketchEditor';
 import { getViewport, registerViewport } from './handle';
@@ -59,7 +67,7 @@ const AXIS_HINTS: Record<string, { text: string; color: string }> = {
 };
 
 export function Viewport() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const navCubeCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -83,6 +91,14 @@ export function Viewport() {
   const sketchAutoHighlightIds = useUiStore((state) => state.sketchAutoHighlightIds);
   const sketchSelectionIds = useUiStore((state) => state.sketchSelectionIds);
   const selection = useDocumentStore((state) => state.selection);
+  // A selected sketch shows its regions in 3D, and selecting one of those
+  // regions keeps the sketch open for the next click.
+  const selectedSketchId =
+    selection.length === 1 && selection[0]?.kind === 'sketch'
+      ? selection[0].id
+      : selection.length > 0 && selection.every((item) => item.kind === 'face')
+        ? selection[0]!.id.split('#')[0]
+        : undefined;
   const meshes = useKernelStore((state) => state.meshes);
   const preview = useKernelStore((state) => state.preview);
   const sketchFrames = useKernelStore((state) => state.sketchFrames);
@@ -92,6 +108,76 @@ export function Viewport() {
   const error = useKernelStore((state) => state.error);
   const theme = useThemeStore((state) => state.theme);
   const openMenu = useContextMenuStore((state) => state.open);
+
+  // A selected face or sketch opens one quick extrude handle. The handle is
+  // derived from the operation, never stored as its own state.
+  const quickTarget = useMemo(
+    () => quickTargetFromSelection(project, selection),
+    [project, selection],
+  );
+  const quickBodies = useMemo(
+    () =>
+      bodies.flatMap((body) => {
+        const mesh = meshes[body.id];
+        return body.kind !== 'mesh' && mesh ? [{ id: body.id, mesh }] : [];
+      }),
+    [bodies, meshes],
+  );
+  const quickBlocked =
+    Boolean(activeSketchId) ||
+    Boolean(pickingExtrude) ||
+    Boolean(pickingExtrudeBodies) ||
+    Boolean(pickingSketchPlane) ||
+    Boolean(pickingSectionFace) ||
+    status !== 'ready';
+  const boundExtrude = useMemo(
+    () => (quickTarget ? findBoundExtrude(project, quickTarget) : undefined),
+    [project, quickTarget],
+  );
+  const handleLabels = useMemo(
+    () => ({
+      extrude: t('features.extrude'),
+      create: t('quick.createTooltip'),
+      distance: t('quick.distanceTooltip'),
+      secondDistance: t('quick.secondDistanceTooltip'),
+    }),
+    [t],
+  );
+  // The extrusion operation offers its handles; the viewport only draws them.
+  const operationHandleList = useMemo(
+    () =>
+      quickBlocked
+        ? []
+        : operationHandles({
+            project,
+            selection,
+            meshes,
+            sketchFrames,
+            bodies: quickBodies,
+            labels: handleLabels,
+          }),
+    [
+      quickBlocked,
+      project,
+      selection,
+      meshes,
+      sketchFrames,
+      quickBodies,
+      handleLabels,
+    ],
+  );
+  const handles = useMemo(
+    () =>
+      operationHandleList.map((handle) => ({
+        id: handle.id,
+        origin: handle.origin,
+        direction: handle.direction,
+        value: handle.value,
+        enabled: handle.enabled,
+        tooltip: handle.tooltip,
+      })),
+    [operationHandleList],
+  );
 
   const activeSketch = activeSketchId
     ? project.features.find(
@@ -130,6 +216,20 @@ export function Viewport() {
   translationRef.current = t;
   const openMenuRef = useRef(openMenu);
   openMenuRef.current = openMenu;
+  const quickDragRef = useRef<OperationHandleDrag | null>(null);
+  const handlesRef = useRef<OperationHandle[]>(operationHandleList);
+  handlesRef.current = operationHandleList;
+  const [quickChip, setQuickChip] = useState<{
+    x: number;
+    y: number;
+    op: string;
+    value: number;
+  } | null>(null);
+  const [handleHover, setHandleHover] = useState<{
+    x: number;
+    y: number;
+    text: string;
+  } | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -343,6 +443,55 @@ export function Viewport() {
         if (!project.features.some((feature) => feature.id === featureId)) return;
         store.select({ kind: 'feature', id: featureId });
       },
+      {
+        // Normal selection: the first click selects an object, the next one
+        // drills into the face or edge under the cursor.
+        onSelectPick: (hit, additive) => {
+          if (useUiStore.getState().activeSketchId) return;
+          const store = useDocumentStore.getState();
+          const resolution = resolveSelectionHit(hit, store.selection, { additive });
+          if (!resolution) {
+            store.select(null);
+            return;
+          }
+          store.select(resolution.item, { additive: resolution.additive });
+        },
+        onHandleDrag: (event) => {
+          if (event.phase === 'start') {
+            const handle = handlesRef.current.find((candidate) => candidate.id === event.id);
+            if (!handle) return;
+            const drag = handle.beginDrag();
+            quickDragRef.current = drag;
+            setQuickChip({
+              x: event.x,
+              y: event.y,
+              op: drag.op ?? 'new',
+              value: drag.value,
+            });
+            return;
+          }
+          const drag = quickDragRef.current;
+          if (!drag) return;
+          if (event.phase === 'move') {
+            drag.update(event.value);
+            setQuickChip({
+              x: event.x,
+              y: event.y,
+              op: drag.op ?? 'new',
+              value: event.value,
+            });
+            return;
+          }
+          if (event.phase === 'end') drag.end();
+          else drag.cancel();
+          quickDragRef.current = null;
+          setQuickChip(null);
+        },
+        onHandleHover: (event) =>
+          setHandleHover(
+            event ? { x: event.x, y: event.y, text: event.text } : null,
+          ),
+      },
     );
     controllerRef.current = controller;
     controller.setTheme(useThemeStore.getState().theme);
@@ -423,6 +572,8 @@ export function Viewport() {
       pickSketch: (x, y) => controller.pickSketch(x, y),
       snapSketch: (x, y, tolerance) => controller.snapSketch(x, y, tolerance),
       projectSketchPoint: (frame, point) => controller.projectSketchPoint(frame, point),
+      getHandles: () => controller.getHandles(),
+      getGhosts: () => controller.getGhosts(),
     });
 
     return () => {
@@ -444,10 +595,13 @@ export function Viewport() {
       const mesh = meshes[body.id];
       if (!mesh) continue;
       const mark = marks.get(body.id);
+      // A join shows the original body exactly as it was; only the translucent
+      // delta ghost above represents the material being added.
+      const renderBase = mark?.renderBase && mark.baseMesh;
       sceneBodies.push({
         id: body.id,
         kind: body.kind,
-        mesh,
+        mesh: renderBase ? mark!.baseMesh! : mesh,
         color: body.color,
         visible: body.visible,
         ...(mark
@@ -500,6 +654,18 @@ export function Viewport() {
     previousCount.current = sceneBodies.length;
   }, [activeSketchId, bodies, meshes, preview, project, selection, featureBodyErrors]);
 
+  // Which bodies are open for detail picking, and which sketch shows regions.
+  useEffect(() => {
+    controllerRef.current?.setSelectionDetail({
+      bodyIds: drilledBodyIds(selection),
+      sketchId: selectedSketchId ?? null,
+    });
+  }, [selection, selectedSketchId]);
+
+  useEffect(() => {
+    controllerRef.current?.setHandles(handles);
+  }, [handles]);
+
   // Faces of the edited operation are highlighted in 3D, and the one under the
   // cursor is highlighted while objects are being picked.
   useEffect(() => {
@@ -517,6 +683,12 @@ export function Viewport() {
     // active operation.
     for (const item of selection) {
       if (item.kind === 'face') selected.push(`s:${item.id}`);
+      // A face with an existing operation is marked by its handle instead:
+      // the boolean renumbers faces, so the stored id may point elsewhere.
+      if (item.kind === 'body-face' && !boundExtrude) {
+        const parsed = parseBodyFaceId(item.id);
+        if (parsed) selected.push(`b:${parsed.bodyId}#${parsed.faceId}`);
+      }
     }
     if (extrude) {
       if (extrude.scope === 'selected' && extrude.sketchId) {
@@ -547,7 +719,14 @@ export function Viewport() {
     pickingExtrudeBodies,
     pickingSketchPlane,
     pickingSectionFace,
+    boundExtrude,
   ]);
+
+  useEffect(() => {
+    controllerRef.current?.setEdgeHighlights(
+      selection.filter((item) => item.kind === 'edge').map((item) => item.id),
+    );
+  }, [selection, meshes]);
 
   useEffect(() => {
     controllerRef.current?.setTheme(theme);
@@ -591,7 +770,7 @@ export function Viewport() {
           outline: face.outline,
           holes: face.holeOutlines,
         })),
-        facesPicking: Boolean(pickingExtrude),
+        facesPicking: Boolean(pickingExtrude) || feature.id === selectedSketchId,
         frame:
           feature.id === activeSketchId && activeSketchReady
             ? computeSketchFrame(
@@ -632,6 +811,7 @@ export function Viewport() {
     activeSketchReady,
     meshes,
     preview,
+    selectedSketchId,
   ]);
 
   useEffect(() => {
@@ -644,6 +824,29 @@ export function Viewport() {
   return (
     <div className="viewport-wrap" ref={containerRef}>
       <canvas ref={canvasRef} className="viewport-canvas" data-testid="viewport-canvas" />
+
+      {quickChip && (
+        <div
+          className="quick-chip"
+          data-testid="quick-chip"
+          style={{ left: quickChip.x + 16, top: quickChip.y + 16 }}
+        >
+          <span>{t(`quick.${quickChip.op}` as never)}</span>
+          <span className="quick-chip-value">
+            {formatNumber(Math.abs(quickChip.value), i18n.language, 1)} mm
+          </span>
+        </div>
+      )}
+
+      {!quickChip && handleHover && handleHover.text && (
+        <div
+          className="handle-tooltip"
+          data-testid="handle-tooltip"
+          style={{ left: handleHover.x + 14, top: handleHover.y + 18 }}
+        >
+          {handleHover.text}
+        </div>
+      )}
 
       <div className="viewport-nav">
         <Tooltip content={t('nav.hint')}>

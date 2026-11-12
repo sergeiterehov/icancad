@@ -31,7 +31,14 @@ import { i18n } from '../i18n';
 import { useKernelStore, isModelRebuilding } from './kernelStore';
 import { useUiStore } from './uiStore';
 
-export type SelectionKind = 'body' | 'mesh' | 'feature' | 'sketch' | 'face';
+export type SelectionKind =
+  | 'body'
+  | 'mesh'
+  | 'feature'
+  | 'sketch'
+  | 'face'
+  | 'body-face'
+  | 'edge';
 
 export interface SelectionItem {
   kind: SelectionKind;
@@ -55,6 +62,8 @@ interface DocumentState {
   editingFeatureId: string | null;
   apply: (...commands: Command[]) => boolean;
   preview: (...commands: Command[]) => void;
+  /** Adds a feature without a history step, for a live handle drag. */
+  previewAddFeature: (feature: Feature) => boolean;
   commitPreview: (before: Project) => void;
   undo: () => void;
   redo: () => void;
@@ -182,6 +191,17 @@ function exists(project: Project, item: SelectionItem, editingFeatureId: string 
             isFeatureInHistory(project, sketchId),
         ),
       );
+    }
+    case 'body-face':
+    case 'edge': {
+      // Detail elements live as long as their body does. Which faces and edges
+      // a body currently has is only known from its mesh, so the viewport
+      // resolves that part and drops stale detail selections there.
+      const separator = item.id.lastIndexOf('#');
+      if (separator <= 0) return false;
+      const bodyId = item.id.slice(0, separator);
+      const body = project.bodies.find((candidate) => candidate.id === bodyId);
+      return Boolean(body && !isMeshObject(body) && isFeatureInHistory(project, body.createdBy));
     }
   }
 }
@@ -334,6 +354,22 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       });
     } catch {
       // Preview commands are transient; invalid intermediate geometry is ignored.
+    }
+  },
+
+  previewAddFeature: (feature) => {
+    const state = get();
+    try {
+      const project = applyCommands(state.project, addFeatureCommands(state.project, feature));
+      const selection = sanitizeSelection(
+        projectForView(project, state.editingFeatureId),
+        state.selection,
+        state.editingFeatureId,
+      );
+      set({ project, selection, ...reconcileEditMode(state, project, selection) });
+      return true;
+    } catch {
+      return false;
     }
   },
 
