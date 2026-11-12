@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import { TriangleAlert } from 'lucide-react';
 import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { Tooltip } from './Tooltip';
 
@@ -249,6 +250,7 @@ export function DimensionField({
   value,
   suffix,
   allowNegative,
+  warning,
   onCommit,
 }: {
   axis?: string;
@@ -258,6 +260,8 @@ export function DimensionField({
   suffix?: string;
   /** Positions are signed and may be zero; sizes are positive lengths. */
   allowNegative?: boolean;
+  /** Shown as a yellow mark next to the field; the value was reduced. */
+  warning?: string;
   onCommit: (value: number) => void;
 }) {
   const [draft, setDraft] = useState(String(value));
@@ -303,6 +307,14 @@ export function DimensionField({
           }}
         />
         {suffix && <span className="dimension-unit">{suffix}</span>}
+        {warning && (
+          <Tooltip content={warning}>
+            <span className="dimension-warning" data-testid="dimension-warning">
+              <TriangleAlert size={13} aria-hidden="true" />
+              <span className="visually-hidden">{warning}</span>
+            </span>
+          </Tooltip>
+        )}
       </label>
     </Tooltip>
   );

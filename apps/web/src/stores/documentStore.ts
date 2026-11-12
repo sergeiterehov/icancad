@@ -13,8 +13,12 @@ import {
   historyInsertIndex,
   isFeatureInHistory,
   isMeshObject,
+  type BodyEdgeRef,
+  type BodyFaceRef,
   type BodyRef,
   type Command,
+  type EdgeTreatmentFeature,
+  type EdgeTreatmentKind,
   type Feature,
   type ImportMeshFeature,
   type MeshFormat,
@@ -81,6 +85,11 @@ interface DocumentState {
   addSketch: (name: string, plane: 'XY' | 'XZ' | 'YZ') => string | null;
   addSketchOnFace: (name: string) => string | null;
   addExtrude: (name: string, input?: ExtrudeInput) => string | null;
+  addEdgeTreatment: (name: string, input?: EdgeTreatmentInput) => string | null;
+  setEdgeTreatmentKind: (featureId: string, kind: EdgeTreatmentKind) => void;
+  setEdgeTreatmentSize: (featureId: string, size: number) => void;
+  toggleEdgeTreatmentFace: (featureId: string, ref: BodyFaceRef) => void;
+  toggleEdgeTreatmentEdge: (featureId: string, ref: BodyEdgeRef) => void;
   setExtrudeOp: (featureId: string, op: ExtrudeFeature['op']) => void;
   setExtrudeInput: (featureId: string, input: ExtrudeInput | null) => void;
   toggleExtrudeFace: (featureId: string, sketchId: string, faceId: string) => void;
@@ -121,6 +130,12 @@ export interface ExtrudeInput {
   sketchId: string;
   /** Empty means the whole sketch; otherwise the picked faces. */
   regions: string[];
+}
+
+/** Edges and faces an edge treatment starts with. */
+export interface EdgeTreatmentInput {
+  faceRefs?: BodyFaceRef[];
+  edgeRefs?: BodyEdgeRef[];
 }
 
 /** Picked objects are keyed so sketch faces and body faces share one order. */
@@ -436,6 +451,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     const pickingGeometry =
       ui.pickingExtrude ??
       ui.pickingExtrudeBodies ??
+      ui.pickingEdges ??
       ui.pickingSketchPlane ??
       ui.pickingSectionFace;
     if (
@@ -463,6 +479,9 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       }
       return;
     }
+    // Edges and faces of an edge treatment are picked in the 3D view, so a
+    // click elsewhere must not replace the operation being configured.
+    if (ui.pickingEdges) return;
 
     const state = get();
     let selection: SelectionItem[];
@@ -622,6 +641,88 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     if (!get().apply(...addFeatureCommands(project, feature))) return null;
     selectFeatureForEditing(featureId, set);
     return featureId;
+  },
+
+  // The edge treatment starts from the current selection, like the extrude
+  // tool: what is picked becomes the operation's input right away.
+  addEdgeTreatment: (name, input) => {
+    get().endFeatureEdit();
+    const project = get().project;
+    const featureId = createId('feat');
+    const feature: EdgeTreatmentFeature = {
+      id: featureId,
+      name,
+      suppressed: false,
+      type: 'edge-treatment',
+      kind: 'fillet',
+      faceRefs: input?.faceRefs ?? [],
+      edgeRefs: input?.edgeRefs ?? [],
+      size: 1,
+    };
+    if (!get().apply(...addFeatureCommands(project, feature))) return null;
+    selectFeatureForEditing(featureId, set);
+    return featureId;
+  },
+
+  setEdgeTreatmentKind: (featureId, kind) => {
+    const feature = get().project.features.find(
+      (candidate): candidate is EdgeTreatmentFeature =>
+        candidate.id === featureId && candidate.type === 'edge-treatment',
+    );
+    if (!feature || feature.kind === kind) return;
+    get().apply({ type: 'feature/replace', feature: { ...feature, kind } });
+  },
+
+  setEdgeTreatmentSize: (featureId, size) => {
+    const feature = get().project.features.find(
+      (candidate): candidate is EdgeTreatmentFeature =>
+        candidate.id === featureId && candidate.type === 'edge-treatment',
+    );
+    if (!feature || !Number.isFinite(size) || size <= 0) return;
+    if (feature.size === size) return;
+    get().apply({ type: 'feature/replace', feature: { ...feature, size } });
+  },
+
+  toggleEdgeTreatmentFace: (featureId, ref) => {
+    const feature = get().project.features.find(
+      (candidate): candidate is EdgeTreatmentFeature =>
+        candidate.id === featureId && candidate.type === 'edge-treatment',
+    );
+    if (!feature) return;
+    const key = `${ref.bodyId}#${ref.faceId}`;
+    const exists = feature.faceRefs.some(
+      (candidate) => `${candidate.bodyId}#${candidate.faceId}` === key,
+    );
+    get().apply({
+      type: 'feature/replace',
+      feature: {
+        ...feature,
+        faceRefs: exists
+          ? feature.faceRefs.filter((candidate) => `${candidate.bodyId}#${candidate.faceId}` !== key)
+          : [...feature.faceRefs, ref],
+      },
+    });
+  },
+
+  toggleEdgeTreatmentEdge: (featureId, ref) => {
+    const feature = get().project.features.find(
+      (candidate): candidate is EdgeTreatmentFeature =>
+        candidate.id === featureId && candidate.type === 'edge-treatment',
+    );
+    if (!feature) return;
+    const key = `${ref.bodyId}#${ref.edgeId}`;
+    const exists = feature.edgeRefs.some(
+      (candidate) => `${candidate.bodyId}#${candidate.edgeId}` === key,
+    );
+    get().apply({
+      type: 'feature/replace',
+      feature: {
+        ...feature,
+        edgeRefs: exists
+          ? feature.edgeRefs.filter((candidate) => `${candidate.bodyId}#${candidate.edgeId}` !== key)
+          : [...feature.edgeRefs, ref],
+      },
+    });
   },
 
   setExtrudeInput: (featureId, input) => {

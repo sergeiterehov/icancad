@@ -2,12 +2,17 @@ import type { SketchFeature } from '@icancad/model';
 import { Hexagon, LayersArrowUp, PencilRuler, Square } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
+import {
+  edgeTreatmentTargetFromSelection,
+  findBoundEdgeTreatment,
+} from '../quick/edgeTreatment';
 import { sketchPlaneFromSelection } from '../sketch/facePlane';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { useContextMenuStore } from './ContextMenu';
 import { useUiStore } from '../stores/uiStore';
 import { IconButton } from './Controls';
+import { EdgeToolIcon } from './edgeIcons';
 import { SectionTool } from './SectionTool';
 
 // Extrude works on a whole sketch or on the faces selected inside one sketch.
@@ -38,6 +43,8 @@ export function ToolRail() {
   const addSketch = useDocumentStore((state) => state.addSketch);
   const addSketchOnFace = useDocumentStore((state) => state.addSketchOnFace);
   const addExtrude = useDocumentStore((state) => state.addExtrude);
+  const addEdgeTreatment = useDocumentStore((state) => state.addEdgeTreatment);
+  const select = useDocumentStore((state) => state.select);
   const project = useDocumentStore((state) => state.project);
   const selection = useDocumentStore((state) => state.selection);
   const sketchSelection = extrudeInput(selection, project);
@@ -118,6 +125,30 @@ export function ToolRail() {
         onClick={() => addExtrude(t('features.extrude'), sketchSelection ?? undefined)}
       >
         <LayersArrowUp size={17} />
+      </IconButton>
+
+      <IconButton
+        label={t('tools.edgeTreatment')}
+        tooltip={t('tools.edgeTreatment')}
+        onClick={() => {
+          const store = useDocumentStore.getState();
+          const input = edgeTreatmentTargetFromSelection(
+            store.project,
+            store.selection,
+            useKernelStore.getState().meshes,
+          );
+          // The same edges already belong to an operation: open it instead of
+          // stacking a second one on top.
+          const bound = input ? findBoundEdgeTreatment(store.project, input) : undefined;
+          if (bound) {
+            select({ kind: 'feature', id: bound.id });
+            return;
+          }
+          const id = addEdgeTreatment(t('features.edgeTreatment'), input ?? undefined);
+          if (id && !input) useUiStore.getState().setPickingEdges(id);
+        }}
+      >
+        <EdgeToolIcon size={17} />
       </IconButton>
 
       <div className="tool-separator" />

@@ -23,6 +23,8 @@ interface UiState {
   pickingExtrude: string | null;
   /** Operation waiting for target bodies to be picked in the 3D view. */
   pickingExtrudeBodies: string | null;
+  /** Edge treatment waiting for edges or faces to be picked in the 3D view. */
+  pickingEdges: string | null;
   /** Sketch operation waiting for its plane face to be picked in the 3D view. */
   pickingSketchPlane: string | null;
   /** Section plane waiting for the face it should follow. */
@@ -45,6 +47,7 @@ interface UiState {
   sketchToolNonce: number;
   requestDelete: (request: DeleteRequest) => void;
   setPickingExtrude: (featureId: string | null) => void;
+  setPickingEdges: (featureId: string | null) => void;
   setPickingExtrudeBodies: (featureId: string | null) => void;
   setPickingSketchPlane: (featureId: string | null) => void;
   setPickingSectionFace: (planeId: string | null) => void;
@@ -95,6 +98,7 @@ export const useUiStore = create<UiState>((set) => ({
   deleteRequest: null,
   pickingExtrude: null,
   pickingExtrudeBodies: null,
+  pickingEdges: null,
   pickingSketchPlane: null,
   pickingSectionFace: null,
   sketchPlanePickThenEdit: null,
@@ -122,10 +126,23 @@ export const useUiStore = create<UiState>((set) => ({
         ? {
             pickingExtrude,
             pickingExtrudeBodies: null,
+            pickingEdges: null,
             pickingSketchPlane: null,
             pickingSectionFace: null,
           }
         : { pickingExtrude },
+    ),
+  setPickingEdges: (pickingEdges) =>
+    set(
+      pickingEdges
+        ? {
+            pickingEdges,
+            pickingExtrude: null,
+            pickingExtrudeBodies: null,
+            pickingSketchPlane: null,
+            pickingSectionFace: null,
+          }
+        : { pickingEdges },
     ),
   setPickingExtrudeBodies: (pickingExtrudeBodies) =>
     set(
@@ -133,6 +150,7 @@ export const useUiStore = create<UiState>((set) => ({
         ? {
             pickingExtrudeBodies,
             pickingExtrude: null,
+            pickingEdges: null,
             pickingSketchPlane: null,
             pickingSectionFace: null,
           }
@@ -146,6 +164,7 @@ export const useUiStore = create<UiState>((set) => ({
             sketchPlanePickThenEdit: null,
             pickingExtrude: null,
             pickingExtrudeBodies: null,
+            pickingEdges: null,
             pickingSectionFace: null,
           }
         : { pickingSketchPlane, sketchPlanePickThenEdit: null },
@@ -157,6 +176,7 @@ export const useUiStore = create<UiState>((set) => ({
             pickingSectionFace,
             pickingExtrude: null,
             pickingExtrudeBodies: null,
+            pickingEdges: null,
             pickingSketchPlane: null,
             sketchPlanePickThenEdit: null,
           }
@@ -168,6 +188,7 @@ export const useUiStore = create<UiState>((set) => ({
       sketchPlanePickThenEdit: enterEdit ? sketchPlanePickThenEdit : null,
       pickingExtrude: null,
       pickingExtrudeBodies: null,
+      pickingEdges: null,
       pickingSectionFace: null,
     }),
   cancelDelete: () => set({ deleteRequest: null }),

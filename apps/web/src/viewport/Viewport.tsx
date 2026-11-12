@@ -52,6 +52,7 @@ import {
 import { findBoundExtrude, quickTargetFromSelection } from '../quick/target';
 import { formatNumber } from '../ui/format';
 import { SceneController, type SceneBody } from './SceneController';
+import { edgeBisector, edgePose } from '../kernel/edgeTreatment';
 import { resolveSelectionHit } from './selectionPick';
 import { SketchAnnotations } from './SketchAnnotations';
 import { SketchEditor } from './SketchEditor';
@@ -65,6 +66,13 @@ const AXIS_HINTS: Record<string, { text: string; color: string }> = {
   top: { text: '+Z', color: '#84a4e4' },
   bottom: { text: '−Z', color: '#84a4e4' },
 };
+
+/** What the drag chip says: the extrude method or the edge treatment side. */
+function chipLabel(drag: OperationHandleDrag, translate: (key: never) => string): string {
+  if (drag.op) return translate(`quick.${drag.op}` as never);
+  if (drag.kind) return translate(`edgeTreatment.${drag.kind}` as never);
+  return '';
+}
 
 export function Viewport() {
   const { t, i18n } = useTranslation();
@@ -83,6 +91,7 @@ export function Viewport() {
   const activeSketchReady = useUiStore((state) => state.activeSketchReady);
   const pickingExtrude = useUiStore((state) => state.pickingExtrude);
   const pickingExtrudeBodies = useUiStore((state) => state.pickingExtrudeBodies);
+  const pickingEdges = useUiStore((state) => state.pickingEdges);
   const pickingSketchPlane = useUiStore((state) => state.pickingSketchPlane);
   const pickingSectionFace = useUiStore((state) => state.pickingSectionFace);
   const sketchSectionEnabled = useUiStore((state) => state.sketchSectionEnabled);
@@ -104,6 +113,7 @@ export function Viewport() {
   const sketchFrames = useKernelStore((state) => state.sketchFrames);
   const featureBodyErrors = useKernelStore((state) => state.featureBodyErrors);
   const featureErrors = useKernelStore((state) => state.featureErrors);
+  const featureLimits = useKernelStore((state) => state.featureLimits);
   const status = useKernelStore((state) => state.status);
   const error = useKernelStore((state) => state.error);
   const theme = useThemeStore((state) => state.theme);
@@ -127,6 +137,7 @@ export function Viewport() {
     Boolean(activeSketchId) ||
     Boolean(pickingExtrude) ||
     Boolean(pickingExtrudeBodies) ||
+    Boolean(pickingEdges) ||
     Boolean(pickingSketchPlane) ||
     Boolean(pickingSectionFace) ||
     status !== 'ready';
@@ -140,6 +151,8 @@ export function Viewport() {
       create: t('quick.createTooltip'),
       distance: t('quick.distanceTooltip'),
       secondDistance: t('quick.secondDistanceTooltip'),
+      edgeTreatment: t('features.edgeTreatment'),
+      edgeTreatmentTooltip: t('edgeTreatment.tooltip'),
     }),
     [t],
   );
@@ -154,6 +167,7 @@ export function Viewport() {
             meshes,
             sketchFrames,
             bodies: quickBodies,
+            limits: featureLimits,
             labels: handleLabels,
           }),
     [
@@ -163,6 +177,7 @@ export function Viewport() {
       meshes,
       sketchFrames,
       quickBodies,
+      featureLimits,
       handleLabels,
     ],
   );
@@ -170,9 +185,12 @@ export function Viewport() {
     () =>
       operationHandleList.map((handle) => ({
         id: handle.id,
+        kind: handle.kind === 'track' ? ('track' as const) : ('arrow' as const),
         origin: handle.origin,
         direction: handle.direction,
         value: handle.value,
+        limit: handle.limit,
+        leader: handle.leader,
         enabled: handle.enabled,
         tooltip: handle.tooltip,
       })),
@@ -222,7 +240,7 @@ export function Viewport() {
   const [quickChip, setQuickChip] = useState<{
     x: number;
     y: number;
-    op: string;
+    label: string;
     value: number;
   } | null>(null);
   const [handleHover, setHandleHover] = useState<{
@@ -328,6 +346,37 @@ export function Viewport() {
           ui.setPickingSectionFace(null);
           return;
         }
+        const edgePicking = ui.pickingEdges;
+        if (edgePicking) {
+          if (!pick) return;
+          if (pick.kind === 'body-edge') {
+            const mesh = useKernelStore.getState().meshes[pick.bodyId];
+            const edge = mesh?.edges?.find((candidate) => candidate.id === pick.edgeId);
+            const bisector = mesh && edge ? edgeBisector(mesh, edge.faceIds) : null;
+            if (!mesh || !edge || !bisector) return;
+            store.toggleEdgeTreatmentEdge(edgePicking, {
+              bodyId: pick.bodyId,
+              edgeId: pick.edgeId,
+              faceIds: [...edge.faceIds],
+              ...edgePose(edge.points),
+              bisector,
+            });
+            return;
+          }
+          if (pick.kind === 'body-face') {
+            if (!pick.planar) {
+              ui.showToast('errors.FACE_NOT_PLANAR', 'error');
+              return;
+            }
+            store.toggleEdgeTreatmentFace(edgePicking, {
+              bodyId: pick.bodyId,
+              faceId: pick.faceId,
+              normal: pick.normal,
+              origin: pick.origin,
+            });
+          }
+          return;
+        }
         const picking = ui.pickingExtrude;
         if (picking) {
           if (!pick) return;
@@ -357,7 +406,7 @@ export function Viewport() {
           store.select({ kind: 'mesh', id: pick.id }, { additive });
           return;
         }
-        if (pick.kind === 'body' || pick.kind === 'body-face') {
+        if (pick.kind === 'body' || pick.kind === 'body-face' || pick.kind === 'body-edge') {
           store.select({ kind: 'body', id: pick.kind === 'body' ? pick.id : pick.bodyId }, {
             additive,
           });
@@ -465,7 +514,7 @@ export function Viewport() {
             setQuickChip({
               x: event.x,
               y: event.y,
-              op: drag.op ?? 'new',
+              label: chipLabel(drag, translationRef.current),
               value: drag.value,
             });
             return;
@@ -477,7 +526,7 @@ export function Viewport() {
             setQuickChip({
               x: event.x,
               y: event.y,
-              op: drag.op ?? 'new',
+              label: chipLabel(drag, translationRef.current),
               value: event.value,
             });
             return;
@@ -676,7 +725,13 @@ export function Viewport() {
         ? project.features.find((feature) => feature.id === selection[0]?.id)
         : undefined;
     const extrude = selectedFeature?.type === 'extrude' ? selectedFeature : undefined;
-    const errors = extrude ? (featureBodyErrors[extrude.id] ?? {}) : {};
+    const treatment =
+      selectedFeature?.type === 'edge-treatment' ? selectedFeature : undefined;
+    const errors = extrude
+      ? (featureBodyErrors[extrude.id] ?? {})
+      : treatment
+        ? (featureBodyErrors[treatment.id] ?? {})
+        : {};
     const selected: string[] = [];
     const invalid: string[] = [];
     // Faces picked in the tree or inspector stay highlighted even without an
@@ -700,6 +755,11 @@ export function Viewport() {
         else selected.push(key);
       }
     }
+    for (const ref of treatment?.faceRefs ?? []) {
+      const key = `b:${ref.bodyId}#${ref.faceId}`;
+      if (errors[ref.bodyId]) invalid.push(key);
+      else selected.push(key);
+    }
     const planeSketch = selectedFeature?.type === 'sketch' ? selectedFeature : undefined;
     if (planeSketch?.plane.type === 'face' && planeSketch.plane.bodyId && planeSketch.plane.topoId) {
       selected.push(`b:${planeSketch.plane.bodyId}#${planeSketch.plane.topoId}`);
@@ -707,8 +767,13 @@ export function Viewport() {
     controller.setFaceHighlights({
       selected,
       invalid,
-      picking: Boolean(pickingExtrude) || Boolean(pickingSketchPlane) || Boolean(pickingSectionFace),
+      picking:
+        Boolean(pickingExtrude) ||
+        Boolean(pickingEdges) ||
+        Boolean(pickingSketchPlane) ||
+        Boolean(pickingSectionFace),
       bodyPicking: Boolean(pickingExtrudeBodies),
+      edgePicking: Boolean(pickingEdges),
       bodyFacesOnly: Boolean(pickingSketchPlane) || Boolean(pickingSectionFace),
     });
   }, [
@@ -719,14 +784,22 @@ export function Viewport() {
     pickingExtrudeBodies,
     pickingSketchPlane,
     pickingSectionFace,
+    pickingEdges,
     boundExtrude,
   ]);
 
   useEffect(() => {
-    controllerRef.current?.setEdgeHighlights(
-      selection.filter((item) => item.kind === 'edge').map((item) => item.id),
-    );
-  }, [selection, meshes]);
+    const selectedFeature =
+      selection.length === 1 && selection[0]?.kind === 'feature'
+        ? project.features.find((feature) => feature.id === selection[0]?.id)
+        : undefined;
+    const treatment =
+      selectedFeature?.type === 'edge-treatment' ? selectedFeature : undefined;
+    controllerRef.current?.setEdgeHighlights([
+      ...selection.filter((item) => item.kind === 'edge').map((item) => item.id),
+      ...(treatment?.edgeRefs ?? []).map((ref) => `${ref.bodyId}#${ref.edgeId}`),
+    ]);
+  }, [selection, meshes, project]);
 
   useEffect(() => {
     controllerRef.current?.setTheme(theme);
@@ -831,7 +904,7 @@ export function Viewport() {
           data-testid="quick-chip"
           style={{ left: quickChip.x + 16, top: quickChip.y + 16 }}
         >
-          <span>{t(`quick.${quickChip.op}` as never)}</span>
+          <span>{quickChip.label}</span>
           <span className="quick-chip-value">
             {formatNumber(Math.abs(quickChip.value), i18n.language, 1)} mm
           </span>

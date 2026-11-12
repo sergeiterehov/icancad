@@ -18,6 +18,7 @@ import { isDirectlySelected, selectedFeatureIds } from '../stores/selection';
 import { canEditSketch } from '../sketch/sectionPlane';
 import { rebuildFrom } from '../kernel/rebuild';
 import { showContextMenu } from './ContextMenu';
+import { ChamferIcon, FilletIcon } from './edgeIcons';
 import { ExtrudeOpIcon } from './featureIcons';
 import { Tooltip } from './Tooltip';
 import { translate } from './translate';
@@ -36,6 +37,12 @@ function FeatureIcon({ feature }: { feature: Feature }) {
       return <FileUp size={16} />;
     case 'delete-body':
       return <Trash2 size={16} />;
+    case 'edge-treatment':
+      return feature.kind === 'chamfer' ? (
+        <ChamferIcon size={16} />
+      ) : (
+        <FilletIcon size={16} />
+      );
     default:
       return <Layers size={16} />;
   }

@@ -1,11 +1,26 @@
 import type { TessellationResult } from '@icancad/kernel';
-import type { ExtrudeFeature, Project, SketchFrame, Vec3 } from '@icancad/model';
+import type {
+  EdgeTreatmentFeature,
+  EdgeTreatmentKind,
+  ExtrudeFeature,
+  Project,
+  SketchFrame,
+  Vec3,
+} from '@icancad/model';
 import type { SelectionItem } from '../stores/documentStore';
 import {
+  QuickEdgeTreatmentDrag,
   QuickExtrudeDrag,
   type ExtrudeHandleAxis,
   type QuickBodySource,
 } from './controller';
+import {
+  edgeTreatmentGeometry,
+  edgeTreatmentLimit,
+  edgeTreatmentTargetFromSelection,
+  findBoundEdgeTreatment,
+  type EdgeTreatmentGeometry,
+} from './edgeTreatment';
 import {
   boundBodyFaceGeometry,
   findBoundExtrude,
@@ -16,7 +31,11 @@ import { quickTargetKey, type QuickTargetGeometry } from './types';
 
 /** A drag started by an operation handle. */
 export interface OperationHandleDrag {
+  /** Extrude method while the gesture runs; the chip names it. */
   readonly op: ExtrudeFeature['op'] | null;
+  /** Edge treatment side while the gesture runs. */
+  readonly kind: EdgeTreatmentKind | null;
+  /** Signed size the operation currently has. */
   readonly value: number;
   update(value: number): void;
   end(): void;
@@ -29,11 +48,15 @@ export interface OperationHandleDrag {
  */
 export interface OperationHandle {
   id: string;
-  kind: 'extrude';
+  kind: 'extrude' | 'track';
   origin: Vec3;
   direction: Vec3;
   /** Signed distance along `direction`; zero shows the idle affordance. */
   value: number;
+  /** Track only: the value at either end of the arc. */
+  limit?: number;
+  /** Track only: reach it from `origin` with a dashed leader. */
+  leader?: boolean;
   enabled: boolean;
   tooltip: string;
   beginDrag(): OperationHandleDrag;
@@ -45,6 +68,8 @@ export interface OperationHandleContext {
   meshes: Record<string, TessellationResult>;
   sketchFrames: Record<string, SketchFrame>;
   bodies: readonly QuickBodySource[];
+  /** Size the kernel applied to an edge treatment, keyed by operation. */
+  limits: Record<string, { requested: number; applied: number }>;
   labels: {
     extrude: string;
     /** Prospective handle: what a drag will create. */
@@ -53,6 +78,9 @@ export interface OperationHandleContext {
     distance: string;
     /** Handle of the second, opposite direction. */
     secondDistance: string;
+    /** Name of the edge treatment operation. */
+    edgeTreatment: string;
+    edgeTreatmentTooltip: string;
   };
 }
 
@@ -61,7 +89,7 @@ export interface OperationHandleContext {
  * its own provider here; the viewport never builds a handle itself.
  */
 export function operationHandles(context: OperationHandleContext): OperationHandle[] {
-  return extrudeHandles(context);
+  return [...extrudeHandles(context), ...edgeTreatmentHandles(context)];
 }
 
 function selectedExtrude(context: OperationHandleContext): ExtrudeFeature | undefined {
@@ -197,4 +225,97 @@ function extrudeHandles(context: OperationHandleContext): OperationHandle[] {
     bound,
     bound ? context.labels.distance : context.labels.create,
   );
+}
+
+function selectedEdgeTreatment(
+  context: OperationHandleContext,
+): EdgeTreatmentFeature | undefined {
+  if (context.selection.length !== 1 || context.selection[0]?.kind !== 'feature') return undefined;
+  const feature = context.project.features.find(
+    (candidate) => candidate.id === context.selection[0]?.id,
+  );
+  return feature?.type === 'edge-treatment' && !feature.suppressed ? feature : undefined;
+}
+
+/** Geometry of an operation from its own stored refs, independent of renaming. */
+function featureTreatmentGeometry(
+  feature: EdgeTreatmentFeature,
+): EdgeTreatmentGeometry | null {
+  return edgeTreatmentGeometry({
+    faceRefs: feature.faceRefs,
+    edgeRefs: feature.edgeRefs,
+  });
+}
+
+function treatmentHandle(
+  geometry: EdgeTreatmentGeometry,
+  context: OperationHandleContext,
+  feature: EdgeTreatmentFeature | undefined,
+  limit: number,
+): OperationHandle {
+  const kind = feature?.kind ?? null;
+  // An operation that exists has no known ceiling any more: the geometry it
+  // measured against is gone. Its own size becomes the middle of the track, so
+  // the knob has room in both directions, and an operation the kernel had to
+  // reduce stays pinned at the end instead.
+  const applied = feature ? context.limits[feature.id]?.applied : undefined;
+  const span =
+    feature && applied !== undefined && applied < feature.size
+      ? feature.size
+      : feature
+        ? Math.max(feature.size * 2, 0.001)
+        : limit;
+  return {
+    id: feature ? `edge-treatment:${feature.id}` : `edge-treatment:new:${treatmentKey(geometry)}`,
+    kind: 'track',
+    origin: geometry.origin,
+    direction: geometry.direction,
+    // A fillet sits on the positive side of the track, a chamfer on the
+    // negative one, so the knob shows which of the two the operation is.
+    value: feature ? (kind === 'chamfer' ? -feature.size : feature.size) : 0,
+    limit: span,
+    leader: geometry.leader,
+    enabled: true,
+    tooltip: context.labels.edgeTreatmentTooltip,
+    beginDrag: () => {
+      const drag = new QuickEdgeTreatmentDrag(geometry, context.labels.edgeTreatment, feature?.id);
+      drag.start();
+      return drag;
+    },
+  };
+}
+
+function treatmentKey(geometry: EdgeTreatmentGeometry): string {
+  const { target } = geometry;
+  return [
+    ...target.faceRefs.map((ref) => `${ref.bodyId}#${ref.faceId}`),
+    ...target.edgeRefs.map((ref) => `${ref.bodyId}#${ref.edgeId}`),
+  ].join(',');
+}
+
+/**
+ * The edge treatment offered by the selection. One track serves both kinds:
+ * pulling it to the right rounds the corners, to the left it cuts them.
+ */
+function edgeTreatmentHandles(context: OperationHandleContext): OperationHandle[] {
+  // A focused operation owns its track: dragging it changes that operation.
+  const focused = selectedEdgeTreatment(context);
+  if (focused) {
+    const geometry = featureTreatmentGeometry(focused);
+    if (!geometry) return [];
+    return [treatmentHandle(geometry, context, focused, focused.size)];
+  }
+
+  const target = edgeTreatmentTargetFromSelection(
+    context.project,
+    context.selection,
+    context.meshes,
+  );
+  if (!target) return [];
+  const geometry = edgeTreatmentGeometry(target);
+  if (!geometry) return [];
+  const limit = edgeTreatmentLimit(target, context.meshes);
+  if (limit === null) return [];
+  const bound = findBoundEdgeTreatment(context.project, target);
+  return [treatmentHandle(geometry, context, bound, limit)];
 }

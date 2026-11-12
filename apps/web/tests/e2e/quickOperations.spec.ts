@@ -38,6 +38,7 @@ function inspectorTitle(page: Page) {
 
 interface HandleScreen {
   id: string;
+  kind: 'arrow' | 'track';
   originX: number;
   originY: number;
   tipX: number;
@@ -56,8 +57,16 @@ async function handleScreens(page: Page): Promise<HandleScreen[]> {
   });
 }
 
-async function dragHandle(page: Page, direction: number, pixels: number, index = 0) {
-  const handles = await handleScreens(page);
+async function dragHandle(
+  page: Page,
+  direction: number,
+  pixels: number,
+  index = 0,
+  kind: 'arrow' | 'track' = 'arrow',
+) {
+  // Several handles can share one anchor, so the kind is what identifies the
+  // one a test means.
+  const handles = (await handleScreens(page)).filter((handle) => handle.kind === kind);
   const handle = handles[index];
   expect(handle).toBeTruthy();
   const dx = handle!.tipX - handle!.originX;
@@ -152,7 +161,15 @@ test.describe('quick operations', () => {
     await page.mouse.click(centerX + 60, centerY + 40);
     await expect(page.getByText('Quick operation')).toBeVisible();
 
-    expect(await handleScreens(page)).toHaveLength(1);
+    // A face offers the extrusion arrow and, at the same point, the edge
+    // treatment track (ADR 0015). Handles are withheld while the model
+    // recalculates, so wait for them instead of reading one frame.
+    await expect
+      .poll(async () => (await handleScreens(page)).length, { timeout: 15_000 })
+      .toBe(2);
+    const faceHandles = await handleScreens(page);
+    expect(faceHandles.filter((handle) => handle.kind === 'arrow')).toHaveLength(1);
+    expect(faceHandles.filter((handle) => handle.kind === 'track')).toHaveLength(1);
     await dragHandle(page, 1, 60);
     await expect(page.locator('.timeline-op')).toHaveCount(2);
     await expect(page.locator('.timeline-op.selected')).toHaveCount(1);
@@ -165,7 +182,7 @@ test.describe('quick operations', () => {
     expect(Number(firstDistance)).toBeGreaterThan(0);
 
     // The focused operation owns the handle, and its tooltip says what it edits.
-    const [focused] = await handleScreens(page);
+    const focused = (await handleScreens(page)).find((handle) => handle.kind === 'arrow');
     expect(focused?.id).toMatch(/^extrude:feat_/);
     await page.mouse.move(
       (focused!.tipX + focused!.originX) / 2,
@@ -212,13 +229,14 @@ test.describe('quick operations', () => {
 
     // The second direction gets its own handle, opposite the primary one.
     await inspector.getByRole('switch', { name: 'Second direction' }).click();
-    await expect.poll(async () => (await handleScreens(page)).length).toBe(2);
-    const [primary, second] = await handleScreens(page);
+    const arrows = async () => (await handleScreens(page)).filter((handle) => handle.kind === 'arrow');
+    await expect.poll(async () => (await arrows()).length).toBe(2);
+    const [primary, second] = await arrows();
     expect(second!.originX).toBeCloseTo(primary!.originX);
     expect(second!.originY).toBeCloseTo(primary!.originY);
     const secondBefore = second!.value;
     await dragHandle(page, 1, 50, 1);
-    const after = await handleScreens(page);
+    const after = await arrows();
     expect(after).toHaveLength(2);
     expect(after[0]!.value).toBeCloseTo(primary!.value);
     expect(after[1]!.value).toBeGreaterThan(secondBefore);
@@ -232,8 +250,11 @@ test.describe('quick operations', () => {
     // A through-all extent has no free distance, so its handle disappears.
     await inspector.getByRole('button', { name: 'Cut', exact: true }).click();
     await inspector.getByRole('button', { name: 'Through all' }).first().click();
-    await expect.poll(async () => (await handleScreens(page)).length).toBe(1);
+    await expect.poll(async () => (await arrows()).length).toBe(1);
     await inspector.getByRole('switch', { name: 'Second direction' }).click();
+    // Both directions have no free distance, so the focused operation offers
+    // no handle at all; the edge treatment track belongs to the face, which is
+    // not selected while the operation is.
     await expect.poll(async () => (await handleScreens(page)).length).toBe(0);
   });
 
@@ -321,7 +342,7 @@ test.describe('quick operations', () => {
     expect(await bodyInfos(page)).toHaveLength(1);
   });
 
-  test('selects an edge without offering an extrude handle', async ({ page }) => {
+  test('selects an edge and offers the edge treatment track instead', async ({ page }) => {
     await openApp(page);
     await addBox(page);
 
@@ -359,8 +380,11 @@ test.describe('quick operations', () => {
     });
 
     await expect(
-      page.getByText('Chamfer and fillet handles will appear here.'),
+      page.getByText('Drag the track to round or chamfer these edges.'),
     ).toBeVisible();
-    expect(await handleScreens(page)).toHaveLength(0);
+    // An edge offers the edge treatment track, never an extrude arrow.
+    const handles = await handleScreens(page);
+    expect(handles).toHaveLength(1);
+    expect(handles[0]?.kind).toBe('track');
   });
 });

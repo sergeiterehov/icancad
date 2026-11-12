@@ -1,4 +1,5 @@
 import type {
+  EdgeTreatmentResult,
   MakeBoxResult,
   ShapeStats,
   SplitSolid,
@@ -13,6 +14,7 @@ import {
   featureBodyId,
   isMeshObject,
   type BodyFaceRef,
+  type EdgeTreatmentFeature,
   type ExtrudeFeature,
   type Feature,
   type ImportMeshFeature,
@@ -33,6 +35,8 @@ import {
 import { parseMeshInWorker } from '../io/client';
 import { i18n } from '../i18n';
 import { getKernelClient } from './client';
+import { resolveEdgeRef } from './edgeLookup';
+import { edgeTreatmentLimit } from './edgeTreatment';
 import { resolveFaceRef } from './faceLookup';
 import { kernelTaskQueue } from './scheduler';
 import { splitAssignment, splitBodyId } from './splitBodies';
@@ -43,6 +47,21 @@ const importedMeshCache = new Map<string, Promise<ParsedMesh>>();
 
 /** Kernel shapes this pipeline created; shapes nobody references are disposed. */
 const liveShapes = new Set<string>();
+
+/**
+ * Sizes the kernel actually applied to each edge treatment, collected while the
+ * scene is rebuilt and published with it.
+ */
+const treatmentLimits = new Map<string, { requested: number; applied: number }>();
+
+/** Smallest size worth building; below it the treatment is invisible. */
+const MIN_TREATMENT_SIZE = 0.01;
+
+/**
+ * The mesh estimate is the exact geometric ceiling, which is also the size the
+ * kernel rejects. A hair below it keeps the preview on the first try.
+ */
+const ESTIMATE_MARGIN = 0.999;
 
 async function loadImportedMesh(assetId: string, format: MeshFormat): Promise<ParsedMesh> {
   const cached = importedMeshCache.get(assetId);
@@ -314,6 +333,7 @@ async function runRebuild(
   const startIndex = cached ? cached.index + 1 : 0;
   const state = cached ? cloneState(cached.state) : emptyState();
   const produced: RebuildCheckpoint<RebuildState>[] = [];
+  treatmentLimits.clear();
 
   useKernelStore.getState().setRebuildCursor(startIndex);
 
@@ -397,6 +417,7 @@ async function runRebuild(
   // to the operation that made it.
   useKernelStore.getState().setBodyOperations(Object.fromEntries(scene.bodySource));
   useKernelStore.getState().setFaceOperations(Object.fromEntries(scene.faceOwners));
+  useKernelStore.getState().setFeatureLimits(Object.fromEntries(treatmentLimits));
 
   for (const checkpoint of produced) rebuildCache.store(checkpoint);
   useDocumentStore.getState().syncCreatedBodies(base.createdBodies, base.blockedFeatureId);
@@ -600,6 +621,19 @@ async function evaluateFeature(
     }
     // A per-body failure does not throw, but it still blocks the timeline:
     // later operations must not be built on a failed state.
+    if (state.featureErrors[feature.id]) state.blockedFeatureId = feature.id;
+    return;
+  }
+
+  if (feature.type === 'edge-treatment') {
+    state.createdBodies.set(feature.id, []);
+    try {
+      await applyEdgeTreatment(feature, state, context);
+    } catch (error) {
+      state.featureErrors[feature.id] = kernelErrorCode(error);
+      state.blockedFeatureId = feature.id;
+      return;
+    }
     if (state.featureErrors[feature.id]) state.blockedFeatureId = feature.id;
     return;
   }
@@ -1172,6 +1206,122 @@ async function applyExtrude(
     // object also carries its own icon. If every implicit target was skipped,
     // there is simply nothing to apply the extrusion to.
     featureErrors[feature.id] = bodyErrors[0] ?? objectErrors[0] ?? 'NO_TARGET_BODY';
+  }
+}
+
+/**
+ * A chamfer or a fillet applies to the rim of picked faces and to picked edges,
+ * one body at a time. The stored refs are poses, so a body renumbered by an
+ * earlier operation still finds its edges.
+ */
+async function applyEdgeTreatment(
+  feature: EdgeTreatmentFeature,
+  state: RebuildState,
+  context: EvalContext,
+): Promise<void> {
+  const { client, epoch } = context;
+  const { bodyShapes, meshes, bodyStats, bodySource, faceOwners, featureBodyErrors } = state;
+
+  // An operation without inputs is being configured, not failing.
+  if (feature.faceRefs.length === 0 && feature.edgeRefs.length === 0) return;
+
+  const markBodyError = (bodyId: string, code: string) => {
+    const errors = featureBodyErrors[feature.id] ?? {};
+    errors[bodyId] = code;
+    featureBodyErrors[feature.id] = errors;
+  };
+
+  const groups = new Map<string, { faceIds: number[]; edgeIds: string[] }>();
+  const groupOf = (bodyId: string) => {
+    let group = groups.get(bodyId);
+    if (!group) {
+      group = { faceIds: [], edgeIds: [] };
+      groups.set(bodyId, group);
+    }
+    return group;
+  };
+  for (const ref of feature.faceRefs) {
+    const resolved = resolveFaceRef({ bodyShapes, meshes, bodyStats }, ref);
+    if (!resolved) {
+      markBodyError(ref.bodyId, bodyShapes.has(ref.bodyId) ? 'TARGET_FAILED' : 'UNKNOWN_BODY');
+      continue;
+    }
+    groupOf(resolved.bodyId).faceIds.push(resolved.faceId);
+  }
+  for (const ref of feature.edgeRefs) {
+    const resolved = resolveEdgeRef({ bodyShapes, meshes }, ref);
+    if (!resolved) {
+      markBodyError(ref.bodyId, bodyShapes.has(ref.bodyId) ? 'TARGET_FAILED' : 'UNKNOWN_BODY');
+      continue;
+    }
+    groupOf(resolved.bodyId).edgeIds.push(resolved.edgeId);
+  }
+
+  let applied = Infinity;
+  let appliedAny = false;
+  for (const [bodyId, group] of groups) {
+    const sourceShapeId = bodyShapes.get(bodyId);
+    if (!sourceShapeId) {
+      markBodyError(bodyId, 'UNKNOWN_BODY');
+      continue;
+    }
+    if (group.faceIds.length === 0 && group.edgeIds.length === 0) continue;
+    // The mesh gives a cheap ceiling, so an oversized request costs one build
+    // instead of a search. The kernel reports what it really used.
+    const mesh = meshes[bodyId];
+    const estimate = mesh ? edgeTreatmentLimit(mesh, group) : null;
+    const size =
+      estimate === null
+        ? feature.size
+        : Math.min(feature.size, Math.max(MIN_TREATMENT_SIZE, estimate * ESTIMATE_MARGIN));
+    const resultShapeId = trackShape(`${bodyId}:${feature.id}`);
+    let result: EdgeTreatmentResult;
+    try {
+      result = await client.request<EdgeTreatmentResult>({
+        type: 'edge-treatment',
+        params: {
+          shapeId: resultShapeId,
+          sourceShapeId,
+          kind: feature.kind,
+          faceIds: group.faceIds,
+          edgeIds: group.edgeIds,
+          size,
+        },
+      });
+    } catch (error) {
+      markBodyError(bodyId, kernelErrorCode(error));
+      continue;
+    }
+    if (epoch !== rebuildEpoch) return;
+
+    // Treated faces are the operation's; the ones the kernel left untouched
+    // keep the operation that made them.
+    const previousOwners = faceOwners.get(bodyId) ?? [];
+    faceOwners.set(
+      bodyId,
+      result.facesFromBase.map((from) =>
+        from >= 0 ? (previousOwners[from] ?? feature.id) : feature.id,
+      ),
+    );
+    bodyShapes.set(bodyId, resultShapeId);
+    bodySource.set(bodyId, feature.id);
+    bodyStats[bodyId] = result.stats;
+    const meshAfter = await client.request<TessellationResult>({
+      type: 'tessellate',
+      shapeId: resultShapeId,
+    });
+    if (epoch !== rebuildEpoch) return;
+    meshes[bodyId] = meshAfter;
+    applied = Math.min(applied, result.applied);
+    appliedAny = true;
+  }
+
+  if (appliedAny) {
+    treatmentLimits.set(feature.id, { requested: feature.size, applied });
+  }
+  const bodyErrors = Object.values(featureBodyErrors[feature.id] ?? {});
+  if (!appliedAny || bodyErrors.length > 0) {
+    state.featureErrors[feature.id] = bodyErrors[0] ?? 'TARGET_FAILED';
   }
 }
 

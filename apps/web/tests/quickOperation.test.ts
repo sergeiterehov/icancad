@@ -49,6 +49,8 @@ const labels = {
   create: 'Create',
   distance: 'Distance',
   secondDistance: 'Second distance',
+  edgeTreatment: 'Edge',
+  edgeTreatmentTooltip: 'Edge — right rounds, left cuts',
 };
 
 function handles(context: {
@@ -62,6 +64,7 @@ function handles(context: {
     meshes: context.meshes ?? {},
     sketchFrames: {},
     bodies: [],
+    limits: {},
     labels,
   });
 }

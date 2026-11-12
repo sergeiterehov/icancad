@@ -46,6 +46,10 @@ import {
 } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { selectedBodyFaces, selectedDetailBodyId, selectedEdges } from '../stores/selection';
+import {
+  edgeTreatmentTargetFromSelection,
+  findBoundEdgeTreatment,
+} from '../quick/edgeTreatment';
 import { findBoundExtrude, quickTargetFromSelection } from '../quick/target';
 import { isPlanarFace } from '../viewport/planarFace';
 import { useUiStore } from '../stores/uiStore';
@@ -63,6 +67,7 @@ import {
 } from './Controls';
 import { formatNumber } from './format';
 import { useContextMenuStore } from './ContextMenu';
+import { ChamferIcon, FilletIcon } from './edgeIcons';
 import { ExtrudeOpIcon, PointIcon } from './featureIcons';
 import { SectionPanel } from './SectionPanel';
 import { referenceMenuItems } from '../sketch/referenceMenu';
@@ -296,6 +301,8 @@ function featureTypeLabel(t: (key: string) => string, feature: Feature): string 
       return t('inspector.extrude');
     case 'import-mesh':
       return t('inspector.mesh');
+    case 'edge-treatment':
+      return t('features.edgeTreatment');
     default:
       return t('inspector.operation');
   }
@@ -477,12 +484,18 @@ export function Inspector() {
   const toggleExtrudeBodyFace = useDocumentStore((state) => state.toggleExtrudeBodyFace);
   const toggleExtrudeBodyTarget = useDocumentStore((state) => state.toggleExtrudeBodyTarget);
   const setExtrudeReversed = useDocumentStore((state) => state.setExtrudeReversed);
+  const setEdgeTreatmentKind = useDocumentStore((state) => state.setEdgeTreatmentKind);
+  const setEdgeTreatmentSize = useDocumentStore((state) => state.setEdgeTreatmentSize);
+  const toggleEdgeTreatmentFace = useDocumentStore((state) => state.toggleEdgeTreatmentFace);
+  const toggleEdgeTreatmentEdge = useDocumentStore((state) => state.toggleEdgeTreatmentEdge);
   const toggleBodyVisibility = useDocumentStore((state) => state.toggleBodyVisibility);
   const toggleSketchVisibility = useDocumentStore((state) => state.toggleSketchVisibility);
   const setConstructionVisible = useDocumentStore((state) => state.setConstructionVisible);
   const picking = useUiStore((state) => state.pickingExtrude);
   const pickingBodies = useUiStore((state) => state.pickingExtrudeBodies);
   const pickingSketchPlane = useUiStore((state) => state.pickingSketchPlane);
+  const pickingEdges = useUiStore((state) => state.pickingEdges);
+  const setPickingEdges = useUiStore((state) => state.setPickingEdges);
   const setPickingExtrude = useUiStore((state) => state.setPickingExtrude);
   const setPickingExtrudeBodies = useUiStore((state) => state.setPickingExtrudeBodies);
   const setPickingSketchPlane = useUiStore((state) => state.setPickingSketchPlane);
@@ -492,6 +505,7 @@ export function Inspector() {
   const featureErrors = useKernelStore((state) => state.featureErrors);
   const featureBodyErrors = useKernelStore((state) => state.featureBodyErrors);
   const featureObjectErrors = useKernelStore((state) => state.featureObjectErrors);
+  const featureLimits = useKernelStore((state) => state.featureLimits);
   const preview = useKernelStore((state) => state.preview);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
 
@@ -515,6 +529,10 @@ export function Inspector() {
   const detailEdge = selection.length === 1 ? selectedEdges(selection)[0] : undefined;
   const quickTarget = selection.length === 1 ? quickTargetFromSelection(project, selection) : null;
   const quickExtrude = quickTarget ? findBoundExtrude(project, quickTarget) : undefined;
+  const quickTreatmentTarget = edgeTreatmentTargetFromSelection(project, selection, meshes);
+  const quickTreatment = quickTreatmentTarget
+    ? findBoundEdgeTreatment(project, quickTreatmentTarget)
+    : undefined;
   const detailMesh = detailBodyId ? meshes[detailBodyId] : undefined;
   const detailPlanar = Boolean(
     detailFace && detailMesh && isPlanarFace(detailMesh, Number(detailFace.faceId)),
@@ -605,6 +623,18 @@ export function Inspector() {
   }, [pickingSketchPlane, setPickingSketchPlane]);
 
   const extrudeFeature = feature?.type === 'extrude' ? feature : undefined;
+  const treatmentFeature = feature?.type === 'edge-treatment' ? feature : undefined;
+  // The kernel reduces a size that does not fit; the inspector says so next to
+  // the field instead of turning the operation into an error.
+  const treatmentApplied = treatmentFeature
+    ? featureLimits[treatmentFeature.id]
+    : undefined;
+  const treatmentWarning =
+    treatmentFeature && treatmentApplied && treatmentApplied.applied < treatmentFeature.size
+      ? t('edgeTreatment.maxWarning', {
+          value: formatNumber(treatmentApplied.applied, locale, 2),
+        })
+      : undefined;
   const setExtrudeEnd = (featureId: string, end: ExtrudeFeature['end']) =>
     apply({ type: 'feature/replace', feature: { ...extrudeFeature!, id: featureId, end } });
   const setExtrudeDistance = (featureId: string, distance: number) =>
@@ -617,6 +647,28 @@ export function Inspector() {
       type: 'feature/replace',
       feature: { ...extrudeFeature!, id: featureId, secondDirection },
     });
+
+  const bodyNameOf = (bodyId: string) => project.metadata[bodyId]?.name;
+  const treatmentRows: PickableRow[] = treatmentFeature
+    ? [
+        ...treatmentFeature.faceRefs.map((ref, index) => ({
+          key: `face:${ref.bodyId}#${ref.faceId}`,
+          name: t('sketch.face', { index: index + 1 }),
+          meta: bodyNameOf(ref.bodyId),
+          icon: <Hexagon size={13} />,
+          error: featureBodyErrors[treatmentFeature.id]?.[ref.bodyId],
+          onRemove: () => toggleEdgeTreatmentFace(treatmentFeature.id, ref),
+        })),
+        ...treatmentFeature.edgeRefs.map((ref, index) => ({
+          key: `edge:${ref.bodyId}#${ref.edgeId}`,
+          name: t('sketch.edge', { index: index + 1 }),
+          meta: bodyNameOf(ref.bodyId),
+          icon: <Spline size={13} />,
+          error: featureBodyErrors[treatmentFeature.id]?.[ref.bodyId],
+          onRemove: () => toggleEdgeTreatmentEdge(treatmentFeature.id, ref),
+        })),
+      ]
+    : [];
 
   // What an extrude works on: the whole sketch, or the faces picked from it.
   const targetErrors = extrudeFeature
@@ -1311,6 +1363,59 @@ export function Inspector() {
               </>
             )}
 
+            {treatmentFeature && (
+              <>
+                <PanelSection title={t('edgeTreatment.kind')}>
+                  <Segmented ariaLabel={t('edgeTreatment.kind')}>
+                    <SegmentedTab
+                      label={t('edgeTreatment.fillet')}
+                      icon={<FilletIcon />}
+                      active={treatmentFeature.kind === 'fillet'}
+                      onClick={() => setEdgeTreatmentKind(treatmentFeature.id, 'fillet')}
+                    />
+                    <SegmentedTab
+                      label={t('edgeTreatment.chamfer')}
+                      icon={<ChamferIcon />}
+                      active={treatmentFeature.kind === 'chamfer'}
+                      onClick={() => setEdgeTreatmentKind(treatmentFeature.id, 'chamfer')}
+                    />
+                  </Segmented>
+                </PanelSection>
+
+                <PanelSection title={t('edgeTreatment.size')}>
+                  <div className="dimension-row">
+                    <DimensionField
+                      icon={<ArrowLeftRight size={13} />}
+                      label={t(
+                        treatmentFeature.kind === 'fillet'
+                          ? 'edgeTreatment.radius'
+                          : 'edgeTreatment.distance',
+                      )}
+                      suffix="mm"
+                      value={treatmentFeature.size}
+                      warning={treatmentWarning}
+                      onCommit={(size) => setEdgeTreatmentSize(treatmentFeature.id, size)}
+                    />
+                  </div>
+                </PanelSection>
+
+                <PickableSection
+                  title={t('edgeTreatment.targets')}
+                  count={treatmentRows.length}
+                  picking={pickingEdges === treatmentFeature.id}
+                  onTogglePicking={() =>
+                    setPickingEdges(pickingEdges === treatmentFeature.id ? null : treatmentFeature.id)
+                  }
+                  pickLabel={t('extrude.pickFaces')}
+                  finishLabel={t('extrude.finishPick')}
+                  emptyHint={t('edgeTreatment.emptyHint')}
+                  pickHint={t('edgeTreatment.pickHint')}
+                  removeLabel={t('extrude.removeObject')}
+                  rows={treatmentRows}
+                />
+              </>
+            )}
+
             {isPrimitive(feature) && (
               <>
                 <PanelSection title={t('inspector.position')}>
@@ -1365,7 +1470,23 @@ export function Inspector() {
         ) : body ? (
           detailEdge ? (
             <PanelSection title={t('quick.operation')}>
-              <p className="hint">{t('quick.edgeHint')}</p>
+              {quickTreatment ? (
+                <>
+                  <StatRow
+                    label={t('edgeTreatment.kind')}
+                    value={t(`edgeTreatment.${quickTreatment.kind}`)}
+                  />
+                  <StatRow
+                    label={t('edgeTreatment.size')}
+                    value={`${formatNumber(quickTreatment.size, locale)} mm`}
+                  />
+                  <Button onClick={() => select({ kind: 'feature', id: quickTreatment.id })}>
+                    {t('quick.editOperation')}
+                  </Button>
+                </>
+              ) : (
+                <p className="hint">{t('quick.edgeHint')}</p>
+              )}
             </PanelSection>
           ) : detailFace ? (
             <PanelSection title={t('quick.operation')}>

@@ -86,6 +86,11 @@ interface KernelState {
   bodyOperations: Record<string, string>;
   /** Operation that created each face of a body, in shape order. */
   faceOperations: Record<string, string[]>;
+  /**
+   * Edge treatment sizes the kernel could apply, keyed by operation. A request
+   * above the limit is reduced instead of failing, and the inspector says so.
+   */
+  featureLimits: Record<string, { requested: number; applied: number }>;
   tasks: KernelTask[];
   /** Caret position of the operation currently being rebuilt. */
   rebuildCursor: number | null;
@@ -107,6 +112,7 @@ interface KernelState {
   ) => void;
   setBodyOperations: (bodyOperations: Record<string, string>) => void;
   setFaceOperations: (faceOperations: Record<string, string[]>) => void;
+  setFeatureLimits: (featureLimits: Record<string, { requested: number; applied: number }>) => void;
   clearScene: () => void;
   clearFeatureError: (featureId: string) => void;
 }
@@ -130,6 +136,7 @@ export const useKernelStore = create<KernelState>((set) => ({
   preview: null,
   bodyOperations: {},
   faceOperations: {},
+  featureLimits: {},
   tasks: [],
   rebuildCursor: null,
 
@@ -193,6 +200,8 @@ export const useKernelStore = create<KernelState>((set) => ({
 
   setFaceOperations: (faceOperations) => set({ faceOperations }),
 
+  setFeatureLimits: (featureLimits) => set({ featureLimits }),
+
   clearScene: () =>
     set((state) => ({
       meshes: {},
@@ -207,6 +216,7 @@ export const useKernelStore = create<KernelState>((set) => ({
       preview: null,
       bodyOperations: {},
       faceOperations: {},
+      featureLimits: {},
       rebuildCursor: null,
     })),
   clearFeatureError: (featureId) =>

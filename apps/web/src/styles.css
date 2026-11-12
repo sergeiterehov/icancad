@@ -1760,6 +1760,27 @@ button.selection-item[data-active='true'][data-error='true'] {
   flex: 0 0 auto;
 }
 
+/* A size the kernel had to reduce: the mark says the value is not what is used. */
+.dimension-warning {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  color: #f0b429;
+  flex: 0 0 auto;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .kernel-popover {
   position: fixed;
   z-index: 1200;

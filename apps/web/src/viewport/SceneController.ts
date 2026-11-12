@@ -47,6 +47,12 @@ const DOUBLE_CLICK_SLOP_PX = 6;
 /** Length of the idle arrow, before an operation gives the handle a value. */
 const HANDLE_IDLE_PX = 48;
 const HANDLE_HIT_PX = 9;
+/** Radial track: arc radius, reach from an edge, and its half sweep. */
+const TRACK_RADIUS_PX = 22;
+const TRACK_LEADER_PX = 34;
+const TRACK_SWEEP = Math.PI / 3;
+/** Tie-break between a track and an arrow that start at the same point. */
+const TRACK_PRIORITY_PX = 6;
 /** Overlays are lifted off the surface they annotate to avoid depth fighting. */
 const FACE_OVERLAY_LIFT = 0.01;
 const SKETCH_FACE_LIFT = 0.02;
@@ -106,6 +112,8 @@ export interface FaceHighlightState {
   bodyPicking: boolean;
   /** Ignore sketch face pickers and only accept solid-body faces. */
   bodyFacesOnly?: boolean;
+  /** Pick body edges; a hit within the click tolerance wins over the face. */
+  edgePicking?: boolean;
 }
 
 interface CameraPose {
@@ -243,12 +251,14 @@ export class SceneController {
     picking: boolean;
     bodyPicking: boolean;
     bodyFacesOnly: boolean;
+    edgePicking: boolean;
   } = {
     selected: new Set(),
     invalid: new Set(),
     picking: false,
     bodyPicking: false,
     bodyFacesOnly: false,
+    edgePicking: false,
   };
   private bodyStyles: {
     selected: Set<string>;
@@ -306,11 +316,13 @@ export class SceneController {
   private handleData: SceneHandle[] = [];
   private handleEntries: Array<{
     handle: SceneHandle;
-    line: Line2;
-    material: LineMaterial;
-    cone: THREE.Mesh;
-    coneMaterial: THREE.MeshBasicMaterial;
-    anchor: THREE.Mesh;
+    /** Everything the handle drew; removed and disposed together. */
+    objects: THREE.Object3D[];
+    /** Materials that follow the hover colour. */
+    colors: Array<{ color: THREE.Color }>;
+    line?: Line2;
+    material?: LineMaterial;
+    leaderMaterial?: LineMaterial;
   }> = [];
   private hoveredHandleId: string | null = null;
   private lastHandleHover: { x: number; y: number } | null = null;
@@ -499,6 +511,7 @@ export class SceneController {
       if (!geometry) {
         return {
           id: handle.id,
+          kind: handle.kind === 'track' ? 'track' : 'arrow',
           originX: 0,
           originY: 0,
           tipX: 0,
@@ -509,6 +522,7 @@ export class SceneController {
       }
       return {
         id: handle.id,
+        kind: handle.kind === 'track' ? 'track' : 'arrow',
         originX: geometry.origin.x + rect.left,
         originY: geometry.origin.y + rect.top,
         tipX: geometry.tip.x + rect.left,
@@ -519,11 +533,78 @@ export class SceneController {
     });
   }
 
+  /** Handles are blue; selection stays purple. */
+  private handleColor(): number {
+    return this.theme === 'dark' ? 0x3b82f6 : 0x2563eb;
+  }
+
+  /**
+   * A track drawn in the plane the camera sees: an arc around the anchor that
+   * the knob slides along. Right is always the positive side, whatever way the
+   * surface faces, so the same gesture means the same thing everywhere.
+   */
+  private trackGeometry(handle: SceneHandle): {
+    anchor: THREE.Vector3;
+    knob: THREE.Vector3;
+    points: THREE.Vector3[];
+    leaderStart?: THREE.Vector3;
+    leaderEnd?: THREE.Vector3;
+  } | null {
+    const origin = new THREE.Vector3(...handle.origin);
+    const direction = new THREE.Vector3(...handle.direction);
+    if (direction.lengthSq() < 1e-12) return null;
+    direction.normalize();
+    const forward = new THREE.Vector3(0, 0, -1)
+      .applyQuaternion(this.camera.quaternion)
+      .normalize();
+    let planeUp = direction.clone().addScaledVector(forward, -direction.dot(forward));
+    if (planeUp.lengthSq() < 1e-8) {
+      planeUp = new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion);
+    }
+    planeUp.normalize();
+    const planeRight = new THREE.Vector3().crossVectors(forward, planeUp).normalize();
+
+    const worldPerPixel = 1 / this.pixelsPerWorldUnit();
+    const radius = TRACK_RADIUS_PX * worldPerPixel;
+    const reach = handle.leader ? TRACK_LEADER_PX * worldPerPixel : 0;
+    const arcAnchor = origin.clone().addScaledVector(planeUp, reach);
+    const center = arcAnchor.clone().addScaledVector(planeUp, -radius);
+    const pointAt = (angle: number) =>
+      center
+        .clone()
+        .addScaledVector(planeUp, radius * Math.cos(angle))
+        .addScaledVector(planeRight, radius * Math.sin(angle));
+
+    const points: THREE.Vector3[] = [];
+    const segments = 24;
+    for (let index = 0; index <= segments; index += 1) {
+      points.push(pointAt(-TRACK_SWEEP + (2 * TRACK_SWEEP * index) / segments));
+    }
+    const limit = handle.limit && handle.limit > 0 ? handle.limit : 1;
+    const value = Math.max(-1, Math.min(1, handle.value / limit));
+    return {
+      anchor: origin,
+      knob: pointAt(value * TRACK_SWEEP),
+      points,
+      ...(reach > 0 ? { leaderStart: origin, leaderEnd: arcAnchor } : {}),
+    };
+  }
+
   /** Projected arrow of a handle, using the same length the user sees. */
   private handleScreenGeometry(
     handle: SceneHandle,
   ): { origin: { x: number; y: number }; tip: { x: number; y: number } } | null {
     const origin = new THREE.Vector3(...handle.origin);
+    if (handle.kind === 'track') {
+      const track = this.trackGeometry(handle);
+      if (!track) return null;
+      const projectedOrigin = this.projectWorld(track.anchor);
+      const projectedKnob = this.projectWorld(track.knob);
+      return {
+        origin: { x: projectedOrigin.x, y: projectedOrigin.y },
+        tip: { x: projectedKnob.x, y: projectedKnob.y },
+      };
+    }
     const direction = new THREE.Vector3(...handle.direction);
     if (direction.lengthSq() < 1e-12) return null;
     direction.normalize();
@@ -546,92 +627,200 @@ export class SceneController {
   private updateHandles(): void {
     this.clearHandleGroup();
     if (this.handleData.length === 0) return;
-    const worldPerPixel = 1 / this.pixelsPerWorldUnit();
     for (const handle of this.handleData) {
       if (!this.handleScreenGeometry(handle)) continue;
-      const origin = new THREE.Vector3(...handle.origin);
-      const direction = new THREE.Vector3(...handle.direction).normalize();
-      const arrowDirection = handle.value < 0 ? direction.clone().negate() : direction;
-      const length =
-        handle.value === 0
-          ? HANDLE_IDLE_PX * worldPerPixel
-          : Math.max(Math.abs(handle.value), 18 * worldPerPixel);
-      const tip = origin.clone().addScaledVector(arrowDirection, length);
-      const coneHeight = Math.min(12 * worldPerPixel, length * 0.7);
-      const base = tip.clone().addScaledVector(arrowDirection, -coneHeight);
-      const hovered = this.hoveredHandleId === handle.id;
-      const color = hovered ? 0xffffff : this.edgeHighlightColor();
+      if (handle.kind === 'track') this.addTrackHandle(handle);
+      else this.addArrowHandle(handle);
+    }
+  }
 
-      const geometry = new LineGeometry();
-      geometry.setPositions([origin.x, origin.y, origin.z, base.x, base.y, base.z]);
-      const material = new LineMaterial({
+  private addArrowHandle(handle: SceneHandle): void {
+    const worldPerPixel = 1 / this.pixelsPerWorldUnit();
+    const origin = new THREE.Vector3(...handle.origin);
+    const direction = new THREE.Vector3(...handle.direction).normalize();
+    const arrowDirection = handle.value < 0 ? direction.clone().negate() : direction;
+    const length =
+      handle.value === 0
+        ? HANDLE_IDLE_PX * worldPerPixel
+        : Math.max(Math.abs(handle.value), 18 * worldPerPixel);
+    const tip = origin.clone().addScaledVector(arrowDirection, length);
+    const coneHeight = Math.min(12 * worldPerPixel, length * 0.7);
+    const base = tip.clone().addScaledVector(arrowDirection, -coneHeight);
+    const hovered = this.hoveredHandleId === handle.id;
+    const color = hovered ? 0xffffff : this.handleColor();
+
+    const geometry = new LineGeometry();
+    geometry.setPositions([origin.x, origin.y, origin.z, base.x, base.y, base.z]);
+    const material = new LineMaterial({
+      color,
+      linewidth: hovered ? 3.2 : 2.3,
+      transparent: true,
+      opacity: 1,
+      depthTest: false,
+      depthWrite: false,
+      resolution: new THREE.Vector2(this.width, this.height),
+    });
+
+    const line = new Line2(geometry, material);
+    line.renderOrder = RenderOrder.handle;
+    line.userData.handleId = handle.id;
+
+    const coneMaterial = new THREE.MeshBasicMaterial({
+      color,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+    });
+    const cone = new THREE.Mesh(
+      new THREE.ConeGeometry(
+        Math.max(0.001, 4.5 * worldPerPixel),
+        Math.max(0.001, coneHeight),
+        16,
+      ),
+      coneMaterial,
+    );
+    cone.position.copy(tip).addScaledVector(arrowDirection, -coneHeight / 2);
+    cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), arrowDirection);
+    cone.renderOrder = RenderOrder.handle;
+    cone.userData.handleId = handle.id;
+
+    const anchorMaterial = new THREE.MeshBasicMaterial({
+      color,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+    });
+    const anchor = new THREE.Mesh(
+      new THREE.SphereGeometry(Math.max(0.001, 3.4 * worldPerPixel), 14, 10),
+      anchorMaterial,
+    );
+    anchor.position.copy(origin);
+    anchor.renderOrder = RenderOrder.handle;
+    anchor.userData.handleId = handle.id;
+
+    this.handleGroup.add(line, cone, anchor);
+    this.handleEntries.push({
+      handle,
+      objects: [line, cone, anchor],
+      colors: [material, coneMaterial, anchorMaterial],
+      line,
+      material,
+    });
+  }
+
+  /**
+   * A radial track: a short arc around the anchor with a knob on it. Dragging
+   * the knob to the right and to the left is what tells the two sides of the
+   * operation apart, so the track is the affordance for both of them.
+   */
+  private addTrackHandle(handle: SceneHandle): void {
+    const track = this.trackGeometry(handle);
+    if (!track) return;
+    const worldPerPixel = 1 / this.pixelsPerWorldUnit();
+    const hovered = this.hoveredHandleId === handle.id;
+    const color = hovered ? 0xffffff : this.handleColor();
+
+    const arcGeometry = new LineGeometry();
+    arcGeometry.setPositions(
+      track.points.flatMap((point) => [point.x, point.y, point.z]),
+    );
+    const arcMaterial = new LineMaterial({
+      color,
+      linewidth: hovered ? 2.6 : 1.8,
+      transparent: true,
+      opacity: hovered ? 1 : 0.9,
+      depthTest: false,
+      depthWrite: false,
+      resolution: new THREE.Vector2(this.width, this.height),
+    });
+    const arc = new Line2(arcGeometry, arcMaterial);
+    arc.renderOrder = RenderOrder.handle;
+    arc.userData.handleId = handle.id;
+
+    const knobMaterial = new THREE.MeshBasicMaterial({
+      color,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+    });
+    const knob = new THREE.Mesh(
+      new THREE.SphereGeometry(Math.max(0.001, 3.6 * worldPerPixel), 14, 10),
+      knobMaterial,
+    );
+    knob.position.copy(track.knob);
+    knob.renderOrder = RenderOrder.handle;
+    knob.userData.handleId = handle.id;
+
+    const anchorMaterial = new THREE.MeshBasicMaterial({
+      color,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+    });
+    const anchor = new THREE.Mesh(
+      new THREE.SphereGeometry(Math.max(0.001, 2.6 * worldPerPixel), 12, 8),
+      anchorMaterial,
+    );
+    anchor.position.copy(track.anchor);
+    anchor.renderOrder = RenderOrder.handle;
+    anchor.userData.handleId = handle.id;
+
+    const objects: THREE.Object3D[] = [arc, knob, anchor];
+    const colors: Array<{ color: THREE.Color }> = [arcMaterial, knobMaterial, anchorMaterial];
+    let leaderMaterial: LineMaterial | undefined;
+    if (track.leaderStart && track.leaderEnd) {
+      const leaderGeometry = new LineGeometry();
+      leaderGeometry.setPositions([
+        track.leaderStart.x,
+        track.leaderStart.y,
+        track.leaderStart.z,
+        track.leaderEnd.x,
+        track.leaderEnd.y,
+        track.leaderEnd.z,
+      ]);
+      leaderMaterial = new LineMaterial({
         color,
-        linewidth: hovered ? 3.2 : 2.3,
+        linewidth: hovered ? 2.2 : 1.5,
         transparent: true,
-        opacity: 1,
+        opacity: 0.85,
         depthTest: false,
         depthWrite: false,
+        dashed: true,
+        dashSize: 5 * worldPerPixel,
+        gapSize: 3.5 * worldPerPixel,
         resolution: new THREE.Vector2(this.width, this.height),
       });
-
-      const line = new Line2(geometry, material);
-      line.renderOrder = RenderOrder.handle;
-      line.userData.handleId = handle.id;
-
-      const coneMaterial = new THREE.MeshBasicMaterial({
-        color,
-        depthTest: false,
-        depthWrite: false,
-        transparent: true,
-      });
-      const cone = new THREE.Mesh(
-        new THREE.ConeGeometry(
-          Math.max(0.001, 4.5 * worldPerPixel),
-          Math.max(0.001, coneHeight),
-          16,
-        ),
-        coneMaterial,
-      );
-      cone.position.copy(tip).addScaledVector(arrowDirection, -coneHeight / 2);
-      cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), arrowDirection);
-      cone.renderOrder = RenderOrder.handle;
-      cone.userData.handleId = handle.id;
-
-      const anchorMaterial = new THREE.MeshBasicMaterial({
-        color,
-        depthTest: false,
-        depthWrite: false,
-        transparent: true,
-      });
-      const anchor = new THREE.Mesh(
-        new THREE.SphereGeometry(Math.max(0.001, 3.4 * worldPerPixel), 14, 10),
-        anchorMaterial,
-      );
-      anchor.position.copy(origin);
-      anchor.renderOrder = RenderOrder.handle;
-      anchor.userData.handleId = handle.id;
-
-      this.handleGroup.add(line, cone, anchor);
-      this.handleEntries.push({
-        handle,
-        line,
-        material,
-        cone,
-        coneMaterial,
-        anchor,
-      });
+      const leader = new Line2(leaderGeometry, leaderMaterial);
+      leader.computeLineDistances();
+      leader.renderOrder = RenderOrder.handle;
+      leader.userData.handleId = handle.id;
+      objects.push(leader);
+      colors.push(leaderMaterial);
     }
+
+    this.handleGroup.add(...objects);
+    this.handleEntries.push({
+      handle,
+      objects,
+      colors,
+      line: arc,
+      material: arcMaterial,
+      leaderMaterial,
+    });
   }
 
   private clearHandleGroup(): void {
     for (const entry of this.handleEntries) {
-      this.handleGroup.remove(entry.line, entry.cone, entry.anchor);
-      entry.line.geometry.dispose();
-      entry.material.dispose();
-      entry.cone.geometry.dispose();
-      entry.coneMaterial.dispose();
-      entry.anchor.geometry.dispose();
-      (entry.anchor.material as THREE.Material).dispose();
+      this.handleGroup.remove(...entry.objects);
+      for (const object of entry.objects) {
+        if (object instanceof Line2) {
+          object.geometry.dispose();
+          (object.material as THREE.Material).dispose();
+        } else if (object instanceof THREE.Mesh) {
+          object.geometry.dispose();
+          (object.material as THREE.Material).dispose();
+        }
+      }
     }
     this.handleEntries = [];
   }
@@ -639,11 +828,10 @@ export class SceneController {
   private applyHandleStyles(): void {
     for (const entry of this.handleEntries) {
       const hovered = this.hoveredHandleId === entry.handle.id;
-      const color = hovered ? 0xffffff : this.edgeHighlightColor();
-      entry.material.color.setHex(color);
-      entry.material.linewidth = hovered ? 3.2 : 2.3;
-      entry.coneMaterial.color.setHex(color);
-      (entry.anchor.material as THREE.MeshBasicMaterial).color.setHex(color);
+      const color = hovered ? 0xffffff : this.handleColor();
+      for (const target of entry.colors) target.color.setHex(color);
+      if (entry.material) entry.material.linewidth = hovered ? 2.6 : 1.8;
+      if (entry.leaderMaterial) entry.leaderMaterial.linewidth = hovered ? 2.2 : 1.5;
     }
   }
 
@@ -674,6 +862,55 @@ export class SceneController {
       if (!handle.enabled) continue;
       const projected = this.handleScreenGeometry(handle);
       if (!projected) continue;
+      if (handle.kind === 'track') {
+        const track = this.trackGeometry(handle);
+        if (!track) continue;
+        // The track is horizontal on screen, so the drag is the plain pointer
+        // displacement to the right. Its scale still follows the camera.
+        let pixelsPerMm = Math.hypot(
+          projected.tip.x - projected.origin.x,
+          projected.tip.y - projected.origin.y,
+        );
+        if (pixelsPerMm < 0.5) pixelsPerMm = this.pixelsPerWorldUnit();
+        const knobDistance = Math.hypot(local.x - projected.tip.x, local.y - projected.tip.y);
+        let distance = knobDistance;
+        const screenPoints = track.points.map((point) => this.projectWorld(point));
+        for (let index = 0; index + 1 < screenPoints.length; index += 1) {
+          distance = Math.min(
+            distance,
+            pointSegmentDistance(
+              [local.x, local.y],
+              [screenPoints[index]!.x, screenPoints[index]!.y],
+              [screenPoints[index + 1]!.x, screenPoints[index + 1]!.y],
+            ),
+          );
+        }
+        // A leader connects the arc to the edge it belongs to, so the whole
+        // way from the edge to the track is grabbable.
+        if (track.leaderStart && track.leaderEnd) {
+          const from = this.projectWorld(track.leaderStart);
+          const to = this.projectWorld(track.leaderEnd);
+          distance = Math.min(
+            distance,
+            pointSegmentDistance([local.x, local.y], [from.x, from.y], [to.x, to.y]),
+          );
+        }
+        if (distance > HANDLE_HIT_PX) continue;
+        // A track and the arrow of the same face start at the same point. The
+        // arc is the smaller target, so it wins unless the pointer is clearly
+        // on the arrow further up.
+        const score = distance - TRACK_PRIORITY_PX;
+        if (best && score >= best.distance) continue;
+        best = {
+          handle,
+          axisX: 1,
+          axisY: 0,
+          pixelsPerMm,
+          distance: score,
+          tipDistance: knobDistance,
+        };
+        continue;
+      }
       const direction = new THREE.Vector3(...handle.direction).normalize();
       const unit = this.projectWorld(
         new THREE.Vector3(...handle.origin).add(direction),
@@ -918,6 +1155,7 @@ export class SceneController {
       picking: state.picking,
       bodyPicking: state.bodyPicking,
       bodyFacesOnly: Boolean(state.bodyFacesOnly),
+      edgePicking: Boolean(state.edgePicking),
     };
     if (!state.picking) this.hoveredFaceKey = null;
     if (!state.bodyPicking && this.hoveredBodyId !== null) {
@@ -2494,6 +2732,13 @@ export class SceneController {
     }
     if (bodyHit) {
       const bodyId = bodyHit.object.userData.bodyId as string | undefined;
+      if (bodyId && this.faceHighlights.edgePicking) {
+        const entry = this.bodies.get(bodyId);
+        if (entry && entry.kind === 'solid') {
+          const edgeId = this.pickEdgeAt(entry, clientX, clientY);
+          if (edgeId) return { kind: 'body-edge', bodyId, edgeId };
+        }
+      }
       if (bodyId && faces) {
         const entry = this.bodies.get(bodyId);
         const faceId = entry?.hitRef.faceIds[bodyHit.faceIndex ?? -1];

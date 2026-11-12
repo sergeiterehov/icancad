@@ -38,7 +38,8 @@
     "constraints": "Constraints",
     "construction": "Construction geometry",
     "magnet": "Magnet",
-    "extrudeNeedsSketch": "Select a sketch to extrude"
+    "extrudeNeedsSketch": "Select a sketch to extrude",
+    "edgeTreatment": "Edge treatment"
   },
   "tree": {
     "bodies": "Bodies",
@@ -174,13 +175,16 @@
     "FACE_NOT_PLANAR": "Only planar faces can be extruded. Pick a flat face.",
     "DISJOINT_UNION": "Add cannot create a disconnected body: the extrusion does not touch the target body.",
     "MISSING_ASSET": "Imported mesh data is missing",
-    "IMPORT_FAILED": "Failed to import the mesh"
+    "IMPORT_FAILED": "Failed to import the mesh",
+    "NO_EDGES": "Pick edges to treat",
+    "EDGE_TREATMENT_FAILED": "These edges cannot be rounded or chamfered"
   },
   "features": {
     "box": "Box",
     "sketch": "Sketch",
     "extrude": "Extrude",
-    "importMesh": "Imported mesh"
+    "importMesh": "Imported mesh",
+    "edgeTreatment": "Edge treatment"
   },
   "common": {
     "close": "Close",
@@ -374,10 +378,24 @@
     "body": "body",
     "sketch": "sketch",
     "edge": "Edge",
-    "edgeHint": "Chamfer and fillet handles will appear here.",
+    "edgeHint": "Drag the track to round or chamfer these edges.",
     "curvedFace": "A curved face cannot be extruded yet.",
     "createTooltip": "Extrude — drag to create the operation",
     "distanceTooltip": "Extrude distance — drag to change",
     "secondDistanceTooltip": "Second direction distance — drag to change"
+  },
+  "edgeTreatment": {
+    "tooltip": "Edge treatment — drag right to round, left to chamfer",
+    "fillet": "Round",
+    "chamfer": "Chamfer",
+    "kind": "Type",
+    "radius": "Radius",
+    "distance": "Distance",
+    "size": "Size",
+    "targets": "Edges and faces",
+    "pickHint": "Click edges or faces of the body.",
+    "emptyHint": "Pick edges or faces to treat.",
+    "noEdges": "These edges cannot be treated. Pick different edges.",
+    "maxWarning": "The maximum {{value}} mm will be used"
   }
 }
