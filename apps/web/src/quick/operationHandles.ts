@@ -240,11 +240,12 @@ function selectedEdgeTreatment(
 /** Geometry of an operation from its own stored refs, independent of renaming. */
 function featureTreatmentGeometry(
   feature: EdgeTreatmentFeature,
+  context: OperationHandleContext,
 ): EdgeTreatmentGeometry | null {
-  return edgeTreatmentGeometry({
-    faceRefs: feature.faceRefs,
-    edgeRefs: feature.edgeRefs,
-  });
+  return edgeTreatmentGeometry(
+    { faceRefs: feature.faceRefs, edgeRefs: feature.edgeRefs },
+    context.meshes,
+  );
 }
 
 function treatmentHandle(
@@ -301,7 +302,7 @@ function edgeTreatmentHandles(context: OperationHandleContext): OperationHandle[
   // A focused operation owns its track: dragging it changes that operation.
   const focused = selectedEdgeTreatment(context);
   if (focused) {
-    const geometry = featureTreatmentGeometry(focused);
+    const geometry = featureTreatmentGeometry(focused, context);
     if (!geometry) return [];
     return [treatmentHandle(geometry, context, focused, focused.size)];
   }
@@ -312,7 +313,7 @@ function edgeTreatmentHandles(context: OperationHandleContext): OperationHandle[
     context.meshes,
   );
   if (!target) return [];
-  const geometry = edgeTreatmentGeometry(target);
+  const geometry = edgeTreatmentGeometry(target, context.meshes);
   if (!geometry) return [];
   const limit = edgeTreatmentLimit(target, context.meshes);
   if (limit === null) return [];

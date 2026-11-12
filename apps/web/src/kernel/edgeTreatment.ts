@@ -50,8 +50,14 @@ export function edgePose(points: readonly number[]): EdgePose {
   return { start, mid, end };
 }
 
+/**
+ * Direction of an edge. A closed edge, such as the rim of a cylinder, starts and
+ * ends at the same point, so the chord to its middle vertex is used instead.
+ */
 export function edgeDirection(points: readonly number[]): Vec3 | null {
-  return normalize(subtract(pointAt(points, lastIndex(points)), pointAt(points, 0)));
+  const start = pointAt(points, 0);
+  const end = pointAt(points, lastIndex(points));
+  return normalize(subtract(end, start)) ?? normalize(subtract(edgePose(points).mid, start));
 }
 
 /**

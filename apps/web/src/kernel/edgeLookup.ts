@@ -15,28 +15,50 @@ export interface EdgeLookupContext {
 const DIRECTION_DOT = 0.999;
 const POSITION_TOLERANCE = 1e-3;
 
+function directionOf(start: Vec3, mid: Vec3, end: Vec3): Vec3 | null {
+  const length = Math.hypot(end[0] - start[0], end[1] - start[1], end[2] - start[2]);
+  if (length > 1e-9) {
+    return [
+      (end[0] - start[0]) / length,
+      (end[1] - start[1]) / length,
+      (end[2] - start[2]) / length,
+    ];
+  }
+  // A closed edge ends where it starts; the chord to its middle still tells the
+  // direction apart from any other closed edge.
+  const chord = Math.hypot(mid[0] - start[0], mid[1] - start[1], mid[2] - start[2]);
+  if (chord < 1e-9) return null;
+  return [
+    (mid[0] - start[0]) / chord,
+    (mid[1] - start[1]) / chord,
+    (mid[2] - start[2]) / chord,
+  ];
+}
+
+function distance(a: Vec3, b: Vec3): number {
+  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+}
+
 /** How far an edge is from the stored pose, or null when it does not match. */
 export function edgeMatchDistance(
   edge: { points: number[] },
-  ref: Pick<BodyEdgeRef, 'mid' | 'bisector'> & { start: Vec3; end: Vec3 },
+  ref: Pick<BodyEdgeRef, 'start' | 'mid' | 'end'>,
 ): number | null {
   const direction = edgeDirection(edge.points);
-  if (!direction) return null;
-  const refVector: Vec3 = [
-    ref.end[0] - ref.start[0],
-    ref.end[1] - ref.start[1],
-    ref.end[2] - ref.start[2],
-  ];
-  const length = Math.hypot(refVector[0], refVector[1], refVector[2]);
-  if (length < 1e-9) return null;
+  const refDirection = directionOf(ref.start, ref.mid, ref.end);
+  if (!direction || !refDirection) return null;
   const alignment =
-    direction[0] * (refVector[0] / length) +
-    direction[1] * (refVector[1] / length) +
-    direction[2] * (refVector[2] / length);
+    direction[0] * refDirection[0] +
+    direction[1] * refDirection[1] +
+    direction[2] * refDirection[2];
   if (Math.abs(alignment) < DIRECTION_DOT) return null;
-  const mid = edgePose(edge.points).mid;
-  const distance = Math.hypot(mid[0] - ref.mid[0], mid[1] - ref.mid[1], mid[2] - ref.mid[2]);
-  return distance <= POSITION_TOLERANCE ? distance : null;
+  // Both the start and the middle have to agree, which keeps two edges that
+  // share a line but not a span apart.
+  const pose = edgePose(edge.points);
+  if (distance(pose.mid, ref.mid) > POSITION_TOLERANCE) return null;
+  const startDistance = distance(pose.start, ref.start);
+  if (startDistance > POSITION_TOLERANCE) return null;
+  return startDistance;
 }
 
 /**
@@ -61,9 +83,11 @@ export function resolveEdgeRef(
     const mesh = context.meshes[bodyId];
     if (!mesh) continue;
     for (const edge of mesh.edges ?? []) {
-      const distance = edgeMatchDistance(edge, ref);
-      if (distance === null) continue;
-      if (!best || distance < best.distance) best = { bodyId, edgeId: edge.id, distance };
+      const edgeDistance = edgeMatchDistance(edge, ref);
+      if (edgeDistance === null) continue;
+      if (!best || edgeDistance < best.distance) {
+        best = { bodyId, edgeId: edge.id, distance: edgeDistance };
+      }
     }
   }
   return best ? { bodyId: best.bodyId, edgeId: best.edgeId } : null;

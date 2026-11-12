@@ -48,12 +48,6 @@ const importedMeshCache = new Map<string, Promise<ParsedMesh>>();
 /** Kernel shapes this pipeline created; shapes nobody references are disposed. */
 const liveShapes = new Set<string>();
 
-/**
- * Sizes the kernel actually applied to each edge treatment, collected while the
- * scene is rebuilt and published with it.
- */
-const treatmentLimits = new Map<string, { requested: number; applied: number }>();
-
 /** Smallest size worth building; below it the treatment is invisible. */
 const MIN_TREATMENT_SIZE = 0.01;
 
@@ -166,6 +160,8 @@ interface RebuildState {
   featureErrors: Record<string, string>;
   featureBodyErrors: Record<string, Record<string, string>>;
   featureObjectErrors: Record<string, Record<string, string>>;
+  /** Size the kernel applied to each edge treatment, keyed by operation. */
+  featureLimits: Record<string, { requested: number; applied: number }>;
   /** The first failed operation: nothing after it is built. */
   blockedFeatureId: string | null;
 }
@@ -220,6 +216,7 @@ function emptyState(): RebuildState {
     featureErrors: {},
     featureBodyErrors: {},
     featureObjectErrors: {},
+    featureLimits: {},
     blockedFeatureId: null,
   };
 }
@@ -251,6 +248,7 @@ function cloneState(state: RebuildState): RebuildState {
     featureErrors: { ...state.featureErrors },
     featureBodyErrors: cloneErrors(state.featureBodyErrors),
     featureObjectErrors: cloneErrors(state.featureObjectErrors),
+    featureLimits: { ...state.featureLimits },
     blockedFeatureId: state.blockedFeatureId,
   };
 }
@@ -333,7 +331,6 @@ async function runRebuild(
   const startIndex = cached ? cached.index + 1 : 0;
   const state = cached ? cloneState(cached.state) : emptyState();
   const produced: RebuildCheckpoint<RebuildState>[] = [];
-  treatmentLimits.clear();
 
   useKernelStore.getState().setRebuildCursor(startIndex);
 
@@ -417,7 +414,7 @@ async function runRebuild(
   // to the operation that made it.
   useKernelStore.getState().setBodyOperations(Object.fromEntries(scene.bodySource));
   useKernelStore.getState().setFaceOperations(Object.fromEntries(scene.faceOwners));
-  useKernelStore.getState().setFeatureLimits(Object.fromEntries(treatmentLimits));
+  useKernelStore.getState().setFeatureLimits(scene.featureLimits);
 
   for (const checkpoint of produced) rebuildCache.store(checkpoint);
   useDocumentStore.getState().syncCreatedBodies(base.createdBodies, base.blockedFeatureId);
@@ -469,7 +466,7 @@ function buildPreview(
     };
   };
 
-  // The body a boolean produces is real material, so it stays opaque. What the
+  // The body a boolean produce is real material, so it stays opaque. What the
   // operation changes is the ghost drawn on top of it: removed material for a
   // cut, added material for a join.
   const keepsBodySolid =
@@ -488,6 +485,9 @@ function buildPreview(
     // A boolean against a body the tool misses still produces a new shape;
     // only a changed tessellation counts as a modification.
     if (meshSignature(before) === meshSignature(now)) continue;
+    // An edge treatment does not restyle its body: the rounded or cut edges are
+    // the feedback, and marking the body as changed would only tint the model.
+    if (feature.type === 'edge-treatment') continue;
     bodies.push({
       id: bodyId,
       kind: 'modified',
@@ -1317,7 +1317,7 @@ async function applyEdgeTreatment(
   }
 
   if (appliedAny) {
-    treatmentLimits.set(feature.id, { requested: feature.size, applied });
+    state.featureLimits[feature.id] = { requested: feature.size, applied };
   }
   const bodyErrors = Object.values(featureBodyErrors[feature.id] ?? {});
   if (!appliedAny || bodyErrors.length > 0) {

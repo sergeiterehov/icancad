@@ -89,6 +89,83 @@ async function selectEdge(page: Page, index = 0) {
   }, index);
 }
 
+/** A round boss: a circle sketch extruded upwards. */
+async function addBoss(page: Page) {
+  await page.evaluate(async () => {
+    const url = (s: string) =>
+      performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .find((name) => name.includes(s));
+    const doc = await import(url('/src/stores/documentStore.ts')!);
+    const store = doc.useDocumentStore.getState();
+    const sketchId = store.addSketch('Sketch', 'XY');
+    const sketch = doc.useDocumentStore
+      .getState()
+      .project.features.find((feature: { id: string }) => feature.id === sketchId);
+    doc.useDocumentStore.getState().apply({
+      type: 'feature/replace',
+      feature: {
+        ...sketch,
+        entities: [{ id: 'circle-1', type: 'circle', construction: false, cx: 0, cy: 0, r: 10 }],
+      },
+    });
+    doc.useDocumentStore.getState().addExtrude('Extrude', { sketchId, regions: [] });
+  });
+  // The extrude opens for editing; dismissing it commits the body.
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(async () => {
+          const url = (s: string) =>
+            performance
+              .getEntriesByType('resource')
+              .map((entry) => entry.name)
+              .find((name) => name.includes(s));
+          const kernel = await import(url('/src/stores/kernelStore.ts')!);
+          const preview = kernel.useKernelStore.getState().preview;
+          return preview ? preview.bodies.length : 0;
+        }),
+      { timeout: 20_000 },
+    )
+    .toBe(1);
+  await commitOperation(page);
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(async () => {
+          const url = (s: string) =>
+            performance
+              .getEntriesByType('resource')
+              .map((entry) => entry.name)
+              .find((name) => name.includes(s));
+          const doc = await import(url('/src/stores/documentStore.ts')!);
+          return doc.useDocumentStore.getState().project.bodies.length;
+        }),
+      { timeout: 20_000 },
+    )
+    .toBe(1);
+}
+
+/** Select the first closed edge, such as the rim of a cylinder. */
+async function selectClosedEdge(page: Page) {
+  await page.evaluate(async () => {
+    const url = (s: string) =>
+      performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .find((name) => name.includes(s));
+    const doc = await import(url('/src/stores/documentStore.ts')!);
+    const kernel = await import(url('/src/stores/kernelStore.ts')!);
+    const selection = await import(url('/src/stores/selection.ts')!);
+    const store = doc.useDocumentStore.getState();
+    const body = store.project.bodies[0]!;
+    const mesh = kernel.useKernelStore.getState().meshes[body.id]!;
+    const rim = mesh.edges!.find((edge: { closed: boolean }) => edge.closed)!;
+    store.select({ kind: 'edge', id: selection.bodyEdgeId(body.id, rim.id) });
+  });
+}
+
 async function selectFace(page: Page) {
   await page.evaluate(async () => {
     const url = (s: string) =>
@@ -203,6 +280,26 @@ test.describe('edge treatment', () => {
     await expect.poll(async () => (await lastTreatment(page))?.kind).toBe('chamfer');
     await expect(
       page.getByTestId('inspector').getByText('Chamfer', { exact: true }),
+    ).toBeVisible();
+  });
+
+  test('rounds the rim of a round boss', async ({ page }) => {
+    await openApp(page);
+    await addBoss(page);
+    await selectClosedEdge(page);
+
+    // A rim is a closed polyline, so this used to fail to resolve its edge.
+    await expect
+      .poll(async () => (await handleScreens(page)).length, { timeout: 15_000 })
+      .toBe(1);
+    await dragTrack(page, 70);
+    await expect.poll(async () => (await lastTreatment(page))?.kind).toBe('fillet');
+    const treatment = await lastTreatment(page);
+    expect(treatment?.error).toBeUndefined();
+    expect(treatment?.applied).toBeGreaterThan(0);
+    // Only the rounded surface is new; the cap and the wall keep their faces.
+    await expect(
+      page.getByTestId('inspector').getByText('Round', { exact: true }),
     ).toBeVisible();
   });
 

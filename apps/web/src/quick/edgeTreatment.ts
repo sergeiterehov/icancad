@@ -15,6 +15,7 @@ import {
   edgeBisector,
   edgePose,
   edgeTreatmentLimit as meshTreatmentLimit,
+  treatedEdges,
 } from '../kernel/edgeTreatment';
 import { outwardNormal } from './geometry';
 
@@ -84,6 +85,7 @@ export function edgeTreatmentTargetFromSelection(
 /** Anchor and axis of the track: the first edge when there is one. */
 export function edgeTreatmentGeometry(
   target: EdgeTreatmentTarget,
+  meshes?: Record<string, TessellationResult>,
 ): EdgeTreatmentGeometry | null {
   const edge = target.edgeRefs[0];
   if (edge) {
@@ -91,30 +93,27 @@ export function edgeTreatmentGeometry(
   }
   const face = target.faceRefs[0];
   if (!face) return null;
+  // A face is treated along its rim, so the track points out of the corner at
+  // half the angle between that face and its neighbour. The stored pose is the
+  // fallback once the operation has rebuilt the face.
+  const mesh = meshes?.[face.bodyId];
+  const rim = mesh ? faceRimPose(mesh, face) : null;
+  if (rim) return { target, origin: rim.mid, direction: rim.bisector, leader: true };
   return { target, origin: face.origin, direction: face.normal, leader: false };
 }
 
-/** Edges the operation will treat: picked ones plus the rim of picked faces. */
-export function treatedEdges(
+/** Middle and outward bisector of the first rim edge of a face. */
+function faceRimPose(
   mesh: TessellationResult,
-  target: EdgeTreatmentTarget,
-): Array<{ id: string; faceIds: number[]; points: number[] }> {
-  const picked = new Set(target.edgeRefs.map((ref) => ref.edgeId));
-  const faces = new Set(target.faceRefs.map((ref) => Number(ref.faceId)));
-  const chosen: Array<{ id: string; faceIds: number[]; points: number[] }> = [];
-  for (const edge of mesh.edges ?? []) {
-    if (picked.has(edge.id)) {
-      chosen.push(edge);
-      continue;
-    }
-    if (faces.size === 0) continue;
-    const inside = edge.faceIds.filter((face) => faces.has(face)).length;
-    // An edge between two selected faces is inside the selection; only the rim
-    // shared with faces that stay untouched is treated.
-    if (inside > 0 && inside < edge.faceIds.length) chosen.push(edge);
-  }
-  return chosen;
+  face: BodyFaceRef,
+): { mid: Vec3; bisector: Vec3 } | null {
+  const [rim] = treatedEdges(mesh, { faceIds: [Number(face.faceId)], edgeIds: [] });
+  if (!rim) return null;
+  const bisector = edgeBisector(mesh, rim.faceIds);
+  if (!bisector) return null;
+  return { mid: edgePose(rim.points).mid, bisector };
 }
+
 
 /**
  * Upper bound of the size that can be applied, over every body in the target.

@@ -21,7 +21,7 @@ operation, no rebuild step and no way to pick an edge.
 | One tool | "Edge treatment" / «Кромка» in the tool rail, with a `stroke-linejoin="miter"` corner. The history uses `bevel` for a chamfer and `round` for a fillet, so the join of the stroke is the operation. |
 | Inputs | The operation stores the picked faces and edges with the pose they had at pick time: face refs as before, edge refs with start, middle, end and the bisector. A picked face contributes its rim — the edges shared with faces that are not picked. |
 | Several bodies | Inputs may belong to different bodies; the rebuild groups them, treats each body in its own kernel call and reports a failure per body. |
-| Track | The quick operation is a radial track rather than an arrow: a short arc around the anchor with a knob. Pulling it to the right rounds the corners, to the left it cuts them. The arc saturates at the maximum size, the number does not: the operation keeps what the user asked for and the kernel applies what fits. |
+| Track | The quick operation is a radial track rather than an arrow: a short arc around the anchor with a knob. Pulling it to the right rounds the corners, to the left it cuts them. The arc saturates at the maximum size, the number does not: the operation keeps what the user asked for and the kernel applies what fits. Every handle value is snapped — a tenth of a millimetre for lengths, a whole degree for angles — so a drag never leaves a long float behind. |
 | Leader | On an edge the track sits a fixed distance away along the outward bisector and a dashed leader connects it to the edge; there is no arrow, because an edge has no single direction to extrude along. |
 | Availability | Any selected edge disables extrusion. A selected face offers both the extrude arrow and the track, anchored at the same point: the arc is the smaller target, so it wins the grab unless the pointer is clearly further up the arrow. |
 | Colour | Handles are blue in both themes; selection stays purple. A handle is an affordance, not a selection. |
@@ -29,7 +29,17 @@ operation, no rebuild step and no way to pick an edge.
 | Locking | The first drag picks the kind from the side it was pulled to and may still flip while the pointer is down. The kind is stored when the drag ends; later drags change only the size, and the inspector changes the kind explicitly. |
 | Size limit | The web estimates a ceiling from the mesh: how far each adjacent face reaches away from the edge, split between the parallel picked edges of that face. The rebuild sends `min(requested, estimate)` so the common case builds once. |
 | Oversized size | The kernel never fails just because the size is too large: it builds, checks the result, and bisects down until a valid solid appears, reporting `applied`. The inspector shows a yellow mark next to the size field saying which maximum will be used. |
-| Feature identity | A treatment keeps the body it modifies: the body id, name, colour and owner stay, and only the shape changes. Faces the kernel leaves untouched keep the operation that made them; new faces belong to the treatment. |
+| Feature identity | A treatment keeps the body it modifies: the body id, name, colour and owner stay, and only the shape changes. Every face the treatment merely trims keeps the operation that made it; only the surfaces it creates belong to the treatment. The kernel reports this through `Modified`: a trimmed face is a new B-rep face, so `IsSame` alone would hand the whole body to the last treatment. |
+| Preview style | A treatment does not restyle its body. Unlike a boolean, the result is the body the user already has, so it is drawn opaque in its own colour instead of as a translucent ghost, and the tree does not mark it as changed. The worked edges are the feedback. |
+| Face anchor | A face is treated along its rim, so its track sits on the first rim edge and points out of the corner, at half the angle between that face and its neighbour — the same bisector an edge uses. The stored face normal is the fallback once the operation has rebuilt the face. |
+
+## Closed edges
+
+A rim, such as the top edge of a round boss, is one closed polyline: its start
+and end are the same point, so a pose taken from those two points has no
+direction and could not be matched after a rebuild. An edge ref is therefore
+matched by its start and its middle vertex, and the direction falls back to the
+chord between them. Closed rims then resolve like any other edge.
 
 ## Kernel
 

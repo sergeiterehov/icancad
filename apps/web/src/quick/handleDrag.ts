@@ -19,3 +19,17 @@ export function handleDragValue(input: HandleDragInput): number {
   const along = input.deltaX * input.axisX + input.deltaY * input.axisY;
   return input.startValue + along / Math.max(input.pixelsPerMm, 0.2);
 }
+
+/** Every handle snaps to a tenth of a millimetre. */
+export const HANDLE_LENGTH_STEP = 0.1;
+/** Angle handles snap to a whole degree. */
+export const HANDLE_ANGLE_STEP = 1;
+
+/** A length a handle can actually mean, without a long float tail. */
+export function snapLength(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+export function snapAngle(value: number): number {
+  return Math.round(value);
+}

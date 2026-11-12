@@ -105,11 +105,11 @@ describe('quick edge treatment drag', () => {
     expect(features[0]).toMatchObject({ kind: 'chamfer', size: 3 });
   });
 
-  it('rounds the size the handle reports', () => {
+  it('snaps the size the handle reports to a tenth of a millimetre', () => {
     const drag = new QuickEdgeTreatmentDrag(edgeTarget(edgedCube(), ['0']), 'Edge');
     drag.start();
     drag.update(2.3456789);
-    expect(treatments()[0]?.size).toBe(2.35);
+    expect(treatments()[0]?.size).toBe(2.3);
     drag.end();
   });
 
@@ -131,6 +131,28 @@ describe('quick edge treatment drag', () => {
 });
 
 describe('edge ref lookup', () => {
+  it('matches a closed edge such as a cylinder rim', () => {
+    // A rim starts and ends at the same point, so the pose needs the middle.
+    const points = [5, 0, 0, 0, 5, 0, -5, 0, 0, 0, -5, 0, 5, 0, 0];
+    const mesh = {
+      ...edgedCube(),
+      edges: [{ id: 'rim', faceIds: [0, 1], points, closed: true }],
+    };
+    const ref = {
+      bodyId: BODY,
+      edgeId: 'renumbered',
+      faceIds: [0, 1],
+      start: [5, 0, 0] as [number, number, number],
+      mid: [-5, 0, 0] as [number, number, number],
+      end: [5, 0, 0] as [number, number, number],
+      bisector: [0, 0, 1] as [number, number, number],
+    };
+    expect(edgeMatchDistance({ points }, ref)).not.toBeNull();
+    expect(
+      resolveEdgeRef({ bodyShapes: new Map([[BODY, 'shape-1']]), meshes: { [BODY]: mesh } }, ref),
+    ).toEqual({ bodyId: BODY, edgeId: 'rim' });
+  });
+
   it('matches an edge by its stored pose', () => {
     const mesh = edgedCube();
     const edge = mesh.edges![0]!;
@@ -156,7 +178,6 @@ describe('edge ref lookup', () => {
     expect(
       edgeMatchDistance(edge, {
         mid: [10, 10, 10],
-        bisector: [0, 0, 1],
         start: [0, 0, 0],
         end: [20, 0, 0],
       }),

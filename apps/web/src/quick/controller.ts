@@ -7,6 +7,7 @@ import type {
   Vec3,
 } from '@icancad/model';
 import { useDocumentStore } from '../stores/documentStore';
+import { snapLength } from './handleDrag';
 import {
   buildQuickEdgeTreatment,
   findBoundEdgeTreatment,
@@ -151,7 +152,7 @@ export class QuickExtrudeDrag {
       type: 'feature/replace',
       feature: {
         ...feature,
-        distance: Math.abs(value),
+        distance: snapLength(Math.abs(value)),
         reversed: value < 0,
         ...(prediction ? { op: prediction.op, bodyIds: prediction.bodyIds } : {}),
       },
@@ -183,7 +184,7 @@ export class QuickExtrudeDrag {
       type: 'feature/replace',
       feature: {
         ...feature,
-        secondDirection: { end: 'blind', distance: value },
+        secondDirection: { end: 'blind', distance: snapLength(value) },
       },
     });
     this.changed = true;
@@ -340,9 +341,9 @@ export class QuickEdgeTreatmentDrag {
         ? 'chamfer'
         : 'fillet';
     this.currentKind = kind;
-    // A handle cannot resolve better than a hundredth of a millimetre, and the
+    // A handle cannot resolve better than a tenth of a millimetre, and the
     // operation reads better without a long float in its field.
-    const size = Math.round(Math.abs(value) * 100) / 100;
+    const size = snapLength(Math.abs(value));
 
     if (!this.featureId) {
       const feature = buildQuickEdgeTreatment(
