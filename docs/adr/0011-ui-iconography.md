@@ -20,6 +20,9 @@ lucide's `Icon` wrapper. Both packages are dependencies of the web app.
 | Main tools | Sketch | `PencilRuler` |
 | Main tools | Extrude | `LayersArrowUp` |
 | Main tools | Section | `SquareCenterlineDashedVertical` |
+| Main tools | Edge treatment («Кромка») | Custom `lucide` icon node: a corner with `stroke-linejoin="miter"` |
+| Edge treatment type, inspector and history | Chamfer | The same corner with `stroke-linejoin="bevel"` |
+| Edge treatment type, inspector and history | Fillet | The same corner with an arc and `stroke-linejoin="round"` |
 | Extrude operation, inspector and history | New body | `Box` |
 | Extrude operation, inspector and history | Add / unite | `SquaresUnite` |
 | Extrude operation, inspector and history | Subtract | `SquaresSubtract` |
@@ -46,6 +49,12 @@ lucide's `Icon` wrapper. Both packages are dependencies of the web app.
 
 Unimplemented tools are not shown: the disabled Shell and Hole buttons and their
 labels were removed.
+
+The edge treatment family is drawn rather than imported: the three icons are the
+same body corner, and the stroke join itself is the operation — a miter for the
+tool, a bevel for a chamfer and a round join for a fillet. They live in
+`ui/edgeIcons.tsx` and are rendered through lucide's `Icon`, so size, stroke and
+colour behave like every other icon.
 
 ## Consequences
 

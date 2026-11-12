@@ -20,16 +20,18 @@ show that decision in 3D before the user commits to a gesture.
 | Selection depth | The first click selects the object, the next click inside that object selects the face or edge under the cursor. A click on another object starts at object level again. The rule is derived from the current selection; there is no separate drill mode. |
 | Detail elements | `body-face` and `edge` are first-class selection kinds next to bodies, meshes, sketches, sketch faces and operations. Their ids are `bodyId#faceId` and `bodyId#edgeId`. |
 | Edges | Edges are B-rep edges collected during tessellation (`BodyEdge`): a polyline, the two adjacent face indices and a deterministic id. Seams inside a single face are filtered out. |
-| Handles | A handle is a 3D arrow offered by an operation, not a viewport mode. The operation returns `OperationHandle` descriptors (origin, direction, value, enabled, tooltip, `beginDrag`). The viewport only draws, hit-tests and reports drag values. |
+| Handles | A handle is a 3D affordance offered by an operation, not a viewport mode. The operation returns `OperationHandle` descriptors (kind, origin, direction, value, enabled, tooltip, `beginDrag`). The viewport only draws, hit-tests and reports drag values. An extrude offers an arrow; an edge treatment offers a radial track (ADR 0015). |
 | Prospective operations | A selected face or sketch offers the operation that could be created from it. Dragging its handle creates the operation and focuses it as soon as the drag starts: the operation is selected, its panel opens and the rest of the gesture drives the operation's own handle. |
 | Focused operations | An operation offers its handles from its stored inputs (`faceRefs` or `sketchId` + regions). Dragging a focused handle edits that operation instead of creating another one. |
 | Handle extents | A blind extrusion offers one handle per free extent: the primary direction and, when enabled, the second direction opposite to it. A `through-all` extent has no free distance, so that handle is not drawn. |
+| What is available | A selected face offers the extrude arrow and, at the same point, the track of the edge treatment; the arc is the smaller target, so it wins the grab unless the pointer is clearly further along the arrow. Any selected edge offers the track only: an edge has no direction to extrude along, so extrusion is unavailable while one is picked. The sketch and its faces offer the arrow alone. |
+| Handle colour | Handles are blue in both themes, hovered handles turn white. Selection keeps the purple accent, so an affordance never reads as a selected element. |
 | Method prediction | The method is predicted while an operation is new: a body face dragged along its outward normal joins the body, against the normal it cuts; a sketch cuts when material lies ahead of the profile, joins when the profile sits on a surface, and otherwise creates a new body. Cut wins over join when both have evidence. |
 | Method locking | The method is stored in the feature when the drag ends. Later drags of the same operation change only the distance and the sign (`reversed`); the method never changes from a handle. The inspector remains the place to change it explicitly. |
 | Direction | The handle value is signed along the outward normal. Passing through zero flips `reversed` and keeps the method. The drag axis is always the positive normal, even while the arrow is drawn on the opposite side, so the arrow keeps following the pointer after the flip. |
 | Editing | A handle drag uses the document preview commands and commits the whole gesture with one history step. Escape and `pointercancel` restore the pre-drag state. |
 | Preview of a join | A join draws the body exactly as it was before the operation. Only the material it adds is shown, as a green translucent ghost: the tool minus the base body. A cut keeps showing the removed volume. |
-| Feedback | While dragging, a chip names the method and the distance. Hovering a handle shows a tooltip that names what the handle changes. |
+| Feedback | While dragging, a chip names the method (or the edge treatment side) and the size. Hovering a handle shows a tooltip that names what the handle changes. |
 
 ## Selection algorithm
 
@@ -48,6 +50,15 @@ selection:
 
 Double-click is unchanged: it opens the operation that produced the face. The
 drill-down click is deliberately the single click after the double-click window.
+
+## Radial track
+
+An edge treatment is sized by one number on a known side, so its handle is a
+radial track: a short arc in the plane the camera sees, with a knob that slides
+along it. Pulling to the right rounds the corners, to the left it cuts them; the
+side the first drag takes becomes the kind of the operation and no later drag
+changes it. On an edge the track sits away from the edge and a dashed leader
+connects them, because an edge has no arrow of its own.
 
 ## Handle lifecycle
 
