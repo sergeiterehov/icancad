@@ -2,6 +2,8 @@ import type {
   BodyEdge,
   BooleanParams,
   BoxParams,
+  EdgeTreatmentParams,
+  EdgeTreatmentResult,
   HealthResult,
   KernelErrorCode,
   KernelStatusEvent,
@@ -100,11 +102,28 @@ interface TessellationBuffers {
   faceIds: number[];
 }
 
+/** B-rep edges of a shape, kept so an edge treatment can address them again. */
+interface ShapeEdges {
+  edges: BodyEdge[];
+  shapes: Map<string, OcctShape>;
+}
+
+/** Below this a treatment is not worth building. */
+const MIN_TREATMENT_SIZE = 0.01;
+
+/** Bisection steps used to find the largest size that still builds. */
+const TREATMENT_SEARCH_STEPS = 6;
+
 export class KernelEngine {
   private oc: OcctBindings | null = null;
   private loading: Promise<OcctBindings> | null = null;
   private loadMs = 0;
   private readonly shapes = new Map<string, OcctShape>();
+  /**
+   * Edges each tessellated shape reported, with their B-rep counterparts. A
+   * treatment reuses them instead of walking the shape again.
+   */
+  private readonly shapeEdges = new Map<string, ShapeEdges>();
 
   constructor(
     private readonly loader: OcctLoader,
@@ -375,6 +394,7 @@ export class KernelEngine {
     // reports it builds the polyline; the second only adds its face index.
     const edgeBuckets = new Map<string, Array<{ shape: OcctShape; edge: BodyEdge }>>();
     const allEdges: BodyEdge[] = [];
+    const edgeShapes = new Map<string, OcctShape>();
     let edgeCount = 0;
 
     const explorer = new oc.TopExp_Explorer_2(
@@ -492,6 +512,7 @@ export class KernelEngine {
             bucket.push(record);
             edgeBuckets.set(bucketKey, bucket);
             allEdges.push(record.edge);
+            edgeShapes.set(record.edge.id, edgeShape);
           }
           if (!record.edge.faceIds.includes(faceIndex)) record.edge.faceIds.push(faceIndex);
         }
@@ -500,6 +521,16 @@ export class KernelEngine {
       faceIndex += 1;
       explorer.Next();
     }
+
+    // Edges are the only handle a treatment has on the shape, so they outlive
+    // the tessellation for as long as the shape does.
+    const keptEdges = allEdges.filter((edge) => edge.faceIds.length === 2);
+    this.shapeEdges.set(shapeId, {
+      edges: keptEdges,
+      shapes: new Map(
+        keptEdges.map((edge) => [edge.id, edgeShapes.get(edge.id)!] as const),
+      ),
+    });
 
     return {
       positions: new Float32Array(buffers.positions),
@@ -514,7 +545,7 @@ export class KernelEngine {
       },
       // A seam inside one face has only one adjacent face and is not an edge
       // the user can pick or fillet.
-      edges: allEdges.filter((edge) => edge.faceIds.length === 2),
+      edges: keptEdges,
     };
   }
 
@@ -522,12 +553,123 @@ export class KernelEngine {
     return this.countTopology(this.getShape(shapeId));
   }
 
+  /**
+   * Chamfers or rounds the given edges of a body. A size that does not fit the
+   * geometry is reduced instead of failing: the built body is returned together
+   * with the size it was actually made with, so the operation never becomes an
+   * error just because the user pulled too far.
+   */
+  treatEdges(params: EdgeTreatmentParams): EdgeTreatmentResult {
+    if (!params.shapeId) throw new KernelOpError('INVALID_PARAMS', 'shapeId is required');
+    if (!Number.isFinite(params.size) || params.size <= 0) {
+      throw new KernelOpError('INVALID_PARAMS', 'size must be positive');
+    }
+    const source = this.getShape(params.sourceShapeId);
+    const edges = this.treatmentEdges(params);
+    if (edges.length === 0) throw new KernelOpError('NO_EDGES', 'No edges to treat');
+
+    const built = this.buildTreatment(params.kind, source, edges, params.size);
+    let shape = built?.shape ?? null;
+    let applied = params.size;
+    if (!shape) {
+      // Bisect between nothing and the rejected size. Six steps are enough to
+      // land within a couple of percent of the limit.
+      let low = 0;
+      let high = params.size;
+      for (let step = 0; step < TREATMENT_SEARCH_STEPS; step += 1) {
+        const mid = (low + high) / 2;
+        if (mid < MIN_TREATMENT_SIZE) break;
+        const attempt = this.buildTreatment(params.kind, source, edges, mid);
+        if (attempt) {
+          low = mid;
+          applied = mid;
+          shape = attempt.shape;
+        } else {
+          high = mid;
+        }
+      }
+      if (!shape) {
+        throw new KernelOpError(
+          'EDGE_TREATMENT_FAILED',
+          `These edges cannot be ${params.kind === 'fillet' ? 'rounded' : 'chamfered'}`,
+        );
+      }
+    }
+
+    this.shapes.set(params.shapeId, shape);
+    return {
+      shapeId: params.shapeId,
+      stats: this.countTopology(shape),
+      applied,
+      limit: applied,
+      facesFromBase: this.facesFromBase(shape, source),
+      edgeCount: edges.length,
+    };
+  }
+
+  /** Explicit edges plus the boundary edges of the given faces. */
+  private treatmentEdges(params: EdgeTreatmentParams): OcctShape[] {
+    const cache = this.shapeEdges.get(params.sourceShapeId);
+    if (!cache) throw new KernelOpError('SHAPE_NOT_FOUND', 'Tessellate the body first');
+    const picked = new Set(params.edgeIds);
+    const faces = new Set(params.faceIds);
+    const chosen = new Set<string>();
+    for (const edge of cache.edges) {
+      if (picked.has(edge.id)) chosen.add(edge.id);
+    }
+    if (faces.size > 0) {
+      for (const edge of cache.edges) {
+        const inside = edge.faceIds.filter((face) => faces.has(face)).length;
+        // An edge between two selected faces is inside the selection, not on
+        // its boundary, so picking a face treats the rim it shares with others.
+        if (inside > 0 && inside < edge.faceIds.length) chosen.add(edge.id);
+      }
+    }
+    const shapes: OcctShape[] = [];
+    for (const id of chosen) {
+      const shape = cache.shapes.get(id);
+      if (shape) shapes.push(shape);
+    }
+    return shapes;
+  }
+
+  private buildTreatment(
+    kind: EdgeTreatmentParams['kind'],
+    source: OcctShape,
+    edges: readonly OcctShape[],
+    size: number,
+  ): { shape: OcctShape } | null {
+    const oc = this.requireOc();
+    try {
+      const maker =
+        kind === 'fillet'
+          ? new oc.BRepFilletAPI_MakeFillet(source, oc.ChFi3d_FilletShape.ChFi3d_Rational)
+          : new oc.BRepFilletAPI_MakeChamfer(source);
+      for (const edge of edges) maker.Add_2(size, edge);
+      maker.Build();
+      if (!maker.IsDone()) return null;
+      const shape = maker.Shape();
+      if (!shape || shape.IsNull()) return null;
+      // A build can report success and still leave a self-intersecting body, so
+      // the result decides whether the size was usable.
+      const analyzer = new oc.BRepCheck_Analyzer(shape, true);
+      if (!analyzer.IsValid_2()) return null;
+      return { shape };
+    } catch {
+      // The published OCCT build throws C++ failures as broken JS objects. A
+      // rejected size is a normal outcome here, not an exception.
+      return null;
+    }
+  }
+
   dispose(shapeId: string): boolean {
+    this.shapeEdges.delete(shapeId);
     return this.shapes.delete(shapeId);
   }
 
   clear(): void {
     this.shapes.clear();
+    this.shapeEdges.clear();
   }
 
   private prismVectors(params: MakePrismParams): unknown[] {

@@ -254,20 +254,30 @@ const ribFeature = z.object({
   direction: vec3,
 });
 
-const filletFeature = z.object({
+const edgeTreatmentFeature = z.object({
   ...featureBase,
-  type: z.literal('fillet'),
-  bodyId: z.string().min(1),
-  edges: z.array(entityRef),
-  radius: z.number().positive(),
-});
-
-const chamferFeature = z.object({
-  ...featureBase,
-  type: z.literal('chamfer'),
-  bodyId: z.string().min(1),
-  edges: z.array(entityRef),
-  distance: z.number().positive(),
+  type: z.literal('edge-treatment'),
+  kind: z.enum(['fillet', 'chamfer']),
+  faceRefs: z.array(
+    z.object({
+      bodyId: z.string().min(1),
+      faceId: z.string().min(1),
+      normal: vec3,
+      origin: vec3,
+    }),
+  ),
+  edgeRefs: z.array(
+    z.object({
+      bodyId: z.string().min(1),
+      edgeId: z.string().min(1),
+      faceIds: z.array(z.number().int().nonnegative()),
+      start: vec3,
+      mid: vec3,
+      end: vec3,
+      bisector: vec3,
+    }),
+  ),
+  size: z.number().positive(),
 });
 
 const booleanFeature = z.object({
@@ -299,8 +309,7 @@ export const featureSchema = z.discriminatedUnion('type', [
   shellFeature,
   holeFeature,
   ribFeature,
-  filletFeature,
-  chamferFeature,
+  edgeTreatmentFeature,
   booleanFeature,
   deleteBodyFeature,
   transformFeature,

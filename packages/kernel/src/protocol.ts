@@ -166,6 +166,31 @@ export interface BooleanParams {
   trackFaces?: boolean;
 }
 
+export interface EdgeTreatmentParams {
+  shapeId: string;
+  /** Body the edges belong to. */
+  sourceShapeId: string;
+  kind: 'fillet' | 'chamfer';
+  /** Faces whose boundary edges are treated. */
+  faceIds: number[];
+  /** Edge ids from the tessellation of the source shape. */
+  edgeIds: string[];
+  /** Requested radius (fillet) or leg distance (chamfer), in millimetres. */
+  size: number;
+}
+
+export interface EdgeTreatmentResult {
+  shapeId: string;
+  stats: ShapeStats;
+  /** Size the solid was actually built with; never above the request. */
+  applied: number;
+  /** Largest size that still produced a valid solid for this edge set. */
+  limit: number;
+  /** Source face index of every result face, or -1 for a treated one. */
+  facesFromBase: number[];
+  edgeCount: number;
+}
+
 export type KernelStatusPhase = 'loading-occt' | 'ready' | 'error';
 
 export interface KernelStatusEvent {
@@ -181,6 +206,8 @@ export type KernelErrorCode =
   | 'SHAPE_NOT_FOUND'
   | 'INVALID_PARAMS'
   | 'FACE_NOT_PLANAR'
+  | 'NO_EDGES'
+  | 'EDGE_TREATMENT_FAILED'
   | 'NOT_IMPLEMENTED'
   | 'OP_FAILED';
 
@@ -191,6 +218,7 @@ export type KernelRequestPayload =
   | { type: 'make-face-prism'; params: MakeFacePrismParams }
   | { type: 'boolean'; params: BooleanParams }
   | { type: 'split-solids'; params: SplitSolidsParams }
+  | { type: 'edge-treatment'; params: EdgeTreatmentParams }
   | { type: 'tessellate'; shapeId: string; quality?: TessellationQuality }
   | { type: 'topology'; shapeId: string }
   | { type: 'dispose'; shapeId: string };

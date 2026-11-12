@@ -19,8 +19,7 @@ export type FeatureType =
   | 'shell'
   | 'hole'
   | 'rib'
-  | 'fillet'
-  | 'chamfer'
+  | 'edge-treatment'
   | 'boolean'
   | 'delete-body'
   | 'transform';
@@ -178,6 +177,24 @@ export interface BodyFaceRef {
   origin: Vec3;
 }
 
+/**
+ * An edge of a solid body used as an edge treatment input. Like a face ref it
+ * keeps the pose it had when it was picked, so the edge can be found again
+ * after a rebuild renumbers the traversal.
+ */
+export interface BodyEdgeRef {
+  bodyId: string;
+  edgeId: string;
+  /** Faces on both sides of the edge, in tessellation order. */
+  faceIds: number[];
+  /** Start, middle and end of the edge polyline, in world space. */
+  start: Vec3;
+  mid: Vec3;
+  end: Vec3;
+  /** Bisector of the two face normals, pointing away from the material. */
+  bisector: Vec3;
+}
+
 export interface ExtrudeFeature extends FeatureBase {
   type: 'extrude';
   /** Absent until the operation is given objects to extrude. */
@@ -245,18 +262,22 @@ export interface RibFeature extends FeatureBase {
   direction: Vec3;
 }
 
-export interface FilletFeature extends FeatureBase {
-  type: 'fillet';
-  bodyId: string;
-  edges: EntityRef[];
-  radius: number;
-}
+export type EdgeTreatmentKind = 'fillet' | 'chamfer';
 
-export interface ChamferFeature extends FeatureBase {
-  type: 'chamfer';
-  bodyId: string;
-  edges: EntityRef[];
-  distance: number;
+/**
+ * One operation for both kinds of edge treatment (ADR 0015). The kind is a
+ * property of the operation, so the same tool creates either and the history
+ * still tells them apart.
+ */
+export interface EdgeTreatmentFeature extends FeatureBase {
+  type: 'edge-treatment';
+  kind: EdgeTreatmentKind;
+  /** Faces whose boundary edges are treated. */
+  faceRefs: BodyFaceRef[];
+  /** Edges picked one by one. */
+  edgeRefs: BodyEdgeRef[];
+  /** Requested radius (fillet) or leg distance (chamfer), in millimetres. */
+  size: number;
 }
 
 export interface BooleanFeature extends FeatureBase {
@@ -287,8 +308,7 @@ export type Feature =
   | ShellFeature
   | HoleFeature
   | RibFeature
-  | FilletFeature
-  | ChamferFeature
+  | EdgeTreatmentFeature
   | BooleanFeature
   | DeleteBodyFeature
   | TransformFeature;

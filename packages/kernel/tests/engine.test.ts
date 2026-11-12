@@ -438,6 +438,112 @@ describe('OCCT kernel engine', () => {
     expect(new Set(moved).size).toBe(moved.length);
   });
 
+  it('fillets one edge of a box', () => {
+    engine.makeBox({ shapeId: 'fillet-box', dx: 10, dy: 10, dz: 10 });
+    const mesh = engine.tessellate('fillet-box');
+    const edge = mesh.edges![0]!;
+    const result = engine.treatEdges({
+      shapeId: 'fillet-result',
+      sourceShapeId: 'fillet-box',
+      kind: 'fillet',
+      faceIds: [],
+      edgeIds: [edge.id],
+      size: 2,
+    });
+    expect(result.applied).toBe(2);
+    expect(result.edgeCount).toBe(1);
+    // Two faces get a rounded corner, the operation adds the third.
+    expect(result.stats.faces).toBe(7);
+    expect(result.stats.solids).toBe(1);
+    const rounded = engine.tessellate('fillet-result');
+    // The rounded corner removes (1 − π/4)·r² per unit of length.
+    expect(meshSignedVolume(rounded)).toBeLessThan(1000);
+    expect(meshSignedVolume(rounded)).toBeGreaterThan(990);
+  });
+
+  it('chamfers one edge of a box', () => {
+    engine.makeBox({ shapeId: 'chamfer-box', dx: 10, dy: 10, dz: 10 });
+    const mesh = engine.tessellate('chamfer-box');
+    const edge = mesh.edges![0]!;
+    const result = engine.treatEdges({
+      shapeId: 'chamfer-result',
+      sourceShapeId: 'chamfer-box',
+      kind: 'chamfer',
+      faceIds: [],
+      edgeIds: [edge.id],
+      size: 2,
+    });
+    expect(result.applied).toBe(2);
+    expect(result.stats.faces).toBe(7);
+    const chamfered = engine.tessellate('chamfer-result');
+    // A 2 mm chamfer cuts a right triangle of 2×2/2 over the 10 mm edge.
+    expect(meshSignedVolume(chamfered)).toBeCloseTo(1000 - 20, 1);
+  });
+
+  it('reduces a treatment that does not fit instead of failing', () => {
+    engine.makeBox({ shapeId: 'oversize-box', dx: 10, dy: 10, dz: 10 });
+    const mesh = engine.tessellate('oversize-box');
+    const edges = mesh.edges!.map((edge) => edge.id);
+    const result = engine.treatEdges({
+      shapeId: 'oversize-result',
+      sourceShapeId: 'oversize-box',
+      kind: 'fillet',
+      faceIds: [],
+      edgeIds: edges,
+      size: 50,
+    });
+    expect(result.applied).toBeGreaterThan(0);
+    expect(result.applied).toBeLessThan(50);
+    expect(result.limit).toBe(result.applied);
+    expect(result.edgeCount).toBe(12);
+    expect(result.stats.solids).toBe(1);
+    const rounded = engine.tessellate('oversize-result');
+    expect(meshSignedVolume(rounded)).toBeGreaterThan(500);
+  });
+
+  it('treats the boundary edges of a face', () => {
+    engine.makeBox({ shapeId: 'face-box', dx: 10, dy: 10, dz: 10 });
+    const mesh = engine.tessellate('face-box');
+    // Pick the face of the first edge and treat only its rim.
+    const faceId = mesh.edges![0]!.faceIds[0]!;
+    const result = engine.treatEdges({
+      shapeId: 'face-result',
+      sourceShapeId: 'face-box',
+      kind: 'chamfer',
+      faceIds: [faceId],
+      edgeIds: [],
+      size: 1,
+    });
+    expect(result.edgeCount).toBe(4);
+    expect(result.stats.faces).toBe(10);
+  });
+
+  it('rejects a treatment without edges and without a tessellated body', () => {
+    engine.makeBox({ shapeId: 'empty-box', dx: 10, dy: 10, dz: 10 });
+    engine.tessellate('empty-box');
+    expect(() =>
+      engine.treatEdges({
+        shapeId: 'empty-result',
+        sourceShapeId: 'empty-box',
+        kind: 'fillet',
+        faceIds: [],
+        edgeIds: [],
+        size: 1,
+      }),
+    ).toThrowError(KernelOpError);
+    engine.makeBox({ shapeId: 'untessellated-box', dx: 10, dy: 10, dz: 10 });
+    expect(() =>
+      engine.treatEdges({
+        shapeId: 'empty-result',
+        sourceShapeId: 'untessellated-box',
+        kind: 'fillet',
+        faceIds: [],
+        edgeIds: ['0'],
+        size: 1,
+      }),
+    ).toThrowError(KernelOpError);
+  });
+
   it('cuts one solid with another', () => {
     engine.makePrism({
       shapeId: 'plate',

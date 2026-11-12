@@ -85,6 +85,15 @@ export interface OcctShapeMaker {
   Shape(): OcctShape;
 }
 
+/** Shared surface of `BRepFilletAPI_MakeFillet` and `MakeChamfer`. */
+export interface OcctEdgeMaker {
+  /** `Add(размер, ребро)` for both makers. */
+  Add_2(size: number, edge: OcctShape): void;
+  Build(): void;
+  IsDone(): boolean;
+  Shape(): OcctShape;
+}
+
 export interface OcctBindings {
   BRepPrimAPI_MakeBox_1: new (dx: number, dy: number, dz: number) => OcctShapeMaker;
   BRepPrimAPI_MakeBox_2: new (
@@ -174,4 +183,15 @@ export interface OcctBindings {
     unifyFaces: boolean,
     concatBSplines: boolean,
   ) => { Build(): void; Shape(): OcctShape };
+  ChFi3d_FilletShape: {
+    ChFi3d_Rational: unknown;
+    ChFi3d_QuasiAngular: unknown;
+    ChFi3d_Polynomial: unknown;
+  };
+  /** Both makers take the shape, and a fillet also takes its surface kind. */
+  BRepFilletAPI_MakeFillet: new (shape: OcctShape, surface: unknown) => OcctEdgeMaker;
+  BRepFilletAPI_MakeChamfer: new (shape: OcctShape) => OcctEdgeMaker;
+  BRepCheck_Analyzer: new (shape: OcctShape, geometryControls: boolean) => {
+    IsValid_2(): boolean;
+  };
 }

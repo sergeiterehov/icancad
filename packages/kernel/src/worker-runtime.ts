@@ -61,6 +61,11 @@ export function startKernelWorker(options: KernelWorkerOptions = {}): void {
           postSuccess(scope, request.id, engine.splitSolids(request.params));
           break;
         }
+        case 'edge-treatment': {
+          await engine.init();
+          postSuccess(scope, request.id, engine.treatEdges(request.params));
+          break;
+        }
         case 'tessellate': {
           await engine.init();
           const result = engine.tessellate(request.shapeId, request.quality);
