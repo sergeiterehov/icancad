@@ -155,6 +155,11 @@ export interface MakeFacePrismParams {
   normal: Vec3;
   /** Signed extrusion distances along the normal. */
   distances: number[];
+  /**
+   * Whether the prism is a tool for a boolean rather than a body of its own.
+   * A tool may reach a sliver behind its face so it overlaps what it joins.
+   */
+  embed?: boolean;
 }
 
 export interface BooleanParams {

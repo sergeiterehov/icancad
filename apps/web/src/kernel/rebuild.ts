@@ -6,6 +6,7 @@ import type {
   SplitSolidsResult,
   TessellationResult,
 } from '@icancad/kernel';
+import type { Vec3 } from '@icancad/model';
 import { sketchProfiles, type ProfileRegion } from '@icancad/sketch';
 import {
   HISTORY_START,
@@ -904,6 +905,9 @@ async function applyExtrude(
         faceId: resolved.faceId,
         normal: ref.normal,
         distances: extrudeDistances(feature, ref.origin, ref.normal, meshes),
+        // A tool that joins material may reach behind its face, so the union
+        // has something to intersect instead of only touching.
+        embed: feature.op === 'add',
       },
     });
     if (epoch !== rebuildEpoch) return;
@@ -1361,6 +1365,49 @@ function dropFaceMarks(state: RebuildState, featureId: string, bodyId: string): 
  * Splits the faces a treatment created by what happened to the material: a face
  * inside the body before the operation is a cut, one outside it is an addition.
  */
+/** How many places on one face are checked when the centroid is not enough. */
+const FACE_SAMPLE_LIMIT = 24;
+
+/** Points spread over the triangles of one face. */
+function faceSamples(mesh: TessellationResult, faceId: number): Vec3[] {
+  const { positions, indices, faceIds } = mesh;
+  const own: number[] = [];
+  for (let triangle = 0; triangle < faceIds.length; triangle += 1) {
+    if (faceIds[triangle] === faceId) own.push(triangle);
+  }
+  const step = Math.max(1, Math.ceil(own.length / FACE_SAMPLE_LIMIT));
+  const samples: Vec3[] = [];
+  for (let index = 0; index < own.length; index += step) {
+    const triangle = own[index]!;
+    const a = indices[triangle * 3]! * 3;
+    const b = indices[triangle * 3 + 1]! * 3;
+    const c = indices[triangle * 3 + 2]! * 3;
+    samples.push([
+      (positions[a]! + positions[b]! + positions[c]!) / 3,
+      (positions[a + 1]! + positions[b + 1]! + positions[c + 1]!) / 3,
+      (positions[a + 2]! + positions[b + 2]! + positions[c + 2]!) / 3,
+    ]);
+  }
+  return samples;
+}
+
+/** Whether the face the operation created sits in material or in free space. */
+function faceTakesMaterial(
+  before: TessellationResult,
+  after: TessellationResult,
+  faceId: number,
+): boolean {
+  const region = faceRegion(after, faceId);
+  if (!region) return false;
+  if (pointInMesh(before, region.centroid)) return true;
+  // A face that runs round a hole has its centroid over the hole, in the air,
+  // so where most of the face lies decides instead.
+  const samples = faceSamples(after, faceId);
+  if (samples.length === 0) return false;
+  const inside = samples.filter((point) => pointInMesh(before, point)).length;
+  return inside > samples.length / 2;
+}
+
 function classifyTreatmentFaces(
   bodyId: string,
   before: TessellationResult | undefined,
@@ -1370,10 +1417,8 @@ function classifyTreatmentFaces(
   const mark: PreviewFaceMark = { bodyId, red: [], green: [] };
   for (let faceId = 0; faceId < facesFromBase.length; faceId += 1) {
     if (facesFromBase[faceId] !== -1) continue;
-    const region = faceRegion(after, faceId);
-    if (!region) continue;
-    const removed = before ? pointInMesh(before, region.centroid) : true;
-    (removed ? mark.red : mark.green).push(faceId);
+    const takesMaterial = before ? faceTakesMaterial(before, after, faceId) : false;
+    (takesMaterial ? mark.red : mark.green).push(faceId);
   }
   return mark;
 }

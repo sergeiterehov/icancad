@@ -208,6 +208,9 @@ interface ShapeEdges {
   shapes: Map<string, OcctShape>;
 }
 
+/** How far a face prism reaches behind its face, to overlap the body it joins. */
+const FACE_PRISM_EMBED = 0.01;
+
 /** Below this a treatment is not worth building. */
 const MIN_TREATMENT_SIZE = 0.01;
 
@@ -341,7 +344,7 @@ export class KernelEngine {
   // so arcs and holes keep their exact geometry.
   makeFacePrism(params: MakeFacePrismParams): MakeBoxResult {
     const oc = this.requireOc();
-    const { shapeId, sourceShapeId, faceId, normal, distances } = params;
+    const { shapeId, sourceShapeId, faceId, normal, distances, embed } = params;
     if (!shapeId) throw new KernelOpError('INVALID_PARAMS', 'shapeId is required');
     if (!Number.isInteger(faceId) || faceId < 0) {
       throw new KernelOpError('INVALID_PARAMS', 'Face id must be a non-negative integer');
@@ -372,8 +375,15 @@ export class KernelEngine {
       number,
     ];
 
+    // A tool that only stands on the face it was made from touches the body it
+    // joins without intersecting it, and the union leaves slivers behind. A
+    // sliver of overlap behind the face turns the contact into a real one, so
+    // the tool reaches back into material that is already there. A body of its
+    // own must not grow, so only a tool does this.
+    const first = distances[0]!;
+    const steps = embed && first > 0 ? [-FACE_PRISM_EMBED, ...distances] : distances;
     let shape: OcctShape | null = null;
-    for (const distance of distances) {
+    for (const distance of steps) {
       const vector = new oc.gp_Vec_4(nx * distance, ny * distance, nz * distance);
       const prism = new oc.BRepPrimAPI_MakePrism_1(face, vector, false, true);
       if (!prism.IsDone()) {
@@ -1142,20 +1152,36 @@ export class KernelEngine {
   // they must be one topological face for picking and for downstream features.
   private unify(shape: OcctShape): OcctShape {
     const oc = this.requireOc();
-    const unify = new oc.ShapeUpgrade_UnifySameDomain_2(shape, true, true, false);
-    unify.Build();
-    const result = unify.Shape();
-    return result.IsNull() ? shape : result;
+    // A shape with a face that only grazes another can make the merge give up,
+    // and an unmerged body is still the right body — just with an extra seam.
+    const modes: Array<[boolean, boolean, boolean]> = [
+      [true, true, false],
+      [true, true, true],
+      [true, false, false],
+      [false, true, false],
+    ];
+    for (const [unifyEdges, unifyFaces, concat] of modes) {
+      try {
+        const unify = new oc.ShapeUpgrade_UnifySameDomain_2(shape, unifyEdges, unifyFaces, concat);
+        unify.Build();
+        const result = unify.Shape();
+        if (!result.IsNull()) return result;
+      } catch {
+        // Try the next mode, then keep the shape as it is.
+      }
+    }
+    return shape;
   }
 
   private boolean(base: OcctShape, tool: OcctShape, op: BooleanParams['op']): OcctShape {
     const oc = this.requireOc();
-    const maker =
+    const make = () =>
       op === 'fuse'
         ? new oc.BRepAlgoAPI_Fuse_3(base, tool)
         : op === 'cut'
           ? new oc.BRepAlgoAPI_Cut_3(base, tool)
           : new oc.BRepAlgoAPI_Common_3(base, tool);
+    const maker = make();
     maker.Build();
     const shape = maker.Shape();
     if (shape.IsNull()) {
