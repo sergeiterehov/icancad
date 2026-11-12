@@ -454,11 +454,44 @@ describe('OCCT kernel engine', () => {
     expect(result.edgeCount).toBe(1);
     // Two faces get a rounded corner, the operation adds the third.
     expect(result.stats.faces).toBe(7);
+    // The faces the fillet only trimmed keep their source; the rounded surface
+    // is the only new one.
+    const trimmed = result.facesFromBase.filter((from) => from >= 0);
+    expect(trimmed).toHaveLength(6);
+    expect(result.facesFromBase.filter((from) => from < 0)).toHaveLength(1);
     expect(result.stats.solids).toBe(1);
     const rounded = engine.tessellate('fillet-result');
     // The rounded corner removes (1 − π/4)·r² per unit of length.
     expect(meshSignedVolume(rounded)).toBeLessThan(1000);
     expect(meshSignedVolume(rounded)).toBeGreaterThan(990);
+  });
+
+  it('rounds the rim of a cylindrical boss', () => {
+    engine.makePrism({
+      shapeId: 'boss',
+      origin: [0, 0, 0],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 1, 0],
+      regions: [{ outer: { curves: [{ type: 'circle', cx: 0, cy: 0, r: 10 }] }, holes: [] }],
+      distances: [10],
+    });
+    const mesh = engine.tessellate('boss');
+    // The rim is a closed polyline: start and end are the same point.
+    const rim = mesh.edges!.find((edge) => edge.closed)!;
+    const result = engine.treatEdges({
+      shapeId: 'boss-fillet',
+      sourceShapeId: 'boss',
+      kind: 'fillet',
+      faceIds: [],
+      edgeIds: [rim.id],
+      size: 1,
+    });
+    expect(result.applied).toBe(1);
+    expect(result.stats.solids).toBe(1);
+    // The fillet surface is new, the cap and the wall keep their identity.
+    expect(result.facesFromBase.filter((from) => from < 0)).toHaveLength(1);
+    const rounded = engine.tessellate('boss-fillet');
+    expect(meshSignedVolume(rounded)).toBeLessThan(Math.PI * 100 * 10);
   });
 
   it('chamfers one edge of a box', () => {

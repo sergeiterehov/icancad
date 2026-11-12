@@ -22,6 +22,7 @@ import type {
 import { DEFAULT_TESSELLATION_QUALITY } from './protocol';
 import type {
   OcctBindings,
+  OcctEdgeMaker,
   OcctPolygonOnTriangulation,
   OcctShape,
   OcctTransformation,
@@ -570,6 +571,7 @@ export class KernelEngine {
 
     const built = this.buildTreatment(params.kind, source, edges, params.size);
     let shape = built?.shape ?? null;
+    let maker: OcctEdgeMaker | null = built?.maker ?? null;
     let applied = params.size;
     if (!shape) {
       // Bisect between nothing and the rejected size. Six steps are enough to
@@ -584,6 +586,7 @@ export class KernelEngine {
           low = mid;
           applied = mid;
           shape = attempt.shape;
+          maker = attempt.maker;
         } else {
           high = mid;
         }
@@ -602,9 +605,63 @@ export class KernelEngine {
       stats: this.countTopology(shape),
       applied,
       limit: applied,
-      facesFromBase: this.facesFromBase(shape, source),
+      facesFromBase: maker ? this.treatedFaces(maker, shape, source) : this.facesFromBase(shape, source),
       edgeCount: edges.length,
     };
+  }
+
+  /**
+   * Where every result face came from. A face the treatment only trimmed keeps
+   * the operation that made it; only the surfaces the treatment creates are new.
+   */
+  private treatedFaces(maker: OcctEdgeMaker, shape: OcctShape, source: OcctShape): number[] {
+    const oc = this.requireOc();
+    const resultFaces: OcctShape[] = [];
+    const resultExplorer = new oc.TopExp_Explorer_2(
+      shape,
+      oc.TopAbs_ShapeEnum.TopAbs_FACE,
+      oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+    );
+    while (resultExplorer.More()) {
+      resultFaces.push(resultExplorer.Current());
+      resultExplorer.Next();
+    }
+    const indexOf = (face: OcctShape) => resultFaces.findIndex((candidate) => candidate.IsSame(face));
+
+    const mapping = resultFaces.map(() => -1);
+    const sourceExplorer = new oc.TopExp_Explorer_2(
+      source,
+      oc.TopAbs_ShapeEnum.TopAbs_FACE,
+      oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+    );
+    let sourceIndex = 0;
+    while (sourceExplorer.More()) {
+      const face = sourceExplorer.Current();
+      sourceExplorer.Next();
+      let mapped = false;
+      try {
+        const modified = maker.Modified(face);
+        const size = modified.Size();
+        if (size > 0) {
+          // The binding exposes the ends of the list only, which covers a
+          // trimmed face and the halves of a face the treatment splits.
+          const ends = size > 1 ? [modified.First_1(), modified.Last_1()] : [modified.First_1()];
+          for (const candidate of ends) {
+            const index = indexOf(candidate);
+            if (index >= 0) mapping[index] = sourceIndex;
+          }
+          mapped = true;
+        }
+      } catch {
+        // A maker that cannot report the mapping falls back to identity below.
+      }
+      if (!mapped) {
+        const index = indexOf(face);
+        if (index >= 0) mapping[index] = sourceIndex;
+      }
+      sourceIndex += 1;
+    }
+    return mapping;
   }
 
   /** Explicit edges plus the boundary edges of the given faces. */
@@ -638,7 +695,7 @@ export class KernelEngine {
     source: OcctShape,
     edges: readonly OcctShape[],
     size: number,
-  ): { shape: OcctShape } | null {
+  ): { shape: OcctShape; maker: OcctEdgeMaker } | null {
     const oc = this.requireOc();
     try {
       const maker =
@@ -654,7 +711,7 @@ export class KernelEngine {
       // the result decides whether the size was usable.
       const analyzer = new oc.BRepCheck_Analyzer(shape, true);
       if (!analyzer.IsValid_2()) return null;
-      return { shape };
+      return { shape, maker };
     } catch {
       // The published OCCT build throws C++ failures as broken JS objects. A
       // rejected size is a normal outcome here, not an exception.

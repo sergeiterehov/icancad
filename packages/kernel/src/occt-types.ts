@@ -85,6 +85,13 @@ export interface OcctShapeMaker {
   Shape(): OcctShape;
 }
 
+/** `TopTools_ListOfShape`: the faces a base face became. */
+export interface OcctShapeList {
+  Size(): number;
+  First_1(): OcctShape;
+  Last_1(): OcctShape;
+}
+
 /** Shared surface of `BRepFilletAPI_MakeFillet` and `MakeChamfer`. */
 export interface OcctEdgeMaker {
   /** `Add(размер, ребро)` for both makers. */
@@ -92,6 +99,12 @@ export interface OcctEdgeMaker {
   Build(): void;
   IsDone(): boolean;
   Shape(): OcctShape;
+  /**
+   * The faces a face became. A trimmed face is rebuilt, so `IsSame` cannot find
+   * it in the result; this is the only way to keep its identity.
+   */
+  Modified(shape: OcctShape): OcctShapeList;
+  IsDeleted(shape: OcctShape): boolean;
 }
 
 export interface OcctBindings {
