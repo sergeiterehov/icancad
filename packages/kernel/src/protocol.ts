@@ -10,6 +10,21 @@ export const DEFAULT_TESSELLATION_QUALITY: TessellationQuality = {
   angularDeflection: 0.5,
 };
 
+/**
+ * A B-rep edge of a tessellated body. Edges shared by the same two faces are
+ * merged into one polyline, so seams inside a single face stay out. Ids follow
+ * the deterministic face/edge traversal of the shape, which is what a future
+ * fillet or chamfer needs to address the same edge.
+ */
+export interface BodyEdge {
+  id: string;
+  /** Face traversal indices on both sides of the edge, in tessellation order. */
+  faceIds: number[];
+  /** Flat world-space points of the polyline. */
+  points: number[];
+  closed: boolean;
+}
+
 export interface TessellationResult {
   positions: Float32Array;
   normals: Float32Array;
@@ -18,6 +33,8 @@ export interface TessellationResult {
   triangleCount: number;
   vertexCount: number;
   bbox: { min: Vec3; max: Vec3 };
+  /** Solid bodies only: imported meshes have no B-rep edges. */
+  edges?: BodyEdge[];
 }
 
 export interface ShapeStats {
@@ -49,6 +66,31 @@ export interface MakeBoxResult {
    * in shape order, or -1 for a face this operation created.
    */
   facesFromBase?: number[];
+}
+
+export interface SplitSolidsParams {
+  shapeId: string;
+  /** Extracted solids get ids `${prefix}:solid-${index}`. */
+  prefix: string;
+}
+
+export interface SplitSolid {
+  shapeId: string;
+  /**
+   * For every face of the solid, in shape order, its index among the faces of
+   * the split shape. Untouched faces are the very same B-rep faces, so a
+   * boolean that later moves them keeps their identity.
+   */
+  facesFromShape: number[];
+  stats: ShapeStats;
+  /** Volume of the solid, used to pick the part that keeps the body. */
+  volume: number;
+  /** Centre of mass, a deterministic tie-breaker for equal volumes. */
+  center: [number, number, number];
+}
+
+export interface SplitSolidsResult {
+  solids: SplitSolid[];
 }
 
 export interface ProfileLine {
@@ -148,6 +190,7 @@ export type KernelRequestPayload =
   | { type: 'make-prism'; params: MakePrismParams }
   | { type: 'make-face-prism'; params: MakeFacePrismParams }
   | { type: 'boolean'; params: BooleanParams }
+  | { type: 'split-solids'; params: SplitSolidsParams }
   | { type: 'tessellate'; shapeId: string; quality?: TessellationQuality }
   | { type: 'topology'; shapeId: string }
   | { type: 'dispose'; shapeId: string };

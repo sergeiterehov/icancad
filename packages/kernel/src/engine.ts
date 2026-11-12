@@ -1,4 +1,5 @@
 import type {
+  BodyEdge,
   BooleanParams,
   BoxParams,
   HealthResult,
@@ -10,11 +11,20 @@ import type {
   ProfileCurve,
   ProfileLoop,
   ShapeStats,
+  SplitSolid,
+  SplitSolidsParams,
+  SplitSolidsResult,
   TessellationQuality,
   TessellationResult,
 } from './protocol';
 import { DEFAULT_TESSELLATION_QUALITY } from './protocol';
-import type { OcctBindings, OcctShape } from './occt-types';
+import type {
+  OcctBindings,
+  OcctPolygonOnTriangulation,
+  OcctShape,
+  OcctTransformation,
+  OcctTriangulation,
+} from './occt-types';
 
 export const OCCT_VERSION = '7.4.0p1';
 
@@ -29,6 +39,58 @@ export class KernelOpError extends Error {
     this.name = 'KernelOpError';
     this.code = code;
   }
+}
+
+
+/** Coarse spatial bucket for matching the same topological edge seen from two faces. */
+const EDGE_BUCKET_SCALE = 100;
+
+function edgeBucketKey(points: readonly number[]): string {
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+  for (let index = 0; index < points.length; index += 3) {
+    const x = points[index]!;
+    const y = points[index + 1]!;
+    const z = points[index + 2]!;
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (z < minZ) minZ = z;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+    if (z > maxZ) maxZ = z;
+  }
+  const center = [(minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2];
+  return center.map((value) => Math.round(value * EDGE_BUCKET_SCALE)).join(',');
+}
+
+function polygonPoints(
+  polygon: OcctPolygonOnTriangulation,
+  triangulation: OcctTriangulation,
+  transformation: OcctTransformation,
+): number[] {
+  const count = polygon.NbNodes();
+  const nodes = polygon.Nodes();
+  const points: number[] = [];
+  for (let index = 1; index <= count; index += 1) {
+    const node = nodes.Value(index);
+    const point = triangulation.Nodes().Value(node).Transformed(transformation);
+    points.push(point.X(), point.Y(), point.Z());
+  }
+  return points;
+}
+
+function polygonClosed(points: readonly number[]): boolean {
+  if (points.length < 6) return false;
+  const last = points.length - 3;
+  return (
+    Math.abs(points[0]! - points[last]!) < 1e-6 &&
+    Math.abs(points[1]! - points[last + 1]!) < 1e-6 &&
+    Math.abs(points[2]! - points[last + 2]!) < 1e-6
+  );
 }
 
 interface TessellationBuffers {
@@ -212,6 +274,86 @@ export class KernelEngine {
     return result;
   }
 
+  /**
+   * Extracts the solids of a shape as independent shapes. A cut that separates
+   * a body leaves one compound behind; taking the solids apart is what lets the
+   * document keep each part as its own body.
+   */
+  splitSolids(params: SplitSolidsParams): SplitSolidsResult {
+    const oc = this.requireOc();
+    if (!params.shapeId) throw new KernelOpError('INVALID_PARAMS', 'shapeId is required');
+    if (!params.prefix) throw new KernelOpError('INVALID_PARAMS', 'prefix is required');
+    const source = this.getShape(params.shapeId);
+
+    const sourceFaces: OcctShape[] = [];
+    const faceExplorer = new oc.TopExp_Explorer_2(
+      source,
+      oc.TopAbs_ShapeEnum.TopAbs_FACE,
+      oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+    );
+    while (faceExplorer.More()) {
+      sourceFaces.push(faceExplorer.Current());
+      faceExplorer.Next();
+    }
+
+    const solids: SplitSolid[] = [];
+    const explorer = new oc.TopExp_Explorer_2(
+      source,
+      oc.TopAbs_ShapeEnum.TopAbs_SOLID,
+      oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+    );
+    let index = 0;
+    while (explorer.More()) {
+      const solid = oc.TopoDS.Solid_1(explorer.Current());
+      const shapeId = `${params.prefix}:solid-${index}`;
+      this.shapes.set(shapeId, solid);
+
+      const facesFromShape: number[] = [];
+      const solidFaces = new oc.TopExp_Explorer_2(
+        solid,
+        oc.TopAbs_ShapeEnum.TopAbs_FACE,
+        oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+      );
+      while (solidFaces.More()) {
+        const face = solidFaces.Current();
+        let match = -1;
+        for (let candidate = 0; candidate < sourceFaces.length; candidate += 1) {
+          if (sourceFaces[candidate]!.IsSame(face)) {
+            match = candidate;
+            break;
+          }
+        }
+        facesFromShape.push(match);
+        solidFaces.Next();
+      }
+
+      let volume = 0;
+      let center: [number, number, number] = [0, 0, 0];
+      try {
+        const props = new oc.GProp_GProps_1();
+        oc.BRepGProp.VolumeProperties_1(solid, props, false, false, false);
+        volume = props.Mass();
+        if (volume > 0) {
+          const massCenter = props.CentreOfMass();
+          center = [massCenter.X(), massCenter.Y(), massCenter.Z()];
+        }
+      } catch {
+        // An open shell has no volume; it still splits, it just sorts last.
+      }
+
+      solids.push({
+        shapeId,
+        facesFromShape,
+        stats: this.countTopology(solid),
+        volume,
+        center,
+      });
+      index += 1;
+      explorer.Next();
+    }
+    return { solids };
+  }
+
   tessellate(shapeId: string, quality: TessellationQuality = DEFAULT_TESSELLATION_QUALITY): TessellationResult {
     const oc = this.requireOc();
     const shape = this.getShape(shapeId);
@@ -229,6 +371,11 @@ export class KernelEngine {
     const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
     let triangleCount = 0;
     let faceIndex = 0;
+    // A B-rep edge is seen from both faces that share it. The first face that
+    // reports it builds the polyline; the second only adds its face index.
+    const edgeBuckets = new Map<string, Array<{ shape: OcctShape; edge: BodyEdge }>>();
+    const allEdges: BodyEdge[] = [];
+    let edgeCount = 0;
 
     const explorer = new oc.TopExp_Explorer_2(
       shape,
@@ -311,6 +458,43 @@ export class KernelEngine {
           const length = Math.hypot(nx, ny, nz) || 1;
           buffers.normals.push(nx / length, ny / length, nz / length);
         }
+
+        const edgeExplorer = new oc.TopExp_Explorer_2(
+          face,
+          oc.TopAbs_ShapeEnum.TopAbs_EDGE,
+          oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+        );
+        while (edgeExplorer.More()) {
+          const edgeShape = oc.TopoDS.Edge_1(edgeExplorer.Current());
+          edgeExplorer.Next();
+          const raw = oc.BRep_Tool.PolygonOnTriangulation_1(edgeShape, handle, location) as unknown;
+          const polygon =
+            raw && typeof (raw as { get?: unknown }).get === 'function'
+              ? (raw as { get(): OcctPolygonOnTriangulation }).get()
+              : (raw as OcctPolygonOnTriangulation | null);
+          if (!polygon) continue;
+          const points = polygonPoints(polygon, triangulation, transformation);
+          if (points.length < 6) continue;
+          const bucketKey = edgeBucketKey(points);
+          const bucket = edgeBuckets.get(bucketKey) ?? [];
+          let record = bucket.find((candidate) => candidate.shape.IsSame(edgeShape));
+          if (!record) {
+            record = {
+              shape: edgeShape,
+              edge: {
+                id: String(edgeCount),
+                faceIds: [],
+                points,
+                closed: polygonClosed(points),
+              },
+            };
+            edgeCount += 1;
+            bucket.push(record);
+            edgeBuckets.set(bucketKey, bucket);
+            allEdges.push(record.edge);
+          }
+          if (!record.edge.faceIds.includes(faceIndex)) record.edge.faceIds.push(faceIndex);
+        }
       }
 
       faceIndex += 1;
@@ -328,6 +512,9 @@ export class KernelEngine {
         min: Number.isFinite(min[0]) ? min : [0, 0, 0],
         max: Number.isFinite(max[0]) ? max : [0, 0, 0],
       },
+      // A seam inside one face has only one adjacent face and is not an edge
+      // the user can pick or fillet.
+      edges: allEdges.filter((edge) => edge.faceIds.length === 2),
     };
   }
 

@@ -29,6 +29,12 @@ export interface OcctTriangulationHandle {
   get(): OcctTriangulation;
 }
 
+/** `Poly_PolygonOnTriangulation`: node indices into the face triangulation. */
+export interface OcctPolygonOnTriangulation {
+  NbNodes(): number;
+  Nodes(): OcctArray<number>;
+}
+
 export interface OcctLocation {
   Transformation(): OcctTransformation;
 }
@@ -117,9 +123,26 @@ export interface OcctBindings {
   TopoDS: {
     Face_1(shape: OcctShape): OcctShape;
     Edge_1(shape: OcctShape): OcctShape;
+    Solid_1(shape: OcctShape): OcctShape;
+  };
+  GProp_GProps_1: new () => { Mass(): number; CentreOfMass(): OcctPoint3 };
+  BRepGProp: {
+    VolumeProperties_1(
+      shape: OcctShape,
+      props: { Mass(): number },
+      onlyClosed: boolean,
+      skipShared: boolean,
+      useTriangulation: boolean,
+    ): void;
   };
   BRep_Tool: {
     Triangulation(face: OcctShape, location: OcctLocation): OcctTriangulationHandle | null;
+    /** Nodes of `edge` inside the triangulation of the face that owns it. */
+    PolygonOnTriangulation_1(
+      edge: OcctShape,
+      triangulation: OcctTriangulationHandle,
+      location: OcctLocation,
+    ): OcctPolygonOnTriangulation | null;
   };
   TopLoc_Location_1: new () => OcctLocation;
   gp_Pnt_3: new (x: number, y: number, z: number) => OcctPoint3;

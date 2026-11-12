@@ -1,4 +1,10 @@
-import type { MakeBoxResult, ShapeStats, TessellationResult } from '@icancad/kernel';
+import type {
+  MakeBoxResult,
+  ShapeStats,
+  SplitSolid,
+  SplitSolidsResult,
+  TessellationResult,
+} from '@icancad/kernel';
 import { sketchProfiles, type ProfileRegion } from '@icancad/sketch';
 import {
   HISTORY_START,
@@ -27,7 +33,9 @@ import {
 import { parseMeshInWorker } from '../io/client';
 import { i18n } from '../i18n';
 import { getKernelClient } from './client';
+import { resolveFaceRef } from './faceLookup';
 import { kernelTaskQueue } from './scheduler';
+import { splitAssignment, splitBodyId } from './splitBodies';
 import { RebuildCache, type RebuildCheckpoint } from './checkpoints';
 
 let rebuildEpoch = 0;
@@ -110,6 +118,8 @@ function transformImportedMesh(mesh: ParsedMesh, feature: ImportMeshFeature): Te
       min: mesh.positions.length > 0 ? min : [0, 0, 0],
       max: mesh.positions.length > 0 ? max : [0, 0, 0],
     },
+    // Imported meshes are not B-reps, so they have no selectable edges.
+    edges: [],
   };
 }
 
@@ -145,6 +155,8 @@ interface RebuildState {
 interface GhostCollector {
   mesh?: TessellationResult;
   fade?: { axis: [number, number, number]; start: number }[];
+  /** Body whose added part the ghost is; its base mesh is drawn instead. */
+  addBaseBodyId?: string;
 }
 
 interface EvalContext {
@@ -334,7 +346,11 @@ async function runRebuild(
     // reuses its snapshot: only real edits force a recalculation. A cut has to
     // be evaluated again because its tool volume is only tessellated for the
     // preview.
-    const needsGhost = previewFeature.type === 'extrude' && previewFeature.op === 'subtract';
+    // A cut shows the removed volume; an add shows the material it will add.
+    // Both need the tool solid only the preview tessellates.
+    const needsGhost =
+      previewFeature.type === 'extrude' &&
+      (previewFeature.op === 'subtract' || previewFeature.op === 'add');
     const cachedPreview = needsGhost ? null : rebuildCache.find(features, previewIndex);
     if (cachedPreview && cachedPreview.index === previewIndex) {
       published = cachedPreview.state;
@@ -432,7 +448,12 @@ function buildPreview(
     };
   };
 
-  const isCut = feature.type === 'extrude' && feature.op === 'subtract';
+  // The body a boolean produces is real material, so it stays opaque. What the
+  // operation changes is the ghost drawn on top of it: removed material for a
+  // cut, added material for a join.
+  const keepsBodySolid =
+    feature.type === 'extrude' &&
+    (feature.op === 'subtract' || feature.op === 'add' || feature.op === 'intersect');
   // Meshes cover solid bodies and imported meshes alike.
   for (const bodyId of Object.keys(after.meshes)) {
     const before = base.meshes[bodyId];
@@ -451,8 +472,8 @@ function buildPreview(
       kind: 'modified',
       ...describe(bodyId),
       baseMesh: before,
-      // The cut result stays solid so the hole itself is visible.
-      ...(isCut ? { translucent: false } : {}),
+      ...(keepsBodySolid ? { translucent: false } : {}),
+      ...(ghost.mesh && ghost.addBaseBodyId === bodyId ? { renderBase: true } : {}),
     });
   }
   for (const bodyId of Object.keys(base.meshes)) {
@@ -468,10 +489,11 @@ function buildPreview(
 
   const ghosts: SceneGhost[] = [];
   if (ghost.mesh) {
+    const isAdd = feature.type === 'extrude' && feature.op === 'add';
     ghosts.push({
       id: `ghost:${feature.id}`,
       mesh: ghost.mesh,
-      color: '#ef4444',
+      color: isAdd ? '#22c55e' : '#ef4444',
       ...(ghost.fade ? { fade: ghost.fade } : {}),
     });
   }
@@ -597,24 +619,6 @@ function kernelErrorCode(error: unknown): string {
 /** Every face of a freshly built body belongs to the operation that built it. */
 function ownAllFaces(owners: Map<string, string[]>, bodyId: string, faces: number, id: string) {
   owners.set(bodyId, Array.from({ length: Math.max(0, faces) }, () => id));
-}
-
-/**
- * Applies a boolean face map to the owners of the body: a face the boolean kept
- * stays with the operation that made it, a new or rebuilt face belongs to this
- * operation.
- */
-function applyFaceMap(
-  owners: Map<string, string[]>,
-  bodyId: string,
-  map: number[],
-  id: string,
-): void {
-  const previous = owners.get(bodyId) ?? [];
-  owners.set(
-    bodyId,
-    map.map((from) => (from >= 0 ? (previous[from] ?? id) : id)),
-  );
 }
 
 async function applyExtrude(
@@ -810,6 +814,7 @@ async function applyExtrude(
   // fuse them back into one tool below. The object key matches the Faces list,
   // so a part that cannot be applied can be reported on its own row.
   const toolParts: { shapeId: string; key: string }[] = [];
+  const refBodyRemap = new Map<string, string>();
   for (const [index, profile] of selected.entries()) {
     const shapeId = trackShape(`tool:${feature.id}:sketch-${index}`);
     await client.request({
@@ -827,18 +832,29 @@ async function applyExtrude(
     toolParts.push({ shapeId, key: `s:${sketch!.id}#${profile.id}` });
   }
   for (const [index, ref] of faceRefs.entries()) {
-    const sourceShapeId = bodyShapes.get(ref.bodyId);
+    const resolved = resolveFaceRef(
+      { bodyShapes, meshes, bodyStats },
+      ref,
+    );
+    if (!resolved) {
+      markBodyError(ref.bodyId, bodyErrorCode(ref.bodyId));
+      continue;
+    }
+    const sourceShapeId = bodyShapes.get(resolved.bodyId);
     if (!sourceShapeId) {
       markBodyError(ref.bodyId, bodyErrorCode(ref.bodyId));
       continue;
     }
+    // A face a previous boolean moved to another body keeps its identity, so
+    // the target list follows it instead of adding to a body it left behind.
+    if (!refBodyRemap.has(ref.bodyId)) refBodyRemap.set(ref.bodyId, resolved.bodyId);
     const shapeId = trackShape(`tool:${feature.id}:face-${index}`);
     await client.request({
       type: 'make-face-prism',
       params: {
         shapeId,
         sourceShapeId,
-        faceId: Number(ref.faceId),
+        faceId: resolved.faceId,
         normal: ref.normal,
         distances: extrudeDistances(feature, ref.origin, ref.normal, meshes),
       },
@@ -868,6 +884,16 @@ async function applyExtrude(
     }
   }
 
+  // `scope` describes the regions being extruded, so bodies to combine with are
+  // chosen separately: the ones listed on the feature, or every other body.
+  const explicitTargets = feature.bodyIds.length > 0;
+  const targets = explicitTargets
+    ? [
+        ...new Set(feature.bodyIds.map((bodyId) => refBodyRemap.get(bodyId) ?? bodyId)),
+      ]
+    : [...bodyShapes.keys()].filter((bodyId) => bodyOwner.get(bodyId) !== feature.id);
+  if (targets.length === 0) throw new Error('NO_TARGET_BODY');
+
   // The volume a cut removes is shown in the preview even though the resulting
   // body no longer contains it.
   if (ghost && feature.op === 'subtract') {
@@ -893,13 +919,58 @@ async function applyExtrude(
     }
   }
 
-  // `scope` describes the regions being extruded, so bodies to combine with are
-  // chosen separately: the ones listed on the feature, or every other body.
-  const explicitTargets = feature.bodyIds.length > 0;
-  const targets = explicitTargets
-    ? feature.bodyIds
-    : [...bodyShapes.keys()].filter((bodyId) => bodyOwner.get(bodyId) !== feature.id);
-  if (targets.length === 0) throw new Error('NO_TARGET_BODY');
+  // A join keeps the base body opaque, so only the material it actually adds is
+  // shown as a ghost: the tool minus the body it is applied to.
+  if (ghost && feature.op === 'add' && explicitTargets && targets.length === 1) {
+    // The ghost is feedback only: a tool that misses the body or produces an
+    // empty delta must not turn the operation into a failure. The real add
+    // below reports its own errors.
+    try {
+      const targetId = targets.find((bodyId) => bodyShapes.has(bodyId));
+      const baseShapeId = targetId ? bodyShapes.get(targetId) : undefined;
+      const firstPart = toolParts[0];
+      if (baseShapeId && firstPart) {
+        let ghostToolId = firstPart.shapeId;
+        for (const [index, part] of toolParts.slice(1).entries()) {
+          const fusedId = trackShape(`tool:${feature.id}:ghost-fused-${index}`);
+          await client.request({
+            type: 'boolean',
+            params: {
+              shapeId: fusedId,
+              baseShapeId: ghostToolId,
+              toolShapeId: part.shapeId,
+              op: 'fuse',
+            },
+          });
+          if (epoch !== rebuildEpoch) return;
+          ghostToolId = fusedId;
+        }
+        const deltaId = trackShape(`${feature.id}:ghost-add`);
+        await client.request({
+          type: 'boolean',
+          params: {
+            shapeId: deltaId,
+            // The added material is the tool minus the body: the body itself
+            // keeps its own colour, only the new part turns green.
+            baseShapeId: ghostToolId,
+            toolShapeId: baseShapeId,
+            op: 'cut',
+          },
+        });
+        if (epoch !== rebuildEpoch) return;
+        ghost.mesh = await client.request<TessellationResult>({
+          type: 'tessellate',
+          shapeId: deltaId,
+        });
+        if (epoch !== rebuildEpoch) return;
+        ghost.addBaseBodyId = targetId;
+      }
+    } catch {
+      if (epoch !== rebuildEpoch) return;
+      ghost.mesh = undefined;
+      ghost.addBaseBodyId = undefined;
+    }
+  }
 
   let applied = 0;
   /** Parts that actually affected at least one explicitly chosen body. */
@@ -996,24 +1067,91 @@ async function applyExtrude(
       },
     });
     if (epoch !== rebuildEpoch) return;
-    if (operated.facesFromBase) {
-      applyFaceMap(faceOwners, bodyId, operated.facesFromBase, feature.id);
-    } else {
-      ownAllFaces(faceOwners, bodyId, operated.stats.faces, feature.id);
+    // Which operation owns each face of the compound result. Splitting it must
+    // not lose this: a face that moves to a new body keeps its operation.
+    const previousOwners = faceOwners.get(bodyId) ?? [];
+    const compoundOwners = (
+      operated.facesFromBase ??
+      Array.from({ length: Math.max(0, operated.stats.faces) }, () => -1)
+    ).map((from) => (from >= 0 ? (previousOwners[from] ?? feature.id) : feature.id));
+
+    // A cut through the whole cross-section leaves a compound of separate
+    // solids. Each one becomes a body: the largest keeps this one, the rest are
+    // new independent bodies with stable ids.
+    const splitPrefix = `${resultShapeId}:split`;
+    // Register the expected shapes before the request, so a rebuild that is
+    // aborted mid-split can still dispose them.
+    if (operated.stats.solids > 1) {
+      for (let index = 0; index < operated.stats.solids; index += 1) {
+        trackShape(`${splitPrefix}:solid-${index}`);
+      }
     }
-    bodyShapes.set(bodyId, resultShapeId);
-    bodySource.set(bodyId, feature.id);
-    const mesh = await client.request<TessellationResult>({
-      type: 'tessellate',
-      shapeId: resultShapeId,
-    });
+    const split =
+      operated.stats.solids > 1
+        ? await client.request<SplitSolidsResult>({
+            type: 'split-solids',
+            params: { shapeId: resultShapeId, prefix: splitPrefix },
+          })
+        : null;
     if (epoch !== rebuildEpoch) return;
-    meshes[bodyId] = mesh;
-    bodyStats[bodyId] = await client.request<ShapeStats>({
-      type: 'topology',
-      shapeId: resultShapeId,
-    });
-    if (epoch !== rebuildEpoch) return;
+    const assignment = split ? splitAssignment(split.solids) : null;
+    const originalOwner = bodyOwner.get(bodyId) ?? feature.id;
+    if (assignment) {
+      const pieces: Array<{ bodyId: string; solid: SplitSolid; created: boolean }> = [
+        { bodyId, solid: assignment.main, created: false },
+        ...assignment.extras.map((solid, index) => ({
+          bodyId: splitBodyId(feature.id, bodyId, index + 1),
+          solid,
+          created: true,
+        })),
+      ];
+      for (const piece of pieces) {
+        bodyShapes.set(piece.bodyId, piece.solid.shapeId);
+        bodyOwner.set(piece.bodyId, piece.created ? feature.id : originalOwner);
+        bodySource.set(piece.bodyId, feature.id);
+        faceOwners.set(
+          piece.bodyId,
+          piece.solid.facesFromShape.map((from) => compoundOwners[from] ?? feature.id),
+        );
+        const pieceMesh = await client.request<TessellationResult>({
+          type: 'tessellate',
+          shapeId: piece.solid.shapeId,
+        });
+        if (epoch !== rebuildEpoch) return;
+        meshes[piece.bodyId] = pieceMesh;
+        bodyStats[piece.bodyId] = await client.request<ShapeStats>({
+          type: 'topology',
+          shapeId: piece.solid.shapeId,
+        });
+        if (epoch !== rebuildEpoch) return;
+      }
+      const splitPrefix = `${feature.id}:split:${bodyId}:`;
+      createdBodies.set(feature.id, [
+        ...(createdBodies.get(feature.id) ?? []).filter((id) => !id.startsWith(splitPrefix)),
+        ...pieces.filter((piece) => piece.created).map((piece) => piece.bodyId),
+      ]);
+    } else {
+      bodyShapes.set(bodyId, resultShapeId);
+      bodySource.set(bodyId, feature.id);
+      faceOwners.set(bodyId, compoundOwners);
+      const mesh = await client.request<TessellationResult>({
+        type: 'tessellate',
+        shapeId: resultShapeId,
+      });
+      if (epoch !== rebuildEpoch) return;
+      meshes[bodyId] = mesh;
+      bodyStats[bodyId] = await client.request<ShapeStats>({
+        type: 'topology',
+        shapeId: resultShapeId,
+      });
+      if (epoch !== rebuildEpoch) return;
+      // A body that is whole again loses the bodies its cut had split off.
+      const splitPrefix = `${feature.id}:split:${bodyId}:`;
+      createdBodies.set(
+        feature.id,
+        (createdBodies.get(feature.id) ?? []).filter((id) => !id.startsWith(splitPrefix)),
+      );
+    }
     applied += 1;
   }
 

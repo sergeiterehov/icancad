@@ -38,13 +38,17 @@ pass through material.
 | Unified fuse | After fusing regions or adding material, `ShapeUpgrade_UnifySameDomain` merges coplanar and same-surface faces. A union of three regions has one top and one bottom face, so the result can be picked again as a single face. |
 | Face labels | The Faces list keeps selection order, but every row shows the face's real index in the sketch topology (or the body face index), not the row position. Two different circles therefore show different face numbers. |
 | New body identity | New bodies use stable slots (`body-0`, `body-1`, …) in selection order. Replacing the first picked face keeps that body's name and colour instead of creating a new identity. |
-| Cut and intersect | These may split a body into several solids; the body container is allowed to hold them (ADR 0001). |
+| Cut and intersect | These can leave several independent solids. The result is split: the largest solid (by volume, then position) keeps the original body and its name and colour, and every other solid becomes its own body with a stable id derived from the operation and the source body. |
+| Split face identity | Splitting takes the solids out of the same boolean result, so untouched faces are the very same B-rep faces, not copies. A stored face reference resolves by the normal and centroid captured when it was picked, so a face that moved to a new body is still found there; a face the cut itself rebuilt keeps the positional fallback. |
 | Body identity | A new body per object keeps the id derived from its region or face, so metadata stays stable while the object is unchanged. |
 
 ## Consequences
 
 - Two disjoint sketch regions still become two bodies, while regions that touch along an edge fuse into one (ADR 0009).
-- Body face IDs are traversal indexes, so merging coplanar faces after a fuse changes the indexes of the resulting body. Downstream body-face references are re-picked rather than persisted.
+- Body face IDs are traversal indexes, so merging coplanar faces after a fuse changes the indexes of the resulting body. A stored reference first resolves by its captured pose, which survives a split or renumbering when the face itself survives; a face the operation rebuilt still needs re-picking.
+- A cut that separates a body adds the new parts as ordinary bodies: they have their own names, colours and visibility, and they disappear again when the cut is removed or stops separating the body.
+- A quick operation whose face moved to another body follows the face for its tool and for a target body it named, so it keeps acting on the material it was built from.
+- Persistent topological naming (M5) is still needed for references to a face that an operation rebuilds or divides: the pose lookup cannot preserve identity for a face that no longer exists as one face.
 - Adding material is checked with one extra topology query per target body. A
   disjoint result is rejected before it replaces the body, so the model never
   gains a hidden second solid through "Add".

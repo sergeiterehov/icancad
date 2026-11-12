@@ -56,6 +56,11 @@ export function startKernelWorker(options: KernelWorkerOptions = {}): void {
           postSuccess(scope, request.id, engine.booleanShape(request.params));
           break;
         }
+        case 'split-solids': {
+          await engine.init();
+          postSuccess(scope, request.id, engine.splitSolids(request.params));
+          break;
+        }
         case 'tessellate': {
           await engine.init();
           const result = engine.tessellate(request.shapeId, request.quality);

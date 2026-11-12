@@ -70,6 +70,39 @@ describe('OCCT kernel engine', () => {
     expect(meshSignedVolume(mesh)).toBeCloseTo(20 * 10 * 5, 3);
   });
 
+  it('reports selectable B-rep edges without seams', () => {
+    const box = engine.tessellate('box-1');
+    expect(box.edges).toHaveLength(12);
+    for (const edge of box.edges ?? []) {
+      expect(edge.faceIds).toHaveLength(2);
+      expect(new Set(edge.faceIds).size).toBe(2);
+      expect(edge.points.length).toBeGreaterThanOrEqual(6);
+      expect(edge.closed).toBe(false);
+    }
+    // Every edge joins a different pair of faces.
+    const pairs = new Set((box.edges ?? []).map((edge) => [...edge.faceIds].sort().join('-')));
+    expect(pairs.size).toBe(12);
+  });
+
+  it('filters the seam of a cylindrical face from edges', () => {
+    engine.makePrism({
+      shapeId: 'prism-cylinder',
+      origin: [0, 0, 0],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 1, 0],
+      regions: [{ outer: { curves: [{ type: 'circle', cx: 0, cy: 0, r: 10 }] }, holes: [] }],
+      distances: [5],
+    });
+    const mesh = engine.tessellate('prism-cylinder');
+    // Two circles: the cap boundary is one closed edge each, the seam is gone.
+    expect(mesh.edges).toHaveLength(2);
+    for (const edge of mesh.edges ?? []) {
+      expect(edge.closed).toBe(true);
+      expect(edge.faceIds).toHaveLength(2);
+      expect(new Set(edge.faceIds).size).toBe(2);
+    }
+  });
+
   it('supports finer tessellation quality', () => {
     const coarse = engine.tessellate('box-1', {
       linearDeflection: 1,
@@ -364,6 +397,45 @@ describe('OCCT kernel engine', () => {
     // rebuilt because their boundary changes, and the four walls are new.
     expect(map!.filter((index) => index >= 0)).toHaveLength(4);
     expect(map!.filter((index) => index < 0)).toHaveLength(6);
+  });
+
+  it('splits a cut that separates a body into independent solids', () => {
+    engine.makeBox({ shapeId: 'split-base', dx: 20, dy: 20, dz: 20 });
+    engine.makeBox({ shapeId: 'split-tool', dx: 22, dy: 2, dz: 22, at: [-1, 9, -1] });
+    const cut = engine.booleanShape({
+      shapeId: 'split-cut',
+      baseShapeId: 'split-base',
+      toolShapeId: 'split-tool',
+      op: 'cut',
+      trackFaces: true,
+    });
+    expect(cut.stats.solids).toBe(2);
+
+    const split = engine.splitSolids({ shapeId: 'split-cut', prefix: 'split-part' });
+    expect(split.solids).toHaveLength(2);
+    expect(split.solids.map((solid) => solid.shapeId)).toEqual([
+      'split-part:solid-0',
+      'split-part:solid-1',
+    ]);
+
+    const totals: number[] = [];
+    for (const solid of split.solids) {
+      expect(solid.stats.solids).toBe(1);
+      expect(solid.facesFromShape).toHaveLength(solid.stats.faces);
+      expect(solid.volume).toBeGreaterThan(0);
+      totals.push(solid.volume);
+      const mesh = engine.tessellate(solid.shapeId);
+      expect(Math.abs(meshSignedVolume(mesh))).toBeCloseTo(solid.volume, 2);
+    }
+    expect(totals[0]! + totals[1]!).toBeCloseTo(20 * 20 * 20 - 20 * 2 * 20, 3);
+
+    // Faces the cut left untouched are the same B-rep faces and belong to
+    // exactly one part; rebuilt faces report -1.
+    const moved = split.solids.flatMap((solid) =>
+      solid.facesFromShape.filter((index) => index >= 0),
+    );
+    expect(moved.length).toBeGreaterThan(0);
+    expect(new Set(moved).size).toBe(moved.length);
   });
 
   it('cuts one solid with another', () => {
