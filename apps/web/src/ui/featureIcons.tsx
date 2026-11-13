@@ -1,9 +1,48 @@
+import type { SketchEntity } from '@icancad/model';
 import { crosshairPlusDot } from '@lucide/lab';
-import { Box, Icon, SquaresIntersect, SquaresSubtract, SquaresUnite } from 'lucide-react';
+import {
+  Box,
+  CircleDot,
+  Ellipse,
+  Icon,
+  LineSquiggle,
+  LoaderCircle,
+  SquaresIntersect,
+  SquaresSubtract,
+  SquaresUnite,
+  Waypoints,
+} from 'lucide-react';
 
 /** Experimental Lucide Lab point marker. */
 export function PointIcon({ size = 16 }: { size?: number }) {
   return <Icon iconNode={crosshairPlusDot} size={size} />;
+}
+
+/**
+ * The icon of a sketch entity. The tool rail and the geometry list share it, so
+ * a line looks the same while it is drawn and in the list of what was drawn.
+ */
+export function SketchEntityIcon({
+  type,
+  size = 13,
+}: {
+  type: SketchEntity['type'];
+  size?: number;
+}) {
+  switch (type) {
+    case 'point':
+      return <PointIcon size={size} />;
+    case 'line':
+      return <Waypoints size={size} />;
+    case 'circle':
+      return <CircleDot size={size} />;
+    case 'arc':
+      return <LoaderCircle size={size} />;
+    case 'ellipse':
+      return <Ellipse size={size} />;
+    case 'bezier':
+      return <LineSquiggle size={size} />;
+  }
 }
 
 /** The icon of an extrude operation, shared by the inspector and the timeline. */

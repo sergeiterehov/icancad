@@ -789,6 +789,20 @@ button:disabled {
   color: var(--accent);
 }
 
+.constraint-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+.constraint-row[data-active='true'] .constraint-icon {
+  color: var(--accent);
+}
+
+.constraint-row[data-problem='true'] .constraint-icon {
+  color: var(--warn);
+}
+
 .constraint-label {
   flex: 1 1 auto;
   min-width: 0;
@@ -1550,6 +1564,16 @@ button.selection-item[data-active='true'][data-error='true'] {
   cursor: help;
 }
 
+.selection-item .entity-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+.selection-item[data-active='true'] .entity-icon {
+  color: var(--accent);
+}
+
 .selection-item .tree-name {
   min-width: 0;
   overflow: hidden;
@@ -1668,6 +1692,14 @@ button.selection-item[data-active='true'][data-error='true'] {
   height: 1px;
   margin: 4px 2px;
   background: var(--border-strong);
+}
+
+.context-menu-tip {
+  display: flex;
+}
+
+.context-menu-tip > .context-menu-item {
+  flex: 1 1 auto;
 }
 
 .context-menu-hint {
@@ -2030,6 +2062,7 @@ button.selection-item[data-active='true'][data-error='true'] {
   position: absolute;
   display: inline-flex;
   align-items: center;
+  gap: 4px;
   height: 22px;
   padding: 0 7px;
   border: 1px solid var(--border);
@@ -2047,6 +2080,15 @@ button.selection-item[data-active='true'][data-error='true'] {
 
 .sketch-annotation:hover {
   border-color: var(--accent);
+}
+
+.sketch-annotation-icon {
+  display: inline-flex;
+  color: var(--text-faint);
+}
+
+.sketch-annotation[data-active='true'] .sketch-annotation-icon {
+  color: var(--accent);
 }
 
 .sketch-annotation[data-active='true'] {

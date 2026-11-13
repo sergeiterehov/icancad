@@ -28,33 +28,6 @@ export class ConstraintSolveError extends Error {
   }
 }
 
-const LABEL_KEYS: Partial<Record<ConstraintType, string>> = {
-  fix: 'constraint.fix',
-  coincident: 'constraint.coincident',
-  horizontal: 'constraint.horizontal',
-  vertical: 'constraint.vertical',
-  parallel: 'constraint.parallel',
-  perpendicular: 'constraint.perpendicular',
-  distance: 'constraint.distance',
-  'horizontal-distance': 'constraint.horizontalDistance',
-  'vertical-distance': 'constraint.verticalDistance',
-  angle: 'constraint.angle',
-  radius: 'constraint.radius',
-  diameter: 'constraint.diameter',
-  equal: 'constraint.equal',
-  concentric: 'constraint.concentric',
-  midpoint: 'constraint.midpoint',
-  'point-on-line': 'constraint.pointOnLine',
-  'point-on-circle': 'constraint.pointOnCircle',
-  'point-on-ellipse': 'constraint.pointOnEllipse',
-  tangent: 'constraint.tangent',
-  symmetric: 'constraint.symmetric',
-};
-
-export function constraintLabel(t: (key: string) => string, type: ConstraintType): string {
-  return t(LABEL_KEYS[type] ?? type);
-}
-
 export function constraintEntityIds(constraint: SketchConstraint): Set<string> {
   return new Set(constraint.refs.map((ref) => ref.entityId));
 }

@@ -1,7 +1,13 @@
 import type { SketchFeature } from '@icancad/model';
+import { MousePointer2, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { applyConstraintValue, ConstraintSolveError } from '../sketch/constraintModel';
+import {
+  applyConstraintValue,
+  constraintsGeometryIds,
+  ConstraintSolveError,
+  diagnoseSketch,
+} from '../sketch/constraintModel';
 import { computeSketchFrame } from '../sketch/sectionPlane';
 import {
   dimensionAnnotations,
@@ -12,6 +18,8 @@ import {
 import { useDocumentStore } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { useUiStore } from '../stores/uiStore';
+import { CONSTRAINT_CATALOG } from '../ui/constraintCatalog';
+import { useContextMenuStore } from '../ui/ContextMenu';
 import { useWheelStep } from '../ui/Controls';
 import { formatStep, parseNumber, steppedValue, wheelStep } from '../ui/numberStep';
 import { getViewport } from './handle';
@@ -46,6 +54,8 @@ export function SketchAnnotations() {
   const selectionKeys = useUiStore((state) => state.sketchSelectionIds);
   const selectedConstraintIds = useUiStore((state) => state.sketchConstraintIds);
   const selectConstraint = useUiStore((state) => state.selectSketchConstraint);
+  const setSketchSelection = useUiStore((state) => state.setSketchSelection);
+  const openMenu = useContextMenuStore((state) => state.open);
   const showToast = useUiStore((state) => state.showToast);
   const project = useDocumentStore((state) => state.project);
   const apply = useDocumentStore((state) => state.apply);
@@ -197,6 +207,48 @@ export function SketchAnnotations() {
     selectConstraint(annotation.id);
   };
 
+  const removeConstraint = (id: string) => {
+    if (!feature) return;
+    const next = {
+      ...feature,
+      constraints: feature.constraints.filter((constraint) => constraint.id !== id),
+    };
+    apply({ type: 'feature/replace', feature: next });
+    if (selectedConstraintIds.includes(id)) selectConstraint(null);
+    void diagnoseSketch(next);
+  };
+
+  const openConstraintMenu = (
+    annotation: DimensionAnnotation,
+    event: { clientX: number; clientY: number; preventDefault: () => void },
+  ) => {
+    if (!feature) return;
+    event.preventDefault();
+    // A right-clicked member of a selection keeps the whole selection, like the
+    // constraint list in the panel.
+    const targets = selectedConstraints.has(annotation.id)
+      ? feature.constraints.filter((candidate) => selectedConstraints.has(candidate.id))
+      : [annotation.constraint];
+    const geometryIds = constraintsGeometryIds(targets);
+    openMenu(event.clientX, event.clientY, [
+      {
+        id: 'select-geometry',
+        label: t('sketch.selectRelatedGeometry'),
+        icon: <MousePointer2 size={14} />,
+        disabled: geometryIds.length === 0,
+        onSelect: () => setSketchSelection(geometryIds),
+      },
+      { id: 'constraint-separator', separator: true },
+      {
+        id: 'delete',
+        label: t('common.delete'),
+        icon: <Trash2 size={14} />,
+        danger: true,
+        onSelect: () => removeConstraint(annotation.constraint.id),
+      },
+    ]);
+  };
+
   const commit = async (annotation: DimensionAnnotation, raw: string) => {
     endApplyGesture();
     if (cancelled.current) {
@@ -231,6 +283,7 @@ export function SketchAnnotations() {
         const position = positions[annotation.id];
         if (!position) return null;
         const editing = editingId === annotation.id;
+        const Icon = CONSTRAINT_CATALOG[annotation.constraint.type]?.icon;
         return (
           <div
             key={annotation.id}
@@ -251,6 +304,11 @@ export function SketchAnnotations() {
             onDoubleClick={(event) => {
               event.stopPropagation();
               beginEdit(annotation);
+            }}
+            onContextMenu={(event) => {
+              if (editing) return;
+              event.stopPropagation();
+              openConstraintMenu(annotation, event);
             }}
             onKeyDown={(event) => {
               if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -284,7 +342,14 @@ export function SketchAnnotations() {
                 }}
               />
             ) : (
-              <span>{annotation.text}</span>
+              <>
+                {Icon ? (
+                  <span className="sketch-annotation-icon" aria-hidden="true">
+                    <Icon size={12} />
+                  </span>
+                ) : null}
+                <span>{annotation.text}</span>
+              </>
             )}
           </div>
         );

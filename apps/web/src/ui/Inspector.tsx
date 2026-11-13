@@ -65,7 +65,7 @@ import {
 import { formatNumber } from './format';
 import { useContextMenuStore } from './ContextMenu';
 import { ChamferIcon, FilletIcon } from './edgeIcons';
-import { ExtrudeOpIcon, PointIcon } from './featureIcons';
+import { ExtrudeOpIcon, PointIcon, SketchEntityIcon } from './featureIcons';
 import { SectionPanel } from './SectionPanel';
 import {
   constraintsGeometryIds,
@@ -437,6 +437,9 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
                   );
                 }}
               >
+                <span className="entity-icon" aria-hidden="true">
+                  <SketchEntityIcon type={entity.type} />
+                </span>
                 <span className="tree-name">
                   {sketchEntityLabel((key) => t(key as never), entity)}
                 </span>

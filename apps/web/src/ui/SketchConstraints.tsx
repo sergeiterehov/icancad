@@ -4,13 +4,13 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   constraintEntityIds,
-  constraintLabel,
   constraintsGeometryIds,
   diagnoseSketch,
 } from '../sketch/constraintModel';
 import { isNumericConstraint } from '../sketch/dimensions';
 import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
+import { CONSTRAINT_CATALOG, constraintLabel } from './constraintCatalog';
 import { useContextMenuStore } from './ContextMenu';
 import { PanelSection } from './Controls';
 import { formatNumber } from './format';
@@ -116,6 +116,7 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
             const dimmed =
               (selectedEntityIds.size > 0 && !relatedByElement) ||
               (selectedConstraintIds.length > 0 && !activeConstraintIds.has(constraint.id));
+            const Icon = CONSTRAINT_CATALOG[constraint.type]?.icon;
             return (
               <div
                 key={constraint.id}
@@ -167,6 +168,9 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
                   ]);
                 }}
               >
+                <span className="constraint-icon" aria-hidden="true">
+                  {Icon ? <Icon size={13} /> : null}
+                </span>
                 <span className="constraint-label">
                   {constraintLabel((key) => t(key as never), constraint.type)}
                 </span>

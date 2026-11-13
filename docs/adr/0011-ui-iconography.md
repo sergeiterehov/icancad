@@ -34,6 +34,7 @@ lucide's `Icon` wrapper. Both packages are dependencies of the web app.
 | Sketch tools | Arc | `LoaderCircle` |
 | Sketch tools | Ellipse | `Ellipse` |
 | Sketch tools | Spline / Bezier | `LineSquiggle` |
+| Sketch object geometry list | Point, line, circle, arc, ellipse, Bezier | The icon of the tool that draws the entity, from `ui/featureIcons.tsx`, so what was drawn matches how it was drawn |
 | Sketch tools | Construction geometry | `LineStyle` |
 | Sketch tools | Constraints | `Ruler` |
 | Sketch placement | Face plane tab and face picker | `Hexagon` |
@@ -50,11 +51,34 @@ lucide's `Icon` wrapper. Both packages are dependencies of the web app.
 Unimplemented tools are not shown: the disabled Shell and Hole buttons and their
 labels were removed.
 
-The edge treatment family is drawn rather than imported: the three icons are the
-same body corner, and the stroke join itself is the operation — a miter for the
-tool, a bevel for a chamfer and a round join for a fillet. They live in
-`ui/edgeIcons.tsx` and are rendered through lucide's `Icon`, so size, stroke and
-colour behave like every other icon.
+### Sketch constraints
+
+Every constraint has an icon, a name, a description and a `Shift` shortcut, and
+all four come from one directory: `apps/web/src/ui/constraintCatalog.tsx`. The
+constraint list, the add menu and the dimension chips in the sketch editor read
+that directory, so a constraint always looks the same wherever it appears.
+
+| Constraint | Icon |
+|---|---|
+| Fix | `Pin` |
+| Coincident | `Link` |
+| Concentric | `Target` |
+| Horizontal / Vertical | `MoveUp` / `MoveRight` |
+| Parallel | `MarginHorizontal` |
+| Perpendicular | `TriangleRight` |
+| Tangent | `Tangent` |
+| Equal | `Equal` |
+| Distance | `MoveDiagonal` |
+| Horizontal / Vertical distance | `MoveHorizontal` / `MoveVertical` |
+| Angle | `Angle` |
+| Radius / Diameter | `Radius` / `Diameter` |
+| Symmetric | `TrianglesCenterlineDashedVertical` |
+| Midpoint | `ChevronsDownUp` |
+| Point on line / circle / ellipse | `GitCommitVertical` |
+
+The point-on-curve family shares one glyph: the target curve already tells which
+entity the constraint refers to, and a single glyph keeps the three entries
+visually together in the list.
 
 ## Consequences
 

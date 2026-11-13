@@ -3,6 +3,7 @@ import { Check, ChevronRight } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { create } from 'zustand';
+import { Tooltip } from './Tooltip';
 
 export type ContextMenuItem =
   | { id: string; separator: true }
@@ -14,6 +15,8 @@ export type ContextMenuItem =
       label: string;
       icon?: ReactNode;
       hint?: ReactNode;
+      /** Long description shown in a tooltip while the item is hovered. */
+      tooltip?: string;
       /** Overrides the visible label for assistive technology. */
       ariaLabel?: string;
       danger?: boolean;
@@ -69,6 +72,39 @@ export function showContextMenu(
   if (items.length === 0) return;
   event.preventDefault();
   useContextMenuStore.getState().open(event.clientX, event.clientY, items);
+}
+
+type MenuActionItem = Extract<ContextMenuItem, { onSelect: () => void }>;
+
+function MenuButton({ item, onSelect }: { item: MenuActionItem; onSelect: () => void }) {
+  const close = useContextMenuStore((state) => state.close);
+  const button = (
+    <button
+      type="button"
+      role="menuitem"
+      aria-label={item.ariaLabel}
+      disabled={item.disabled}
+      className={clsx('context-menu-item', item.danger && 'danger')}
+      onClick={() => {
+        close();
+        onSelect();
+      }}
+    >
+      {item.checked !== undefined ? (
+        <span className="context-menu-icon">{item.checked ? <Check size={14} /> : null}</span>
+      ) : (
+        item.icon && <span className="context-menu-icon">{item.icon}</span>
+      )}
+      <span className="context-menu-label">{item.label}</span>
+      {item.hint && <span className="context-menu-hint">{item.hint}</span>}
+    </button>
+  );
+  if (!item.tooltip) return button;
+  return (
+    <Tooltip content={item.tooltip} delay={600} className="context-menu-tip">
+      {button}
+    </Tooltip>
+  );
 }
 
 export function ContextMenuHost() {
@@ -232,28 +268,7 @@ export function ContextMenuHost() {
                         {child.heading}
                       </div>
                     ) : 'onSelect' in child ? (
-                      <button
-                        key={child.id}
-                        type="button"
-                        role="menuitem"
-                        aria-label={child.ariaLabel}
-                        disabled={child.disabled}
-                        className={clsx('context-menu-item', child.danger && 'danger')}
-                        onClick={() => {
-                          close();
-                          child.onSelect();
-                        }}
-                      >
-                        {child.checked !== undefined ? (
-                          <span className="context-menu-icon">
-                            {child.checked ? <Check size={14} /> : null}
-                          </span>
-                        ) : (
-                          child.icon && <span className="context-menu-icon">{child.icon}</span>
-                        )}
-                        <span className="context-menu-label">{child.label}</span>
-                        {child.hint && <span className="context-menu-hint">{child.hint}</span>}
-                      </button>
+                      <MenuButton key={child.id} item={child} onSelect={child.onSelect} />
                     ) : null,
                   )}
                 </div>
@@ -261,28 +276,7 @@ export function ContextMenuHost() {
             </div>
           );
         }
-        return (
-          <button
-            key={item.id}
-            type="button"
-            role="menuitem"
-            aria-label={item.ariaLabel}
-            disabled={item.disabled}
-            className={clsx('context-menu-item', item.danger && 'danger')}
-            onClick={() => {
-              close();
-              item.onSelect();
-            }}
-          >
-            {item.checked !== undefined ? (
-              <span className="context-menu-icon">{item.checked ? <Check size={14} /> : null}</span>
-            ) : (
-              item.icon && <span className="context-menu-icon">{item.icon}</span>
-            )}
-            <span className="context-menu-label">{item.label}</span>
-            {item.hint && <span className="context-menu-hint">{item.hint}</span>}
-          </button>
-        );
+        return <MenuButton key={item.id} item={item} onSelect={item.onSelect} />;
       })}
     </div>,
     document.body,

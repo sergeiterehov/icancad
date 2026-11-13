@@ -1,40 +1,30 @@
 import type { SketchFeature } from '@icancad/model';
 import { isFundamentalEntityId } from '@icancad/sketch';
-import {
-  Check,
-  CircleDot,
-  Ellipse,
-  LineSquiggle,
-  LineStyle,
-  LoaderCircle,
-  Magnet,
-  MousePointer2,
-  Ruler,
-  Trash2,
-  Waypoints,
-} from 'lucide-react';
-import { useState, type ComponentType, type MouseEvent } from 'react';
+import { Check, LineStyle, Magnet, MousePointer2, Ruler, Trash2 } from 'lucide-react';
+import type { MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  applyConstraintAction,
   buildConstraintActions,
-  constraintLabel,
-  ConstraintSolveError,
   diagnoseSketch,
   removeSketchEntities,
-  type ConstraintAction,
 } from '../sketch/constraintModel';
-import type { SketchTool } from '../sketch/tool';
+import { SKETCH_TOOL_SHORTCUTS, type SketchTool } from '../sketch/tool';
+import { useApplyConstraintAction } from '../sketch/useConstraintActions';
 import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
+import {
+  CONSTRAINT_CATALOG,
+  constraintDescription,
+  constraintLabel,
+  constraintShortcutLabel,
+} from './constraintCatalog';
 import { useContextMenuStore } from './ContextMenu';
 import { IconButton } from './Controls';
-import { PointIcon } from './featureIcons';
+import { SketchEntityIcon } from './featureIcons';
 import { SectionTool } from './SectionTool';
 
 const TOOLS: {
   tool: SketchTool;
-  icon: ComponentType<{ size?: number }>;
   label:
     | 'sketch.toolSelect'
     | 'sketch.toolPoint'
@@ -44,13 +34,13 @@ const TOOLS: {
     | 'sketch.toolEllipse'
     | 'sketch.toolBezier';
 }[] = [
-  { tool: 'select', icon: MousePointer2, label: 'sketch.toolSelect' },
-  { tool: 'point', icon: PointIcon, label: 'sketch.toolPoint' },
-  { tool: 'line', icon: Waypoints, label: 'sketch.toolLine' },
-  { tool: 'circle', icon: CircleDot, label: 'sketch.toolCircle' },
-  { tool: 'arc', icon: LoaderCircle, label: 'sketch.toolArc' },
-  { tool: 'ellipse', icon: Ellipse, label: 'sketch.toolEllipse' },
-  { tool: 'bezier', icon: LineSquiggle, label: 'sketch.toolBezier' },
+  { tool: 'select', label: 'sketch.toolSelect' },
+  { tool: 'point', label: 'sketch.toolPoint' },
+  { tool: 'line', label: 'sketch.toolLine' },
+  { tool: 'circle', label: 'sketch.toolCircle' },
+  { tool: 'arc', label: 'sketch.toolArc' },
+  { tool: 'ellipse', label: 'sketch.toolEllipse' },
+  { tool: 'bezier', label: 'sketch.toolBezier' },
 ];
 
 export function SketchToolRail() {
@@ -63,16 +53,15 @@ export function SketchToolRail() {
   const setSketchSelection = useUiStore((state) => state.setSketchSelection);
   const magnetEnabled = useUiStore((state) => state.sketchMagnetEnabled);
   const setMagnetEnabled = useUiStore((state) => state.setSketchMagnetEnabled);
-  const showToast = useUiStore((state) => state.showToast);
   const project = useDocumentStore((state) => state.project);
   const apply = useDocumentStore((state) => state.apply);
   const openMenu = useContextMenuStore((state) => state.open);
-  const [busy, setBusy] = useState(false);
 
   const feature = project.features.find(
     (candidate): candidate is SketchFeature =>
       candidate.id === activeSketchId && candidate.type === 'sketch',
   );
+  const { run: runAction, busy } = useApplyConstraintAction(feature);
   const actions = feature ? buildConstraintActions(feature, selectionIds) : [];
   const entitySelection = selectionIds.filter(
     (key) => !key.includes('#') && !isFundamentalEntityId(key),
@@ -81,24 +70,6 @@ export function SketchToolRail() {
     feature?.entities.filter((entity) => entitySelection.includes(entity.id)) ?? [];
   const constructionActive =
     constructionEntities.length > 0 && constructionEntities.every((entity) => entity.construction);
-
-  const runAction = async (action: ConstraintAction) => {
-    if (!feature) return;
-    setBusy(true);
-    try {
-      const next = await applyConstraintAction(feature, action);
-      apply({ type: 'feature/replace', feature: next });
-    } catch (error) {
-      showToast(
-        error instanceof ConstraintSolveError && error.code === 'conflict'
-          ? 'constraint.conflict'
-          : 'constraint.failed',
-        'error',
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const toggleConstruction = () => {
     if (!feature || constructionEntities.length === 0) return;
@@ -121,27 +92,41 @@ export function SketchToolRail() {
     openMenu(
       rect.left,
       rect.bottom + 6,
-      actions.map((action) => ({
-        id: action.key,
-        label: constraintLabel((key) => t(key as never), action.type),
-        onSelect: () => void runAction(action),
-        disabled: busy,
-      })),
+      actions.map((action) => {
+        const Icon = CONSTRAINT_CATALOG[action.type]?.icon;
+        return {
+          id: action.key,
+          label: constraintLabel((key) => t(key as never), action.type),
+          icon: Icon ? <Icon size={14} /> : undefined,
+          hint: constraintShortcutLabel(action.type),
+          tooltip: constraintDescription((key) => t(key as never), action.type),
+          onSelect: () => void runAction(action),
+          disabled: busy,
+        };
+      }),
     );
   };
 
   return (
     <nav className="tool-rail" aria-label={t('panels.tools')}>
-      {TOOLS.map(({ tool, icon: Icon, label }) => (
-        <IconButton
-          key={tool}
-          label={t(label)}
-          active={sketchTool === tool}
-          onClick={() => setSketchTool(tool)}
-        >
-          <Icon size={17} />
-        </IconButton>
-      ))}
+      {TOOLS.map(({ tool, label }) => {
+        const shortcut = SKETCH_TOOL_SHORTCUTS[tool];
+        return (
+          <IconButton
+            key={tool}
+            label={t(label)}
+            tooltip={shortcut ? `${t(label)} (${shortcut})` : t(label)}
+            active={sketchTool === tool}
+            onClick={() => setSketchTool(tool)}
+          >
+            {tool === 'select' ? (
+              <MousePointer2 size={17} />
+            ) : (
+              <SketchEntityIcon type={tool} size={17} />
+            )}
+          </IconButton>
+        );
+      })}
 
       <div className="tool-separator" />
 

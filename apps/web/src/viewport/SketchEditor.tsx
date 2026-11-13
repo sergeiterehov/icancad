@@ -22,7 +22,10 @@ import { useTranslation } from 'react-i18next';
 import { solveSketch } from '../sketch/client';
 import { rebuildScene } from '../kernel/rebuild';
 import { autoConstraintsForEntity, isNearAxis, snapHighlightIds } from '../sketch/autoConstraints';
-import { diagnoseSketch, removeSketchEntities } from '../sketch/constraintModel';
+import { buildConstraintActions, diagnoseSketch, removeSketchEntities } from '../sketch/constraintModel';
+import { sketchToolFromShortcut } from '../sketch/tool';
+import { useApplyConstraintAction } from '../sketch/useConstraintActions';
+import { constraintFromShortcut } from '../ui/constraintCatalog';
 import { canEditSketch, computeSketchFrame, sketchFrameOf } from '../sketch/sectionPlane';
 import { solveDrag } from '../sketch/dragSolve';
 import { liveMeasures, measureInfo } from '../sketch/measure';
@@ -122,6 +125,7 @@ export function SketchEditor() {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? 'en';
   const openContextMenu = useContextMenuStore((state) => state.open);
+  const closeContextMenu = useContextMenuStore((state) => state.close);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
   const setActiveSketch = useUiStore((state) => state.setActiveSketch);
   const setSketchTool = useUiStore((state) => state.setSketchTool);
@@ -163,6 +167,7 @@ export function SketchEditor() {
         : null,
     [sketch, activeSketchReady, meshes, sketchFrames],
   );
+  const { run: runConstraintAction } = useApplyConstraintAction(sketch);
 
   const [draft, setDraft] = useState<DraftPoint[]>([]);
   // The ref mirrors the draft synchronously, so a tool switch can clear it
@@ -1035,6 +1040,26 @@ export function SketchEditor() {
       }
       if (event.key === 'Enter' && activeTool === 'bezier') finishBezier();
       if (event.key === 'Enter' && activeTool === 'line') finishLine();
+      const shortcutConstraint = constraintFromShortcut(event);
+      if (shortcutConstraint) {
+        const action = sketch
+          ? buildConstraintActions(sketch, selectionIds).find(
+              (candidate) => candidate.type === shortcutConstraint,
+            )
+          : undefined;
+        if (action) {
+          event.preventDefault();
+          closeContextMenu();
+          void runConstraintAction(action);
+          return;
+        }
+      }
+      const shortcutTool = sketchToolFromShortcut(event);
+      if (shortcutTool) {
+        event.preventDefault();
+        closeContextMenu();
+        setSketchTool(shortcutTool);
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
