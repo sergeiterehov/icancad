@@ -26,6 +26,7 @@ import { diagnoseSketch, removeSketchEntities } from '../sketch/constraintModel'
 import { canEditSketch, computeSketchFrame, sketchFrameOf } from '../sketch/sectionPlane';
 import { solveDrag } from '../sketch/dragSolve';
 import { liveMeasures, measureInfo } from '../sketch/measure';
+import { sketchPickKey } from '../sketch/pickKey';
 import { referenceMenuItems } from '../sketch/referenceMenu';
 import type { SketchSnap, SketchSnapInput, SketchSnapMode } from '../sketch/snap';
 import type { SketchTool } from '../sketch/tool';
@@ -131,6 +132,8 @@ export function SketchEditor() {
   const selectSketchConstraint = useUiStore((state) => state.selectSketchConstraint);
   const setSketchFrozen = useUiStore((state) => state.setSketchFrozen);
   const setSketchAutoHighlight = useUiStore((state) => state.setSketchAutoHighlight);
+  const setSketchHover = useUiStore((state) => state.setSketchHover);
+  const sketchHoverIds = useUiStore((state) => state.sketchHoverIds);
   const setSketchProblems = useUiStore((state) => state.setSketchProblems);
   const magnetEnabled = useUiStore((state) => state.sketchMagnetEnabled);
   const tool = useUiStore((state) => state.sketchTool);
@@ -200,6 +203,7 @@ export function SketchEditor() {
     polylineTail.current = null;
     draftToolRef.current = tool;
     applyAutoHighlight([]);
+    setSketchHover([]);
   }, [activeSketchId, tool, sketchToolNonce]);
 
   useEffect(() => {
@@ -586,7 +590,11 @@ export function SketchEditor() {
     if (!activeSketchId || !sketch) return;
     const canvas = document.querySelector<HTMLCanvasElement>('[data-testid="viewport-canvas"]');
     if (!canvas) return;
-    canvas.style.cursor = tool === 'select' ? 'default' : 'crosshair';
+    // The listener effect is rebuilt whenever the document or a tool changes,
+    // so it restores the cursor from the current hover instead of the tool
+    // alone: a late commit must not drop the pointer over geometry.
+    const hovering = useUiStore.getState().sketchHoverIds.length > 0;
+    canvas.style.cursor = tool === 'select' ? (hovering ? 'pointer' : 'default') : 'crosshair';
 
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
@@ -604,6 +612,7 @@ export function SketchEditor() {
       if (!entity) return;
       // Fundamental geometry is fixed: it can be selected but not dragged.
       if (isFundamentalEntityId(entity.id)) return;
+      setSketchHover([]);
       const pointIndex = pick.pointIndex ?? (entity.type === 'point' ? 0 : null);
       const key = pointIndex === null ? entity.id : `${entity.id}#${pointIndex}`;
       if (!additive) setSketchSelection([key]);
@@ -625,7 +634,22 @@ export function SketchEditor() {
       const activeTool = useUiStore.getState().sketchTool;
       if (activeTool === 'select') {
         const activeDrag = drag.current;
-        if (!activeDrag) return;
+        if (!activeDrag) {
+          // Preview what a click would take. A tool that creates geometry has
+          // its own magnet feedback, so this hover is selection-only.
+          const hoverPick = getViewport()?.pickSketch(
+            event.clientX,
+            event.clientY,
+            currentSketchEntities(activeSketchId),
+          );
+          const hoverEntity = hoverPick?.entityId
+            ? sketchEntityIndex(sketch.entities).get(hoverPick.entityId)
+            : undefined;
+          const hoverKey = sketchPickKey(hoverPick ?? null, hoverEntity);
+          setSketchHover(hoverKey ? [hoverKey] : []);
+          canvas.style.cursor = hoverKey ? 'pointer' : 'default';
+          return;
+        }
         if (!activeDrag.active) {
           if (
             Math.hypot(event.clientX - activeDrag.startX, event.clientY - activeDrag.startY) <= 3
@@ -749,11 +773,10 @@ export function SketchEditor() {
           currentSketchEntities(activeSketchId),
         );
         if (!pick) return;
-        const key = pick.entityId
-          ? pick.pointIndex !== null
-            ? `${pick.entityId}#${pick.pointIndex}`
-            : pick.entityId
-          : null;
+        const pickEntity = pick.entityId
+          ? sketchEntityIndex(sketch.entities).get(pick.entityId)
+          : undefined;
+        const key = sketchPickKey(pick, pickEntity);
         const additive = event.metaKey || event.ctrlKey || event.shiftKey;
         if (!key) {
           if (!additive) setSketchSelection([]);
@@ -814,8 +837,14 @@ export function SketchEditor() {
       );
     };
 
+    const onPointerLeave = () => {
+      setSketchHover([]);
+      if (useUiStore.getState().sketchTool === 'select') canvas.style.cursor = 'default';
+    };
+
     canvas.addEventListener('pointerdown', onPointerDown);
     canvas.addEventListener('pointermove', onPointerMove);
+    canvas.addEventListener('pointerleave', onPointerLeave);
     canvas.addEventListener('click', onClick);
     canvas.addEventListener('dblclick', onDoubleClick);
     canvas.addEventListener('contextmenu', onContextMenu);
@@ -824,6 +853,7 @@ export function SketchEditor() {
       canvas.style.cursor = '';
       canvas.removeEventListener('pointerdown', onPointerDown);
       canvas.removeEventListener('pointermove', onPointerMove);
+      canvas.removeEventListener('pointerleave', onPointerLeave);
       canvas.removeEventListener('click', onClick);
       canvas.removeEventListener('dblclick', onDoubleClick);
       canvas.removeEventListener('contextmenu', onContextMenu);
@@ -1042,7 +1072,7 @@ export function SketchEditor() {
   })();
 
   return (
-    <div className="sketch-overlay">
+    <div className="sketch-overlay" data-sketch-hover={sketchHoverIds.join(' ') || undefined}>
       {liveMeasure && liveMeasure.x !== null && liveMeasure.y !== null && (
         <div
           className="sketch-live-measure"

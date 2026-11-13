@@ -1289,6 +1289,41 @@ test.describe('ICANCad foundation', () => {
     await expect(page.getByRole('menuitem')).toHaveCount(1);
     await expect(page.getByRole('menuitem', { name: 'Fix', exact: true })).toBeVisible();
   });
+  test('highlights the geometry under the pointer while selecting', async ({ page }) => {
+    await openApp(page);
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    // Entering a sketch animates the camera; wait so clicks map to the settled view.
+    await page.waitForTimeout(600);
+
+    const canvas = page.getByTestId('viewport-canvas');
+    const box = await canvas.boundingBox();
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    await page.mouse.click(box!.x + 300, box!.y + 200);
+    await page.mouse.click(box!.x + 500, box!.y + 200);
+    await page.getByRole('button', { name: 'Select', exact: true }).click();
+    await expect(page.locator('.sketch-entity-row')).toHaveCount(1);
+
+    const overlay = page.locator('.sketch-overlay');
+    // The pointer previews what a click would take.
+    await page.mouse.move(box!.x + 400, box!.y + 200);
+    await expect(overlay).toHaveAttribute('data-sketch-hover', /^entity_/);
+    await expect(canvas).toHaveCSS('cursor', 'pointer');
+    // A control point wins over the curve it belongs to.
+    await page.mouse.move(box!.x + 300, box!.y + 200);
+    await expect(overlay).toHaveAttribute('data-sketch-hover', /#0$/);
+    // Empty space clears the preview.
+    await page.mouse.move(box!.x + 600, box!.y + 500);
+    await expect(overlay).not.toHaveAttribute('data-sketch-hover', /.+/);
+    await expect(canvas).toHaveCSS('cursor', 'default');
+
+    // A creating tool keeps its magnet feedback and shows no selection preview.
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    await page.mouse.move(box!.x + 400, box!.y + 200);
+    await expect(overlay).not.toHaveAttribute('data-sketch-hover', /.+/);
+    await expect(canvas).toHaveCSS('cursor', 'crosshair');
+  });
   test('adds automatic constraints and toggles construction geometry', async ({ page }) => {
     await openApp(page);
     await page.getByRole('button', { name: 'Sketch', exact: true }).click();

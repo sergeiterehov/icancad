@@ -25,7 +25,7 @@ not drawn at all.
 | Axis alignment | A point on an axis is solved as sharing that coordinate with the fixed origin (`horizontal_pp` for the X axis, `vertical_pp` for the Y axis) instead of as a point on the axis line. planegcs reports the line version as redundant, and a wrong DoF, as soon as the point is also joined to other geometry. |
 | Snapping and selection | The origin is a snap target, so snapping to it produces a coincidence. The axes are not automatic snap targets: an unbounded line would catch ordinary clicks anywhere in the sketch, and drawing along an axis already adds a horizontal or vertical constraint. The axes are picked like stored lines and constrained explicitly — with a point selected they offer point-on-line, with a line parallel, perpendicular and angle, and with two points symmetry. The origin with a point offers coincidence, distance, horizontal/vertical distance and alignment. |
 | Limits | The origin and the axes cannot be deleted, dragged, fixed, measured or made construction, and their control points are not grab targets. A `fix` action still applies to the stored geometry selected along with them. |
-| Rendering | The axes and the origin are drawn with the grid of the sketch being edited, not with its entities. They take the selection and highlight colours, and they are hidden for sketches that are not being edited. |
+| Rendering | The axes and the origin are drawn with the grid of the sketch being edited, not with its entities. They take the selection, hover and highlight colours (ADR 0017), and they are hidden for sketches that are not being edited. |
 | References | `SketchReference` measures stay limited to stored entities: the fundamental geometry needs no annotations of its own. |
 
 ## Consequences

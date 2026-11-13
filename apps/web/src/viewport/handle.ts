@@ -25,6 +25,8 @@ export interface SceneSketch {
   dimmedEntityIds: string[];
   frozenEntityIds: string[];
   highlightIds: string[];
+  /** Geometry under the pointer while selecting. */
+  hoverIds: string[];
   active: boolean;
 }
 

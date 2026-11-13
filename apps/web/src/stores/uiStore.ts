@@ -40,6 +40,8 @@ interface UiState {
   sketchConstraintId: string | null;
   sketchFrozenEntityIds: string[];
   sketchAutoHighlightIds: string[];
+  /** Geometry under the pointer while selecting; empty while a tool creates. */
+  sketchHoverIds: string[];
   sketchProblemConstraintIds: string[];
   sketchMagnetEnabled: boolean;
   sketchTool: SketchTool;
@@ -65,6 +67,7 @@ interface UiState {
   selectSketchConstraint: (id: string | null) => void;
   setSketchFrozen: (ids: string[]) => void;
   setSketchAutoHighlight: (ids: string[]) => void;
+  setSketchHover: (ids: string[]) => void;
   setSketchProblems: (ids: string[]) => void;
   setSketchMagnetEnabled: (enabled: boolean) => void;
   setSketchTool: (tool: SketchTool) => void;
@@ -112,6 +115,7 @@ export const useUiStore = create<UiState>((set) => ({
   sketchConstraintId: null,
   sketchFrozenEntityIds: [],
   sketchAutoHighlightIds: [],
+  sketchHoverIds: [],
   sketchProblemConstraintIds: [],
   sketchMagnetEnabled: loadSketchMagnet(),
   sketchTool: 'select',
@@ -211,12 +215,18 @@ export const useUiStore = create<UiState>((set) => ({
       sketchConstraintId: null,
       sketchFrozenEntityIds: [],
       sketchAutoHighlightIds: [],
+      sketchHoverIds: [],
       sketchProblemConstraintIds: [],
       sketchTool: 'select',
     }),
   setActiveSketchReady: (activeSketchReady) => set({ activeSketchReady }),
   setSketchSelection: (sketchSelectionIds) =>
-    set({ sketchSelectionIds, sketchConstraintId: null, sketchAutoHighlightIds: [] }),
+    set({
+      sketchSelectionIds,
+      sketchConstraintId: null,
+      sketchAutoHighlightIds: [],
+      sketchHoverIds: [],
+    }),
   selectSketchConstraint: (sketchConstraintId) =>
     set({ sketchConstraintId, sketchSelectionIds: [] }),
   setSketchFrozen: (sketchFrozenEntityIds) => set({ sketchFrozenEntityIds }),
@@ -236,6 +246,13 @@ export const useUiStore = create<UiState>((set) => ({
         ? state
         : { sketchAutoHighlightIds },
     ),
+  setSketchHover: (sketchHoverIds) =>
+    set((state) =>
+      state.sketchHoverIds.length === sketchHoverIds.length &&
+      state.sketchHoverIds.every((id, index) => id === sketchHoverIds[index])
+        ? state
+        : { sketchHoverIds },
+    ),
   setSketchMagnetEnabled: (sketchMagnetEnabled) => {
     try {
       localStorage.setItem(SKETCH_MAGNET_KEY, String(sketchMagnetEnabled));
@@ -249,6 +266,7 @@ export const useUiStore = create<UiState>((set) => ({
       sketchTool,
       sketchToolNonce: state.sketchToolNonce + 1,
       sketchAutoHighlightIds: [],
+      sketchHoverIds: [],
     })),
   setSectionEnabled: (sectionEnabled) => {
     try {

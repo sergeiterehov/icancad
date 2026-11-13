@@ -37,6 +37,7 @@ import type {
   ViewName,
   ViewportCamera,
 } from './handle';
+import { hoverColor, selectionColor } from './interactionColors';
 import { isPlanarFace } from './planarFace';
 import { RenderOrder } from './renderOrder';
 import { firstUnclippedHit } from './sectionPick';
@@ -734,10 +735,6 @@ export class SceneController {
     }
   }
 
-  private edgeHighlightColor(): number {
-    return this.sketchHighlightColor();
-  }
-
   private handleAt(
     clientX: number,
     clientY: number,
@@ -896,7 +893,13 @@ export class SceneController {
   setEdgeHighlights(keys: readonly string[]): void {
     this.edgeHighlights = [...keys];
     this.clearEdgeLines(this.edgeHighlightEntries);
-    this.drawEdgeLines(this.edgeHighlightEntries, this.edgeHighlights, 3.4, 1);
+    this.drawEdgeLines(
+      this.edgeHighlightEntries,
+      this.edgeHighlights,
+      3.4,
+      1,
+      this.sketchSelectedColor(),
+    );
     this.invalidate();
   }
 
@@ -906,6 +909,7 @@ export class SceneController {
     keys: readonly string[],
     linewidth: number,
     opacity: number,
+    color: number,
   ): void {
     for (const key of keys) {
       const separator = key.lastIndexOf('#');
@@ -922,7 +926,7 @@ export class SceneController {
       }
       geometry.setPositions(positions);
       const material = new LineMaterial({
-        color: this.sketchHighlightColor(),
+        color,
         linewidth,
         transparent: true,
         opacity,
@@ -954,7 +958,9 @@ export class SceneController {
     if (key === this.hoveredEdgeKey) return;
     this.hoveredEdgeKey = key;
     this.clearEdgeLines(this.edgeHoverEntries);
-    if (key) this.drawEdgeLines(this.edgeHoverEntries, [key], 4.6, 0.55);
+    if (key) {
+      this.drawEdgeLines(this.edgeHoverEntries, [key], 4.6, 0.55, this.sketchHoverColor());
+    }
     this.invalidate();
   }
 
@@ -1480,15 +1486,20 @@ export class SceneController {
   }
 
   private sketchSelectedColor(): number {
-    return 0xff9f43;
+    return selectionColor(this.theme);
   }
 
   private sketchConstructionColor(): number {
     return this.theme === 'dark' ? 0x7d8ea8 : 0x6d7a8d;
   }
 
+  /** Accent of the geometry the magnet would snap to; shared with selection. */
   private sketchHighlightColor(): number {
-    return this.theme === 'dark' ? 0xbb86fc : 0x7c3aed;
+    return selectionColor(this.theme);
+  }
+
+  private sketchHoverColor(): number {
+    return hoverColor(this.theme);
   }
 
   private sketchFrozenLineColor(): number {
@@ -1527,10 +1538,25 @@ export class SceneController {
         set.add(Number(index));
         selectedPoints.set(entityId, set);
       }
+      const hovered = new Set(sketch.hoverIds.filter((key) => !key.includes('#')));
+      const hoveredPoints = new Map<string, Set<number>>();
+      for (const key of sketch.hoverIds) {
+        const [entityId, index] = key.split('#');
+        if (!entityId || index === undefined) continue;
+        const set = hoveredPoints.get(entityId) ?? new Set<number>();
+        set.add(Number(index));
+        hoveredPoints.set(entityId, set);
+      }
       // The origin and the axes are not part of the sketch, so they are drawn
       // with the grid instead of with the stored entities.
       if (sketch.active) {
-        this.addSketchFundamentals(group, sketch.frame, sketch.selectionKeys, sketch.highlightIds);
+        this.addSketchFundamentals(
+          group,
+          sketch.frame,
+          sketch.selectionKeys,
+          sketch.highlightIds,
+          sketch.hoverIds,
+        );
       }
       // Construction geometry is a modelling helper: it is only drawn when the
       // object asks for it, or while that sketch itself is being edited.
@@ -1548,6 +1574,8 @@ export class SceneController {
           frozen.has(entity.id),
           highlighted.has(entity.id),
           highlightedPoints.get(entity.id) ?? new Set<number>(),
+          hovered.has(entity.id),
+          hoveredPoints.get(entity.id) ?? new Set<number>(),
           editingSketch && !sketch.active,
           sketch.active ? null : tint,
         );
@@ -1882,20 +1910,25 @@ export class SceneController {
     frame: SketchFrame,
     selectionKeys: readonly string[],
     highlightKeys: readonly string[],
+    hoverKeys: readonly string[],
   ): void {
     const selected = new Set(selectionKeys.map((key) => key.split('#')[0]));
     const highlighted = new Set(highlightKeys.map((key) => key.split('#')[0]));
+    const hovered = new Set(hoverKeys.map((key) => key.split('#')[0]));
     for (const entity of fundamentalEntities()) {
       if (entity.type !== 'line') continue;
       const picked = selected.has(entity.id) || highlighted.has(entity.id);
       const color = selected.has(entity.id)
         ? this.sketchSelectedColor()
-        : highlighted.has(entity.id)
-          ? this.sketchHighlightColor()
-          : entity.id === SKETCH_X_AXIS_ID
-            ? 0xd48282
-            : 0x82b482;
-      const line = this.createSketchLine(entity, frame, color, picked ? 3 : 1.5, 1);
+        : hovered.has(entity.id)
+          ? this.sketchHoverColor()
+          : highlighted.has(entity.id)
+            ? this.sketchHighlightColor()
+            : entity.id === SKETCH_X_AXIS_ID
+              ? 0xd48282
+              : 0x82b482;
+      const width = selected.has(entity.id) ? 3 : hovered.has(entity.id) ? 2.5 : picked ? 3 : 1.5;
+      const line = this.createSketchLine(entity, frame, color, width, 1);
       if (!line) continue;
       line.renderOrder = RenderOrder.sketchGrid;
       group.add(line);
@@ -1903,25 +1936,30 @@ export class SceneController {
 
     const originSelected = selected.has(SKETCH_ORIGIN_ID);
     const originHighlighted = highlighted.has(SKETCH_ORIGIN_ID);
+    const originHovered = hovered.has(SKETCH_ORIGIN_ID);
     const origin = new THREE.Points(
       new THREE.BufferGeometry().setFromPoints([this.sketchWorld(frame, [0, 0])]),
       new THREE.PointsMaterial({
         color: originSelected
           ? this.sketchSelectedColor()
-          : originHighlighted
-            ? this.sketchHighlightColor()
-            : this.sketchPointColor(),
+          : originHovered
+            ? this.sketchHoverColor()
+            : originHighlighted
+              ? this.sketchHighlightColor()
+              : this.sketchPointColor(),
         map: this.pointTexture,
         alphaTest: 0.5,
         transparent: true,
-        size: originSelected || originHighlighted ? 8 : 6,
+        size: originSelected ? 8 : originHovered ? 7 : originHighlighted ? 8 : 6,
         sizeAttenuation: false,
         depthTest: false,
         depthWrite: false,
       }),
     );
     origin.renderOrder =
-      originSelected || originHighlighted ? RenderOrder.sketchPointActive : RenderOrder.sketchPoint;
+      originSelected || originHovered || originHighlighted
+        ? RenderOrder.sketchPointActive
+        : RenderOrder.sketchPoint;
     group.add(origin);
   }
 
@@ -1945,21 +1983,25 @@ export class SceneController {
     frozen: boolean,
     highlighted: boolean,
     highlightedPoints: ReadonlySet<number>,
+    hovered: boolean,
+    hoveredPoints: ReadonlySet<number>,
     background: boolean,
     tint: number | null,
   ): void {
     const color = selected
       ? this.sketchSelectedColor()
-      : highlighted
-        ? this.sketchHighlightColor()
-        : frozen
-          ? this.sketchFrozenLineColor()
-          : entity.construction
-            ? this.sketchConstructionColor()
-            : (tint ?? this.sketchColor());
+      : hovered
+        ? this.sketchHoverColor()
+        : highlighted
+          ? this.sketchHighlightColor()
+          : frozen
+            ? this.sketchFrozenLineColor()
+            : entity.construction
+              ? this.sketchConstructionColor()
+              : (tint ?? this.sketchColor());
     // Sketches that are not being edited are drawn thinner so they cannot be
     // mistaken for the sketch in progress.
-    const width = selected ? 3 : highlighted ? 3 : background ? 1 : 2;
+    const width = selected ? 3 : hovered ? 3 : highlighted ? 3 : background ? 1 : 2;
     if (entity.type !== 'point') {
       const line = this.createSketchLine(
         entity,
@@ -1977,6 +2019,7 @@ export class SceneController {
     const controlPoints = this.sketchControlPoints(entity);
     controlPoints.forEach((point, index) => {
       const pointHighlighted = highlighted || highlightedPoints.has(index);
+      const pointHovered = hovered || hoveredPoints.has(index);
       const selectedPoint = selected || selectedPoints.has(index);
       const geometry = new THREE.BufferGeometry().setFromPoints([this.sketchWorld(frame, point)]);
       const points = new THREE.Points(
@@ -1984,23 +2027,27 @@ export class SceneController {
         new THREE.PointsMaterial({
           color: selectedPoint
             ? this.sketchSelectedColor()
-            : pointHighlighted
-              ? this.sketchHighlightColor()
-              : frozen
-                ? this.sketchFrozenPointColor()
-                : this.sketchPointColor(),
+            : pointHovered
+              ? this.sketchHoverColor()
+              : pointHighlighted
+                ? this.sketchHighlightColor()
+                : frozen
+                  ? this.sketchFrozenPointColor()
+                  : this.sketchPointColor(),
           map: this.pointTexture,
           alphaTest: 0.5,
           transparent: true,
           opacity: dimmed ? 0.25 : 1,
-          size: selectedPoint || pointHighlighted ? 6 : 4,
+          size: selectedPoint ? 6 : pointHovered ? 5 : pointHighlighted ? 6 : 4,
           sizeAttenuation: false,
           depthTest: false,
           depthWrite: false,
         }),
       );
       points.renderOrder =
-        selectedPoint || pointHighlighted ? RenderOrder.sketchPointActive : RenderOrder.sketchPoint;
+        selectedPoint || pointHovered || pointHighlighted
+          ? RenderOrder.sketchPointActive
+          : RenderOrder.sketchPoint;
       points.userData.entityId = entity.id;
       points.userData.pointIndex = index;
       group.add(points);

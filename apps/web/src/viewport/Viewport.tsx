@@ -103,6 +103,7 @@ export function Viewport() {
   const sketchConstraintId = useUiStore((state) => state.sketchConstraintId);
   const sketchFrozenEntityIds = useUiStore((state) => state.sketchFrozenEntityIds);
   const sketchAutoHighlightIds = useUiStore((state) => state.sketchAutoHighlightIds);
+  const sketchHoverIds = useUiStore((state) => state.sketchHoverIds);
   const sketchSelectionIds = useUiStore((state) => state.sketchSelectionIds);
   const selection = useDocumentStore((state) => state.selection);
   // A selected sketch shows its regions in 3D, and selecting one of those
@@ -897,6 +898,7 @@ export function Viewport() {
             : [],
         frozenEntityIds: feature.id === activeSketchId ? sketchFrozenEntityIds : [],
         highlightIds: feature.id === activeSketchId ? sketchAutoHighlightIds : [],
+        hoverIds: feature.id === activeSketchId ? sketchHoverIds : [],
         active: feature.id === activeSketchId,
       }));
     getViewport()?.setSketches(sketches);
@@ -907,6 +909,7 @@ export function Viewport() {
     sketchConstraintId,
     sketchFrozenEntityIds,
     sketchAutoHighlightIds,
+    sketchHoverIds,
     pickingExtrude,
     featureErrors,
     sketchFrames,
