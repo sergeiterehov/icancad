@@ -70,6 +70,19 @@ interface DocumentState {
    * the one that hides the sketches it consumed when its settings close.
    */
   freshFeatureId: string | null;
+  /**
+   * Open scroll gesture and the document it started from. Its changes alter the
+   * document without a history entry. Leaving the field records the value that
+   * stays as the one edit of the visit — or nothing when the value came back to
+   * where it started, or the edit was cancelled.
+   */
+  applyGesture: { before: Project } | null;
+  /** Opens the gesture when the first wheel notch of a visit arrives. */
+  beginWheelGesture: () => void;
+  /** Ends the gesture and records it when the document really changed. */
+  endApplyGesture: () => void;
+  /** Ends the gesture and returns the document to where it started. */
+  cancelApplyGesture: () => void;
   apply: (...commands: Command[]) => boolean;
   preview: (...commands: Command[]) => void;
   /** Adds a feature without a history step, for a live handle drag. */
@@ -160,6 +173,18 @@ function withOrderKey(order: readonly string[] | undefined, key: string, add: bo
 }
 
 const HISTORY_LIMIT = 100;
+
+/**
+ * Content of a document without the parts that are bookkeeping rather than an
+ * edit: the save timestamp and the camera the user happens to look from.
+ */
+function projectContent(project: Project): string {
+  return JSON.stringify({
+    ...project,
+    updatedAt: '',
+    view: { ...project.view, camera: null },
+  });
+}
 
 // An operation created while the timeline cursor sits in the middle of the list
 // belongs at that position, and the cursor moves onto it so everything after it
@@ -391,6 +416,47 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   saveState: 'idle',
   editingFeatureId: null,
   freshFeatureId: null,
+  applyGesture: null,
+
+  beginWheelGesture: () => {
+    const state = get();
+    if (state.applyGesture) return;
+    set({ applyGesture: { before: state.project } });
+  },
+
+  endApplyGesture: () => {
+    const state = get();
+    const gesture = state.applyGesture;
+    if (!gesture) return;
+    const changed = projectContent(state.project) !== projectContent(gesture.before);
+    set({
+      applyGesture: null,
+      ...(changed
+        ? {
+            past: [...state.past, gesture.before].slice(-HISTORY_LIMIT),
+            future: [],
+          }
+        : {}),
+    });
+  },
+
+  cancelApplyGesture: () => {
+    const state = get();
+    const gesture = state.applyGesture;
+    if (!gesture) return;
+    const selection = sanitizeSelection(
+      projectForView(gesture.before, state.editingFeatureId),
+      state.selection,
+      state.editingFeatureId,
+    );
+    set({
+      project: gesture.before,
+      selection,
+      applyGesture: null,
+      ...reconcileEditMode(state, gesture.before, selection),
+    });
+  },
+
   apply: (...commands) => {
     const state = get();
     try {
@@ -400,6 +466,16 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         state.selection,
         state.editingFeatureId,
       );
+      // A scroll changes the document without touching the history: the value
+      // that stays when the field is left becomes the one edit of the gesture.
+      if (state.applyGesture) {
+        set({
+          project,
+          selection,
+          ...reconcileEditMode(state, project, selection),
+        });
+        return true;
+      }
       set({
         project,
         past: [...state.past, state.project].slice(-HISTORY_LIMIT),
@@ -464,6 +540,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   undo: () => {
+    get().endApplyGesture();
     const state = get();
     const previous = state.past[state.past.length - 1];
     if (!previous) return;
@@ -476,11 +553,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       project: previous,
       past: state.past.slice(0, -1),
       future: [state.project, ...state.future].slice(0, HISTORY_LIMIT),
-
+      selection,
+      applyGesture: null,
+      ...reconcileEditMode(state, previous, selection),
     });
   },
 
   redo: () => {
+    get().endApplyGesture();
     const state = get();
     const next = state.future[0];
     if (!next) return;
@@ -494,6 +574,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       past: [...state.past, state.project].slice(-HISTORY_LIMIT),
       future: state.future.slice(1),
       selection,
+      applyGesture: null,
       ...reconcileEditMode(state, next, selection),
     });
   },
@@ -506,6 +587,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       selection: [],
       editingFeatureId: null,
       freshFeatureId: null,
+      applyGesture: null,
       hydrated: true,
       saveState: 'saved',
     });

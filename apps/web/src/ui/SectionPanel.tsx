@@ -1,12 +1,12 @@
 import { createId, type SectionPlane, type SketchFeature } from '@icancad/model';
 import { ArrowLeftRight, Eye, EyeOff, Hexagon, Plus, Trash2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { resolveSectionPlane } from '../sketch/sectionPlane';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { useUiStore } from '../stores/uiStore';
-import { IconButton, ObjectPickerField, PanelSection } from './Controls';
+import { IconButton, NumberField, ObjectPickerField, PanelSection } from './Controls';
 import { Tooltip } from './Tooltip';
 
 type Axis = 'x' | 'y' | 'z';
@@ -40,42 +40,16 @@ function NumericInput({
   suffix?: string;
   onCommit: (value: number) => void;
 }) {
-  const [draft, setDraft] = useState(String(value));
-
-  useEffect(() => {
-    setDraft(String(value));
-  }, [value]);
-
-  const commit = () => {
-    const parsed = Number(draft.replace(',', '.'));
-    if (Number.isFinite(parsed)) {
-      if (parsed !== value) onCommit(parsed);
-      else setDraft(String(value));
-    } else {
-      setDraft(String(value));
-    }
-  };
-
   return (
     <Tooltip content={label}>
-      <span className="section-input">
-        <input
-          className="input"
-          inputMode="decimal"
-          aria-label={label}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') event.currentTarget.blur();
-            if (event.key === 'Escape') {
-              setDraft(String(value));
-              event.currentTarget.blur();
-            }
-          }}
-        />
-        {suffix && <span className="section-input-suffix">{suffix}</span>}
-      </span>
+      <NumberField
+        label={label}
+        value={value}
+        allowNegative
+        onCommit={onCommit}
+        className="section-input"
+        suffix={suffix ? <span className="section-input-suffix">{suffix}</span> : undefined}
+      />
     </Tooltip>
   );
 }

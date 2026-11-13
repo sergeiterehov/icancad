@@ -12,6 +12,8 @@ import {
 import { useDocumentStore } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { useUiStore } from '../stores/uiStore';
+import { useWheelStep } from '../ui/Controls';
+import { formatStep, parseNumber, steppedValue, wheelStep } from '../ui/numberStep';
 import { getViewport } from './handle';
 
 interface Position {
@@ -47,12 +49,17 @@ export function SketchAnnotations() {
   const showToast = useUiStore((state) => state.showToast);
   const project = useDocumentStore((state) => state.project);
   const apply = useDocumentStore((state) => state.apply);
+  const beginWheelGesture = useDocumentStore((state) => state.beginWheelGesture);
+  const endApplyGesture = useDocumentStore((state) => state.endApplyGesture);
+  const cancelApplyGesture = useDocumentStore((state) => state.cancelApplyGesture);
   const meshes = useKernelStore((state) => state.meshes);
   const [positions, setPositions] = useState<Record<string, Position>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const cancelled = useRef(false);
+  // Precision the value was opened with or typed at, kept across wheel notches.
+  const step = useRef(1);
 
   const feature = project.features.find(
     (candidate): candidate is SketchFeature =>
@@ -125,6 +132,46 @@ export function SketchAnnotations() {
     return () => cancelAnimationFrame(frame);
   }, [editingId]);
 
+  useEffect(() => () => endApplyGesture(), []);
+
+  const solving = useRef(false);
+  const applyValue = async (annotation: DimensionAnnotation, value: number) => {
+    if (!feature) return;
+    solving.current = true;
+    try {
+      const next = await applyConstraintValue(feature, annotation.id, value);
+      apply({ type: 'feature/replace', feature: next });
+    } catch (error) {
+      showToast(
+        error instanceof ConstraintSolveError && error.code === 'conflict'
+          ? 'constraint.conflict'
+          : 'constraint.failed',
+        'error',
+      );
+    } finally {
+      solving.current = false;
+    }
+  };
+
+  // A wheel step applies right away but keeps the value open for the next notch.
+  useWheelStep(
+    inputRef,
+    (direction) => {
+      if (!editingId || solving.current) return;
+      const annotation = annotations.find((candidate) => candidate.id === editingId);
+      if (!annotation || draft.trim() === '') return;
+      const parsed = parseNumber(draft);
+      if (!Number.isFinite(parsed)) return;
+      const next = steppedValue(parsed, step.current, direction);
+      if (next === parsed) return;
+      // The whole scroll is one undo step, like a handle drag.
+      beginWheelGesture();
+      setDraft(formatStep(next, step.current));
+      void applyValue(annotation, next);
+    },
+    editingId !== null,
+  );
+
   if (!feature || !activeSketchReady) return null;
 
   const selectedEntityIds = new Set(
@@ -141,31 +188,25 @@ export function SketchAnnotations() {
   };
 
   const beginEdit = (annotation: DimensionAnnotation) => {
+    endApplyGesture();
     cancelled.current = false;
     setEditingId(annotation.id);
-    setDraft(String(annotation.constraint.value ?? 0));
+    const text = String(annotation.constraint.value ?? 0);
+    step.current = wheelStep(text);
+    setDraft(text);
     selectConstraint(annotation.id);
   };
 
-  const commit = async (annotation: DimensionAnnotation) => {
+  const commit = async (annotation: DimensionAnnotation, raw: string) => {
+    endApplyGesture();
     if (cancelled.current) {
       cancelled.current = false;
       return;
     }
-    const value = Number(draft.replace(',', '.'));
+    const value = parseNumber(raw);
     setEditingId(null);
     if (!Number.isFinite(value) || value === annotation.constraint.value) return;
-    try {
-      const next = await applyConstraintValue(feature, annotation.id, value);
-      apply({ type: 'feature/replace', feature: next });
-    } catch (error) {
-      showToast(
-        error instanceof ConstraintSolveError && error.code === 'conflict'
-          ? 'constraint.conflict'
-          : 'constraint.failed',
-        'error',
-      );
-    }
+    await applyValue(annotation, value);
   };
 
   return (
@@ -223,16 +264,20 @@ export function SketchAnnotations() {
                 className="sketch-annotation-input"
                 value={draft}
                 inputMode="decimal"
-                onChange={(event) => setDraft(event.target.value)}
+                onChange={(event) => {
+                  step.current = wheelStep(event.target.value);
+                  setDraft(event.target.value);
+                }}
                 onFocus={(event) => {
                   event.currentTarget.scrollLeft = 0;
                 }}
                 onPointerDown={(event) => event.stopPropagation()}
-                onBlur={() => void commit(annotation)}
+                onBlur={() => void commit(annotation, draft)}
                 onKeyDown={(event) => {
                   event.stopPropagation();
                   if (event.key === 'Enter') event.currentTarget.blur();
                   if (event.key === 'Escape') {
+                    cancelApplyGesture();
                     cancelled.current = true;
                     setEditingId(null);
                   }

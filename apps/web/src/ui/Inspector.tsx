@@ -36,7 +36,7 @@ import {
   SquareArrowUpExit,
   X,
 } from 'lucide-react';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   bodyFaceKey,
@@ -53,6 +53,7 @@ import {
   Button,
   DimensionField,
   IconButton,
+  NumberField,
   ObjectPickerField,
   PanelSection,
   Segmented,
@@ -234,36 +235,18 @@ function SketchOffsetField({
   unit: string;
   onCommit: (value: number) => void;
 }) {
-  const [draft, setDraft] = useState(String(value));
-  useEffect(() => setDraft(String(value)), [value]);
-
-  const commit = () => {
-    const parsed = Number(draft.replace(',', '.'));
-    if (Number.isFinite(parsed) && parsed !== value) onCommit(parsed);
-    else setDraft(String(value));
-  };
-
   return (
     <Tooltip content={label}>
-      <label className="sketch-offset-field">
-        <MoveVertical size={13} />
-        <input
-          className="sketch-offset-input"
-          inputMode="decimal"
-          aria-label={label}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') event.currentTarget.blur();
-            if (event.key === 'Escape') {
-              setDraft(String(value));
-              event.currentTarget.blur();
-            }
-          }}
-        />
-        <span className="sketch-offset-unit">{unit}</span>
-      </label>
+      <NumberField
+        label={label}
+        value={value}
+        allowNegative
+        onCommit={onCommit}
+        className="sketch-offset-field"
+        inputClassName="sketch-offset-input"
+        prefix={<MoveVertical size={13} />}
+        suffix={<span className="sketch-offset-unit">{unit}</span>}
+      />
     </Tooltip>
   );
 }
