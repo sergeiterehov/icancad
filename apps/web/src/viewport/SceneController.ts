@@ -2,8 +2,13 @@ import type { TessellationResult } from '@icancad/kernel';
 import type { SectionPlane, SketchEntity, SketchFrame } from '@icancad/model';
 import {
   entityControlPoints,
+  fundamentalEntities,
+  isSketchAxisId,
+  SKETCH_ORIGIN_ID,
+  SKETCH_X_AXIS_ID,
   sketchPointToWorld,
   tessellateEntity,
+  withFundamentalEntities,
   worldToSketchPoint,
   type Point2,
 } from '@icancad/sketch';
@@ -1371,12 +1376,15 @@ export class SceneController {
     const point = worldToSketchPoint(active.frame, [world.x, world.y, world.z]);
     const unitsPerPixel = (this.camera.top - this.camera.bottom) / Math.max(1, this.height);
     const limit = unitsPerPixel * tolerancePx;
-    const sketchEntities =
-      entities ?? this.sketchData.find((candidate) => candidate.id === active.id)?.entities ?? [];
+    const sketchEntities = withFundamentalEntities(
+      entities ?? this.sketchData.find((candidate) => candidate.id === active.id)?.entities ?? [],
+    );
 
     let pointSnap: SketchSnap['pointSnap'] = null;
     let bestPoint = limit;
     for (const entity of sketchEntities) {
+      // An axis has no ends to snap to; only its line is meaningful.
+      if (isSketchAxisId(entity.id)) continue;
       this.sketchControlPoints(entity).forEach((candidate, index) => {
         // The circle rim handle is derived from center and radius, so it is not
         // a solver primitive that a coincidence can reference.
@@ -1395,7 +1403,7 @@ export class SceneController {
     let midpointSnap: SketchSnap['midpointSnap'] = null;
     let bestMidpoint = limit;
     for (const entity of sketchEntities) {
-      if (entity.type !== 'line') continue;
+      if (entity.type !== 'line' || isSketchAxisId(entity.id)) continue;
       const midpoint: Point2 = [(entity.x1 + entity.x2) / 2, (entity.y1 + entity.y2) / 2];
       const candidateDistance = Math.hypot(point[0] - midpoint[0], point[1] - midpoint[1]);
       if (candidateDistance <= bestMidpoint) {
@@ -1418,6 +1426,11 @@ export class SceneController {
       ) {
         continue;
       }
+      // The axes are unbounded references, so making them snap targets would
+      // capture ordinary clicks across the whole sketch. They are constrained
+      // by selecting them instead; drawing along one already adds the
+      // horizontal or vertical constraint.
+      if (isSketchAxisId(entity.id)) continue;
       const closest = this.closestPointOnEntity(entity, point);
       if (closest && closest.distance <= bestCurve) {
         bestCurve = closest.distance;
@@ -1512,6 +1525,11 @@ export class SceneController {
         const set = selectedPoints.get(entityId) ?? new Set<number>();
         set.add(Number(index));
         selectedPoints.set(entityId, set);
+      }
+      // The origin and the axes are not part of the sketch, so they are drawn
+      // with the grid instead of with the stored entities.
+      if (sketch.active) {
+        this.addSketchFundamentals(group, sketch.frame, sketch.selectionKeys, sketch.highlightIds);
       }
       // Construction geometry is a modelling helper: it is only drawn when the
       // object asks for it, or while that sketch itself is being edited.
@@ -1757,8 +1775,9 @@ export class SceneController {
     if (!this.raycaster.ray.intersectPlane(plane, world)) return null;
     const point = worldToSketchPoint(active.frame, [world.x, world.y, world.z]);
     const unitsPerPixel = (this.camera.top - this.camera.bottom) / Math.max(1, this.height);
-    const sketchEntities =
-      entities ?? this.sketchData.find((candidate) => candidate.id === active.id)?.entities ?? [];
+    const sketchEntities = withFundamentalEntities(
+      entities ?? this.sketchData.find((candidate) => candidate.id === active.id)?.entities ?? [],
+    );
     let entityId: string | null = null;
     let best = Number.POSITIVE_INFINITY;
     for (const entity of sketchEntities) {
@@ -1790,6 +1809,8 @@ export class SceneController {
     let pointIndex: number | null = null;
     let bestPoint = unitsPerPixel * 4;
     for (const entity of sketchEntities) {
+      // Axis endpoints are not geometry the user can grab or constrain.
+      if (isSketchAxisId(entity.id)) continue;
       this.sketchControlPoints(entity).forEach((candidate, index) => {
         const distance = Math.hypot(point[0] - candidate[0], point[1] - candidate[1]);
         if (distance <= bestPoint) {
@@ -1836,28 +1857,59 @@ export class SceneController {
     };
     makeLines(minor, this.theme === 'dark' ? 0x5c6575 : 0x9aa4b2, 0.18);
     makeLines(major, this.theme === 'dark' ? 0x8c97a8 : 0x6d7787, 0.38);
-    const axes = [
-      this.sketchWorld(frame, [-extent, 0], offset),
-      this.sketchWorld(frame, [extent, 0], offset),
-    ];
-    const xGeometry = new THREE.BufferGeometry().setFromPoints(axes);
-    const xLine = new THREE.Line(
-      xGeometry,
-      new THREE.LineBasicMaterial({ color: 0xd48282, depthTest: false, depthWrite: false }),
+  }
+
+  /**
+   * Fundamental geometry of the sketch being edited: the two axes and the
+   * origin. It is not stored in the sketch, so it is drawn from the shared
+   * definition instead of from `sketch.entities`.
+   */
+  private addSketchFundamentals(
+    group: THREE.Group,
+    frame: SketchFrame,
+    selectionKeys: readonly string[],
+    highlightKeys: readonly string[],
+  ): void {
+    const selected = new Set(selectionKeys.map((key) => key.split('#')[0]));
+    const highlighted = new Set(highlightKeys.map((key) => key.split('#')[0]));
+    for (const entity of fundamentalEntities()) {
+      if (entity.type !== 'line') continue;
+      const picked = selected.has(entity.id) || highlighted.has(entity.id);
+      const color = selected.has(entity.id)
+        ? this.sketchSelectedColor()
+        : highlighted.has(entity.id)
+          ? this.sketchHighlightColor()
+          : entity.id === SKETCH_X_AXIS_ID
+            ? 0xd48282
+            : 0x82b482;
+      const line = this.createSketchLine(entity, frame, color, picked ? 3 : 1.5, 1);
+      if (!line) continue;
+      line.renderOrder = RenderOrder.sketchGrid;
+      group.add(line);
+    }
+
+    const originSelected = selected.has(SKETCH_ORIGIN_ID);
+    const originHighlighted = highlighted.has(SKETCH_ORIGIN_ID);
+    const origin = new THREE.Points(
+      new THREE.BufferGeometry().setFromPoints([this.sketchWorld(frame, [0, 0])]),
+      new THREE.PointsMaterial({
+        color: originSelected
+          ? this.sketchSelectedColor()
+          : originHighlighted
+            ? this.sketchHighlightColor()
+            : this.sketchPointColor(),
+        map: this.pointTexture,
+        alphaTest: 0.5,
+        transparent: true,
+        size: originSelected || originHighlighted ? 8 : 6,
+        sizeAttenuation: false,
+        depthTest: false,
+        depthWrite: false,
+      }),
     );
-    xLine.renderOrder = RenderOrder.sketchGrid;
-    group.add(xLine);
-    const yAxes = [
-      this.sketchWorld(frame, [0, -extent], offset),
-      this.sketchWorld(frame, [0, extent], offset),
-    ];
-    const yGeometry = new THREE.BufferGeometry().setFromPoints(yAxes);
-    const yLine = new THREE.Line(
-      yGeometry,
-      new THREE.LineBasicMaterial({ color: 0x82b482, depthTest: false, depthWrite: false }),
-    );
-    yLine.renderOrder = RenderOrder.sketchGrid;
-    group.add(yLine);
+    origin.renderOrder =
+      originSelected || originHighlighted ? RenderOrder.sketchPointActive : RenderOrder.sketchPoint;
+    group.add(origin);
   }
 
   private sketchWorld(frame: SketchFrame, point: Point2, extra?: Point2): THREE.Vector3 {

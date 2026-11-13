@@ -6,7 +6,12 @@ import {
   type SketchEntity,
   type SketchFeature,
 } from '@icancad/model';
-import { entityControlPoints, type Point2 } from '@icancad/sketch';
+import {
+  entityControlPoints,
+  isFundamentalEntityId,
+  sketchEntityIndex,
+  type Point2,
+} from '@icancad/sketch';
 import { useUiStore } from '../stores/uiStore';
 import { solveSketch } from './client';
 
@@ -114,24 +119,27 @@ export function buildConstraintActions(
   feature: SketchFeature,
   selectionKeys: string[],
 ): ConstraintAction[] {
-  const entities = new Map(feature.entities.map((entity) => [entity.id, entity]));
+  const entities = sketchEntityIndex(feature.entities);
   const refs = selectionRefs(selectionKeys, entities);
   const pointRefs = refs.filter((ref) => ref.pointIndex !== undefined);
   const entityRefs = refs.filter((ref) => ref.pointIndex === undefined);
   const selectedEntities = entityRefs
     .map((ref) => entities.get(ref.entityId))
     .filter((entity): entity is SketchEntity => Boolean(entity));
+  // The origin and the axes are a priori fixed, so they cannot be fixed or
+  // measured like ordinary geometry, but they are valid constraint targets.
+  const ownRefs = refs.filter((ref) => !isFundamentalEntityId(ref.entityId));
+  const ownEntities = selectedEntities.filter((entity) => !isFundamentalEntityId(entity.id));
   const lines = selectedEntities.filter((entity) => entity.type === 'line');
-  const circles = selectedEntities.filter(
-    (entity) => entity.type === 'circle' || entity.type === 'arc',
-  );
-  const ellipses = selectedEntities.filter((entity) => entity.type === 'ellipse');
+  const ownLines = ownEntities.filter((entity) => entity.type === 'line');
+  const circles = ownEntities.filter((entity) => entity.type === 'circle' || entity.type === 'arc');
+  const ellipses = ownEntities.filter((entity) => entity.type === 'ellipse');
   const actions: ConstraintAction[] = [];
   const push = (type: ConstraintType, actionRefs: SketchConstraintRef[], value?: number) => {
     actions.push({ key: `${type}-${actions.length}`, type, refs: actionRefs, value });
   };
 
-  if (refs.length > 0) push('fix', refs);
+  if (ownRefs.length > 0) push('fix', refs);
   if (refs.length === 2 && pointRefs.length === 2) {
     const first = refPoint(pointRefs[0]!, entities);
     const second = refPoint(pointRefs[1]!, entities);
@@ -145,8 +153,8 @@ export function buildConstraintActions(
     push('horizontal', refs);
     push('vertical', refs);
   }
-  if (selectedEntities.length === 1 && lines.length === 1) {
-    const line = lines[0] as Extract<SketchEntity, { type: 'line' }>;
+  if (ownEntities.length === 1 && ownLines.length === 1 && refs.length === 1) {
+    const line = ownLines[0] as Extract<SketchEntity, { type: 'line' }>;
     push('horizontal', entityRefs);
     push('vertical', entityRefs);
     push('distance', entityRefs, Math.hypot(line.x2 - line.x1, line.y2 - line.y1));
@@ -156,7 +164,7 @@ export function buildConstraintActions(
     push('perpendicular', entityRefs);
     const angle = lineAngle(selectedEntities, entityRefs);
     if (angle !== undefined) push('angle', entityRefs, Math.round(angle * 100) / 100);
-    push('equal', entityRefs);
+    if (ownLines.length === 2) push('equal', entityRefs);
   }
   if (circles.length === 1 && entityRefs.length === 1) {
     const circle = circles[0] as Extract<SketchEntity, { type: 'circle' | 'arc' }>;
@@ -196,6 +204,7 @@ function constraintsForAction(
 
   const constraints: SketchConstraint[] = [];
   for (const ref of action.refs) {
+    if (isFundamentalEntityId(ref.entityId)) continue;
     const entity = entities.get(ref.entityId);
     if (!entity) continue;
     if (entity.type === 'circle') {
@@ -260,7 +269,7 @@ export function applyConstraintAction(
   feature: SketchFeature,
   action: ConstraintAction,
 ): Promise<SketchFeature> {
-  const entities = new Map(feature.entities.map((entity) => [entity.id, entity]));
+  const entities = sketchEntityIndex(feature.entities);
   const constraints = constraintsForAction(action, entities);
   if (constraints.length === 0) return Promise.reject(new ConstraintSolveError('failed'));
   return solveWithConstraints(feature, [...feature.constraints, ...constraints]);
@@ -288,7 +297,7 @@ export function removeSketchEntities(
   feature: SketchFeature,
   entityIds: Iterable<string>,
 ): SketchFeature {
-  const removed = new Set(entityIds);
+  const removed = new Set([...entityIds].filter((id) => !isFundamentalEntityId(id)));
   return {
     ...feature,
     entities: feature.entities.filter((entity) => !removed.has(entity.id)),

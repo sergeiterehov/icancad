@@ -10,8 +10,11 @@ import {
 import {
   entityControlPointRefs,
   entityControlPoints,
+  isFundamentalEntityId,
   moveEntityControlPoint,
+  sketchEntityIndex,
   translateEntity,
+  withFundamentalEntities,
   type Point2,
 } from '@icancad/sketch';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -58,6 +61,10 @@ function snapTargetPoint(snap: SketchSnap | null, mode: SketchSnapMode): Point2 
   return snap.pointSnap?.point ?? snap.midpointSnap?.point ?? snap.curveSnap?.point ?? null;
 }
 
+/**
+ * Entities offered to picking and snapping: the stored geometry plus the
+ * fundamental origin and axes, which every sketch has a priori.
+ */
 function currentSketchEntities(sketchId: string | null): readonly SketchEntity[] {
   if (!sketchId) return [];
   const feature = useDocumentStore
@@ -66,7 +73,7 @@ function currentSketchEntities(sketchId: string | null): readonly SketchEntity[]
       (candidate): candidate is SketchFeature =>
         candidate.id === sketchId && candidate.type === 'sketch',
     );
-  return feature?.entities ?? [];
+  return withFundamentalEntities(feature?.entities ?? []);
 }
 
 interface DragState {
@@ -593,8 +600,10 @@ export function SketchEditor() {
         currentSketchEntities(activeSketchId),
       );
       if (!pick?.entityId) return;
-      const entity = sketch.entities.find((candidate) => candidate.id === pick.entityId);
+      const entity = sketchEntityIndex(sketch.entities).get(pick.entityId);
       if (!entity) return;
+      // Fundamental geometry is fixed: it can be selected but not dragged.
+      if (isFundamentalEntityId(entity.id)) return;
       const pointIndex = pick.pointIndex ?? (entity.type === 'point' ? 0 : null);
       const key = pointIndex === null ? entity.id : `${entity.id}#${pointIndex}`;
       if (!additive) setSketchSelection([key]);
@@ -671,8 +680,7 @@ export function SketchEditor() {
           .catch(() => undefined);
         return;
       }
-      const draftLength =
-        draftToolRef.current === activeTool ? draftRef.current.length : 0;
+      const draftLength = draftToolRef.current === activeTool ? draftRef.current.length : 0;
       const mode = snapModeFor(activeTool, draftLength);
       const snap = getViewport()?.snapSketch(
         event.clientX,
@@ -760,8 +768,7 @@ export function SketchEditor() {
         }
         return;
       }
-      const draftLength =
-        draftToolRef.current === activeTool ? draftRef.current.length : 0;
+      const draftLength = draftToolRef.current === activeTool ? draftRef.current.length : 0;
       const mode = snapModeFor(activeTool, draftLength);
       const snap = getViewport()?.snapSketch(
         event.clientX,
@@ -786,7 +793,11 @@ export function SketchEditor() {
       if (useUiStore.getState().sketchTool !== 'select') return;
       const current = currentSketch();
       if (!current) return;
-      const pick = getViewport()?.pickSketch(event.clientX, event.clientY, current.entities);
+      const pick = getViewport()?.pickSketch(
+        event.clientX,
+        event.clientY,
+        currentSketchEntities(current.id),
+      );
       if (!pick?.entityId) return;
       event.preventDefault();
       const entityId = pick.entityId;
@@ -970,7 +981,9 @@ export function SketchEditor() {
           void diagnoseSketch(next);
           return;
         }
-        const entityIds = selectionIds.filter((key) => !key.includes('#'));
+        const entityIds = selectionIds.filter(
+          (key) => !key.includes('#') && !isFundamentalEntityId(key),
+        );
         if (entityIds.length > 0 && sketch) {
           const next = removeSketchEntities(sketch, entityIds);
           apply({ type: 'feature/replace', feature: next });

@@ -11,7 +11,7 @@ The sketch editor needs parametric constraints without blocking the UI. The solv
 | Area | Decision |
 |---|---|
 | Solver runtime | planegcs compiled to WebAssembly, running in a dedicated module worker. The UI never calls the solver synchronously. |
-| Constraint references | A constraint references sketch entities and optional control-point indices: `{ entityId, pointIndex? }`. This makes point-to-point constraints independent from primitive order. |
+| Constraint references | A constraint references sketch entities and optional control-point indices: `{ entityId, pointIndex? }`. This makes point-to-point constraints independent from primitive order. Fundamental geometry (origin and axes) uses the ids it has in every sketch, so a copied constraint keeps its anchor (ADR 0016). |
 | Absolute fixation | `fix` stores the captured `x`/`y` anchor on the constraint. Rebuilding the solver from edited geometry cannot silently move a fixed point. |
 | Solve policy | Solve on explicit constraint creation/editing and while dragging handles. Ordinary geometry edits do not trigger an implicit solve. Entering a sketch re-solves it once and silently repairs geometry that violated its own constraints (for example files produced before solutions were merged back). |
 | Drag solving | Dragged points are passed as temporary fixed primitives. Dragging a whole curve is attempted with all of its control points pinned, then with only the grabbed point, and finally without pins, so a closed profile never turns into a false over-constrained error. Redundant results are accepted; only genuine conflicts revert the drag. Geometry is previewed without history while moving; pointer release commits a single undoable feature replacement. |

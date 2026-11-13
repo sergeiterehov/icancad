@@ -1,5 +1,5 @@
 import type { SketchConstraint, SketchEntity, SketchFeature, SketchMeasure } from '@icancad/model';
-import { tessellateEntity, type Point2 } from '@icancad/sketch';
+import { sketchEntityIndex, tessellateEntity, type Point2 } from '@icancad/sketch';
 import { constraintEntityIds, refPoint } from './constraintModel';
 import { measureInfo } from './measure';
 
@@ -216,7 +216,7 @@ export function dimensionAnnotations(
   feature: SketchFeature,
   locale: string,
 ): DimensionAnnotation[] {
-  const entities = new Map(feature.entities.map((entity) => [entity.id, entity]));
+  const entities = sketchEntityIndex(feature.entities);
   const annotations: DimensionAnnotation[] = [];
   for (const constraint of feature.constraints) {
     if (!isNumericConstraint(constraint)) continue;

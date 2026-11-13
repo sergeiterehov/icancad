@@ -6,6 +6,7 @@ import type {
 } from '@icancad/model';
 
 export * from './frame';
+export * from './fundamental';
 
 export interface SketchDocument {
   entities: SketchEntity[];

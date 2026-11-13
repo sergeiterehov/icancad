@@ -1,4 +1,5 @@
 import type { SketchFeature } from '@icancad/model';
+import { isFundamentalEntityId } from '@icancad/sketch';
 import {
   Check,
   CircleDot,
@@ -73,7 +74,9 @@ export function SketchToolRail() {
       candidate.id === activeSketchId && candidate.type === 'sketch',
   );
   const actions = feature ? buildConstraintActions(feature, selectionIds) : [];
-  const entitySelection = selectionIds.filter((key) => !key.includes('#'));
+  const entitySelection = selectionIds.filter(
+    (key) => !key.includes('#') && !isFundamentalEntityId(key),
+  );
   const constructionEntities =
     feature?.entities.filter((entity) => entitySelection.includes(entity.id)) ?? [];
   const constructionActive =

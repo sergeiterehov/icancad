@@ -1,6 +1,16 @@
 import type { Constraint, SketchPrimitive } from '@salusoft89/planegcs';
 import type { SketchConstraint, SketchConstraintRef, SketchEntity } from '@icancad/model';
-import { entityControlPoints, type Point2 } from '@icancad/sketch';
+import {
+  entityControlPoints,
+  fundamentalEntities,
+  isFundamentalEntityId,
+  SKETCH_ORIGIN_ID,
+  SKETCH_X_AXIS_ID,
+  SKETCH_Y_AXIS_ID,
+  sketchEntityIndex,
+  withFundamentalEntities,
+  type Point2,
+} from '@icancad/sketch';
 
 const pointId = (entityId: string, index: number): string => `${entityId}~p${index}`;
 
@@ -52,10 +62,15 @@ export function buildSolverPrimitives(
 ): SolverPrimitives {
   const fixed = new Set<string>();
   const anchors = new Map<string, Point2>();
-  const entityMap = new Map(entities.map((entity) => [entity.id, entity]));
+  const entityMap = sketchEntityIndex(entities);
+  // Fundamental geometry is a priori fixed: the solver never moves it.
+  for (const entity of fundamentalEntities()) {
+    for (const id of pointRefIds({ entityId: entity.id }, entity)) fixed.add(id);
+  }
   for (const constraint of constraints) {
     if (constraint.type !== 'fix') continue;
     for (const ref of constraint.refs) {
+      if (isFundamentalEntityId(ref.entityId)) continue;
       for (const id of pointRefIds(ref, entityMap.get(ref.entityId))) {
         fixed.add(id);
         if (
@@ -69,11 +84,12 @@ export function buildSolverPrimitives(
     }
   }
   for (const ref of pinned) {
+    if (isFundamentalEntityId(ref.entityId)) continue;
     for (const id of pointRefIds(ref, entityMap.get(ref.entityId))) fixed.add(id);
   }
 
   const primitives: SketchPrimitive[] = [];
-  for (const entity of entities) {
+  for (const entity of withFundamentalEntities(entities)) {
     const points = entityControlPoints(entity);
     const point = (index: number, fallback?: Point2): string => {
       const id = pointId(entity.id, index);
@@ -384,12 +400,27 @@ function mapConstraint(
     }
     case 'point-on-line': {
       const pointRef = refs.find((ref) => pointRefId(ref, entityMap.get(ref.entityId)));
-      const lineRef = refs.find((ref) => entityMap.get(ref.entityId)?.type === 'line');
+      // A line endpoint is itself typed as a line, so only a ref without a
+      // point index designates the line to lie on.
+      const lineRef = refs.find(
+        (ref) => ref.pointIndex === undefined && entityMap.get(ref.entityId)?.type === 'line',
+      );
       if (!pointRef || !lineRef) return null;
+      const p = pointRefId(pointRef, entityMap.get(pointRef.entityId))!;
+      // A point on an axis is the same as it sharing a coordinate with the
+      // origin. Aligning with the fixed origin point keeps the solve clean,
+      // whereas `point_on_line_pl` against an already fixed line makes the
+      // solver report spurious redundants and a wrong DoF.
+      if (lineRef.entityId === SKETCH_X_AXIS_ID) {
+        return { id, type: 'horizontal_pp', p1_id: p, p2_id: SKETCH_ORIGIN_ID } as Constraint;
+      }
+      if (lineRef.entityId === SKETCH_Y_AXIS_ID) {
+        return { id, type: 'vertical_pp', p1_id: p, p2_id: SKETCH_ORIGIN_ID } as Constraint;
+      }
       return {
         id,
         type: 'point_on_line_pl',
-        p_id: pointRefId(pointRef, entityMap.get(pointRef.entityId))!,
+        p_id: p,
         l_id: lineRef.entityId,
       } as Constraint;
     }
