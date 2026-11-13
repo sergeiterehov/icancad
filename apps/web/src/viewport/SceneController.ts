@@ -3,6 +3,7 @@ import type { SectionPlane, SketchEntity, SketchFrame } from '@icancad/model';
 import {
   entityControlPoints,
   fundamentalEntities,
+  isFundamentalEntityId,
   isSketchAxisId,
   SKETCH_ORIGIN_ID,
   SKETCH_X_AXIS_ID,
@@ -1778,29 +1779,41 @@ export class SceneController {
     const sketchEntities = withFundamentalEntities(
       entities ?? this.sketchData.find((candidate) => candidate.id === active.id)?.entities ?? [],
     );
+    const hitDistance = (entity: SketchEntity): number => {
+      if (entity.type === 'point') {
+        return Math.hypot(point[0] - entity.x, point[1] - entity.y);
+      }
+      let distance = Number.POSITIVE_INFINITY;
+      const curve = tessellateEntity(entity, 64);
+      if (entity.type === 'circle' || entity.type === 'ellipse') {
+        const first = curve[0];
+        if (first) curve.push(first);
+      }
+      for (let index = 0; index < curve.length - 1; index += 1) {
+        distance = Math.min(
+          distance,
+          pointSegmentDistance(point, curve[index]!, curve[index + 1]!),
+        );
+      }
+      return distance;
+    };
     let entityId: string | null = null;
     let best = Number.POSITIVE_INFINITY;
-    for (const entity of sketchEntities) {
-      let distance = Number.POSITIVE_INFINITY;
-      if (entity.type === 'point') {
-        distance = Math.hypot(point[0] - entity.x, point[1] - entity.y);
-      } else {
-        const curve = tessellateEntity(entity, 64);
-        if (entity.type === 'circle' || entity.type === 'ellipse') {
-          const first = curve[0];
-          if (first) curve.push(first);
-        }
-        for (let index = 0; index < curve.length - 1; index += 1) {
-          distance = Math.min(
-            distance,
-            pointSegmentDistance(point, curve[index]!, curve[index + 1]!),
-          );
-        }
-      }
+    const consider = (entity: SketchEntity) => {
+      const distance = hitDistance(entity);
       const limit = unitsPerPixel * (entity.type === 'point' ? 4 : 3);
       if (distance <= limit && distance < best) {
         best = distance;
         entityId = entity.id;
+      }
+    };
+    // Stored geometry wins over a fundamental reference it happens to lie on.
+    for (const entity of sketchEntities) {
+      if (!isFundamentalEntityId(entity.id)) consider(entity);
+    }
+    if (!entityId) {
+      for (const entity of sketchEntities) {
+        if (isFundamentalEntityId(entity.id)) consider(entity);
       }
     }
     // Control points always win the hit test over curves, including points
