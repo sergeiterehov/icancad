@@ -87,6 +87,8 @@ export function Viewport() {
   const controllerRef = useRef<SceneController | null>(null);
   const navCubeRef = useRef<NavCube | null>(null);
   const previousCount = useRef(0);
+  /** Bodies the scene has already shown; a body coming back is not new. */
+  const seenBodyIds = useRef(new Set<string>());
 
   const project = useViewProject();
   const bodies = bodiesInHistory(project);
@@ -716,7 +718,14 @@ export function Viewport() {
     );
     controller.setGhosts(preview?.ghosts ?? []);
     controller.setTreatmentMarks(preview?.faceMarks ?? []);
-    if (!activeSketchId && previousCount.current === 0 && sceneBodies.length > 0) {
+    // A sketch is edited with the timeline rolled in front of it, so bodies
+    // created later vanish from the scene and reappear on exit. A body that
+    // has been seen before is coming back, not appearing: fitting would
+    // interrupt the camera restore that returns the user to the view they had
+    // before entering the sketch (the same goes for rolling the timeline).
+    const unseenBody = sceneBodies.some((body) => !seenBodyIds.current.has(body.id));
+    for (const body of sceneBodies) seenBodyIds.current.add(body.id);
+    if (!activeSketchId && previousCount.current === 0 && unseenBody) {
       controller.fit();
     }
     previousCount.current = sceneBodies.length;

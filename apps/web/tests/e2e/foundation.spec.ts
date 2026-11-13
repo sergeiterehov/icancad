@@ -926,6 +926,112 @@ test.describe('ICANCad foundation', () => {
       .toBeGreaterThan(1.5);
   });
 
+  test('keeps the original view across a sketch switch and restores it on finish', async ({
+    page,
+  }) => {
+    await openApp(page);
+    const cube = page.getByTestId('nav-cube');
+    const tools = page.getByRole('navigation', { name: 'Tools' });
+
+    const makeSketch = async (plane: 'XY plane' | 'XZ plane') => {
+      await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+      await page.getByRole('menuitem', { name: plane }).click();
+      await expect(page.locator('.sketch-overlay')).toBeVisible();
+      await page.waitForTimeout(700);
+      await page.getByRole('button', { name: 'Finish sketch' }).click();
+      await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+    };
+
+    await makeSketch('XY plane');
+    await makeSketch('XZ plane');
+
+    const view = async () => ({
+      azimuth: Number(await cube.getAttribute('data-azimuth')),
+      polar: Number(await cube.getAttribute('data-polar')),
+      distance: Number(await cube.getAttribute('data-distance')),
+    });
+
+    await cube.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Isometric' }).click();
+    await page.waitForTimeout(700);
+    const before = await view();
+
+    const rows = page.locator('.tree-row');
+    await rows.nth(1).locator('.tree-main').dblclick();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await expect
+      .poll(async () => Number(await cube.getAttribute('data-polar')))
+      .toBeGreaterThan(1.5);
+
+    // Switching sketches while editing aligns to the new one but is not an
+    // exit followed by an entry: the first view stays in reserve.
+    await rows.first().locator('.tree-main').dblclick();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await expect.poll(async () => Number(await cube.getAttribute('data-polar'))).toBeLessThan(0.01);
+
+    await page.getByRole('button', { name: 'Finish sketch' }).click();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+    await expect.poll(async () => (await view()).azimuth).toBeCloseTo(before.azimuth, 2);
+    await expect.poll(async () => (await view()).polar).toBeCloseTo(before.polar, 2);
+    await expect.poll(async () => (await view()).distance).toBeCloseTo(before.distance, 1);
+  });
+
+  test('restores the view after leaving a sketch that hid later bodies', async ({ page }) => {
+    await openApp(page);
+    const tools = page.getByRole('navigation', { name: 'Tools' });
+    const canvas = page.getByTestId('viewport-canvas');
+    const cube = page.getByTestId('nav-cube');
+    const box = await canvas.boundingBox();
+
+    // A closed profile extruded into a body. Editing the sketch that made the
+    // body rolls the timeline in front of it, so the body disappears from the
+    // scene and comes back on exit. That reappearance must not refit the view.
+    await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await page.waitForTimeout(600);
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    const corners: [number, number][] = [
+      [300, 250],
+      [520, 250],
+      [520, 420],
+      [300, 420],
+    ];
+    for (let index = 0; index < corners.length; index += 1) {
+      const start = corners[index]!;
+      const end = corners[(index + 1) % corners.length]!;
+      await page.mouse.click(box!.x + start[0], box!.y + start[1]);
+      await page.waitForTimeout(320);
+      await page.mouse.click(box!.x + end[0], box!.y + end[1]);
+      await page.waitForTimeout(320);
+    }
+    await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+    await page.locator('.tree-row').first().locator('.tree-main').click();
+    await tools.getByRole('button', { name: 'Extrude', exact: true }).click();
+    await commitOperation(page);
+
+    await cube.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Isometric' }).click();
+    await page.waitForTimeout(700);
+    const view = async () => ({
+      azimuth: Number(await cube.getAttribute('data-azimuth')),
+      polar: Number(await cube.getAttribute('data-polar')),
+      distance: Number(await cube.getAttribute('data-distance')),
+    });
+    const before = await view();
+
+    await page.locator('.timeline-op').first().dblclick();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await expect.poll(async () => Number(await cube.getAttribute('data-polar'))).toBeLessThan(0.2);
+
+    await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+    await expect.poll(async () => (await view()).azimuth).toBeCloseTo(before.azimuth, 2);
+    await expect.poll(async () => (await view()).polar).toBeCloseTo(before.polar, 2);
+    await expect.poll(async () => (await view()).distance).toBeCloseTo(before.distance, 1);
+  });
+
   test('returns to a face sketch orientation after a datum sketch', async ({ page }) => {
     await openApp(page);
     await addBox(page);
