@@ -67,7 +67,7 @@ The production build is a static site in `apps/web/dist`; it includes the OCCT W
 
 ### GitHub Pages
 
-`.github/workflows/deploy.yml` builds the site on every push to `main` (and on a manual run) and publishes it with the Pages artifact API. One-time setup in the repository: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+`.github/workflows/deploy.yml` builds the site on every push to `main` (and on a manual run) and publishes it with the Pages artifact API. Pages must be enabled once for the repository with **Settings → Pages → Build and deployment → Source: GitHub Actions**; the workflow itself cannot do that, because `actions/configure-pages` needs a personal access token to switch Pages on.
 
 The workflow takes the site path from `actions/configure-pages`, so a project site is served from `https://<owner>.github.io/<repo>/` without editing the config: `VITE_BASE` is set to that base path and [apps/web/vite.config.ts](apps/web/vite.config.ts) uses it as Vite's `base`. A local `pnpm build` keeps the domain root (`/`); pass `VITE_BASE=/icancad/` to reproduce the Pages build.
 

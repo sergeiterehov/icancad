@@ -26,14 +26,18 @@ jobs:
       # a confirmation prompt on a fresh runner.
       COREPACK_ENABLE_DOWNLOAD_PROMPT: 0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      # The base path of a project site is the repository name; the same step
-      # also reports the site origin and keeps Pages enabled for the repo.
+      # Pages metadata: a project site is served under the repository name, a
+      # user site and a custom domain under the root. Reading it fails while
+      # Pages is switched off in the repository settings, so the step must not
+      # stop the build — the deploy step reports that problem with its own
+      # message, and the base path falls back to the repository name.
       - id: pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
+        continue-on-error: true
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
@@ -42,11 +46,23 @@ jobs:
       - name: Enable the pinned pnpm
         run: corepack enable
 
+      - name: Resolve the site base path
+        id: base
+        run: |
+          base='${{ steps.pages.outputs.base_path }}'
+          if [ -z "$base" ]; then
+            case '${{ github.event.repository.name }}' in
+              *.github.io) base='' ;;
+              *) base='/${{ github.event.repository.name }}' ;;
+            esac
+          fi
+          printf 'path=%s/\n' "$base" >> "$GITHUB_OUTPUT"
+
       - name: Read the pnpm store path
         id: pnpm-store
         run: echo "path=$(corepack pnpm store path 2>/dev/null)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
           key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
@@ -60,18 +76,19 @@ jobs:
       - name: Build the site
         run: corepack pnpm build
         env:
-          VITE_BASE: ${{ steps.pages.outputs.base_path }}/
+          VITE_BASE: ${{ steps.base.outputs.path }}
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: apps/web/dist
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
