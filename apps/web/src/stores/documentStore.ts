@@ -29,6 +29,7 @@ import {
   type ExtrudeFeature,
   type DeleteBodyFeature,
 } from '@icancad/model';
+import { sketchTopology } from '@icancad/sketch';
 import { useMemo } from 'react';
 import { create } from 'zustand';
 import { i18n } from '../i18n';
@@ -64,6 +65,11 @@ interface DocumentState {
    * instead (see `projectForView`).
    */
   editingFeatureId: string | null;
+  /**
+   * Operation created in this session that has not been dismissed yet. It is
+   * the one that hides the sketches it consumed when its settings close.
+   */
+  freshFeatureId: string | null;
   apply: (...commands: Command[]) => boolean;
   preview: (...commands: Command[]) => void;
   /** Adds a feature without a history step, for a live handle drag. */
@@ -236,24 +242,76 @@ function withHistoryEnd(project: Project, historyEnd: string | null): Project {
   return project.historyEnd === historyEnd ? project : { ...project, historyEnd };
 }
 
-// A hidden sketch cannot be configured, so it is shown while its operation is
-// open. This is a view override only: the stored visibility is left alone, so
-// the sketch is hidden again once the operation is dismissed.
-function withVisibleSketch(project: Project, editingFeatureId: string): Project {
-  const feature = project.features.find(
-    (candidate): candidate is SketchFeature =>
-      candidate.id === editingFeatureId && candidate.type === 'sketch',
-  );
+// A hidden sketch cannot be configured, so it is shown while an operation that
+// reads it is open — its own settings, or the extrude built from it. This is a
+// view override only: the stored visibility is left alone, so the sketch is
+// hidden again once the operation is dismissed.
+function withVisibleSketches(project: Project, editingFeatureId: string): Project {
+  const feature = project.features.find((candidate) => candidate.id === editingFeatureId);
   if (!feature) return project;
-  const objectId = sketchObjectId(feature.id);
-  if (objectVisible(project, objectId)) return project;
+  const sketchIds = new Set<string>();
+  if (feature.type === 'sketch') sketchIds.add(feature.id);
+  if (feature.type === 'extrude' && feature.sketchId) sketchIds.add(feature.sketchId);
+  let metadata = project.metadata;
+  for (const sketchId of sketchIds) {
+    const objectId = sketchObjectId(sketchId);
+    if (metadata[objectId]?.visible !== false) continue;
+    metadata = { ...metadata, [objectId]: { ...metadata[objectId], visible: true } };
+  }
+  return metadata === project.metadata ? project : { ...project, metadata };
+}
+
+/**
+ * The sketch an operation consumes completely. Such a sketch is only the input
+ * of the operation afterwards, so it hides itself once the operation closes.
+ */
+function consumedSketchId(feature: Feature, project: Project): string | null {
+  if (feature.type !== 'extrude' || feature.suppressed) return null;
+  if (feature.faceRefs.length > 0) return null;
+  const sketchId = feature.sketchId;
+  if (!sketchId) return null;
+  if (feature.scope === 'all') return sketchId;
+  const sketch = project.features.find(
+    (candidate): candidate is SketchFeature =>
+      candidate.id === sketchId && candidate.type === 'sketch',
+  );
+  if (!sketch) return null;
+  const faces = sketchTopology(sketch.entities).faces;
+  if (faces.length === 0) return null;
+  const regions = new Set(feature.regions);
+  return faces.every((face) => regions.has(face.id)) ? sketchId : null;
+}
+
+function hideConsumedSketch(project: Project, featureId: string): Project {
+  const feature = project.features.find((candidate) => candidate.id === featureId);
+  if (!feature) return project;
+  const sketchId = consumedSketchId(feature, project);
+  if (!sketchId) return project;
+  const objectId = sketchObjectId(sketchId);
+  if (!objectVisible(project, objectId)) return project;
   return {
     ...project,
     metadata: {
       ...project.metadata,
-      [objectId]: { ...project.metadata[objectId], visible: true },
+      [objectId]: { ...project.metadata[objectId], visible: false },
     },
   };
+}
+
+/**
+ * Dismissing the operation the user has just created hides the sketch it
+ * consumes completely: the operation stands for that sketch from now on. An
+ * older operation keeps whatever visibility the user gave its inputs, and a
+ * failed one has not consumed anything yet, so the sketch stays in view.
+ */
+function closeFreshEdit(state: DocumentState, project: Project): Partial<DocumentState> {
+  const fresh = state.freshFeatureId;
+  if (!fresh || state.editingFeatureId !== fresh) return {};
+  if (useKernelStore.getState().featureErrors[fresh]) return {};
+  const hidden = hideConsumedSketch(project, fresh);
+  return hidden === project
+    ? { freshFeatureId: null }
+    : { project: hidden, freshFeatureId: null };
 }
 
 // An operation is configured against the model that existed when it was
@@ -267,7 +325,7 @@ export function projectForView(project: Project, editingFeatureId: string | null
   if (index < 0) return project;
   const inputCursor: string | null =
     index === 0 ? HISTORY_START : (project.features[index - 1]?.id ?? HISTORY_START);
-  return withVisibleSketch(withHistoryEnd(project, inputCursor), editingFeatureId);
+  return withVisibleSketches(withHistoryEnd(project, inputCursor), editingFeatureId);
 }
 
 function leaveEditMode(state: DocumentState): Partial<DocumentState> {
@@ -287,7 +345,9 @@ function editModeFor(
     single?.kind === 'feature'
       ? project.features.find((candidate) => candidate.id === single.id)
       : undefined;
-  return { editingFeatureId: feature ? feature.id : null };
+  const next = feature ? feature.id : null;
+  if (next === state.editingFeatureId) return {};
+  return { editingFeatureId: next, ...closeFreshEdit(state, project) };
 }
 
 // Newly created operations open their settings immediately, exactly like
@@ -298,7 +358,7 @@ function selectFeatureForEditing(
 ): void {
   set((state) => {
     const selection: SelectionItem[] = [{ kind: 'feature', id: featureId }];
-    return { selection, ...editModeFor(state, state.project, selection) };
+    return { selection, ...editModeFor(state, state.project, selection), freshFeatureId: featureId };
   });
 }
 
@@ -314,10 +374,12 @@ function reconcileEditMode(
   const editing = state.editingFeatureId;
   if (editing === null) return {};
   const stillThere = project.features.some((feature) => feature.id === editing);
-  if (!stillThere) return { ...leaveEditMode(state), selection: [] };
+  if (!stillThere) {
+    return { ...leaveEditMode(state), selection: [], ...closeFreshEdit(state, project) };
+  }
   const stillSelected = selection.length === 1 && selection[0]?.id === editing;
   if (stillSelected) return {};
-  return leaveEditMode(state);
+  return { ...leaveEditMode(state), ...closeFreshEdit(state, project) };
 }
 
 export const useDocumentStore = create<DocumentState>((set, get) => ({
@@ -328,7 +390,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   hydrated: false,
   saveState: 'idle',
   editingFeatureId: null,
-
+  freshFeatureId: null,
   apply: (...commands) => {
     const state = get();
     try {
@@ -381,7 +443,13 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         state.selection,
         state.editingFeatureId,
       );
-      set({ project, selection, ...reconcileEditMode(state, project, selection) });
+      set({
+        project,
+        selection,
+        ...reconcileEditMode(state, project, selection),
+        // A drag creates the operation; its inputs close with its settings.
+        freshFeatureId: feature.id,
+      });
       return true;
     } catch {
       return false;
@@ -408,8 +476,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       project: previous,
       past: state.past.slice(0, -1),
       future: [state.project, ...state.future].slice(0, HISTORY_LIMIT),
-      selection,
-      ...reconcileEditMode(state, previous, selection),
+
     });
   },
 
@@ -438,6 +505,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       future: [],
       selection: [],
       editingFeatureId: null,
+      freshFeatureId: null,
       hydrated: true,
       saveState: 'saved',
     });
@@ -502,14 +570,18 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   beginFeatureEdit: (featureId) => {
     const state = get();
     const feature = state.project.features.find((candidate) => candidate.id === featureId);
-    if (!feature) return;
-    set({ editingFeatureId: featureId });
+    if (!feature || featureId === state.editingFeatureId) return;
+    set({ editingFeatureId: featureId, ...closeFreshEdit(state, state.project) });
   },
 
   endFeatureEdit: () => {
     const state = get();
     if (state.editingFeatureId === null) return;
-    set({ selection: [], ...leaveEditMode(state) });
+    set({
+      selection: [],
+      ...leaveEditMode(state),
+      ...closeFreshEdit(state, state.project),
+    });
   },
 
   setSaveState: (saveState) => set({ saveState }),

@@ -5,9 +5,12 @@ import {
   sketchObjectId,
   type Feature,
   type Project,
+  type SketchEntity,
 } from '@icancad/model';
+import { sketchTopology } from '@icancad/sketch';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { projectForView, useDocumentStore } from '../src/stores/documentStore';
+import { useKernelStore } from '../src/stores/kernelStore';
 import { useUiStore } from '../src/stores/uiStore';
 
 function box(id: string): Feature {
@@ -40,8 +43,64 @@ function projectWith(...features: Feature[]): Project {
   return { ...project, features };
 }
 
+function squareSketch(id: string, copies: number): Feature {
+  const entities: SketchEntity[] = [];
+  for (let index = 0; index < copies; index += 1) {
+    const x = index * 10;
+    const corners: Array<[number, number]> = [
+      [x, 0],
+      [x + 5, 0],
+      [x + 5, 5],
+      [x, 5],
+    ];
+    corners.forEach(([x1, y1], corner) => {
+      const [x2, y2] = corners[(corner + 1) % corners.length]!;
+      entities.push({
+        id: `line-${index}-${corner}`,
+        type: 'line',
+        construction: false,
+        x1,
+        y1,
+        x2,
+        y2,
+      });
+    });
+  }
+  return {
+    id,
+    name: id,
+    suppressed: false,
+    type: 'sketch',
+    plane: { type: 'datum', plane: 'XY', offset: 0 },
+    entities,
+    constraints: [],
+    references: [],
+  };
+}
+
+function extrude(id: string, sketchId: string): Feature {
+  return {
+    id,
+    name: id,
+    suppressed: false,
+    type: 'extrude',
+    sketchId,
+    regions: [],
+    faceRefs: [],
+    objectOrder: [],
+    end: 'blind',
+    distance: 10,
+    reversed: false,
+    op: 'new',
+    scope: 'all',
+    bodyIds: [],
+    joinRegions: true,
+  };
+}
+
 function reset(project: Project): void {
   useUiStore.setState({ activeSketchId: null });
+  useKernelStore.setState({ featureErrors: {} });
   useDocumentStore.getState().hydrate(project);
 }
 
@@ -178,5 +237,102 @@ describe('operation editing', () => {
     expect(projectForView(project, null)).toBe(project);
     expect(projectForView(project, 'b').historyEnd).toBe('a');
     expect(project.historyEnd).toBeNull();
+  });
+
+  it('shows the sketch of an extrude while the extrude is configured', () => {
+    const project = projectWith(sketch('s'), extrude('e', 's'));
+    reset({ ...project, metadata: { [sketchObjectId('s')]: { visible: false } } });
+    const objectId = sketchObjectId('s');
+
+    useDocumentStore.getState().select({ kind: 'feature', id: 'e' });
+    const editing = useDocumentStore.getState();
+    expect(editing.editingFeatureId).toBe('e');
+    expect(objectVisible(projectForView(editing.project, editing.editingFeatureId), objectId)).toBe(
+      true,
+    );
+
+    // The stored visibility is untouched, so nothing is hidden by the preview.
+    useDocumentStore.getState().select(null);
+    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(false);
+  });
+
+  it('hides a sketch consumed by a new extrude once the extrude is dismissed', () => {
+    reset(projectWith(sketch('s')));
+    const objectId = sketchObjectId('s');
+    const featureId = useDocumentStore.getState().addExtrude('Extrude', {
+      sketchId: 's',
+      regions: [],
+    });
+    expect(featureId).toBeTruthy();
+    // Still visible while the operation is being configured.
+    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(true);
+
+    useDocumentStore.getState().endFeatureEdit();
+    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(false);
+
+    // Reopening the operation shows the sketch again without storing it.
+    useDocumentStore.getState().select({ kind: 'feature', id: featureId! });
+    const editing = useDocumentStore.getState();
+    expect(objectVisible(projectForView(editing.project, editing.editingFeatureId), objectId)).toBe(
+      true,
+    );
+  });
+
+  it('keeps the sketch of an older extrude visible when it is reopened', () => {
+    const project = projectWith(sketch('s'), extrude('e', 's'));
+    reset(project);
+    const objectId = sketchObjectId('s');
+    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(true);
+
+    useDocumentStore.getState().select({ kind: 'feature', id: 'e' });
+    useDocumentStore.getState().select(null);
+    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(true);
+  });
+
+  it('keeps the sketch of a failed new extrude until the operation works', () => {
+    reset(projectWith(sketch('s')));
+    const objectId = sketchObjectId('s');
+    const featureId = useDocumentStore.getState().addExtrude('Extrude', {
+      sketchId: 's',
+      regions: [],
+    });
+    useKernelStore.setState({ featureErrors: { [featureId!]: 'EXTRUDE_EMPTY' } });
+
+    useDocumentStore.getState().endFeatureEdit();
+    // A failed operation has consumed nothing, so the sketch stays readable.
+    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(true);
+
+    // The fixed operation hides it on the next dismissal.
+    useKernelStore.setState({ featureErrors: {} });
+    useDocumentStore.getState().select({ kind: 'feature', id: featureId! });
+    useDocumentStore.getState().endFeatureEdit();
+    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(false);
+  });
+
+  it('keeps a sketch that only partly feeds the new extrude', () => {
+    const sketchFeature = squareSketch('s', 2);
+    reset(projectWith(sketchFeature));
+    const objectId = sketchObjectId('s');
+    const faces = sketchTopology(
+      (sketchFeature as Extract<Feature, { type: 'sketch' }>).entities,
+    ).faces;
+    expect(faces).toHaveLength(2);
+
+    const partial = useDocumentStore.getState().addExtrude('Extrude', {
+      sketchId: 's',
+      regions: [faces[0]!.id],
+    });
+    expect(partial).toBeTruthy();
+    useDocumentStore.getState().endFeatureEdit();
+    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(true);
+
+    // Both profiles are the whole sketch, so the second extrude hides it.
+    const whole = useDocumentStore.getState().addExtrude('Extrude 2', {
+      sketchId: 's',
+      regions: faces.map((face) => face.id),
+    });
+    expect(whole).toBeTruthy();
+    useDocumentStore.getState().endFeatureEdit();
+    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(false);
   });
 });
