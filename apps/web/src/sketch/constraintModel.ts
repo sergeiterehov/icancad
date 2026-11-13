@@ -14,6 +14,7 @@ import {
 } from '@icancad/sketch';
 import { useUiStore } from '../stores/uiStore';
 import { solveSketch } from './client';
+import { projectionEntityIds } from './projection';
 
 export interface ConstraintAction {
   key: string;
@@ -321,7 +322,10 @@ async function solveWithConstraints(
 ): Promise<SketchFeature> {
   let result;
   try {
-    result = await solveSketch(feature.entities, constraints, [], { diagnose: true });
+    result = await solveSketch(feature.entities, constraints, [], {
+      diagnose: true,
+      derived: [...projectionEntityIds(feature)],
+    });
   } catch {
     throw new ConstraintSolveError('failed');
   }
@@ -352,7 +356,10 @@ export async function diagnoseSketch(feature: SketchFeature): Promise<void> {
     return;
   }
   try {
-    const result = await solveSketch(feature.entities, feature.constraints, [], { diagnose: true });
+    const result = await solveSketch(feature.entities, feature.constraints, [], {
+      diagnose: true,
+      derived: [...projectionEntityIds(feature)],
+    });
     useUiStore.getState().setSketchFrozen(result.frozenEntityIds);
     useUiStore
       .getState()
@@ -375,6 +382,9 @@ export function removeSketchEntities(
       (constraint) => !constraint.refs.some((ref) => removed.has(ref.entityId)),
     ),
     references: (feature.references ?? []).filter((reference) => !removed.has(reference.entityId)),
+    projections: (feature.projections ?? []).filter(
+      (projection) => !removed.has(projection.entityId),
+    ),
   };
 }
 

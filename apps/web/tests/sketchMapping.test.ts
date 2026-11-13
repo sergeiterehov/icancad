@@ -27,12 +27,13 @@ function primitives(
   entities: SketchEntity[],
   constraints: SketchConstraint[],
   pinned: SolverPin[] = [],
+  derived: string[] = [],
 ) {
   const point = (id: string) =>
-    buildSolverPrimitives(entities, constraints, pinned).primitives.find(
+    buildSolverPrimitives(entities, constraints, pinned, derived).primitives.find(
       (primitive) => primitive.id === id,
     );
-  return { build: buildSolverPrimitives(entities, constraints, pinned), point };
+  return { build: buildSolverPrimitives(entities, constraints, pinned, derived), point };
 }
 
 describe('planegcs mapping', () => {
@@ -107,6 +108,13 @@ describe('planegcs mapping', () => {
 });
 
 describe('solver pins', () => {
+  it('holds derived geometry fixed without an explicit fix constraint', () => {
+    const { build, point } = primitives([line], [], [], [line.id]);
+    expect(point('line-1~p0')).toMatchObject({ fixed: true });
+    expect(point('line-1~p1')).toMatchObject({ fixed: true });
+    expect(build.primitives.some((primitive) => primitive.type === 'p2p_coincident')).toBe(false);
+  });
+
   it('holds only the pinned coordinate so the point can still slide', () => {
     const { build, point } = primitives(
       [line],

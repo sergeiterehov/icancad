@@ -86,6 +86,8 @@ interface KernelState {
   meshes: Record<string, TessellationResult>;
   /** Frames computed when each sketch operation was evaluated. */
   sketchFrames: Record<string, SketchFrame>;
+  /** Projected sketch entities whose source is gone, keyed by sketch feature. */
+  projectionLost: Record<string, string[]>;
   /** Increments whenever a rebuild publishes a scene. */
   sceneVersion: number;
   shapeStats: Record<string, ShapeStats>;
@@ -124,6 +126,7 @@ interface KernelState {
     featureBodyErrors: Record<string, Record<string, string>>,
     featureObjectErrors: Record<string, Record<string, string>>,
     sketchFrames: Record<string, SketchFrame>,
+    projectionLost: Record<string, string[]>,
     preview: ScenePreview | null,
   ) => void;
   setBodyOperations: (bodyOperations: Record<string, string>) => void;
@@ -142,6 +145,7 @@ export const useKernelStore = create<KernelState>((set) => ({
   error: null,
   meshes: {},
   sketchFrames: {},
+  projectionLost: {},
   sceneVersion: 0,
   shapeStats: {},
   meshStats: {},
@@ -197,11 +201,13 @@ export const useKernelStore = create<KernelState>((set) => ({
     featureBodyErrors,
     featureObjectErrors,
     sketchFrames,
+    projectionLost,
     preview,
   ) =>
     set((state) => ({
       meshes,
       sketchFrames,
+      projectionLost,
       sceneVersion: state.sceneVersion + 1,
       shapeStats,
       meshStats,
@@ -222,6 +228,7 @@ export const useKernelStore = create<KernelState>((set) => ({
     set((state) => ({
       meshes: {},
       sketchFrames: {},
+      projectionLost: {},
       sceneVersion: state.sceneVersion + 1,
       shapeStats: {},
       meshStats: {},

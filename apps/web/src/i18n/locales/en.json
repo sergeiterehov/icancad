@@ -56,7 +56,8 @@
     "emptyObjects": "No objects yet",
     "previewAdded": "Added by the operation being edited",
     "previewModified": "Changed by the operation being edited",
-    "previewRemoved": "Removed by the operation being edited"
+    "previewRemoved": "Removed by the operation being edited",
+    "projectionLost": "Projected geometry lost its source: the stored snapshot is used"
   },
   "inspector": {
     "project": "Project",
@@ -120,7 +121,8 @@
     "rollbackHint": "Show the model as it was after this operation. Later operations are kept.",
     "goTo": "Go to operation #{{index}}",
     "failedNext": "The operation after this step failed",
-    "locked": "Finish editing the operation to move along the timeline"
+    "locked": "Finish editing the operation to move along the timeline",
+    "projectionWarning": "Projected geometry lost its source"
   },
   "status": {
     "kernelLoading": "Loading OCCT kernel…",
@@ -295,7 +297,11 @@
     "measure_y": "Y",
     "measure_rx": "Width",
     "measure_ry": "Height",
-    "liveMeasure": "Live size"
+    "liveMeasure": "Live size",
+    "toolProject": "Projection",
+    "detachProjection": "Detach from source",
+    "projectionLost": "The source is gone, the stored snapshot is used",
+    "projectionPickHint": "Click a point, an edge or a face in 3D"
   },
   "constraint": {
     "fix": "Fix",

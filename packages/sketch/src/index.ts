@@ -266,3 +266,5 @@ export function moveEntityControlPoint(
 export * from './topology';
 
 export * from './profile';
+
+export * from './projection';

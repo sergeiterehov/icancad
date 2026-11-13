@@ -508,6 +508,12 @@ button:disabled {
   color: var(--text-faint);
 }
 
+.tree-warning-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--warn);
+}
+
 .tree-badge.error {
   background: color-mix(in srgb, var(--danger) 16%, transparent);
   color: var(--danger);
@@ -1215,6 +1221,21 @@ button:disabled {
   background: color-mix(in srgb, var(--danger) 34%, transparent);
 }
 
+/* A projection that lost its source is a warning, not a failure: amber, not red. */
+.timeline-op.warning {
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+}
+
+.timeline-op.warning:hover {
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+  color: var(--warn);
+}
+
+.timeline-op.warning.selected {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 55%, transparent);
+}
+
 /* Disabled cursors never light up on hover, including the ones past a failure. */
 .timeline-caret:disabled:hover::before {
   background: transparent;
@@ -1288,6 +1309,10 @@ button:disabled {
 
 .timeline-tooltip-error {
   color: var(--danger);
+}
+
+.timeline-tooltip-warning {
+  color: var(--warn);
 }
 
 .statusbar {
@@ -1572,6 +1597,20 @@ button.selection-item[data-active='true'][data-error='true'] {
 
 .selection-item[data-active='true'] .entity-icon {
   color: var(--accent);
+}
+
+/* Geometry state wins over the selection tint: derived geometry is violet and
+   geometry without degrees of freedom is green, in the list as in the viewport. */
+.selection-item .entity-icon.frozen {
+  color: var(--ok);
+}
+
+.selection-item .entity-icon.projected {
+  color: #8b5cf6;
+}
+
+[data-theme='light'] .selection-item .entity-icon.projected {
+  color: #6d28d9;
 }
 
 .selection-item .tree-name {

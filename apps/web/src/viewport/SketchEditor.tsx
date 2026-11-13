@@ -30,6 +30,7 @@ import { canEditSketch, computeSketchFrame, sketchFrameOf } from '../sketch/sect
 import { solveDrag } from '../sketch/dragSolve';
 import { liveMeasures, measureInfo } from '../sketch/measure';
 import { sketchPickKey } from '../sketch/pickKey';
+import { isProjectedEntity, projectionEntityIds, resolveSketchProjections } from '../sketch/projection';
 import { referenceMenuItems } from '../sketch/referenceMenu';
 import type { SketchSnap, SketchSnapInput, SketchSnapMode } from '../sketch/snap';
 import type { SketchTool } from '../sketch/tool';
@@ -259,7 +260,9 @@ export function SketchEditor() {
     if (!activeSketchId) return;
     const feature = currentSketch();
     if (!feature || feature.constraints.length === 0) return;
-    void solveSketch(feature.entities, feature.constraints, [])
+    void solveSketch(feature.entities, feature.constraints, [], {
+      derived: [...projectionEntityIds(feature)],
+    })
       .then((result) => {
         if (result.conflicting.length > 0) return;
         const current = currentSketch();
@@ -273,6 +276,19 @@ export function SketchEditor() {
       })
       .catch(() => undefined);
   }, [activeSketchId]);
+
+  // Projected geometry follows the bodies it was taken from. The stored
+  // entities are the snapshot; as soon as the scene has a current body the
+  // snapshot is refreshed so the editor, the solver and the profile agree.
+  useEffect(() => {
+    if (!sketch || !frame || (sketch.projections?.length ?? 0) === 0) return;
+    const resolved = resolveSketchProjections(sketch, frame, (bodyId) => meshes[bodyId]);
+    const ids = projectionEntityIds(sketch);
+    const current = sketch.entities.filter((entity) => ids.has(entity.id));
+    const next = resolved.entities.filter((entity) => ids.has(entity.id));
+    if (JSON.stringify(current) === JSON.stringify(next)) return;
+    preview({ type: 'feature/replace', feature: { ...sketch, entities: resolved.entities } });
+  }, [sketch, frame, meshes, preview]);
 
   useEffect(() => {
     if (!sketch) {
@@ -381,7 +397,7 @@ export function SketchEditor() {
           latest.entities,
           [...latest.constraints, ...constraints],
           [],
-          { diagnose: true },
+          { diagnose: true, derived: [...projectionEntityIds(latest)] },
         );
         if (result.conflicting.length > 0 || result.redundant.length > 0) continue;
         if (!result.entities.some((candidate) => candidate.id === entity.id)) continue;
@@ -622,6 +638,9 @@ export function SketchEditor() {
       const pointIndex = pick.pointIndex ?? (entity.type === 'point' ? 0 : null);
       const key = pointIndex === null ? entity.id : `${entity.id}#${pointIndex}`;
       if (!additive) setSketchSelection([key]);
+      // Projected geometry is derived: it can be selected and detached, but the
+      // next rebuild would overwrite whatever a drag does to it.
+      if (isProjectedEntity(sketch, entity.id)) return;
       drag.current = {
         mode: pointIndex === null ? 'entity' : 'point',
         entityId: entity.id,
@@ -638,6 +657,8 @@ export function SketchEditor() {
     };
     const onPointerMove = (event: PointerEvent) => {
       const activeTool = useUiStore.getState().sketchTool;
+      // The projection tool aims at the 3D scene, so the sketch has no hover.
+      if (activeTool === 'project') return;
       if (activeTool === 'select') {
         const activeDrag = drag.current;
         if (!activeDrag) {
@@ -694,6 +715,7 @@ export function SketchEditor() {
           entities,
           constraints: current.constraints,
           pinSets: dragPinSets(activeDrag),
+          derived: [...projectionEntityIds(current)],
         })
           .then((result) => {
             if (!result) return;
@@ -746,6 +768,7 @@ export function SketchEditor() {
         entities: latest.entities,
         constraints: latest.constraints,
         pinSets: dragPinSets(activeDrag),
+        derived: [...projectionEntityIds(latest)],
       })
         .then((result) => {
           if (activeDrag.version !== version) return;
@@ -772,6 +795,7 @@ export function SketchEditor() {
       pointerDown.current = null;
       if (down && Math.hypot(event.clientX - down.x, event.clientY - down.y) > 4) return;
       const activeTool = useUiStore.getState().sketchTool;
+      if (activeTool === 'project') return;
       if (activeTool === 'select') {
         const pick = getViewport()?.pickSketch(
           event.clientX,
@@ -1090,7 +1114,9 @@ export function SketchEditor() {
               ? draft.length > 0
                 ? t('sketch.finishBezier')
                 : t('sketch.addBezier')
-              : '';
+              : tool === 'project'
+                ? t('sketch.projectionPickHint')
+                : '';
 
   const liveMeasure = (() => {
     const preview = previewEntity();

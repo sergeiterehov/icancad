@@ -151,12 +151,32 @@ export interface SketchReference {
   measure: SketchMeasure;
 }
 
+/**
+ * A sketch entity derived from 3D geometry. The entity itself is the snapshot:
+ * while the source still exists the geometry is regenerated from it, and when
+ * the link is gone the snapshot stays and is reported as a warning. Projected
+ * entities are linked to their source by id and never edited by hand.
+ */
+export interface SketchProjection {
+  id: string;
+  entityId: string;
+  source: {
+    kind: 'vertex' | 'edge';
+    bodyId: string;
+    /** Vertex coordinate id, or the kernel edge id. */
+    elementId: string;
+  };
+  /** Face the projection was taken from, when it came from a face. */
+  faceId?: string;
+}
+
 export interface SketchFeature extends FeatureBase {
   type: 'sketch';
   plane: SketchPlaneRef;
   entities: SketchEntity[];
   constraints: SketchConstraint[];
   references: SketchReference[];
+  projections?: SketchProjection[];
 }
 
 export type ExtrudeEnd = 'blind' | 'symmetric' | 'through-all';

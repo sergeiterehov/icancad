@@ -24,6 +24,7 @@ import {
   type SketchFrame,
 } from '@icancad/model';
 import { computeSketchFrame, faceSketchValid } from '../sketch/sectionPlane';
+import { resolveSketchProjections } from '../sketch/projection';
 import type { MeshFormat, MeshStats, ParsedMesh } from '@icancad/io';
 import { loadAsset } from '../persistence/db';
 import { nextBodyNumber, useDocumentStore } from '../stores/documentStore';
@@ -160,6 +161,8 @@ interface RebuildState {
   /** Sketch id -> frame frozen when that operation was evaluated. */
   sketchFrames: Record<string, SketchFrame>;
   sketches: Map<string, SketchFeature>;
+  /** Sketch entity ids whose projection source is gone, per sketch. */
+  projectionLost: Record<string, string[]>;
   featureErrors: Record<string, string>;
   featureBodyErrors: Record<string, Record<string, string>>;
   featureObjectErrors: Record<string, Record<string, string>>;
@@ -218,6 +221,7 @@ function emptyState(): RebuildState {
     createdBodies: new Map(),
     sketchFrames: {},
     sketches: new Map(),
+    projectionLost: {},
     featureErrors: {},
     featureBodyErrors: {},
     featureObjectErrors: {},
@@ -232,6 +236,12 @@ function cloneErrors(
 ): Record<string, Record<string, string>> {
   const clone: Record<string, Record<string, string>> = {};
   for (const [key, value] of Object.entries(errors)) clone[key] = { ...value };
+  return clone;
+}
+
+function cloneLists(lists: Record<string, string[]>): Record<string, string[]> {
+  const clone: Record<string, string[]> = {};
+  for (const [key, value] of Object.entries(lists)) clone[key] = [...value];
   return clone;
 }
 
@@ -251,6 +261,7 @@ function cloneState(state: RebuildState): RebuildState {
     ),
     sketchFrames: { ...state.sketchFrames },
     sketches: new Map(state.sketches),
+    projectionLost: cloneLists(state.projectionLost),
     featureErrors: { ...state.featureErrors },
     featureBodyErrors: cloneErrors(state.featureBodyErrors),
     featureObjectErrors: cloneErrors(state.featureObjectErrors),
@@ -415,6 +426,7 @@ async function runRebuild(
       scene.featureBodyErrors,
       scene.featureObjectErrors,
       scene.sketchFrames,
+      scene.projectionLost,
       preview,
     );
   // Which operation produced each body's current shape, so a face can lead back
@@ -565,11 +577,26 @@ async function evaluateFeature(
         return;
       }
     }
-    state.sketchFrames[feature.id] = computeSketchFrame(
+    const frame = computeSketchFrame(
       feature,
       feature.plane.type === 'face' ? state.meshes[feature.plane.bodyId ?? ''] : undefined,
     );
-    state.sketches.set(feature.id, feature);
+    state.sketchFrames[feature.id] = frame;
+    // Projected geometry follows the bodies as they exist at this point of the
+    // history; the stored entities remain the snapshot for a lost link.
+    const resolved = resolveSketchProjections(
+      feature,
+      frame,
+      (bodyId) => state.meshes[bodyId],
+    );
+    state.sketches.set(
+      feature.id,
+      resolved.entities === feature.entities
+        ? feature
+        : { ...feature, entities: resolved.entities },
+    );
+    if (resolved.lostEntityIds.length > 0) state.projectionLost[feature.id] = resolved.lostEntityIds;
+    else delete state.projectionLost[feature.id];
     return;
   }
 

@@ -1,6 +1,6 @@
 import type { SketchFeature } from '@icancad/model';
 import { isFundamentalEntityId } from '@icancad/sketch';
-import { Check, LineStyle, Magnet, MousePointer2, Ruler, Trash2 } from 'lucide-react';
+import { Check, LineStyle, Magnet, MousePointer2, Presentation, Ruler, Trash2 } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -31,6 +31,7 @@ const TOOLS: {
     | 'sketch.toolLine'
     | 'sketch.toolCircle'
     | 'sketch.toolArc'
+    | 'sketch.toolProject'
     | 'sketch.toolEllipse'
     | 'sketch.toolBezier';
 }[] = [
@@ -41,6 +42,7 @@ const TOOLS: {
   { tool: 'arc', label: 'sketch.toolArc' },
   { tool: 'ellipse', label: 'sketch.toolEllipse' },
   { tool: 'bezier', label: 'sketch.toolBezier' },
+  { tool: 'project', label: 'sketch.toolProject' },
 ];
 
 export function SketchToolRail() {
@@ -121,6 +123,8 @@ export function SketchToolRail() {
           >
             {tool === 'select' ? (
               <MousePointer2 size={17} />
+            ) : tool === 'project' ? (
+              <Presentation size={17} />
             ) : (
               <SketchEntityIcon type={tool} size={17} />
             )}

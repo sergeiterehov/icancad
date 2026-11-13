@@ -37,6 +37,7 @@ scope.onmessage = (event) => {
         request.entities,
         request.constraints,
         request.pinned,
+        request.derived,
       );
       gcs.push_primitives_and_params(primitives);
       const status = gcs.solve(Algorithm.DogLeg);
@@ -55,7 +56,7 @@ scope.onmessage = (event) => {
       const redundant = gcs.get_gcs_redundant_constraints();
       const dof = gcs.gcs.dof();
       const frozen = request.diagnose
-        ? diagnoseFrozenEntities(gcs, entities, request.constraints, dof)
+        ? diagnoseFrozenEntities(gcs, entities, request.constraints, dof, request.derived)
         : [];
       scope.postMessage({
         id: request.id,

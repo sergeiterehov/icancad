@@ -181,6 +181,17 @@ const sketchReference = z.object({
   measure: z.enum(['length', 'angle', 'radius', 'diameter', 'x', 'y', 'rx', 'ry']),
 });
 
+const sketchProjection = z.object({
+  id: z.string().min(1),
+  entityId: z.string().min(1),
+  source: z.object({
+    kind: z.enum(['vertex', 'edge']),
+    bodyId: z.string().min(1),
+    elementId: z.string().min(1),
+  }),
+  faceId: z.string().min(1).optional(),
+});
+
 const sketchFeature = z.object({
   ...featureBase,
   type: z.literal('sketch'),
@@ -188,6 +199,7 @@ const sketchFeature = z.object({
   entities: z.array(sketchEntity),
   constraints: z.array(sketchConstraint),
   references: z.array(sketchReference).default([]),
+  projections: z.array(sketchProjection).default([]),
 });
 
 const bodyFaceRef = z.object({

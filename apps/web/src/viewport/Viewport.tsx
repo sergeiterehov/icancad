@@ -62,7 +62,13 @@ import { SceneController, type SceneBody } from './SceneController';
 import { resolveSelectionHit } from './selectionPick';
 import { SketchAnnotations } from './SketchAnnotations';
 import { SketchEditor } from './SketchEditor';
-import { getViewport, registerViewport } from './handle';
+import {
+  addProjectionToSketch,
+  projectionEntityIds,
+  resolveSketchProjections,
+  type ProjectionPick,
+} from '../sketch/projection';
+import { getViewport, registerViewport, type ScenePick } from './handle';
 
 const AXIS_HINTS: Record<string, { text: string; color: string }> = {
   right: { text: '+X', color: '#d48282' },
@@ -72,6 +78,41 @@ const AXIS_HINTS: Record<string, { text: string; color: string }> = {
   top: { text: '+Z', color: '#84a4e4' },
   bottom: { text: '−Z', color: '#84a4e4' },
 };
+
+/** Turns a click in the 3D view into projected sketch geometry. */
+function projectPickIntoSketch(sketchId: string, pick: ScenePick | null): void {
+  if (!pick) return;
+  const store = useDocumentStore.getState();
+  const feature = store.project.features.find(
+    (candidate): candidate is SketchFeature =>
+      candidate.id === sketchId && candidate.type === 'sketch',
+  );
+  if (!feature) return;
+  const kernel = useKernelStore.getState();
+  if (pick.kind === 'body' || pick.kind === 'mesh' || pick.kind === 'face') return;
+  const mesh = kernel.meshes[pick.bodyId];
+  if (!mesh) return;
+  const frame = computeSketchFrame(
+    feature,
+    feature.plane.type === 'face' ? kernel.meshes[feature.plane.bodyId ?? ''] : undefined,
+  );
+  let projectionPick: ProjectionPick | null = null;
+  if (pick.kind === 'body-vertex') {
+    projectionPick = {
+      kind: 'vertex',
+      bodyId: pick.bodyId,
+      elementId: pick.elementId,
+      position: pick.position,
+    };
+  } else if (pick.kind === 'body-edge') {
+    projectionPick = { kind: 'edge', bodyId: pick.bodyId, edgeId: pick.edgeId };
+  } else if (pick.kind === 'body-face') {
+    projectionPick = { kind: 'face', bodyId: pick.bodyId, faceId: pick.faceId };
+  }
+  if (!projectionPick) return;
+  const next = addProjectionToSketch(feature, frame, mesh, projectionPick);
+  if (next) store.apply({ type: 'feature/replace', feature: next });
+}
 
 /** What the drag chip says: the extrude method or the edge treatment side. */
 function chipLabel(drag: OperationHandleDrag, translate: (key: never) => string): string {
@@ -97,6 +138,8 @@ export function Viewport() {
   const sectionEnabled = useUiStore((state) => state.sectionEnabled);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
   const activeSketchReady = useUiStore((state) => state.activeSketchReady);
+  const sketchTool = useUiStore((state) => state.sketchTool);
+  const sketchProjecting = Boolean(activeSketchId) && sketchTool === 'project';
   const pickingExtrude = useUiStore((state) => state.pickingExtrude);
   const pickingExtrudeBodies = useUiStore((state) => state.pickingExtrudeBodies);
   const pickingEdges = useUiStore((state) => state.pickingEdges);
@@ -276,9 +319,13 @@ export function Viewport() {
       canvas,
       container,
       (pick, additive) => {
-        if (useUiStore.getState().activeSketchId) return;
-        const store = useDocumentStore.getState();
         const ui = useUiStore.getState();
+        if (ui.activeSketchId) {
+          // Projecting is the only sketch tool that reaches into the 3D scene.
+          if (ui.sketchTool === 'project') projectPickIntoSketch(ui.activeSketchId, pick);
+          return;
+        }
+        const store = useDocumentStore.getState();
         if (pick && isModelRebuilding(useKernelStore.getState())) {
           ui.showToast('toast.pickAfterRebuild');
           return;
@@ -427,7 +474,12 @@ export function Viewport() {
           store.select({ kind: 'mesh', id: pick.id }, { additive });
           return;
         }
-        if (pick.kind === 'body' || pick.kind === 'body-face' || pick.kind === 'body-edge') {
+        if (
+          pick.kind === 'body' ||
+          pick.kind === 'body-face' ||
+          pick.kind === 'body-edge' ||
+          pick.kind === 'body-vertex'
+        ) {
           store.select({ kind: 'body', id: pick.kind === 'body' ? pick.id : pick.bodyId }, {
             additive,
           });
@@ -790,7 +842,15 @@ export function Viewport() {
       else selected.push(key);
     }
     const planeSketch = selectedFeature?.type === 'sketch' ? selectedFeature : undefined;
-    if (planeSketch?.plane.type === 'face' && planeSketch.plane.bodyId && planeSketch.plane.topoId) {
+    // While the sketch is being edited its plane is context, not a selected
+    // target, so the reference face is not highlighted.
+    if (
+      planeSketch &&
+      planeSketch.id !== activeSketchId &&
+      planeSketch.plane.type === 'face' &&
+      planeSketch.plane.bodyId &&
+      planeSketch.plane.topoId
+    ) {
       selected.push(`b:${planeSketch.plane.bodyId}#${planeSketch.plane.topoId}`);
     }
     controller.setFaceHighlights({
@@ -800,9 +860,11 @@ export function Viewport() {
         Boolean(pickingExtrude) ||
         Boolean(pickingEdges) ||
         Boolean(pickingSketchPlane) ||
-        Boolean(pickingSectionFace),
+        Boolean(pickingSectionFace) ||
+        sketchProjecting,
       bodyPicking: Boolean(pickingExtrudeBodies),
-      edgePicking: Boolean(pickingEdges),
+      edgePicking: Boolean(pickingEdges) || sketchProjecting,
+      projecting: sketchProjecting,
       bodyFacesOnly: Boolean(pickingSketchPlane) || Boolean(pickingSectionFace),
     });
   }, [
@@ -814,6 +876,8 @@ export function Viewport() {
     pickingSketchPlane,
     pickingSectionFace,
     pickingEdges,
+    sketchProjecting,
+    activeSketchId,
     boundExtrude,
   ]);
 
@@ -855,9 +919,12 @@ export function Viewport() {
     const resolved = sectionPlanes
       .filter(sectionPlaneActive)
       .map((plane) => resolveSectionPlane(plane, meshes));
-    const planes = sketchSection ? [sketchSection, ...resolved] : resolved;
+    // Projecting aims at the whole model, so the sketch's own section plane
+    // stops cutting it: a clipped face cannot be clicked.
+    const planes =
+      sketchSection && !sketchProjecting ? [sketchSection, ...resolved] : resolved;
     controllerRef.current?.setSection(sectionEnabled ? planes : []);
-  }, [sketchSectionKey, sectionEnabled, sectionPlanes, meshes]);
+  }, [sketchSectionKey, sectionEnabled, sectionPlanes, meshes, sketchProjecting]);
 
   useEffect(() => {
     const ids = activeFeatureIds(project);
@@ -874,43 +941,50 @@ export function Viewport() {
           (feature.id !== activeSketchId || activeSketchReady) &&
           (objectVisible(project, sketchObjectId(feature.id)) || feature.id === activeSketchId),
       )
-      .map((feature) => ({
-        id: feature.id,
-        color: objectColor(project, sketchObjectId(feature.id), SKETCH_COLOR),
-        showConstruction: objectShowConstruction(project, sketchObjectId(feature.id)),
-        faces: sketchTopology(feature.entities).faces.map((face) => ({
-          id: face.id,
-          outline: face.outline,
-          holes: face.holeOutlines,
-        })),
-        facesPicking: Boolean(pickingExtrude) || feature.id === selectedSketchId,
-        frame:
+      .map((feature) => {
+        const frame =
           feature.id === activeSketchId && activeSketchReady
             ? computeSketchFrame(
                 feature,
                 feature.plane.type === 'face' ? meshes[feature.plane.bodyId ?? ''] : undefined,
               )
-            : sketchFrameOf(feature, sketchFrames[feature.id]),
-        entities: feature.entities,
-        selectionKeys: feature.id === activeSketchId ? sketchSelectionIds : [],
-        dimmedEntityIds:
-          feature.id === activeSketchId
-            ? (() => {
-                const constraints = feature.constraints.filter((candidate) =>
-                  sketchConstraintIds.includes(candidate.id),
-                );
-                if (constraints.length === 0) return [];
-                const related = new Set(constraintsGeometryIds(constraints));
-                return feature.entities
-                  .filter((entity) => !related.has(entity.id))
-                  .map((entity) => entity.id);
-              })()
-            : [],
-        frozenEntityIds: feature.id === activeSketchId ? sketchFrozenEntityIds : [],
-        highlightIds: feature.id === activeSketchId ? sketchAutoHighlightIds : [],
-        hoverIds: feature.id === activeSketchId ? sketchHoverIds : [],
-        active: feature.id === activeSketchId,
-      }));
+            : sketchFrameOf(feature, sketchFrames[feature.id]);
+        // Projected geometry follows the bodies as the rebuild sees them; the
+        // stored entities are the snapshot used when a link is gone.
+        const resolved = resolveSketchProjections(feature, frame, (bodyId) => meshes[bodyId]);
+        const dimmed = (() => {
+          if (feature.id !== activeSketchId) return [];
+          const constraints = feature.constraints.filter((candidate) =>
+            sketchConstraintIds.includes(candidate.id),
+          );
+          if (constraints.length === 0) return [];
+          const related = new Set(constraintsGeometryIds(constraints));
+          return resolved.entities
+            .filter((entity) => !related.has(entity.id))
+            .map((entity) => entity.id);
+        })();
+        return {
+          id: feature.id,
+          color: objectColor(project, sketchObjectId(feature.id), SKETCH_COLOR),
+          showConstruction: objectShowConstruction(project, sketchObjectId(feature.id)),
+          faces: sketchTopology(resolved.entities).faces.map((face) => ({
+            id: face.id,
+            outline: face.outline,
+            holes: face.holeOutlines,
+          })),
+          facesPicking: Boolean(pickingExtrude) || feature.id === selectedSketchId,
+          frame,
+          entities: resolved.entities,
+          selectionKeys: feature.id === activeSketchId ? sketchSelectionIds : [],
+          dimmedEntityIds: dimmed,
+          frozenEntityIds: feature.id === activeSketchId ? sketchFrozenEntityIds : [],
+          projectedEntityIds: [...projectionEntityIds(feature)],
+          lostEntityIds: resolved.lostEntityIds,
+          highlightIds: feature.id === activeSketchId ? sketchAutoHighlightIds : [],
+          hoverIds: feature.id === activeSketchId ? sketchHoverIds : [],
+          active: feature.id === activeSketchId,
+        };
+      });
     getViewport()?.setSketches(sketches);
   }, [
     activeSketchId,

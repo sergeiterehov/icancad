@@ -12,6 +12,7 @@ import {
 } from '@icancad/model';
 import clsx from 'clsx';
 import {
+  AlertTriangle,
   Box,
   Eye,
   EyeOff,
@@ -113,6 +114,7 @@ export function LeftPanel() {
   const toggleSketchVisibility = useDocumentStore((state) => state.toggleSketchVisibility);
   const addBox = useDocumentStore((state) => state.addPrimitiveBox);
   const featureErrors = useKernelStore((state) => state.featureErrors);
+  const projectionLost = useKernelStore((state) => state.projectionLost);
   const preview = useKernelStore((state) => state.preview);
   const kernelReady = useKernelStore((state) => state.status === 'ready');
   const openMenu = useContextMenuStore((state) => state.open);
@@ -399,6 +401,13 @@ export function LeftPanel() {
             </span>
             <span className="tree-name">{feature.name}</span>
           </button>
+        )}
+        {(projectionLost[feature.id]?.length ?? 0) > 0 && (
+          <Tooltip content={t('tree.projectionLost')}>
+            <span className="tree-warning-icon" aria-label={t('tree.projectionLost')}>
+              <AlertTriangle size={13} />
+            </span>
+          </Tooltip>
         )}
         <IconButton
           label={visible ? t('tree.hide') : t('tree.show')}

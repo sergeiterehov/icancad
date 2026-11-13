@@ -5,7 +5,7 @@ import {
   type SketchMeasure,
 } from '@icancad/model';
 import { isFundamentalEntityId } from '@icancad/sketch';
-import { Ruler, Trash2 } from 'lucide-react';
+import { Ruler, Split, Trash2 } from 'lucide-react';
 import type { ContextMenuItem } from '../ui/ContextMenu';
 import { constraintIdsForEntities } from './constraintModel';
 import { measureInfo, measuresForEntity } from './measure';
@@ -71,6 +71,23 @@ export function referenceMenuItems(
         } satisfies ContextMenuItem;
       }),
     );
+  }
+  const projected = new Set((feature.projections ?? []).map((projection) => projection.entityId));
+  const detachable = targets.filter((id) => projected.has(id));
+  if (detachable.length > 0) {
+    const detach = new Set(detachable);
+    items.push({
+      id: 'detach-projection',
+      label: t('sketch.detachProjection'),
+      icon: <Split size={14} />,
+      onSelect: () =>
+        onChange({
+          ...feature,
+          projections: (feature.projections ?? []).filter(
+            (projection) => !detach.has(projection.entityId),
+          ),
+        }),
+    });
   }
   const deletable = targets.filter((id) => !isFundamentalEntityId(id));
   if (onDelete && deletable.length > 0) {

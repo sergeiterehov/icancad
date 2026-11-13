@@ -72,6 +72,7 @@ import {
   diagnoseSketch,
   removeSketchEntities,
 } from '../sketch/constraintModel';
+import { isProjectedEntity } from '../sketch/projection';
 import { referenceMenuItems } from '../sketch/referenceMenu';
 import { measureInfo, measuresForEntity } from '../sketch/measure';
 import { sketchPlaneReady } from '../sketch/sectionPlane';
@@ -363,6 +364,7 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
   const activeSketchId = useUiStore((state) => state.activeSketchId);
   const sketchSelectionIds = useUiStore((state) => state.sketchSelectionIds);
   const sketchConstraintIds = useUiStore((state) => state.sketchConstraintIds);
+  const sketchFrozenEntityIds = useUiStore((state) => state.sketchFrozenEntityIds);
   const selectSketchConstraints = useUiStore((state) => state.selectSketchConstraints);
   const setSketchSelection = useUiStore((state) => state.setSketchSelection);
   const openMenu = useContextMenuStore((state) => state.open);
@@ -384,6 +386,11 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
           {feature.entities.map((entity) => {
             const dimmed = selectedConstraints.length > 0 && !constraintEntityIds.has(entity.id);
             const active = selectedEntityIds.has(entity.id);
+            // The icon carries the state of the geometry: violet when it is
+            // projected from 3D, green when it has no degrees of freedom left.
+            const projected = isProjectedEntity(feature, entity.id);
+            const frozen =
+              activeSketchId === feature.id && sketchFrozenEntityIds.includes(entity.id);
             return (
               <button
                 key={entity.id}
@@ -437,7 +444,10 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
                   );
                 }}
               >
-                <span className="entity-icon" aria-hidden="true">
+                <span
+                  className={`entity-icon${frozen ? ' frozen' : ''}${projected ? ' projected' : ''}`}
+                  aria-hidden="true"
+                >
                   <SketchEntityIcon type={entity.type} />
                 </span>
                 <span className="tree-name">

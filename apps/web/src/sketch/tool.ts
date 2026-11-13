@@ -1,4 +1,12 @@
-export type SketchTool = 'select' | 'point' | 'line' | 'circle' | 'arc' | 'ellipse' | 'bezier';
+export type SketchTool =
+  | 'select'
+  | 'point'
+  | 'line'
+  | 'circle'
+  | 'arc'
+  | 'ellipse'
+  | 'bezier'
+  | 'project';
 
 /** Single-key shortcuts of the drawing tools, shown in the tool rail tooltips. */
 export const SKETCH_TOOL_SHORTCUTS: Partial<Record<SketchTool, string>> = {

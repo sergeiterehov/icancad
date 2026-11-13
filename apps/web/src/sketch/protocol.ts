@@ -14,6 +14,8 @@ export interface SketchSolveRequest {
   entities: SketchEntity[];
   constraints: SketchConstraint[];
   pinned?: SolverPin[];
+  /** Derived entity ids (projections) held fixed while solving. */
+  derived?: string[];
   diagnose?: boolean;
 }
 

@@ -98,6 +98,7 @@ export function Timeline() {
   const setHistoryEnd = useDocumentStore((state) => state.setHistoryEnd);
   const removeFeature = useDocumentStore((state) => state.removeFeature);
   const featureErrors = useKernelStore((state) => state.featureErrors);
+  const projectionLost = useKernelStore((state) => state.projectionLost);
   const rebuildCursor = useKernelStore((state) => state.rebuildCursor);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
   const setActiveSketch = useUiStore((state) => state.setActiveSketch);
@@ -131,6 +132,9 @@ export function Timeline() {
     else setHistoryEnd(project.features[index - 1]?.id ?? null);
   };
 
+  const projectionWarning = (feature: Feature) =>
+    (projectionLost[feature.id]?.length ?? 0) > 0;
+
   const timelineTooltip = (feature: Feature, error: string | undefined) =>
     error ? (
       <span className="timeline-tooltip">
@@ -139,6 +143,11 @@ export function Timeline() {
         <span className="timeline-tooltip-error">
           {translate(t, `errors.${error}`, error)}
         </span>
+      </span>
+    ) : projectionWarning(feature) ? (
+      <span className="timeline-tooltip">
+        <span className="timeline-tooltip-name">{feature.name}</span>
+        <span className="timeline-tooltip-warning">{t('timeline.projectionWarning')}</span>
       </span>
     ) : (
       feature.name
@@ -175,6 +184,7 @@ export function Timeline() {
                         dimmed && 'dimmed',
                         (rolledBack || feature.suppressed) && 'muted',
                         Boolean(featureErrors[feature.id]) && 'error',
+                        !featureErrors[feature.id] && projectionWarning(feature) && 'warning',
                       )}
                       aria-label={feature.name}
                       onContextMenu={(event) =>

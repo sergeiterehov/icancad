@@ -59,3 +59,65 @@ describe('project file', () => {
     expect(projectFileName('***')).toBe('project.icad');
   });
 });
+
+it('keeps projected geometry links through the archive', async () => {
+  const project = applyCommands(sampleProject(), [
+    {
+      type: 'feature/add',
+      feature: {
+        id: 'feat_sketch',
+        name: 'Sketch',
+        suppressed: false,
+        type: 'sketch',
+        plane: { type: 'datum', plane: 'XY', offset: 0 },
+        entities: [{ id: 'entity_p', type: 'point', construction: false, x: 1, y: 2 }],
+        constraints: [],
+        references: [],
+        projections: [
+          {
+            id: 'proj_1',
+            entityId: 'entity_p',
+            source: { kind: 'vertex', bodyId: 'body_1', elementId: 'v:1,2,0' },
+            faceId: '3',
+          },
+        ],
+      },
+    },
+  ]);
+  const blob = serializeProjectFile(project, new Map());
+  const parsed = parseProjectFile(new Uint8Array(await blob.arrayBuffer()));
+  const sketch = parsed.project.features.find((feature) => feature.id === 'feat_sketch');
+  expect(sketch?.type).toBe('sketch');
+  if (sketch?.type !== 'sketch') return;
+  expect(sketch.projections).toEqual([
+    {
+      id: 'proj_1',
+      entityId: 'entity_p',
+      source: { kind: 'vertex', bodyId: 'body_1', elementId: 'v:1,2,0' },
+      faceId: '3',
+    },
+  ]);
+});
+
+it('reads a sketch without projections as an empty list', async () => {
+  const project = applyCommands(sampleProject(), [
+    {
+      type: 'feature/add',
+      feature: {
+        id: 'feat_sketch',
+        name: 'Sketch',
+        suppressed: false,
+        type: 'sketch',
+        plane: { type: 'datum', plane: 'XY', offset: 0 },
+        entities: [],
+        constraints: [],
+        references: [],
+      },
+    },
+  ]);
+  const blob = serializeProjectFile(project, new Map());
+  const sketch = parseProjectFile(new Uint8Array(await blob.arrayBuffer())).project.features.at(-1);
+  expect(sketch?.type).toBe('sketch');
+  if (sketch?.type !== 'sketch') return;
+  expect(sketch.projections).toEqual([]);
+});

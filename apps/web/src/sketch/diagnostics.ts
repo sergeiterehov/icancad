@@ -72,10 +72,13 @@ function solveEntities(
   entities: SketchEntity[],
   constraints: SketchConstraint[],
   pinned: SolverPin[],
+  derived: readonly string[] = [],
 ): SketchEntity[] | null {
   try {
     gcs.clear_data();
-    gcs.push_primitives_and_params(buildSolverPrimitives(entities, constraints, pinned).primitives);
+    gcs.push_primitives_and_params(
+      buildSolverPrimitives(entities, constraints, pinned, derived).primitives,
+    );
     const status = gcs.solve(Algorithm.DogLeg);
     if (status === 2 || status === 3) return null;
     if (gcs.get_gcs_conflicting_constraints().length > 0) return null;
@@ -93,17 +96,18 @@ function candidateHasMotion(
   target: SketchEntity,
   moved: SketchEntity,
   pointIndex: number,
+  derived: readonly string[],
   axis?: 'x' | 'y',
 ): boolean {
   const entities = baseline.map((entity) => (entity.id === target.id ? moved : entity));
 
-  const direct = solveEntities(gcs, entities, constraints, []);
+  const direct = solveEntities(gcs, entities, constraints, [], derived);
   const directTarget = direct?.find((entity) => entity.id === target.id);
   if (directTarget && !sameEntity(directTarget, target)) return true;
 
   const first = solveEntities(gcs, entities, constraints, [
     { entityId: target.id, pointIndex, axis },
-  ]);
+  ], derived);
   if (!first) return false;
   const firstTarget = first.find((entity) => entity.id === target.id);
   if (!firstTarget || sameEntity(firstTarget, target)) return false;
@@ -111,7 +115,7 @@ function candidateHasMotion(
   // The first solve can leave a pinned point at an infeasible position if the
   // solver ignores a conflicting constraint. Re-solve with the point free to
   // verify that the moved state is actually part of the solution manifold.
-  const second = solveEntities(gcs, first, constraints, []);
+  const second = solveEntities(gcs, first, constraints, [], derived);
   const secondTarget = second?.find((entity) => entity.id === target.id);
   return Boolean(secondTarget && !sameEntity(secondTarget, target));
 }
@@ -128,6 +132,7 @@ function entityHasMotion(
   baseline: SketchEntity[],
   constraints: SketchConstraint[],
   target: SketchEntity,
+  derived: readonly string[],
 ): boolean {
   const points = entityControlPoints(target);
   // A circle exposes its radius as a second control point, but the solver has
@@ -142,7 +147,7 @@ function entityHasMotion(
             point[0] + (axis === 'x' ? sign * DELTA : 0),
             point[1] + (axis === 'y' ? sign * DELTA : 0),
           ] as Point2);
-          if (candidateHasMotion(gcs, baseline, constraints, target, moved, index, axis)) {
+          if (candidateHasMotion(gcs, baseline, constraints, target, moved, index, derived, axis)) {
             return true;
           }
         }
@@ -152,7 +157,7 @@ function entityHasMotion(
       point[0] + DELTA,
       point[1] + DELTA,
     ] as Point2);
-    if (candidateHasMotion(gcs, baseline, constraints, target, free, index)) return true;
+    if (candidateHasMotion(gcs, baseline, constraints, target, free, index, derived)) return true;
   }
   return false;
 }
@@ -162,9 +167,10 @@ export function diagnoseFrozenEntities(
   entities: SketchEntity[],
   constraints: SketchConstraint[],
   globalDof: number,
+  derived: readonly string[] = [],
 ): string[] {
   if (globalDof === 0) return entities.map((entity) => entity.id);
   return entities
-    .filter((entity) => !entityHasMotion(gcs, entities, constraints, entity))
+    .filter((entity) => !entityHasMotion(gcs, entities, constraints, entity, derived))
     .map((entity) => entity.id);
 }

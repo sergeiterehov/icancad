@@ -37,12 +37,19 @@ export function solveSketch(
   entities: SketchEntity[],
   constraints: SketchConstraint[],
   pinned: SolverPin[] = [],
-  options: { diagnose?: boolean } = {},
+  options: { diagnose?: boolean; derived?: readonly string[] } = {},
 ): Promise<SketchSolveResult> {
   const id = ++sequence;
   const active = getWorker();
   return new Promise<SketchSolveResult>((resolve, reject) => {
     pending.set(id, { resolve, reject });
-    active.postMessage({ id, entities, constraints, pinned, diagnose: options.diagnose });
+    active.postMessage({
+      id,
+      entities,
+      constraints,
+      pinned,
+      derived: options.derived ? [...options.derived] : undefined,
+      diagnose: options.diagnose,
+    });
   });
 }

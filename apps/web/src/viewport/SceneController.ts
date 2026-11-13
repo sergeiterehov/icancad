@@ -39,9 +39,9 @@ import type {
 } from './handle';
 import { hoverColor, selectionColor } from './interactionColors';
 import { isPlanarFace } from './planarFace';
+import { bodyElements } from '../sketch/projection';
 import { RenderOrder } from './renderOrder';
 import { firstUnclippedHit } from './sectionPick';
-import { SKETCH_SECTION_ID } from '../sketch/sectionPlane';
 import { handleDragValue } from '../quick/handleDrag';
 import { outwardNormal } from '../quick/geometry';
 import type { SelectionHit } from './selectionPick';
@@ -121,6 +121,8 @@ export interface FaceHighlightState {
   bodyFacesOnly?: boolean;
   /** Pick body edges; a hit within the click tolerance wins over the face. */
   edgePicking?: boolean;
+  /** Pick body vertices, edges or faces to project them into a sketch. */
+  projecting?: boolean;
 }
 
 interface CameraPose {
@@ -266,12 +268,14 @@ export class SceneController {
     bodyPicking: boolean;
     bodyFacesOnly: boolean;
     edgePicking: boolean;
+    projecting: boolean;
   } = {
     selected: new Set(),
     invalid: new Set(),
     picking: false,
     bodyPicking: false,
     bodyFacesOnly: false,
+    projecting: false,
     edgePicking: false,
   };
   private bodyStyles: {
@@ -1140,6 +1144,7 @@ export class SceneController {
       bodyPicking: state.bodyPicking,
       bodyFacesOnly: Boolean(state.bodyFacesOnly),
       edgePicking: Boolean(state.edgePicking),
+      projecting: Boolean(state.projecting),
     };
     if (!state.picking) {
       this.hoveredFaceKey = null;
@@ -1474,11 +1479,6 @@ export class SceneController {
       ) {
         continue;
       }
-      // The axes are unbounded references, so making them snap targets would
-      // capture ordinary clicks across the whole sketch. They are constrained
-      // by selecting them instead; drawing along one already adds the
-      // horizontal or vertical constraint.
-      if (isSketchAxisId(entity.id)) continue;
       const closest = this.closestPointOnEntity(entity, point);
       if (closest && closest.distance <= bestCurve) {
         bestCurve = closest.distance;
@@ -1551,6 +1551,15 @@ export class SceneController {
     return this.theme === 'dark' ? 0x9af0b8 : 0x1d6b3e;
   }
 
+  /** Projected geometry is violet; a lost link falls back to the orange snapshot. */
+  private sketchProjectionColor(): number {
+    return this.theme === 'dark' ? 0x8b5cf6 : 0x6d28d9;
+  }
+
+  private sketchLostProjectionColor(): number {
+    return this.theme === 'dark' ? 0xf59e0b : 0xb45309;
+  }
+
   setSketches(sketches: SceneSketch[]): void {
     this.sketchData = sketches;
     this.disposeSketchEntries();
@@ -1565,6 +1574,8 @@ export class SceneController {
       const selected = new Set(sketch.selectionKeys.filter((key) => !key.includes('#')));
       const dimmed = new Set(sketch.dimmedEntityIds);
       const frozen = new Set(sketch.frozenEntityIds);
+      const projected = new Set(sketch.projectedEntityIds);
+      const lost = new Set(sketch.lostEntityIds);
       const highlighted = new Set(sketch.highlightIds.filter((key) => !key.includes('#')));
       const highlightedPoints = new Map<string, Set<number>>();
       for (const key of sketch.highlightIds) {
@@ -1616,6 +1627,8 @@ export class SceneController {
           selectedPoints.get(entity.id) ?? new Set<number>(),
           dimmed.has(entity.id),
           frozen.has(entity.id),
+          projected.has(entity.id) && sketch.active,
+          lost.has(entity.id) && sketch.active,
           highlighted.has(entity.id),
           highlightedPoints.get(entity.id) ?? new Set<number>(),
           hovered.has(entity.id),
@@ -2025,6 +2038,8 @@ export class SceneController {
     selectedPoints: ReadonlySet<number>,
     dimmed: boolean,
     frozen: boolean,
+    projected: boolean,
+    lost: boolean,
     highlighted: boolean,
     highlightedPoints: ReadonlySet<number>,
     hovered: boolean,
@@ -2038,11 +2053,15 @@ export class SceneController {
         ? this.sketchHoverColor()
         : highlighted
           ? this.sketchHighlightColor()
-          : frozen
-            ? this.sketchFrozenLineColor()
-            : entity.construction
-              ? this.sketchConstructionColor()
-              : (tint ?? this.sketchColor());
+          : lost
+            ? this.sketchLostProjectionColor()
+            : projected
+              ? this.sketchProjectionColor()
+              : frozen
+                ? this.sketchFrozenLineColor()
+                : entity.construction
+                  ? this.sketchConstructionColor()
+                  : (tint ?? this.sketchColor());
     // Sketches that are not being edited are drawn thinner so they cannot be
     // mistaken for the sketch in progress.
     const width = selected ? 3 : hovered ? 3 : highlighted ? 3 : background ? 1 : 2;
@@ -2075,9 +2094,13 @@ export class SceneController {
               ? this.sketchHoverColor()
               : pointHighlighted
                 ? this.sketchHighlightColor()
-                : frozen
-                  ? this.sketchFrozenPointColor()
-                  : this.sketchPointColor(),
+                : lost
+                  ? this.sketchLostProjectionColor()
+                  : projected
+                    ? this.sketchProjectionColor()
+                    : frozen
+                      ? this.sketchFrozenPointColor()
+                      : this.sketchPointColor(),
           map: this.pointTexture,
           alphaTest: 0.5,
           transparent: true,
@@ -2312,9 +2335,7 @@ export class SceneController {
           uniforms: {
             uPixelRatio: { value: this.renderer.getPixelRatio() },
             uSpacing: { value: HATCH_SPACING_PX },
-            // The sketch plane is a working surface, not a material section:
-            // a flat fill keeps the sketch and its face tint readable.
-            uHatch: { value: section.id === SKETCH_SECTION_ID ? 0 : 1 },
+            uHatch: { value: 1 },
             uFill: { value: fill },
             uLine: { value: line },
           },
@@ -2774,11 +2795,16 @@ export class SceneController {
         // object into its faces and edges.
         const toolPicking = this.faceHighlights.picking || this.faceHighlights.bodyPicking;
         if (toolPicking || !this.callbacks.onSelectPick) {
+          const projecting = Boolean(this.faceHighlights.projecting);
           const pick = this.pickSceneAt(
             event.clientX,
             event.clientY,
             this.faceHighlights.picking,
             this.faceHighlights.bodyFacesOnly,
+            // Projecting aims at the solid, never at the sketch face pickers.
+            projecting,
+            projecting || Boolean(this.faceHighlights.edgePicking),
+            projecting,
           );
           this.onPick?.(pick, additive);
         } else {
@@ -2805,6 +2831,7 @@ export class SceneController {
     bodyFacesOnly = false,
     preferBody = false,
     edges = false,
+    vertices = false,
   ): ScenePick | null {
     const raycaster = this.pointerToRay(clientX, clientY);
     const bodyMeshes = [...this.bodies.values()]
@@ -2830,6 +2857,13 @@ export class SceneController {
     }
     if (bodyHit) {
       const bodyId = bodyHit.object.userData.bodyId as string | undefined;
+      if (bodyId && vertices) {
+        const entry = this.bodies.get(bodyId);
+        if (entry && entry.kind === 'solid') {
+          const vertex = this.pickVertexAt(entry, bodyId, clientX, clientY);
+          if (vertex) return vertex;
+        }
+      }
       if (bodyId && edges) {
         const entry = this.bodies.get(bodyId);
         if (entry && entry.kind === 'solid') {
@@ -2935,6 +2969,34 @@ export class SceneController {
       x: (projected.x * 0.5 + 0.5) * this.width,
       y: (-projected.y * 0.5 + 0.5) * this.height,
       depth: point.clone().applyMatrix4(this.camera.matrixWorldInverse).z,
+    };
+  }
+
+  /** Nearest vertex of one body in screen space, within a click tolerance. */
+  private pickVertexAt(
+    entry: BodyEntry,
+    bodyId: string,
+    clientX: number,
+    clientY: number,
+  ): ScenePick | null {
+    const elements = bodyElements(entry.hitRef);
+    if (elements.vertices.size === 0) return null;
+    const local = this.localPoint(clientX, clientY);
+    let best: { distance: number; elementId: string; point: THREE.Vector3 } | null = null;
+    for (const [elementId, position] of elements.vertices) {
+      const point = new THREE.Vector3(position[0], position[1], position[2]);
+      const projected = this.projectWorld(point);
+      const distance = Math.hypot(local.x - projected.x, local.y - projected.y);
+      if (distance > 8) continue;
+      if (!best || distance < best.distance) best = { distance, elementId, point };
+    }
+    if (!best) return null;
+    if (!this.isEdgePointVisible(entry, best.point)) return null;
+    return {
+      kind: 'body-vertex',
+      bodyId,
+      elementId: best.elementId,
+      position: [best.point.x, best.point.y, best.point.z],
     };
   }
 

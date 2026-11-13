@@ -61,7 +61,11 @@ export function buildSolverPrimitives(
   entities: SketchEntity[],
   constraints: SketchConstraint[],
   pinned: SolverPin[] = [],
+  derived: Iterable<string> = [],
 ): SolverPrimitives {
+  // Derived (projected) geometry is determined by its source, so the solver
+  // never moves it: constraints pull the other side towards it.
+  const derivedIds = new Set(derived);
   const fixed = new Set<string>();
   const anchors = new Map<string, Point2>();
   const axisPins: Constraint[] = [];
@@ -119,7 +123,7 @@ export function buildSolverPrimitives(
         type: 'point',
         x: anchor?.[0] ?? points[index]?.[0] ?? fallback?.[0] ?? 0,
         y: anchor?.[1] ?? points[index]?.[1] ?? fallback?.[1] ?? 0,
-        fixed: fixed.has(id),
+        fixed: fixed.has(id) || derivedIds.has(entity.id),
       } as SketchPrimitive);
       return id;
     };
@@ -132,7 +136,7 @@ export function buildSolverPrimitives(
           type: 'point',
           x: anchor?.[0] ?? entity.x,
           y: anchor?.[1] ?? entity.y,
-          fixed: fixed.has(entity.id),
+          fixed: fixed.has(entity.id) || derivedIds.has(entity.id),
         } as SketchPrimitive);
         break;
       }

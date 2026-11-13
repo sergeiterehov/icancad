@@ -1,4 +1,5 @@
 import type { SketchConstraint, SketchConstraintRef, SketchEntity } from '@icancad/model';
+import { entityControlPoints } from '@icancad/sketch';
 import { solveSketch } from './client';
 import type { SketchSolveResult, SolverPin } from './protocol';
 
@@ -6,6 +7,8 @@ export interface DragSolveOptions {
   entities: SketchEntity[];
   constraints: SketchConstraint[];
   pinSets: SketchConstraintRef[][];
+  /** Derived entities, which stay fixed while everything else moves. */
+  derived?: readonly string[];
 }
 
 /**
@@ -21,6 +24,43 @@ function pinAttempts(pins: SketchConstraintRef[]): SolverPin[][] {
   return [pins, [{ ...single, axis: 'x' }], [{ ...single, axis: 'y' }]];
 }
 
+const POSITION_TOLERANCE = 1e-4;
+
+/** Whether two solutions of the same sketch put the geometry in the same place. */
+function sameGeometry(first: SketchEntity[], second: SketchEntity[]): boolean {
+  if (first.length !== second.length) return false;
+  for (let index = 0; index < first.length; index += 1) {
+    const a = entityControlPoints(first[index]!);
+    const b = entityControlPoints(second[index]!);
+    if (a.length !== b.length) return false;
+    for (let point = 0; point < a.length; point += 1) {
+      if (
+        Math.abs(a[point]![0] - b[point]![0]) > POSITION_TOLERANCE ||
+        Math.abs(a[point]![1] - b[point]![1]) > POSITION_TOLERANCE
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+/**
+ * A pin the constraints cannot honour is not reported as a conflict when the
+ * pinned points are solved as fixed parameters: the solver keeps the dragged
+ * geometry where the pointer put it and quietly drops the constraints that
+ * reference it. Solving again without pins tells whether the pinned result is a
+ * configuration the constraints allow.
+ */
+async function honoursConstraints(
+  result: SketchSolveResult,
+  constraints: SketchConstraint[],
+  derived: readonly string[] | undefined,
+): Promise<boolean> {
+  const free = await solveSketch(result.entities, constraints, [], { derived });
+  return free.conflicting.length === 0 && sameGeometry(result.entities, free.entities);
+}
+
 /**
  * Drag solving degrades gracefully: a strong pin set (for example every control
  * point of a moved curve) can over-constrain a closed profile, so weaker pin
@@ -30,12 +70,16 @@ export async function solveDrag({
   entities,
   constraints,
   pinSets,
+  derived,
 }: DragSolveOptions): Promise<SketchSolveResult | null> {
   for (const pins of pinSets) {
     for (const attempt of pinAttempts(pins)) {
       try {
-        const result = await solveSketch(entities, constraints, attempt);
-        if (result.conflicting.length === 0) return result;
+        const result = await solveSketch(entities, constraints, attempt, { derived });
+        if (result.conflicting.length > 0) continue;
+        if (attempt.length === 0 || (await honoursConstraints(result, constraints, derived))) {
+          return result;
+        }
       } catch {
         // Try the next attempt.
       }

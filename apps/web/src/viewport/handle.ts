@@ -24,6 +24,10 @@ export interface SceneSketch {
   selectionKeys: string[];
   dimmedEntityIds: string[];
   frozenEntityIds: string[];
+  /** Entities projected from 3D geometry; they are drawn in violet. */
+  projectedEntityIds: string[];
+  /** Projected entities whose source is gone; they use the snapshot in orange. */
+  lostEntityIds: string[];
   highlightIds: string[];
   /** Geometry under the pointer while selecting. */
   hoverIds: string[];
@@ -51,7 +55,13 @@ export type ScenePick =
       /** False for cylinders, spheres and other curved faces. */
       planar: boolean;
     }
-  | { kind: 'body-edge'; bodyId: string; edgeId: string };
+  | { kind: 'body-edge'; bodyId: string; edgeId: string }
+  | {
+      kind: 'body-vertex';
+      bodyId: string;
+      elementId: string;
+      position: [number, number, number];
+    };
 
 /**
  * A 3D handle that belongs to an operation. The handle draws an arrow from
