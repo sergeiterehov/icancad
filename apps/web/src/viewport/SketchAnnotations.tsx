@@ -44,7 +44,7 @@ export function SketchAnnotations() {
   const activeSketchId = useUiStore((state) => state.activeSketchId);
   const activeSketchReady = useUiStore((state) => state.activeSketchReady);
   const selectionKeys = useUiStore((state) => state.sketchSelectionIds);
-  const selectedConstraintId = useUiStore((state) => state.sketchConstraintId);
+  const selectedConstraintIds = useUiStore((state) => state.sketchConstraintIds);
   const selectConstraint = useUiStore((state) => state.selectSketchConstraint);
   const showToast = useUiStore((state) => state.showToast);
   const project = useDocumentStore((state) => state.project);
@@ -177,12 +177,12 @@ export function SketchAnnotations() {
   const selectedEntityIds = new Set(
     selectionKeys.map((key) => key.split('#')[0]).filter((id): id is string => Boolean(id)),
   );
-  const activeConstraint = feature.constraints.find(
-    (constraint) => constraint.id === selectedConstraintId,
-  );
+  const selectedConstraints = new Set(selectedConstraintIds);
+  const soleConstraintId =
+    selectedConstraintIds.length === 1 ? selectedConstraintIds[0] : undefined;
 
   const isDimmed = (annotation: DimensionAnnotation) => {
-    if (activeConstraint) return activeConstraint.id !== annotation.id;
+    if (selectedConstraintIds.length > 0) return !selectedConstraints.has(annotation.id);
     if (selectedEntityIds.size === 0) return false;
     return ![...selectedEntityIds].some((id) => annotation.entityIds.has(id));
   };
@@ -238,7 +238,7 @@ export function SketchAnnotations() {
             role="button"
             tabIndex={0}
             aria-label={`${annotation.text}. ${t('constraint.editValue')}`}
-            data-active={activeConstraint?.id === annotation.id ? 'true' : undefined}
+            data-active={selectedConstraints.has(annotation.id) ? 'true' : undefined}
             data-dimmed={isDimmed(annotation) ? 'true' : undefined}
             data-testid={`sketch-annotation-${annotation.id}`}
             style={{ left: position.x, top: position.y }}
@@ -246,7 +246,7 @@ export function SketchAnnotations() {
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => {
               event.stopPropagation();
-              selectConstraint(activeConstraint?.id === annotation.id ? null : annotation.id);
+              selectConstraint(soleConstraintId === annotation.id ? null : annotation.id);
             }}
             onDoubleClick={(event) => {
               event.stopPropagation();
@@ -255,7 +255,7 @@ export function SketchAnnotations() {
             onKeyDown={(event) => {
               if (event.key !== 'Enter' && event.key !== ' ') return;
               event.preventDefault();
-              selectConstraint(activeConstraint?.id === annotation.id ? null : annotation.id);
+              selectConstraint(soleConstraintId === annotation.id ? null : annotation.id);
             }}
           >
             {editing ? (

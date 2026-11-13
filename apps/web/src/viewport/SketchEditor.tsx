@@ -128,8 +128,9 @@ export function SketchEditor() {
   const sketchToolNonce = useUiStore((state) => state.sketchToolNonce);
   const selectionIds = useUiStore((state) => state.sketchSelectionIds);
   const setSketchSelection = useUiStore((state) => state.setSketchSelection);
-  const selectedConstraintId = useUiStore((state) => state.sketchConstraintId);
+  const selectedConstraintIds = useUiStore((state) => state.sketchConstraintIds);
   const selectSketchConstraint = useUiStore((state) => state.selectSketchConstraint);
+  const selectSketchConstraints = useUiStore((state) => state.selectSketchConstraints);
   const setSketchFrozen = useUiStore((state) => state.setSketchFrozen);
   const setSketchAutoHighlight = useUiStore((state) => state.setSketchAutoHighlight);
   const setSketchHover = useUiStore((state) => state.setSketchHover);
@@ -824,6 +825,7 @@ export function SketchEditor() {
       if (!pick?.entityId) return;
       event.preventDefault();
       const entityId = pick.entityId;
+      const entityIds = selectionIds.map((key) => key.split('#')[0]!).filter(Boolean);
       openContextMenu(
         event.clientX,
         event.clientY,
@@ -833,6 +835,10 @@ export function SketchEditor() {
           (key) => t(key as never),
           locale,
           (next) => apply({ type: 'feature/replace', feature: next }),
+          {
+            selectedEntityIds: entityIds.includes(entityId) ? entityIds : [entityId],
+            onSelectConstraints: (ids) => selectSketchConstraints(ids),
+          },
         ),
       );
     };
@@ -866,6 +872,7 @@ export function SketchEditor() {
     sketch,
     selectionIds,
     setSketchSelection,
+    selectSketchConstraints,
     preview,
     commitPreview,
     magnetEnabled,
@@ -999,12 +1006,11 @@ export function SketchEditor() {
         return;
       }
       if (event.key === 'Delete' || event.key === 'Backspace') {
-        if (selectedConstraintId && sketch) {
+        if (selectedConstraintIds.length > 0 && sketch) {
+          const removed = new Set(selectedConstraintIds);
           const next = {
             ...sketch,
-            constraints: sketch.constraints.filter(
-              (constraint) => constraint.id !== selectedConstraintId,
-            ),
+            constraints: sketch.constraints.filter((constraint) => !removed.has(constraint.id)),
           };
           apply({ type: 'feature/replace', feature: next });
           selectSketchConstraint(null);

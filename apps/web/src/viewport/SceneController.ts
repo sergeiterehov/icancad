@@ -1290,6 +1290,7 @@ export class SceneController {
     this.grid.geometry.dispose();
     (this.grid.material as THREE.Material).dispose();
     this.grid = this.createGrid();
+    this.grid.visible = !this.sketchData.some((sketch) => sketch.active);
     this.scene.add(this.grid);
     if (this.sectionPlanes.length > 0) this.rebuildSection();
     if (this.sketchData.length > 0) this.setSketches(this.sketchData);
@@ -1554,6 +1555,9 @@ export class SceneController {
     this.sketchData = sketches;
     this.disposeSketchEntries();
     const editingSketch = sketches.some((sketch) => sketch.active);
+    // The sketch draws its own plane-aligned grid; the world grid would only
+    // duplicate it at a different orientation while editing.
+    this.grid.visible = !editingSketch;
     for (const sketch of sketches) {
       const group = new THREE.Group();
       group.renderOrder = RenderOrder.sketch;

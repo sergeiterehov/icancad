@@ -59,6 +59,26 @@ export function constraintEntityIds(constraint: SketchConstraint): Set<string> {
   return new Set(constraint.refs.map((ref) => ref.entityId));
 }
 
+/** Ids of all geometry a set of constraints refers to. */
+export function constraintsGeometryIds(constraints: Iterable<SketchConstraint>): string[] {
+  const ids = new Set<string>();
+  for (const constraint of constraints) {
+    for (const ref of constraint.refs) ids.add(ref.entityId);
+  }
+  return [...ids];
+}
+
+/** Ids of the constraints that refer to any of the given geometry. */
+export function constraintIdsForEntities(
+  feature: SketchFeature,
+  entityIds: Iterable<string>,
+): string[] {
+  const targets = new Set(entityIds);
+  return feature.constraints
+    .filter((constraint) => constraint.refs.some((ref) => targets.has(ref.entityId)))
+    .map((constraint) => constraint.id);
+}
+
 export function refPoint(
   ref: SketchConstraintRef,
   entities: Map<string, SketchEntity>,
@@ -115,6 +135,20 @@ export function selectionRefs(
   return refs;
 }
 
+/**
+ * Whether the solver has a primitive for a tangent between the two entities.
+ * Mirrors the combinations handled by the planegcs mapping.
+ */
+function canBeTangent(first: SketchEntity, second: SketchEntity): boolean {
+  const round = (entity: SketchEntity) => entity.type === 'circle' || entity.type === 'arc';
+  if (first.type === 'line') {
+    return round(second) || second.type === 'ellipse';
+  }
+  if (first.type === 'ellipse') return second.type === 'line';
+  if (round(first)) return round(second) || second.type === 'line';
+  return false;
+}
+
 export function buildConstraintActions(
   feature: SketchFeature,
   selectionKeys: string[],
@@ -129,77 +163,140 @@ export function buildConstraintActions(
   // The origin and the axes are a priori fixed, so they cannot be fixed or
   // measured like ordinary geometry, but they are valid constraint targets.
   const ownRefs = refs.filter((ref) => !isFundamentalEntityId(ref.entityId));
-  const ownEntities = selectedEntities.filter((entity) => !isFundamentalEntityId(entity.id));
-  const lines = selectedEntities.filter((entity) => entity.type === 'line');
-  const ownLines = ownEntities.filter((entity) => entity.type === 'line');
-  const circles = ownEntities.filter((entity) => entity.type === 'circle' || entity.type === 'arc');
-  const ellipses = ownEntities.filter((entity) => entity.type === 'ellipse');
+  // A group constraint applies to the whole selection, so it is offered only
+  // when every selected reference fits the role it needs. A selection mixing
+  // roles (say, two lines and a circle) hides the constraints that cannot
+  // consume all of it.
+  const everyEntity = entityRefs.length === refs.length && entityRefs.length > 0;
+  const onlyPoints = pointRefs.length === refs.length && pointRefs.length >= 2;
+  const onlyLines = everyEntity && selectedEntities.every((entity) => entity.type === 'line');
+  const onlyCurves =
+    everyEntity &&
+    selectedEntities.every((entity) => entity.type === 'circle' || entity.type === 'arc');
+  const onlyOwnLines = onlyLines && ownRefs.length === refs.length;
   const actions: ConstraintAction[] = [];
   const push = (type: ConstraintType, actionRefs: SketchConstraintRef[], value?: number) => {
     actions.push({ key: `${type}-${actions.length}`, type, refs: actionRefs, value });
   };
 
   if (ownRefs.length > 0) push('fix', refs);
-  if (refs.length === 2 && pointRefs.length === 2) {
-    const first = refPoint(pointRefs[0]!, entities);
-    const second = refPoint(pointRefs[1]!, entities);
-    const current = distanceBetween(pointRefs[0]!, pointRefs[1]!, entities);
-    push('coincident', refs);
-    if (current !== undefined) push('distance', refs, current);
-    if (first && second) {
-      push('horizontal-distance', refs, Math.abs(second[0] - first[0]));
-      push('vertical-distance', refs, Math.abs(second[1] - first[1]));
+  if (onlyPoints) {
+    push('coincident', pointRefs);
+    if (refs.length === 2) {
+      const first = refPoint(pointRefs[0]!, entities);
+      const second = refPoint(pointRefs[1]!, entities);
+      const current = distanceBetween(pointRefs[0]!, pointRefs[1]!, entities);
+      if (current !== undefined) push('distance', pointRefs, current);
+      if (first && second) {
+        push('horizontal-distance', pointRefs, Math.abs(second[0] - first[0]));
+        push('vertical-distance', pointRefs, Math.abs(second[1] - first[1]));
+      }
     }
-    push('horizontal', refs);
-    push('vertical', refs);
+    push('horizontal', pointRefs);
+    push('vertical', pointRefs);
   }
-  if (ownEntities.length === 1 && ownLines.length === 1 && refs.length === 1) {
-    const line = ownLines[0] as Extract<SketchEntity, { type: 'line' }>;
+  if (onlyOwnLines) {
     push('horizontal', entityRefs);
     push('vertical', entityRefs);
-    push('distance', entityRefs, Math.hypot(line.x2 - line.x1, line.y2 - line.y1));
+    if (refs.length === 1) {
+      const line = selectedEntities[0] as Extract<SketchEntity, { type: 'line' }>;
+      push('distance', entityRefs, Math.hypot(line.x2 - line.x1, line.y2 - line.y1));
+    } else {
+      push('equal', entityRefs);
+    }
   }
-  if (lines.length === 2) {
+  if (onlyLines && refs.length >= 2) {
     push('parallel', entityRefs);
     push('perpendicular', entityRefs);
-    const angle = lineAngle(selectedEntities, entityRefs);
-    if (angle !== undefined) push('angle', entityRefs, Math.round(angle * 100) / 100);
-    if (ownLines.length === 2) push('equal', entityRefs);
+    if (refs.length === 2) {
+      const angle = lineAngle(selectedEntities, entityRefs);
+      if (angle !== undefined) push('angle', entityRefs, Math.round(angle * 100) / 100);
+    }
   }
-  if (circles.length === 1 && entityRefs.length === 1) {
-    const circle = circles[0] as Extract<SketchEntity, { type: 'circle' | 'arc' }>;
-    push('radius', entityRefs, circle.r);
-    push('diameter', entityRefs, circle.r * 2);
+  if (entityRefs.length === 1 && refs.length === 1) {
+    const target = selectedEntities[0];
+    if (target?.type === 'circle' || target?.type === 'arc') {
+      push('radius', entityRefs, target.r);
+      push('diameter', entityRefs, target.r * 2);
+    }
   }
-  if (circles.length === 2) {
+  if (onlyCurves && ownRefs.length === refs.length && refs.length >= 2) {
     push('equal', entityRefs);
+  }
+  const tangentTarget = selectedEntities[0];
+  if (
+    everyEntity &&
+    selectedEntities.length >= 2 &&
+    tangentTarget !== undefined &&
+    selectedEntities.slice(1).every((entity) => canBeTangent(tangentTarget, entity))
+  ) {
     push('tangent', entityRefs);
   }
-  if (pointRefs.length === 1 && lines.length === 1) push('point-on-line', refs);
-  if (pointRefs.length === 1 && circles.length === 1) push('point-on-circle', refs);
-  if (lines.length === 1 && circles.length === 1) push('tangent', refs);
-  if (lines.length === 1 && ellipses.length === 1) push('tangent', refs);
-  if (pointRefs.length === 2 && lines.length === 1 && refs.length === 3) push('symmetric', refs);
-  if (pointRefs.length === 3 && refs.length === 3) push('symmetric', refs);
-  if (pointRefs.length === 1 && selectedEntities.some((entity) => entity.type === 'ellipse')) {
-    push('point-on-ellipse', refs);
+  if (pointRefs.length >= 1 && entityRefs.length === 1) {
+    const target = selectedEntities[0];
+    if (target?.type === 'line') push('point-on-line', refs);
+    if (target?.type === 'circle' || target?.type === 'arc') push('point-on-circle', refs);
+    if (target?.type === 'ellipse') push('point-on-ellipse', refs);
   }
+  if (refs.length === 3 && entityRefs.length === 1 && pointRefs.length === 2) {
+    if (selectedEntities[0]?.type === 'line') push('symmetric', refs);
+  }
+  if (refs.length === 3 && pointRefs.length === 3) push('symmetric', refs);
   return actions;
 }
 
-function constraintsForAction(
+function chainPairs(
+  refs: readonly SketchConstraintRef[],
+): Array<[SketchConstraintRef, SketchConstraintRef]> {
+  const first = refs[0];
+  return first === undefined
+    ? []
+    : refs.slice(1).map((ref): [SketchConstraintRef, SketchConstraintRef] => [first, ref]);
+}
+
+/**
+ * Expands a constraint action into the solver-level constraints. Group actions
+ * tie the first selected element to every following one, because planegcs only
+ * knows pairwise primitives and the first element is the reference for the
+ * whole group.
+ */
+export function constraintsForAction(
   action: ConstraintAction,
   entities: Map<string, SketchEntity>,
 ): SketchConstraint[] {
+  const build = (
+    type: ConstraintType,
+    refs: SketchConstraintRef[],
+    value?: number,
+  ): SketchConstraint => ({ id: createId('con'), type, refs, value });
+
   if (action.type !== 'fix') {
-    return [
-      {
-        id: createId('con'),
-        type: action.type,
-        refs: action.refs,
-        value: action.value,
-      },
-    ];
+    switch (action.type) {
+      case 'coincident':
+      case 'parallel':
+      case 'perpendicular':
+      case 'equal':
+      case 'tangent':
+        return chainPairs(action.refs).map(([first, next]) => build(action.type, [first, next]));
+      case 'horizontal':
+      case 'vertical':
+        // A single line constraint per selected line; points are aligned to
+        // the first one.
+        return action.refs.every((ref) => ref.pointIndex === undefined)
+          ? action.refs.map((ref) => build(action.type, [ref]))
+          : chainPairs(action.refs).map(([first, next]) => build(action.type, [first, next]));
+      case 'point-on-line':
+      case 'point-on-circle':
+      case 'point-on-ellipse': {
+        const target = action.refs.find((ref) => ref.pointIndex === undefined);
+        if (!target) return [];
+        return action.refs
+          .filter((ref) => ref !== target)
+          .map((ref) => build(action.type, [ref, target]));
+      }
+      default:
+        return [build(action.type, action.refs, action.value)];
+    }
   }
 
   const constraints: SketchConstraint[] = [];

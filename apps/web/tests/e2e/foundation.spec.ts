@@ -1720,11 +1720,13 @@ test.describe('ICANCad foundation', () => {
 
     await row.click({ button: 'right' });
     await expect(page.locator('.context-menu-heading')).toContainText('Show');
-    await page.getByRole('menuitem').nth(0).click();
+    // The menu starts with the constraint selection action, so pick the
+    // measures by their formatted labels.
+    await page.getByRole('menuitem', { name: /mm$/ }).click();
     await expect(page.locator('.sketch-reference')).toHaveCount(1);
 
     await row.click({ button: 'right' });
-    const angleItem = page.getByRole('menuitem').nth(1);
+    const angleItem = page.getByRole('menuitem', { name: /°/ });
     await expect(angleItem).toContainText('°');
     await angleItem.click();
     await expect(page.locator('.sketch-reference')).toHaveCount(2);

@@ -15,6 +15,7 @@ import {
   type SketchFeature,
 } from '@icancad/model';
 import { faceFrame, sketchTopology } from '@icancad/sketch';
+import { constraintsGeometryIds } from '../sketch/constraintModel';
 import {
   computeSketchFrame,
   flipNormal,
@@ -102,7 +103,7 @@ export function Viewport() {
   const pickingSketchPlane = useUiStore((state) => state.pickingSketchPlane);
   const pickingSectionFace = useUiStore((state) => state.pickingSectionFace);
   const sketchSectionEnabled = useUiStore((state) => state.sketchSectionEnabled);
-  const sketchConstraintId = useUiStore((state) => state.sketchConstraintId);
+  const sketchConstraintIds = useUiStore((state) => state.sketchConstraintIds);
   const sketchFrozenEntityIds = useUiStore((state) => state.sketchFrozenEntityIds);
   const sketchAutoHighlightIds = useUiStore((state) => state.sketchAutoHighlightIds);
   const sketchHoverIds = useUiStore((state) => state.sketchHoverIds);
@@ -895,11 +896,11 @@ export function Viewport() {
         dimmedEntityIds:
           feature.id === activeSketchId
             ? (() => {
-                const constraint = feature.constraints.find(
-                  (candidate) => candidate.id === sketchConstraintId,
+                const constraints = feature.constraints.filter((candidate) =>
+                  sketchConstraintIds.includes(candidate.id),
                 );
-                if (!constraint) return [];
-                const related = new Set(constraint.refs.map((ref) => ref.entityId));
+                if (constraints.length === 0) return [];
+                const related = new Set(constraintsGeometryIds(constraints));
                 return feature.entities
                   .filter((entity) => !related.has(entity.id))
                   .map((entity) => entity.id);
@@ -915,7 +916,7 @@ export function Viewport() {
     activeSketchId,
     project,
     sketchSelectionIds,
-    sketchConstraintId,
+    sketchConstraintIds,
     sketchFrozenEntityIds,
     sketchAutoHighlightIds,
     sketchHoverIds,

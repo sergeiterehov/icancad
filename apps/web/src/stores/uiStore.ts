@@ -37,7 +37,7 @@ interface UiState {
   /** False while the rebuild for the sketch's timeline position is running. */
   activeSketchReady: boolean;
   sketchSelectionIds: string[];
-  sketchConstraintId: string | null;
+  sketchConstraintIds: string[];
   sketchFrozenEntityIds: string[];
   sketchAutoHighlightIds: string[];
   /** Geometry under the pointer while selecting; empty while a tool creates. */
@@ -65,6 +65,7 @@ interface UiState {
   setActiveSketchReady: (ready: boolean) => void;
   setSketchSelection: (ids: string[]) => void;
   selectSketchConstraint: (id: string | null) => void;
+  selectSketchConstraints: (ids: string[]) => void;
   setSketchFrozen: (ids: string[]) => void;
   setSketchAutoHighlight: (ids: string[]) => void;
   setSketchHover: (ids: string[]) => void;
@@ -112,7 +113,7 @@ export const useUiStore = create<UiState>((set) => ({
   activeSketchId: null,
   activeSketchReady: true,
   sketchSelectionIds: [],
-  sketchConstraintId: null,
+  sketchConstraintIds: [],
   sketchFrozenEntityIds: [],
   sketchAutoHighlightIds: [],
   sketchHoverIds: [],
@@ -212,7 +213,7 @@ export const useUiStore = create<UiState>((set) => ({
       activeSketchId,
       activeSketchReady: activeSketchId === null,
       sketchSelectionIds: [],
-      sketchConstraintId: null,
+      sketchConstraintIds: [],
       sketchFrozenEntityIds: [],
       sketchAutoHighlightIds: [],
       sketchHoverIds: [],
@@ -223,12 +224,17 @@ export const useUiStore = create<UiState>((set) => ({
   setSketchSelection: (sketchSelectionIds) =>
     set({
       sketchSelectionIds,
-      sketchConstraintId: null,
+      sketchConstraintIds: [],
       sketchAutoHighlightIds: [],
       sketchHoverIds: [],
     }),
   selectSketchConstraint: (sketchConstraintId) =>
-    set({ sketchConstraintId, sketchSelectionIds: [] }),
+    set({
+      sketchConstraintIds: sketchConstraintId ? [sketchConstraintId] : [],
+      sketchSelectionIds: [],
+    }),
+  selectSketchConstraints: (sketchConstraintIds) =>
+    set({ sketchConstraintIds, sketchSelectionIds: [] }),
   setSketchFrozen: (sketchFrozenEntityIds) => set({ sketchFrozenEntityIds }),
   setSketchProblems: (sketchProblemConstraintIds) =>
     set((state) =>

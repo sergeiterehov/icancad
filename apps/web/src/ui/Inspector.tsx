@@ -67,6 +67,7 @@ import { useContextMenuStore } from './ContextMenu';
 import { ChamferIcon, FilletIcon } from './edgeIcons';
 import { ExtrudeOpIcon, PointIcon } from './featureIcons';
 import { SectionPanel } from './SectionPanel';
+import { constraintsGeometryIds } from '../sketch/constraintModel';
 import { referenceMenuItems } from '../sketch/referenceMenu';
 import { measureInfo, measuresForEntity } from '../sketch/measure';
 import { sketchPlaneReady } from '../sketch/sectionPlane';
@@ -357,17 +358,18 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
   const apply = useDocumentStore((state) => state.apply);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
   const sketchSelectionIds = useUiStore((state) => state.sketchSelectionIds);
-  const sketchConstraintId = useUiStore((state) => state.sketchConstraintId);
+  const sketchConstraintIds = useUiStore((state) => state.sketchConstraintIds);
+  const selectSketchConstraints = useUiStore((state) => state.selectSketchConstraints);
   const setSketchSelection = useUiStore((state) => state.setSketchSelection);
   const openMenu = useContextMenuStore((state) => state.open);
 
-  const activeConstraint = feature.constraints.find(
-    (constraint) => constraint.id === sketchConstraintId,
+  const selectedConstraints = feature.constraints.filter((constraint) =>
+    sketchConstraintIds.includes(constraint.id),
   );
   const selectedEntityIds = new Set(
     sketchSelectionIds.map((key) => key.split('#')[0]).filter((id): id is string => Boolean(id)),
   );
-  const constraintEntityIds = new Set(activeConstraint?.refs.map((ref) => ref.entityId) ?? []);
+  const constraintEntityIds = new Set(constraintsGeometryIds(selectedConstraints));
 
   return (
     <PanelSection title={t('sketch.composition')} count={feature.entities.length}>
@@ -376,7 +378,7 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
       ) : (
         <div className="selection-list">
           {feature.entities.map((entity) => {
-            const dimmed = activeConstraint !== undefined && !constraintEntityIds.has(entity.id);
+            const dimmed = selectedConstraints.length > 0 && !constraintEntityIds.has(entity.id);
             const active = selectedEntityIds.has(entity.id);
             return (
               <button
@@ -402,7 +404,12 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
                 }}
                 onContextMenu={(event) => {
                   event.preventDefault();
-                  setSketchSelection([entity.id]);
+                  // Right-clicking a member of a multi-selection keeps it so
+                  // the constraint action applies to every selected entity.
+                  if (!selectedEntityIds.has(entity.id)) setSketchSelection([entity.id]);
+                  const selection = selectedEntityIds.has(entity.id)
+                    ? [...selectedEntityIds]
+                    : [entity.id];
                   openMenu(
                     event.clientX,
                     event.clientY,
@@ -412,6 +419,10 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
                       (key) => t(key as never),
                       locale,
                       (next) => apply({ type: 'feature/replace', feature: next }),
+                      {
+                        selectedEntityIds: selection,
+                        onSelectConstraints: (ids) => selectSketchConstraints(ids),
+                      },
                     ),
                   );
                 }}

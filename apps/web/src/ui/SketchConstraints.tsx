@@ -1,8 +1,13 @@
 import type { SketchFeature } from '@icancad/model';
-import { AlertTriangle, Trash2 } from 'lucide-react';
+import { AlertTriangle, MousePointer2, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { constraintEntityIds, constraintLabel, diagnoseSketch } from '../sketch/constraintModel';
+import {
+  constraintEntityIds,
+  constraintLabel,
+  constraintsGeometryIds,
+  diagnoseSketch,
+} from '../sketch/constraintModel';
 import { isNumericConstraint } from '../sketch/dimensions';
 import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
@@ -31,8 +36,10 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
   const locale = i18n.resolvedLanguage ?? 'en';
   const apply = useDocumentStore((state) => state.apply);
   const selectionKeys = useUiStore((state) => state.sketchSelectionIds);
-  const selectedConstraintId = useUiStore((state) => state.sketchConstraintId);
+  const setSketchSelection = useUiStore((state) => state.setSketchSelection);
+  const selectedConstraintIds = useUiStore((state) => state.sketchConstraintIds);
   const selectConstraint = useUiStore((state) => state.selectSketchConstraint);
+  const selectConstraints = useUiStore((state) => state.selectSketchConstraints);
   const problemIds = useUiStore((state) => state.sketchProblemConstraintIds);
   const openMenu = useContextMenuStore((state) => state.open);
   const [onlyProblems, setOnlyProblems] = useState(false);
@@ -50,7 +57,9 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
   const selectedEntityIds = new Set(
     selectionKeys.map((key) => key.split('#')[0]).filter((id): id is string => Boolean(id)),
   );
-  const active = feature.constraints.find((constraint) => constraint.id === selectedConstraintId);
+  const activeConstraintIds = new Set(selectedConstraintIds);
+  const soleConstraintId =
+    selectedConstraintIds.length === 1 ? selectedConstraintIds[0] : undefined;
 
   const removeConstraint = (id: string) => {
     const next = {
@@ -58,8 +67,22 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
       constraints: feature.constraints.filter((candidate) => candidate.id !== id),
     };
     apply({ type: 'feature/replace', feature: next });
-    if (selectedConstraintId === id) selectConstraint(null);
+    if (activeConstraintIds.has(id)) {
+      selectConstraint(null);
+    }
     void diagnoseSketch(next);
+  };
+
+  const toggleConstraint = (id: string, additive: boolean) => {
+    if (!additive) {
+      selectConstraint(soleConstraintId === id ? null : id);
+      return;
+    }
+    selectConstraints(
+      activeConstraintIds.has(id)
+        ? selectedConstraintIds.filter((candidate) => candidate !== id)
+        : [...selectedConstraintIds, id],
+    );
   };
 
   return (
@@ -92,28 +115,48 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
             const relatedByElement = [...selectedEntityIds].some((id) => entityIds.has(id));
             const dimmed =
               (selectedEntityIds.size > 0 && !relatedByElement) ||
-              (active !== undefined && active.id !== constraint.id);
+              (selectedConstraintIds.length > 0 && !activeConstraintIds.has(constraint.id));
             return (
               <div
                 key={constraint.id}
                 className="constraint-row"
-                data-active={active?.id === constraint.id ? 'true' : undefined}
+                data-active={activeConstraintIds.has(constraint.id) ? 'true' : undefined}
                 data-dimmed={dimmed ? 'true' : undefined}
                 data-problem={problems.has(constraint.id) ? 'true' : undefined}
                 role="button"
                 tabIndex={0}
-                onClick={() =>
-                  selectConstraint(active?.id === constraint.id ? null : constraint.id)
+                onClick={(event) =>
+                  toggleConstraint(
+                    constraint.id,
+                    event.metaKey || event.ctrlKey || event.shiftKey,
+                  )
                 }
                 onKeyDown={(event) => {
                   if (event.key !== 'Enter' && event.key !== ' ') return;
                   event.preventDefault();
-                  selectConstraint(active?.id === constraint.id ? null : constraint.id);
+                  toggleConstraint(
+                    constraint.id,
+                    event.metaKey || event.ctrlKey || event.shiftKey,
+                  );
                 }}
                 onContextMenu={(event) => {
                   event.preventDefault();
-                  selectConstraint(constraint.id);
+                  // Opening the menu never changes the selection: a clicked
+                  // member of a multi-selection keeps it, otherwise the action
+                  // applies to that constraint alone.
+                  const targets = activeConstraintIds.has(constraint.id)
+                    ? feature.constraints.filter((candidate) => activeConstraintIds.has(candidate.id))
+                    : [constraint];
+                  const geometryIds = constraintsGeometryIds(targets);
                   openMenu(event.clientX, event.clientY, [
+                    {
+                      id: 'select-geometry',
+                      label: t('sketch.selectRelatedGeometry'),
+                      icon: <MousePointer2 size={14} />,
+                      disabled: geometryIds.length === 0,
+                      onSelect: () => setSketchSelection(geometryIds),
+                    },
+                    { id: 'constraint-separator', separator: true },
                     {
                       id: 'delete',
                       label: t('common.delete'),

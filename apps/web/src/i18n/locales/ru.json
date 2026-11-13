@@ -284,6 +284,8 @@
     "entityArc": "Дуга",
     "entityEllipse": "Эллипс",
     "entityBezier": "Безье",
+    "selectRelatedGeometry": "Выбрать всю геометрию",
+    "selectRelatedConstraints": "Выбрать все ограничения",
     "showMeasures": "Показать",
     "measure_length": "Длина",
     "measure_angle": "Угол",

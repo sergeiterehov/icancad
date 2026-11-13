@@ -284,6 +284,8 @@
     "entityArc": "Arc",
     "entityEllipse": "Ellipse",
     "entityBezier": "Bezier",
+    "selectRelatedGeometry": "Select all geometry",
+    "selectRelatedConstraints": "Select all constraints",
     "showMeasures": "Show",
     "measure_length": "Length",
     "measure_angle": "Angle",
