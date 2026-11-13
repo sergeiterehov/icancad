@@ -2,6 +2,8 @@ import type { TessellationResult } from '@icancad/kernel';
 import {
   createId,
   isFeatureInHistory,
+  objectVisible,
+  sketchObjectId,
   type ExtrudeFeature,
   type Project,
   type SketchFeature,
@@ -67,6 +69,9 @@ export function quickTargetFromSelection(
       feature.id === sketchId && feature.type === 'sketch',
   );
   if (!sketch || !isFeatureInHistory(project, sketch.id)) return null;
+  // A hidden sketch has nothing to aim a handle at, so the quick operation is
+  // not offered for it.
+  if (!objectVisible(project, sketchObjectId(sketch.id))) return null;
   return {
     kind: 'sketch',
     sketchId,

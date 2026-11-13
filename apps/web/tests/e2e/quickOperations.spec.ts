@@ -396,4 +396,47 @@ test.describe('quick operations', () => {
     expect(handles).toHaveLength(1);
     expect(handles[0]?.id.startsWith('edge-treatment:')).toBe(true);
   });
+
+  test('offers a handle for a selected sketch only while it is visible', async ({ page }) => {
+    await openApp(page);
+    const tools = page.getByRole('navigation', { name: 'Tools' });
+    const canvas = page.getByTestId('viewport-canvas');
+    const box = await canvas.boundingBox();
+
+    await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await page.waitForTimeout(600);
+    await page.getByRole('button', { name: 'Line', exact: true }).click();
+    const corners: [number, number][] = [
+      [300, 250],
+      [520, 250],
+      [520, 420],
+      [300, 420],
+    ];
+    for (let index = 0; index < corners.length; index += 1) {
+      const start = corners[index]!;
+      const end = corners[(index + 1) % corners.length]!;
+      await page.mouse.click(box!.x + start[0], box!.y + start[1]);
+      await page.waitForTimeout(320);
+      await page.mouse.click(box!.x + end[0], box!.y + end[1]);
+      await page.waitForTimeout(320);
+    }
+    await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+
+    const row = page.locator('.tree-row').first();
+    await row.locator('.tree-main').click();
+    await expect.poll(async () => (await handleScreens(page)).length).toBe(1);
+    expect((await handleScreens(page))[0]?.id).toMatch(/^extrude:new:/);
+
+    // A hidden sketch is not drawn, so an arrow over it would hang in the air.
+    await row.getByRole('button', { name: 'Hide' }).click();
+    await row.locator('.tree-main').click();
+    await expect.poll(async () => (await handleScreens(page)).length).toBe(0);
+
+    await row.getByRole('button', { name: 'Show' }).click();
+    await row.locator('.tree-main').click();
+    await expect.poll(async () => (await handleScreens(page)).length).toBe(1);
+  });
 });
