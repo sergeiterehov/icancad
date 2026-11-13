@@ -57,6 +57,7 @@ import {
   edgeTreatmentFaceRef,
 } from '../quick/edgeTreatment';
 import { findBoundExtrude, quickTargetFromSelection } from '../quick/target';
+import { bodyEdgeAxisRef } from '../sketch/revolveAxis';
 import { formatNumber } from '../ui/format';
 import { SceneController, type SceneBody } from './SceneController';
 import { resolveSelectionHit } from './selectionPick';
@@ -89,7 +90,14 @@ function projectPickIntoSketch(sketchId: string, pick: ScenePick | null): void {
   );
   if (!feature) return;
   const kernel = useKernelStore.getState();
-  if (pick.kind === 'body' || pick.kind === 'mesh' || pick.kind === 'face') return;
+  if (
+    pick.kind === 'body' ||
+    pick.kind === 'mesh' ||
+    pick.kind === 'face' ||
+    pick.kind === 'sketch-edge'
+  ) {
+    return;
+  }
   const mesh = kernel.meshes[pick.bodyId];
   if (!mesh) return;
   const frame = computeSketchFrame(
@@ -118,6 +126,7 @@ function projectPickIntoSketch(sketchId: string, pick: ScenePick | null): void {
 function chipLabel(drag: OperationHandleDrag, translate: (key: never) => string): string {
   if (drag.op) return translate(`quick.${drag.op}` as never);
   if (drag.kind) return translate(`edgeTreatment.${drag.kind}` as never);
+  if (drag.unit === 'angle') return translate('quick.angle' as never);
   return '';
 }
 
@@ -145,6 +154,7 @@ export function Viewport() {
   const pickingEdges = useUiStore((state) => state.pickingEdges);
   const pickingSketchPlane = useUiStore((state) => state.pickingSketchPlane);
   const pickingSectionFace = useUiStore((state) => state.pickingSectionFace);
+  const pickingRevolveAxis = useUiStore((state) => state.pickingRevolveAxis);
   const sketchSectionEnabled = useUiStore((state) => state.sketchSectionEnabled);
   const sketchConstraintIds = useUiStore((state) => state.sketchConstraintIds);
   const sketchFrozenEntityIds = useUiStore((state) => state.sketchFrozenEntityIds);
@@ -200,11 +210,23 @@ export function Viewport() {
     Boolean(pickingEdges) ||
     Boolean(pickingSketchPlane) ||
     Boolean(pickingSectionFace) ||
+    Boolean(pickingRevolveAxis) ||
     status !== 'ready';
   const boundExtrude = useMemo(
     () => (quickTarget ? findBoundExtrude(project, quickTarget) : undefined),
     [project, quickTarget],
   );
+  // The line the edited revolve turns around, so the scene can mark it.
+  const revolveAxisSelection = useMemo(() => {
+    const focused =
+      selection.length === 1 && selection[0]?.kind === 'feature'
+        ? project.features.find((feature) => feature.id === selection[0]?.id)
+        : undefined;
+    const feature = (focused?.type === 'extrude' ? focused : undefined) ?? boundExtrude;
+    return feature && feature.type === 'extrude' && feature.method === 'revolve'
+      ? (feature.revolve?.axis ?? null)
+      : null;
+  }, [project, selection, boundExtrude]);
   const handleLabels = useMemo(
     () => ({
       extrude: t('features.extrude'),
@@ -215,6 +237,8 @@ export function Viewport() {
       edgeTreatmentTooltip: t('edgeTreatment.dragTooltip'),
       edgeTreatmentRadiusTooltip: t('edgeTreatment.radiusTooltip'),
       edgeTreatmentDistanceTooltip: t('edgeTreatment.distanceTooltip'),
+      revolveStart: t('quick.revolveStartTooltip'),
+      revolveEnd: t('quick.revolveEndTooltip'),
     }),
     [t],
   );
@@ -253,6 +277,7 @@ export function Viewport() {
         enabled: handle.enabled,
         thickness: handle.thickness,
         tooltip: handle.tooltip,
+        ...(handle.arc ? { arc: handle.arc } : {}),
       })),
     [operationHandleList],
   );
@@ -302,6 +327,7 @@ export function Viewport() {
     y: number;
     label: string;
     value: number;
+    unit: 'length' | 'angle';
   } | null>(null);
   const [handleHover, setHandleHover] = useState<{
     x: number;
@@ -411,6 +437,36 @@ export function Viewport() {
           return;
         }
         const edgePicking = ui.pickingEdges;
+        if (ui.pickingRevolveAxis) {
+          if (!pick) return;
+          const featureId = ui.pickingRevolveAxis;
+          if (pick.kind === 'body-edge') {
+            // The axis is read from the input the operation works on, which is
+            // the base mesh while a preview shows its result.
+            const kernelState = useKernelStore.getState();
+            const mark = kernelState.preview?.bodies.find(
+              (candidate) => candidate.id === pick.bodyId,
+            );
+            const mesh = mark?.baseMesh ?? kernelState.meshes[pick.bodyId];
+            const ref = mesh ? bodyEdgeAxisRef(mesh, pick.bodyId, pick.edgeId) : null;
+            if (!ref) {
+              ui.showToast('errors.REVOLVE_EDGE_NOT_STRAIGHT', 'error');
+              return;
+            }
+            store.setRevolveAxis(featureId, ref);
+            ui.setPickingRevolveAxis(null);
+            return;
+          }
+          if (pick.kind === 'sketch-edge') {
+            store.setRevolveAxis(featureId, {
+              kind: 'sketch-edge',
+              sketchId: pick.sketchId,
+              entityId: pick.entityId,
+            });
+            ui.setPickingRevolveAxis(null);
+          }
+          return;
+        }
         if (edgePicking) {
           if (!pick) return;
           if (pick.kind !== 'body-edge' && pick.kind !== 'body-face') return;
@@ -485,10 +541,9 @@ export function Viewport() {
           });
           return;
         }
-        store.select(
-          { kind: 'face', id: `${pick.sketchId}#${pick.faceId}` },
-          { additive },
-        );
+        if (pick.kind === 'face') {
+          store.select({ kind: 'face', id: `${pick.sketchId}#${pick.faceId}` }, { additive });
+        }
       },
       (bodyId, x, y) => {
         if (!bodyId || useUiStore.getState().activeSketchId) return;
@@ -500,11 +555,12 @@ export function Viewport() {
         const selected = store.selection.some(
           (item) => (item.kind === 'body' || item.kind === 'mesh') && item.id === bodyId,
         );
-        if (!selected) store.select({ kind: resolveBody(store.project, ref).kind === 'mesh' ? 'mesh' : 'body', id: bodyId });
-        const targets = objectTargets(
-          store.project,
-          useDocumentStore.getState().selection,
-        );
+        if (!selected)
+          store.select({
+            kind: resolveBody(store.project, ref).kind === 'mesh' ? 'mesh' : 'body',
+            id: bodyId,
+          });
+        const targets = objectTargets(store.project, useDocumentStore.getState().selection);
         const labels = translationRef.current;
         const items: ContextMenuItem[] = [];
         const color = colorMenuItem(targets, labels('context.color'));
@@ -516,9 +572,7 @@ export function Viewport() {
         if (visibility) items.push(visibility);
         const remove = deleteMenuItem(
           targets,
-          targets.length > 1
-            ? labels('context.deleteSelected')
-            : labels('context.deleteObject'),
+          targets.length > 1 ? labels('context.deleteSelected') : labels('context.deleteObject'),
         );
         if (remove) items.push(remove);
         showContextMenu({ clientX: x, clientY: y, preventDefault: () => undefined }, items);
@@ -542,7 +596,8 @@ export function Viewport() {
           ui.pickingExtrude ||
           ui.pickingExtrudeBodies ||
           ui.pickingSketchPlane ||
-          ui.pickingSectionFace
+          ui.pickingSectionFace ||
+          ui.pickingRevolveAxis
         ) {
           return;
         }
@@ -589,6 +644,7 @@ export function Viewport() {
               y: event.y,
               label: chipLabel(drag, translationRef.current),
               value: drag.value,
+              unit: drag.unit ?? 'length',
             });
             return;
           }
@@ -601,6 +657,7 @@ export function Viewport() {
               y: event.y,
               label: chipLabel(drag, translationRef.current),
               value: event.value,
+              unit: drag.unit ?? 'length',
             });
             return;
           }
@@ -610,9 +667,7 @@ export function Viewport() {
           setQuickChip(null);
         },
         onHandleHover: (event) =>
-          setHandleHover(
-            event ? { x: event.x, y: event.y, text: event.text } : null,
-          ),
+          setHandleHover(event ? { x: event.x, y: event.y, text: event.text } : null),
       },
     );
     controllerRef.current = controller;
@@ -645,9 +700,7 @@ export function Viewport() {
                       computeSketchFrame(
                         sketchFeature,
                         sketchFeature.plane.type === 'face'
-                          ? useKernelStore.getState().meshes[
-                              sketchFeature.plane.bodyId ?? ''
-                            ]
+                          ? useKernelStore.getState().meshes[sketchFeature.plane.bodyId ?? '']
                           : undefined,
                       ),
                       sketchFeature.entities,
@@ -806,8 +859,7 @@ export function Viewport() {
         ? project.features.find((feature) => feature.id === selection[0]?.id)
         : undefined;
     const extrude = selectedFeature?.type === 'extrude' ? selectedFeature : undefined;
-    const treatment =
-      selectedFeature?.type === 'edge-treatment' ? selectedFeature : undefined;
+    const treatment = selectedFeature?.type === 'edge-treatment' ? selectedFeature : undefined;
     const errors = extrude
       ? (featureBodyErrors[extrude.id] ?? {})
       : treatment
@@ -861,9 +913,10 @@ export function Viewport() {
         Boolean(pickingEdges) ||
         Boolean(pickingSketchPlane) ||
         Boolean(pickingSectionFace) ||
+        Boolean(pickingRevolveAxis) ||
         sketchProjecting,
       bodyPicking: Boolean(pickingExtrudeBodies),
-      edgePicking: Boolean(pickingEdges) || sketchProjecting,
+      edgePicking: Boolean(pickingEdges) || Boolean(pickingRevolveAxis) || sketchProjecting,
       projecting: sketchProjecting,
       bodyFacesOnly: Boolean(pickingSketchPlane) || Boolean(pickingSectionFace),
     });
@@ -876,6 +929,7 @@ export function Viewport() {
     pickingSketchPlane,
     pickingSectionFace,
     pickingEdges,
+    pickingRevolveAxis,
     sketchProjecting,
     activeSketchId,
     boundExtrude,
@@ -886,8 +940,7 @@ export function Viewport() {
       selection.length === 1 && selection[0]?.kind === 'feature'
         ? project.features.find((feature) => feature.id === selection[0]?.id)
         : undefined;
-    const treatment =
-      selectedFeature?.type === 'edge-treatment' ? selectedFeature : undefined;
+    const treatment = selectedFeature?.type === 'edge-treatment' ? selectedFeature : undefined;
     // A stored edge ref names the edge as it was picked; the highlight needs the
     // edge that exists in the mesh the scene shows, which is the input of the
     // operation.
@@ -899,11 +952,32 @@ export function Viewport() {
       );
       return resolved ? [`${resolved.bodyId}#${resolved.edgeId}`] : [];
     });
+    const axis = revolveAxisSelection;
+    const axisEdge =
+      axis?.kind === 'body-edge'
+        ? resolveEdgeRef(
+            { bodyShapes: new Map([[axis.bodyId, axis.bodyId]]), meshes: picked },
+            {
+              bodyId: axis.bodyId,
+              edgeId: axis.edgeId,
+              start: axis.start,
+              mid: [
+                (axis.start[0] + axis.end[0]) / 2,
+                (axis.start[1] + axis.end[1]) / 2,
+                (axis.start[2] + axis.end[2]) / 2,
+              ],
+              end: axis.end,
+              faceIds: [],
+              bisector: [0, 0, 1],
+            },
+          )
+        : null;
     controllerRef.current?.setEdgeHighlights([
       ...selection.filter((item) => item.kind === 'edge').map((item) => item.id),
       ...treated,
+      ...(axisEdge ? [`${axisEdge.bodyId}#${axisEdge.edgeId}`] : []),
     ]);
-  }, [selection, meshes, baseMeshes, project]);
+  }, [selection, meshes, baseMeshes, project, revolveAxisSelection]);
 
   useEffect(() => {
     controllerRef.current?.setTheme(theme);
@@ -921,8 +995,7 @@ export function Viewport() {
       .map((plane) => resolveSectionPlane(plane, meshes));
     // Projecting aims at the whole model, so the sketch's own section plane
     // stops cutting it: a clipped face cannot be clicked.
-    const planes =
-      sketchSection && !sketchProjecting ? [sketchSection, ...resolved] : resolved;
+    const planes = sketchSection && !sketchProjecting ? [sketchSection, ...resolved] : resolved;
     controllerRef.current?.setSection(sectionEnabled ? planes : []);
   }, [sketchSectionKey, sectionEnabled, sectionPlanes, meshes, sketchProjecting]);
 
@@ -980,7 +1053,13 @@ export function Viewport() {
           frozenEntityIds: feature.id === activeSketchId ? sketchFrozenEntityIds : [],
           projectedEntityIds: [...projectionEntityIds(feature)],
           lostEntityIds: resolved.lostEntityIds,
-          highlightIds: feature.id === activeSketchId ? sketchAutoHighlightIds : [],
+          highlightIds: [
+            ...(feature.id === activeSketchId ? sketchAutoHighlightIds : []),
+            ...(revolveAxisSelection?.kind === 'sketch-edge' &&
+            revolveAxisSelection.sketchId === feature.id
+              ? [revolveAxisSelection.entityId]
+              : []),
+          ],
           hoverIds: feature.id === activeSketchId ? sketchHoverIds : [],
           active: feature.id === activeSketchId,
         };
@@ -1001,6 +1080,7 @@ export function Viewport() {
     meshes,
     preview,
     selectedSketchId,
+    revolveAxisSelection,
   ]);
 
   useEffect(() => {
@@ -1022,7 +1102,8 @@ export function Viewport() {
         >
           <span>{quickChip.label}</span>
           <span className="quick-chip-value">
-            {formatNumber(Math.abs(quickChip.value), i18n.language, 1)} mm
+            {formatNumber(Math.abs(quickChip.value), i18n.language, 1)}
+            {quickChip.unit === 'angle' ? '°' : ' mm'}
           </span>
         </div>
       )}

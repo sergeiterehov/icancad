@@ -11,6 +11,7 @@ import { sketchProfiles, type ProfileRegion } from '@icancad/sketch';
 import {
   HISTORY_START,
   BODY_COLORS,
+  defaultRevolve,
   extrudeBodyId,
   featureBodyId,
   isMeshObject,
@@ -24,6 +25,7 @@ import {
   type SketchFrame,
 } from '@icancad/model';
 import { computeSketchFrame, faceSketchValid } from '../sketch/sectionPlane';
+import { resolveRevolveAxis, revolveAngles } from '../sketch/revolveAxis';
 import { resolveSketchProjections } from '../sketch/projection';
 import type { MeshFormat, MeshStats, ParsedMesh } from '@icancad/io';
 import { loadAsset } from '../persistence/db';
@@ -737,6 +739,90 @@ async function applyExtrude(
   }
 
   const frame = sketch ? (sketchFrames[sketch.id] ?? computeSketchFrame(sketch)) : null;
+  // A revolve turns its inputs around a picked line; without that line there is
+  // nothing to turn them around.
+  const revolve =
+    feature.method === 'revolve' ? (feature.revolve ?? defaultRevolve()) : undefined;
+  const revolveAxis = revolve
+    ? resolveRevolveAxis(revolve.axis, {
+        meshes,
+        sketches: [...sketches.values()],
+        frames: sketchFrames,
+      })
+    : null;
+  if (revolve && !revolveAxis) throw new Error('REVOLVE_AXIS_MISSING');
+  const revolveAnglesRad = revolve
+    ? (() => {
+        const angles = revolveAngles(revolve);
+        if (Math.abs(angles.end - angles.start) < 1e-6) throw new Error('REVOLVE_NO_ANGLE');
+        return {
+          startAngle: (angles.start * Math.PI) / 180,
+          endAngle: (angles.end * Math.PI) / 180,
+        };
+      })()
+    : null;
+
+  /** How a sketch region or a face becomes a solid: pulled or turned. */
+  const profileRequest = (
+    shapeId: string,
+    plane: { origin: Vec3; xAxis: Vec3; yAxis: Vec3; normal: Vec3 },
+    regions: ProfileRegion[],
+  ) =>
+    revolveAxis && revolveAnglesRad
+      ? {
+          type: 'make-revolve' as const,
+          params: {
+            shapeId,
+            origin: plane.origin,
+            xAxis: plane.xAxis,
+            yAxis: plane.yAxis,
+            regions: regions.map((profile) => ({
+              outer: profile.outer,
+              holes: profile.holes,
+            })),
+            axis: revolveAxis,
+            ...revolveAnglesRad,
+          },
+        }
+      : {
+          type: 'make-prism' as const,
+          params: {
+            shapeId,
+            origin: plane.origin,
+            xAxis: plane.xAxis,
+            yAxis: plane.yAxis,
+            regions: regions.map((profile) => ({
+              outer: profile.outer,
+              holes: profile.holes,
+            })),
+            distances: extrudeDistances(feature, plane.origin, plane.normal, meshes),
+          },
+        };
+
+  const faceRequest = (
+    shapeId: string,
+    sourceShapeId: string,
+    faceId: number,
+    pose: { origin: Vec3; normal: Vec3 },
+    embed: boolean,
+  ) =>
+    revolveAxis && revolveAnglesRad
+      ? {
+          type: 'make-face-revolve' as const,
+          params: { shapeId, sourceShapeId, faceId, axis: revolveAxis, ...revolveAnglesRad },
+        }
+      : {
+          type: 'make-face-prism' as const,
+          params: {
+            shapeId,
+            sourceShapeId,
+            faceId,
+            normal: pose.normal,
+            distances: extrudeDistances(feature, pose.origin, pose.normal, meshes),
+            embed,
+          },
+        };
+
   const markBodyError = (bodyId: string, code: string) => {
     const errors = featureBodyErrors[feature.id] ?? {};
     errors[bodyId] = code;
@@ -816,20 +902,7 @@ async function applyExtrude(
         emittedGroups.add(group);
         const bodyId = extrudeBodyId(feature.id, `body-${slot}`);
         const shapeId = trackShape(`${feature.id}:prism-${slot}`);
-        await client.request({
-          type: 'make-prism',
-          params: {
-            shapeId,
-            origin: frame!.origin,
-            xAxis: frame!.xAxis,
-            yAxis: frame!.yAxis,
-            regions: group.map((profile) => ({
-              outer: profile.outer,
-              holes: profile.holes,
-            })),
-            distances: extrudeDistances(feature, frame!.origin, frame!.normal, meshes),
-          },
-        });
+        await client.request(profileRequest(shapeId, frame!, group));
         if (epoch !== rebuildEpoch) return;
         bodyShapes.set(bodyId, shapeId);
         bodyOwner.set(bodyId, feature.id);
@@ -853,16 +926,7 @@ async function applyExtrude(
       }
       const bodyId = extrudeBodyId(feature.id, `body-${slot}`);
       const shapeId = trackShape(`${feature.id}:face-${slot}`);
-      await client.request({
-        type: 'make-face-prism',
-        params: {
-          shapeId,
-          sourceShapeId,
-          faceId: Number(ref.faceId),
-          normal: ref.normal,
-          distances: extrudeDistances(feature, ref.origin, ref.normal, meshes),
-        },
-      });
+      await client.request(faceRequest(shapeId, sourceShapeId, Number(ref.faceId), ref, false));
       if (epoch !== rebuildEpoch) return;
       bodyShapes.set(bodyId, shapeId);
       bodyOwner.set(bodyId, feature.id);
@@ -892,25 +956,12 @@ async function applyExtrude(
   const refBodyRemap = new Map<string, string>();
   for (const [index, profile] of selected.entries()) {
     const shapeId = trackShape(`tool:${feature.id}:sketch-${index}`);
-    await client.request({
-      type: 'make-prism',
-      params: {
-        shapeId,
-        origin: frame!.origin,
-        xAxis: frame!.xAxis,
-        yAxis: frame!.yAxis,
-        regions: [{ outer: profile.outer, holes: profile.holes }],
-        distances: extrudeDistances(feature, frame!.origin, frame!.normal, meshes),
-      },
-    });
+    await client.request(profileRequest(shapeId, frame!, [profile]));
     if (epoch !== rebuildEpoch) return;
     toolParts.push({ shapeId, key: `s:${sketch!.id}#${profile.id}` });
   }
   for (const [index, ref] of faceRefs.entries()) {
-    const resolved = resolveFaceRef(
-      { bodyShapes, meshes, bodyStats },
-      ref,
-    );
+    const resolved = resolveFaceRef({ bodyShapes, meshes, bodyStats }, ref);
     if (!resolved) {
       markBodyError(ref.bodyId, bodyErrorCode(ref.bodyId));
       continue;
@@ -924,19 +975,9 @@ async function applyExtrude(
     // the target list follows it instead of adding to a body it left behind.
     if (!refBodyRemap.has(ref.bodyId)) refBodyRemap.set(ref.bodyId, resolved.bodyId);
     const shapeId = trackShape(`tool:${feature.id}:face-${index}`);
-    await client.request({
-      type: 'make-face-prism',
-      params: {
-        shapeId,
-        sourceShapeId,
-        faceId: resolved.faceId,
-        normal: ref.normal,
-        distances: extrudeDistances(feature, ref.origin, ref.normal, meshes),
-        // A tool that joins material may reach behind its face, so the union
-        // has something to intersect instead of only touching.
-        embed: feature.op === 'add',
-      },
-    });
+    await client.request(
+      faceRequest(shapeId, sourceShapeId, resolved.faceId, ref, feature.op === 'add'),
+    );
     if (epoch !== rebuildEpoch) return;
     toolParts.push({ shapeId, key: `b:${ref.bodyId}#${ref.faceId}` });
   }
@@ -966,9 +1007,7 @@ async function applyExtrude(
   // chosen separately: the ones listed on the feature, or every other body.
   const explicitTargets = feature.bodyIds.length > 0;
   const targets = explicitTargets
-    ? [
-        ...new Set(feature.bodyIds.map((bodyId) => refBodyRemap.get(bodyId) ?? bodyId)),
-      ]
+    ? [...new Set(feature.bodyIds.map((bodyId) => refBodyRemap.get(bodyId) ?? bodyId))]
     : [...bodyShapes.keys()].filter((bodyId) => bodyOwner.get(bodyId) !== feature.id);
   if (targets.length === 0) throw new Error('NO_TARGET_BODY');
 
@@ -980,7 +1019,8 @@ async function applyExtrude(
       shapeId: toolShapeId,
     });
     if (epoch !== rebuildEpoch) return;
-    if (frame) {
+    // A revolve has no through-all extent, so its ghost never fades.
+    if (frame && !revolve) {
       const fade: { axis: [number, number, number]; start: number }[] = [];
       const sign = feature.reversed ? -1 : 1;
       const primary = signedDirection(frame.normal, sign);
@@ -1100,7 +1140,9 @@ async function applyExtrude(
           const previous = faceOwners.get(bodyId) ?? [];
           faceOwners.set(
             bodyId,
-            fused.facesFromBase.map((from) => (from >= 0 ? (previous[from] ?? feature.id) : feature.id)),
+            fused.facesFromBase.map((from) =>
+              from >= 0 ? (previous[from] ?? feature.id) : feature.id,
+            ),
           );
         }
         currentShapeId = resultShapeId;
@@ -1149,8 +1191,7 @@ async function applyExtrude(
     // not lose this: a face that moves to a new body keeps its operation.
     const previousOwners = faceOwners.get(bodyId) ?? [];
     const compoundOwners = (
-      operated.facesFromBase ??
-      Array.from({ length: Math.max(0, operated.stats.faces) }, () => -1)
+      operated.facesFromBase ?? Array.from({ length: Math.max(0, operated.stats.faces) }, () => -1)
     ).map((from) => (from >= 0 ? (previousOwners[from] ?? feature.id) : feature.id));
 
     // A cut through the whole cross-section leaves a compound of separate

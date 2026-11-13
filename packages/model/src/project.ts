@@ -1,6 +1,6 @@
 import { createId } from './ids';
 import { PROJECT_SCHEMA_VERSION } from './schemas';
-import type { BodyRef, ObjectMetadata, Project } from './types';
+import type { BodyRef, ObjectMetadata, Project, RevolveSpec } from './types';
 
 /**
  * Colours of objects, also offered as the colour palette. Mid tones only, so a
@@ -60,6 +60,11 @@ export function createProject(name = 'Untitled project'): Project {
 
 export function featureBodyId(featureId: string, index = 0): string {
   return `${featureId}:solid-${index}`;
+}
+
+/** A revolve starts as a full turn around the world Z axis. */
+export function defaultRevolve(): RevolveSpec {
+  return { axis: { kind: 'world', axis: 'z' }, start: 0, end: 360, inverted: false };
 }
 
 // An extrude turns every region it uses into its own body, so the body id is

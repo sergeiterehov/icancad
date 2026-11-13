@@ -4,8 +4,9 @@ import {
   type ExtrudeFeature,
   type PrimitiveFeature,
   type Project,
+  type SketchFeature,
 } from '@icancad/model';
-import { QuickExtrudeDrag } from '../src/quick/controller';
+import { QuickExtrudeDrag, RevolveAngleDrag } from '../src/quick/controller';
 import { operationHandles } from '../src/quick/operationHandles';
 import {
   buildQuickExtrude,
@@ -34,6 +35,52 @@ function baseProject(): Project {
   };
 }
 
+const profile: SketchFeature = {
+  id: 'sketch',
+  name: 'Profile',
+  suppressed: false,
+  type: 'sketch',
+  plane: { type: 'datum', plane: 'XY', offset: 0 },
+  entities: [
+    { id: 'l1', type: 'line', construction: false, x1: 10, y1: 0, x2: 20, y2: 0 },
+    { id: 'l2', type: 'line', construction: false, x1: 20, y1: 0, x2: 20, y2: 5 },
+    { id: 'l3', type: 'line', construction: false, x1: 20, y1: 5, x2: 10, y2: 5 },
+    { id: 'l4', type: 'line', construction: false, x1: 10, y1: 5, x2: 10, y2: 0 },
+  ],
+  constraints: [],
+  references: [],
+};
+
+function revolveFeature(): ExtrudeFeature {
+  return {
+    id: 'revolve',
+    name: 'Revolve',
+    suppressed: false,
+    type: 'extrude',
+    sketchId: 'sketch',
+    regions: [],
+    faceRefs: [],
+    objectOrder: ['s:sketch#*'],
+    method: 'revolve',
+    revolve: { axis: { kind: 'world', axis: 'y' }, start: 0, end: 360, inverted: false },
+    end: 'blind',
+    distance: 10,
+    reversed: false,
+    op: 'new',
+    scope: 'all',
+    bodyIds: [],
+    joinRegions: true,
+  };
+}
+
+function revolveProject(): Project {
+  return {
+    ...createProject(),
+    features: [profile, revolveFeature()],
+    bodies: [],
+  };
+}
+
 function geometry(): QuickTargetGeometry {
   return {
     target: { kind: 'body-face', bodyId: 'body-1', faceIds: ['1'] },
@@ -53,6 +100,8 @@ const labels = {
   edgeTreatmentTooltip: 'Edge — drag to chamfer',
   edgeTreatmentRadiusTooltip: 'Corner radius',
   edgeTreatmentDistanceTooltip: 'Chamfer distance',
+  revolveStart: 'Revolve start angle',
+  revolveEnd: 'Revolve end angle',
 };
 
 function handles(context: {
@@ -229,6 +278,112 @@ describe('quick operation targets and handles', () => {
         selection: [{ kind: 'feature', id: secondThroughAll.id }],
       }).map((handle) => handle.id),
     ).toEqual([`extrude:${secondThroughAll.id}`]);
+  });
+});
+
+describe('quick revolve handles', () => {
+  it('offers a start and an end angle handle on one arc', () => {
+    const project = revolveProject();
+    const list = handles({ project, selection: [{ kind: 'feature', id: 'revolve' }] });
+    expect(list.map((handle) => handle.id)).toEqual([
+      'revolve:revolve:start',
+      'revolve:revolve:end',
+    ]);
+    expect(list[0]).toMatchObject({ value: 0, tooltip: 'Revolve start angle' });
+    expect(list[1]).toMatchObject({ value: 360, tooltip: 'Revolve end angle' });
+    for (const handle of list) {
+      expect(handle.arc).toBeDefined();
+      // A full turn starts and ends on the profile itself: the grip sits on the
+      // circle the farthest profile point traces around the axis.
+      const radial = Math.hypot(handle.origin[0], handle.origin[2]);
+      expect(radial).toBeCloseTo(handle.arc!.radius, 6);
+      expect(handle.origin[1]).toBeCloseTo(2.5, 5);
+      expect(handle.arc!.radius).toBeGreaterThan(19);
+      expect(handle.arc!.radius).toBeLessThan(22);
+    }
+  });
+
+  it('draws the angles the operation sweeps, mirrored when inverted', () => {
+    const project = revolveProject();
+    const feature = project.features[1] as ExtrudeFeature;
+    const inverted: Project = {
+      ...project,
+      features: [
+        profile,
+        {
+          ...feature,
+          revolve: { ...feature.revolve!, start: 30, end: 120, inverted: true },
+        },
+      ],
+    };
+    const list = handles({ project: inverted, selection: [{ kind: 'feature', id: 'revolve' }] });
+    expect(list.map((handle) => handle.value)).toEqual([-30, -120]);
+    expect(list[0]!.arc!.angle).toBeCloseTo((-30 * Math.PI) / 180, 6);
+    expect(list[1]!.arc!.angle).toBeCloseTo((-120 * Math.PI) / 180, 6);
+  });
+
+  it('offers no handles while the axis cannot be found', () => {
+    const project = revolveProject();
+    const feature = project.features[1] as ExtrudeFeature;
+    const broken: Project = {
+      ...project,
+      features: [
+        profile,
+        {
+          ...feature,
+          revolve: {
+            ...feature.revolve!,
+            axis: { kind: 'sketch-edge', sketchId: 'missing', entityId: 'l1' },
+          },
+        },
+      ],
+    };
+    expect(handles({ project: broken, selection: [{ kind: 'feature', id: 'revolve' }] })).toEqual(
+      [],
+    );
+  });
+
+  it('turns the end angle with the pointer and commits one step', () => {
+    useDocumentStore.getState().hydrate(revolveProject());
+    const drag = new RevolveAngleDrag('revolve', 'end', false, 360);
+    drag.start();
+    drag.update(90);
+    const during = useDocumentStore
+      .getState()
+      .project.features.find((feature): feature is ExtrudeFeature => feature.id === 'revolve');
+    expect(during!.revolve).toMatchObject({ start: 0, end: 90 });
+    drag.end();
+    const state = useDocumentStore.getState();
+    expect(state.past).toHaveLength(1);
+    const committed = state.project.features.find(
+      (feature): feature is ExtrudeFeature => feature.id === 'revolve',
+    );
+    expect(committed!.revolve).toMatchObject({ end: 90 });
+  });
+
+  it('stores the opposite angle when the sweep is inverted', () => {
+    useDocumentStore.getState().hydrate({
+      ...revolveProject(),
+      features: [
+        profile,
+        {
+          ...revolveFeature(),
+          revolve: { axis: { kind: 'world', axis: 'y' }, start: 0, end: 360, inverted: true },
+        },
+      ],
+    });
+    const drag = new RevolveAngleDrag('revolve', 'start', true, 0);
+    drag.start();
+    drag.update(-45);
+    const feature = useDocumentStore
+      .getState()
+      .project.features.find(
+        (candidate): candidate is ExtrudeFeature => candidate.id === 'revolve',
+      );
+    // The chip shows the effective angle; the document keeps the stored one.
+    expect(drag.value).toBe(-45);
+    expect(feature!.revolve).toMatchObject({ start: 45, inverted: true });
+    drag.cancel();
   });
 });
 

@@ -217,6 +217,7 @@ export function buildQuickExtrude(
       name,
       suppressed: false,
       type: 'extrude',
+      method: 'extrude',
       regions: [],
       faceRefs: geometry.faces.map((face) => ({
         bodyId: target.bodyId,
@@ -239,6 +240,7 @@ export function buildQuickExtrude(
     name,
     suppressed: false,
     type: 'extrude',
+    method: 'extrude',
     sketchId: target.sketchId,
     regions: target.regions,
     faceRefs: [],

@@ -14,6 +14,11 @@ export interface OcctTransformation {
   Value(row: number, column: number): number;
 }
 
+/** A `gp_Trsf`: a placement the shape makers accept. */
+export interface OcctTransformation3 {
+  SetRotation_1(axis: unknown, angle: number): void;
+}
+
 export interface OcctTriangle {
   Value(index: number): number;
 }
@@ -190,6 +195,19 @@ export interface OcctBindings {
     vector: unknown,
     copy: boolean,
     canonize: boolean,
+  ) => OcctPrismMaker;
+  BRepPrimAPI_MakeRevol_1: new (
+    shape: OcctShape,
+    axis: unknown,
+    angle: number,
+    copy: boolean,
+  ) => OcctPrismMaker;
+  gp_Ax1_2: new (origin: OcctPoint3, direction: unknown) => unknown;
+  gp_Trsf_1: new () => OcctTransformation3;
+  BRepBuilderAPI_Transform_2: new (
+    shape: OcctShape,
+    transform: unknown,
+    copy: boolean,
   ) => OcctPrismMaker;
   BRepAlgoAPI_Fuse_3: new (a: OcctShape, b: OcctShape) => OcctBooleanMaker;
   BRepAlgoAPI_Cut_3: new (a: OcctShape, b: OcctShape) => OcctBooleanMaker;

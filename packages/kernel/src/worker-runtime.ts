@@ -51,6 +51,16 @@ export function startKernelWorker(options: KernelWorkerOptions = {}): void {
           postSuccess(scope, request.id, engine.makeFacePrism(request.params));
           break;
         }
+        case 'make-revolve': {
+          await engine.init();
+          postSuccess(scope, request.id, engine.makeRevolve(request.params));
+          break;
+        }
+        case 'make-face-revolve': {
+          await engine.init();
+          postSuccess(scope, request.id, engine.makeFaceRevolve(request.params));
+          break;
+        }
         case 'boolean': {
           await engine.init();
           postSuccess(scope, request.id, engine.booleanShape(request.params));

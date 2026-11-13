@@ -162,6 +162,33 @@ export interface MakeFacePrismParams {
   embed?: boolean;
 }
 
+/** A line a revolve turns around: a point on it and its direction. */
+export interface RevolveAxisLine {
+  origin: Vec3;
+  direction: Vec3;
+}
+
+export interface MakeRevolveParams {
+  shapeId: string;
+  origin: Vec3;
+  xAxis: Vec3;
+  yAxis: Vec3;
+  regions: ProfileRegion[];
+  axis: RevolveAxisLine;
+  /** Radians, right-handed around the axis: the profile turns from start to end. */
+  startAngle: number;
+  endAngle: number;
+}
+
+export interface MakeFaceRevolveParams {
+  shapeId: string;
+  sourceShapeId: string;
+  faceId: number;
+  axis: RevolveAxisLine;
+  startAngle: number;
+  endAngle: number;
+}
+
 export interface BooleanParams {
   shapeId: string;
   baseShapeId: string;
@@ -225,6 +252,8 @@ export type KernelRequestPayload =
   | { type: 'make-box'; params: BoxParams }
   | { type: 'make-prism'; params: MakePrismParams }
   | { type: 'make-face-prism'; params: MakeFacePrismParams }
+  | { type: 'make-revolve'; params: MakeRevolveParams }
+  | { type: 'make-face-revolve'; params: MakeFaceRevolveParams }
   | { type: 'boolean'; params: BooleanParams }
   | { type: 'split-solids'; params: SplitSolidsParams }
   | { type: 'edge-treatment'; params: EdgeTreatmentParams }

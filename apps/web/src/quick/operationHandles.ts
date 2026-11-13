@@ -1,16 +1,21 @@
 import type { TessellationResult } from '@icancad/kernel';
-import type {
-  EdgeTreatmentFeature,
-  EdgeTreatmentKind,
-  ExtrudeFeature,
-  Project,
-  SketchFrame,
-  Vec3,
+import {
+  defaultRevolve,
+  type EdgeTreatmentFeature,
+  type EdgeTreatmentKind,
+  type ExtrudeFeature,
+  type Project,
+  type SketchFeature,
+  type SketchFrame,
+  type Vec3,
 } from '@icancad/model';
 import type { SelectionItem } from '../stores/documentStore';
+import type { SceneArcHandle } from '../viewport/handle';
+import { resolveRevolveAxis, revolveAngles } from '../sketch/revolveAxis';
 import {
   QuickEdgeTreatmentDrag,
   QuickExtrudeDrag,
+  RevolveAngleDrag,
   type ExtrudeHandleAxis,
   type QuickBodySource,
 } from './controller';
@@ -37,6 +42,8 @@ export interface OperationHandleDrag {
   readonly kind: EdgeTreatmentKind | null;
   /** Value the operation currently has: the distance or the treatment size. */
   readonly value: number;
+  /** Angle handles report degrees; every other handle reports millimetres. */
+  readonly unit?: 'length' | 'angle';
   /** `shift` asks an edge treatment for the other kind while the grab lasts. */
   update(value: number, shift?: boolean): void;
   end(): void;
@@ -63,6 +70,8 @@ export interface OperationHandle {
   /** How heavy the arrow is drawn, relative to the thinnest one. */
   thickness?: number;
   tooltip: string;
+  /** Present on an angle handle: the grip turns around an axis. */
+  arc?: SceneArcHandle;
   beginDrag(): OperationHandleDrag;
 }
 
@@ -93,6 +102,9 @@ export interface OperationHandleContext {
     /** What the handle of an existing operation changes. */
     edgeTreatmentRadiusTooltip: string;
     edgeTreatmentDistanceTooltip: string;
+    /** The two ends of a revolve sweep. */
+    revolveStart: string;
+    revolveEnd: string;
   };
 }
 
@@ -162,7 +174,7 @@ function extrudeHandle(
     thickness: EXTRUDE_ARROW_THICKNESS,
     value: feature
       ? axis === 'second'
-        ? feature.secondDirection?.distance ?? 0
+        ? (feature.secondDirection?.distance ?? 0)
         : feature.reversed
           ? -feature.distance
           : feature.distance
@@ -206,14 +218,150 @@ function extrudeHandlesFor(
   return handles;
 }
 
+/**
+ * Where the angle handles of a revolve sit: on the circle the profile's
+ * farthest point traces around the axis, so the handle starts at the profile
+ * itself and turns with the sweep.
+ */
+interface RevolveArcFrame {
+  center: Vec3;
+  reference: Vec3;
+  radius: number;
+  axis: Vec3;
+}
+
+function subtract(a: Vec3, b: Vec3): Vec3 {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function cross(a: Vec3, b: Vec3): Vec3 {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+
+function dot(a: Vec3, b: Vec3): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function normalized(vector: Vec3): Vec3 | null {
+  const length = Math.hypot(vector[0], vector[1], vector[2]);
+  if (!Number.isFinite(length) || length < 1e-9) return null;
+  return [vector[0] / length, vector[1] / length, vector[2] / length];
+}
+
+function revolveArcFrame(
+  axis: { origin: Vec3; direction: Vec3 },
+  geometry: QuickTargetGeometry | null,
+): RevolveArcFrame | null {
+  const points = [
+    ...(geometry?.samples ?? []),
+    ...(geometry?.faces.map((face) => face.centroid) ?? []),
+  ];
+  let center = axis.origin;
+  if (points.length > 0) {
+    const average: Vec3 = [0, 0, 0];
+    for (const point of points) {
+      average[0] += point[0] / points.length;
+      average[1] += point[1] / points.length;
+      average[2] += point[2] / points.length;
+    }
+    const along = dot(subtract(average, axis.origin), axis.direction);
+    center = [
+      axis.origin[0] + axis.direction[0] * along,
+      axis.origin[1] + axis.direction[1] * along,
+      axis.origin[2] + axis.direction[2] * along,
+    ];
+  }
+  let reference: Vec3 | null = null;
+  let radius = 0;
+  for (const point of points) {
+    const offset = subtract(point, center);
+    const radial = subtract(
+      offset,
+      axis.direction.map((value) => value * dot(offset, axis.direction)) as Vec3,
+    );
+    const length = Math.hypot(radial[0], radial[1], radial[2]);
+    if (length <= radius) continue;
+    const direction = normalized(radial);
+    if (!direction) continue;
+    radius = length;
+    reference = direction;
+  }
+  if (!reference || radius < 1e-3) {
+    // Without a profile to measure, any perpendicular direction will do.
+    const helper: Vec3 = Math.abs(axis.direction[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+    reference = normalized(cross(axis.direction, helper));
+    radius = 10;
+  }
+  if (!reference) return null;
+  return { center, reference, radius: radius * 1.05, axis: axis.direction };
+}
+
+function gripAt(frame: RevolveArcFrame, degrees: number): Vec3 {
+  const angle = (degrees * Math.PI) / 180;
+  const tangent = cross(frame.axis, frame.reference);
+  return [
+    frame.center[0] +
+      (frame.reference[0] * Math.cos(angle) + tangent[0] * Math.sin(angle)) * frame.radius,
+    frame.center[1] +
+      (frame.reference[1] * Math.cos(angle) + tangent[1] * Math.sin(angle)) * frame.radius,
+    frame.center[2] +
+      (frame.reference[2] * Math.cos(angle) + tangent[2] * Math.sin(angle)) * frame.radius,
+  ];
+}
+
+/** The two angle handles of a revolve, or none before its axis is picked. */
+function revolveHandles(
+  feature: ExtrudeFeature,
+  context: OperationHandleContext,
+): OperationHandle[] {
+  const revolve = feature.revolve ?? defaultRevolve();
+  const axis = resolveRevolveAxis(revolve.axis, {
+    meshes: context.meshes,
+    sketches: context.project.features.filter(
+      (candidate): candidate is SketchFeature => candidate.type === 'sketch',
+    ),
+    frames: context.sketchFrames,
+  });
+  if (!axis) return [];
+  const frame = revolveArcFrame(axis, featureGeometry(feature, context));
+  if (!frame) return [];
+  const angles = revolveAngles(revolve);
+  const handles: OperationHandle[] = [];
+  for (const which of ['start', 'end'] as const) {
+    const degrees = angles[which];
+    const grip = gripAt(frame, degrees);
+    const tangent = normalized(cross(frame.axis, subtract(grip, frame.center)));
+    handles.push({
+      id: `revolve:${feature.id}:${which}`,
+      origin: grip,
+      direction: tangent ?? frame.axis,
+      value: degrees,
+      enabled: true,
+      tooltip: which === 'start' ? context.labels.revolveStart : context.labels.revolveEnd,
+      arc: {
+        axis: frame.axis,
+        center: frame.center,
+        reference: frame.reference,
+        angle: (degrees * Math.PI) / 180,
+        radius: frame.radius,
+      },
+      beginDrag: () => {
+        const drag = new RevolveAngleDrag(feature.id, which, revolve.inverted, degrees);
+        drag.start();
+        return drag;
+      },
+    });
+  }
+  return handles;
+}
+
 function extrudeHandles(context: OperationHandleContext): OperationHandle[] {
   // A focused operation owns its handle: dragging it changes that operation.
   const focused = selectedExtrude(context);
   if (focused) {
+    if (focused.method === 'revolve') return revolveHandles(focused, context);
     const geometry = featureGeometry(focused, context);
-    return geometry
-      ? extrudeHandlesFor(geometry, context, focused, context.labels.distance)
-      : [];
+    return geometry ? extrudeHandlesFor(geometry, context, focused, context.labels.distance) : [];
   }
 
   // A selected face or sketch offers the operation that could be created from
@@ -222,6 +370,7 @@ function extrudeHandles(context: OperationHandleContext): OperationHandle[] {
   const target = quickTargetFromSelection(context.project, context.selection);
   if (!target) return [];
   const bound = findBoundExtrude(context.project, target);
+  if (bound?.method === 'revolve') return revolveHandles(bound, context);
   const geometry =
     (bound && target.kind === 'body-face' ? boundBodyFaceGeometry(bound, target) : null) ??
     resolveQuickTarget({
@@ -239,9 +388,7 @@ function extrudeHandles(context: OperationHandleContext): OperationHandle[] {
   );
 }
 
-function selectedEdgeTreatment(
-  context: OperationHandleContext,
-): EdgeTreatmentFeature | undefined {
+function selectedEdgeTreatment(context: OperationHandleContext): EdgeTreatmentFeature | undefined {
   if (context.selection.length !== 1 || context.selection[0]?.kind !== 'feature') return undefined;
   const feature = context.project.features.find(
     (candidate) => candidate.id === context.selection[0]?.id,

@@ -65,6 +65,7 @@ function extrudeFeature(id = 'feat_extrude', sketchId = 'feat_sketch'): ExtrudeF
     name: 'Extrude',
     suppressed: false,
     type: 'extrude',
+    method: 'extrude',
     sketchId,
     regions: [],
     faceRefs: [],
@@ -110,6 +111,7 @@ describe('project model', () => {
     delete legacy.faceRefs;
     delete legacy.objectOrder;
     delete legacy.reversed;
+    delete legacy.method;
     const project = parseProject({
       ...createProject('Old project'),
       features: [legacy],
@@ -118,6 +120,33 @@ describe('project model', () => {
     expect(parsed.faceRefs).toEqual([]);
     expect(parsed.objectOrder).toEqual([]);
     expect(parsed.reversed).toBe(false);
+    // An operation saved before revolves existed is a straight extrusion.
+    expect(parsed.method).toBe('extrude');
+    expect(parsed.revolve).toBeUndefined();
+  });
+
+  it('keeps a revolve axis and its angles through a project file', () => {
+    const feature: ExtrudeFeature = {
+      ...extrudeFeature(),
+      method: 'revolve',
+      revolve: {
+        axis: {
+          kind: 'body-edge',
+          bodyId: 'body-1',
+          edgeId: '3',
+          start: [0, 0, 0],
+          end: [0, 10, 0],
+        },
+        start: 15,
+        end: 210,
+        inverted: true,
+      },
+    };
+    const project = parseProject({
+      ...createProject('Revolve'),
+      features: [feature],
+    });
+    expect((project.features[0] as ExtrudeFeature).revolve).toEqual(feature.revolve);
   });
 
   it('rejects duplicate ids', () => {
@@ -136,16 +165,18 @@ describe('project model', () => {
   it('renames the project and rejects empty names', () => {
     const project = applyCommand(createProject(), { type: 'project/rename', name: 'Bracket' });
     expect(project.name).toBe('Bracket');
-    expect(() => applyCommand(project, { type: 'project/rename', name: '   ' })).toThrow(CommandError);
+    expect(() => applyCommand(project, { type: 'project/rename', name: '   ' })).toThrow(
+      CommandError,
+    );
   });
 
   it('tracks history end', () => {
     const project = withBox();
     const rolled = applyCommand(project, { type: 'history/set-end', featureId: 'feat_box' });
     expect(rolled.historyEnd).toBe('feat_box');
-    expect(() =>
-      applyCommand(rolled, { type: 'history/set-end', featureId: 'missing' }),
-    ).toThrow(CommandError);
+    expect(() => applyCommand(rolled, { type: 'history/set-end', featureId: 'missing' })).toThrow(
+      CommandError,
+    );
 
     const atStart = applyCommand(project, { type: 'history/set-end', featureId: HISTORY_START });
     expect(atStart.historyEnd).toBe(HISTORY_START);
@@ -349,9 +380,9 @@ describe('deleting a set of operations', () => {
   });
 
   it('rejects removing an operation whose dependents stay', () => {
-    expect(() =>
-      applyCommand(chain(), { type: 'feature/remove', featureId: 'feat_a' }),
-    ).toThrow(CommandError);
+    expect(() => applyCommand(chain(), { type: 'feature/remove', featureId: 'feat_a' })).toThrow(
+      CommandError,
+    );
   });
 
   it('keeps dependents when the removal asks for it', () => {

@@ -207,6 +207,29 @@ const bodyFaceRef = z.object({
   origin: vec3,
 });
 
+const revolveAxis = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('world'), axis: z.enum(['x', 'y', 'z']) }),
+  z.object({
+    kind: z.literal('body-edge'),
+    bodyId: z.string().min(1),
+    edgeId: z.string().min(1),
+    start: vec3,
+    end: vec3,
+  }),
+  z.object({
+    kind: z.literal('sketch-edge'),
+    sketchId: z.string().min(1),
+    entityId: z.string().min(1),
+  }),
+]);
+
+const revolveSpec = z.object({
+  axis: revolveAxis,
+  start: z.number(),
+  end: z.number(),
+  inverted: z.boolean().default(false),
+});
+
 const extrudeFeature = z.object({
   ...featureBase,
   type: z.literal('extrude'),
@@ -214,6 +237,8 @@ const extrudeFeature = z.object({
   regions: z.array(z.string()),
   faceRefs: z.array(bodyFaceRef).default([]),
   objectOrder: z.array(z.string()).default([]),
+  method: z.enum(['extrude', 'revolve']).default('extrude'),
+  revolve: revolveSpec.optional(),
   end: z.enum(['blind', 'symmetric', 'through-all']),
   distance: z.number(),
   reversed: z.boolean().default(false),

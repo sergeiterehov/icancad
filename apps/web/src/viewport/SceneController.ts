@@ -28,6 +28,7 @@ import {
   shortestAngle,
 } from './cameraFit';
 import type {
+  SceneArcHandle,
   SceneGhostInfo,
   SceneHandle,
   SceneHandleScreen,
@@ -45,6 +46,16 @@ import { firstUnclippedHit } from './sectionPick';
 import { handleDragValue } from '../quick/handleDrag';
 import { outwardNormal } from '../quick/geometry';
 import type { SelectionHit } from './selectionPick';
+
+/** Where the grip of an angle handle sits, in world space. */
+function arcGripPoint(arc: SceneArcHandle, angle: number): THREE.Vector3 {
+  const axis = new THREE.Vector3(...arc.axis).normalize();
+  const reference = new THREE.Vector3(...arc.reference).normalize();
+  const tangent = new THREE.Vector3().crossVectors(axis, reference);
+  return new THREE.Vector3(...arc.center)
+    .addScaledVector(reference, Math.cos(angle) * arc.radius)
+    .addScaledVector(tangent, Math.sin(angle) * arc.radius);
+}
 
 const HATCH_SPACING_PX = 6;
 /** Screen distance over which a through-cut ghost fades out. */
@@ -354,6 +365,8 @@ export class SceneController {
     id: string;
     /** Value when the pointer went down. */
     value: number;
+    /** Angle handles turn with the pointer instead of sliding along an axis. */
+    arc?: SceneArcHandle & { lastPointerAngle: number };
     lastValue: number;
     startX: number;
     startY: number;
@@ -522,6 +535,7 @@ export class SceneController {
   }
 
 
+
   getGhosts(): SceneGhostInfo[] {
     return this.ghostSources.map((ghost) => ({
       id: ghost.id,
@@ -571,6 +585,14 @@ export class SceneController {
   private handleScreenGeometry(
     handle: SceneHandle,
   ): { origin: { x: number; y: number }; tip: { x: number; y: number } } | null {
+    if (handle.arc) {
+      const grip = arcGripPoint(handle.arc, handle.arc.angle);
+      const next = arcGripPoint(handle.arc, handle.arc.angle + 0.05);
+      return {
+        origin: this.projectWorld(grip),
+        tip: this.projectWorld(next),
+      };
+    }
     const origin = new THREE.Vector3(...handle.origin);
     const direction = new THREE.Vector3(...handle.direction);
     if (direction.lengthSq() < 1e-12) return null;
@@ -595,6 +617,10 @@ export class SceneController {
     this.clearHandleGroup();
     if (this.handleData.length === 0) return;
     for (const handle of this.handleData) {
+      if (handle.arc) {
+        this.addArcHandle(handle);
+        continue;
+      }
       if (!this.handleScreenGeometry(handle)) continue;
       this.addArrowHandle(handle);
     }
@@ -718,6 +744,87 @@ export class SceneController {
     });
   }
 
+  /**
+   * An angle handle: the arc from the zero angle to the grip, plus a grip dot.
+   * The arc is drawn a pixel wider in the colour of the space behind it, so it
+   * stays readable on a body of the same blue.
+   */
+  private addArcHandle(handle: SceneHandle): void {
+    const arc = handle.arc;
+    if (!arc) return;
+    const worldPerPixel = 1 / this.pixelsPerWorldUnit();
+    const hovered = this.hoveredHandleId === handle.id;
+    const color = hovered ? 0xffffff : this.handleColor();
+    const outlineColor = this.handleOutlineColor();
+    const halo = worldPerPixel;
+    const linewidth = (hovered ? 3.2 : 2.3) * (handle.thickness ?? 1);
+
+    const steps = Math.max(2, Math.ceil(Math.abs(arc.angle) / (Math.PI / 36)));
+    const positions: number[] = [];
+    for (let index = 0; index <= steps; index += 1) {
+      const point = arcGripPoint(arc, (arc.angle * index) / steps);
+      positions.push(point.x, point.y, point.z);
+    }
+    const grip = arcGripPoint(arc, arc.angle);
+
+    const makeArc = (colorValue: number, width: number, order: number) => {
+      const geometry = new LineGeometry();
+      geometry.setPositions(positions);
+      const material = new LineMaterial({
+        color: colorValue,
+        linewidth: width,
+        transparent: true,
+        opacity: 1,
+        depthTest: false,
+        depthWrite: false,
+        resolution: new THREE.Vector2(this.width, this.height),
+      });
+      const line = new Line2(geometry, material);
+      line.renderOrder = order;
+      line.userData.handleId = handle.id;
+      return line;
+    };
+
+    const outline = makeArc(outlineColor, linewidth + 2, RenderOrder.handleOutline);
+    const line = makeArc(color, linewidth, RenderOrder.handle);
+    const material = line.material as LineMaterial;
+
+    const dotMaterial = new THREE.MeshBasicMaterial({
+      color,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+    });
+    const radius = Math.max(0.001, 4.5 * (handle.thickness ?? 1) * worldPerPixel);
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(radius, 16, 12), dotMaterial);
+    dot.position.copy(grip);
+    dot.renderOrder = RenderOrder.handle;
+    dot.userData.handleId = handle.id;
+
+    const outlineDot = new THREE.Mesh(
+      new THREE.SphereGeometry(radius + halo, 16, 12),
+      new THREE.MeshBasicMaterial({
+        color: outlineColor,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+      }),
+    );
+    outlineDot.position.copy(grip);
+    outlineDot.renderOrder = RenderOrder.handleOutline;
+    outlineDot.userData.handleId = handle.id;
+
+    this.handleGroup.add(outline, line, outlineDot, dot);
+    this.handleEntries.push({
+      handle,
+      objects: [outline, line, outlineDot, dot],
+      colors: [material, dotMaterial],
+      line,
+      material,
+      outlineMaterial: outline.material as LineMaterial,
+    });
+  }
+
   private clearHandleGroup(): void {
     for (const entry of this.handleEntries) {
       this.handleGroup.remove(...entry.objects);
@@ -745,6 +852,69 @@ export class SceneController {
     }
   }
 
+  /** The angle handle whose grip or arc is under the pointer. */
+  private handleArcAt(local: { x: number; y: number }): {
+    handle: SceneHandle;
+    axisX: number;
+    axisY: number;
+    pixelsPerMm: number;
+    distance: number;
+  } | null {
+    let best: { handle: SceneHandle; distance: number; pixelsPerRadian: number } | null = null;
+    for (const handle of this.handleData) {
+      const arc = handle.arc;
+      if (!handle.enabled || !arc) continue;
+      const projected = this.handleScreenGeometry(handle);
+      if (!projected) continue;
+      const hitPx = HANDLE_HIT_PX * (handle.thickness ?? 1) + 2;
+      let distance = Math.hypot(local.x - projected.origin.x, local.y - projected.origin.y);
+      if (Math.abs(arc.angle) > 0.02) {
+        const steps = Math.max(2, Math.ceil(Math.abs(arc.angle) / (Math.PI / 36)));
+        let previous = this.projectWorld(arcGripPoint(arc, 0));
+        for (let index = 1; index <= steps; index += 1) {
+          const next = this.projectWorld(arcGripPoint(arc, (arc.angle * index) / steps));
+          distance = Math.min(
+            distance,
+            pointSegmentDistance([local.x, local.y], [previous.x, previous.y], [next.x, next.y]),
+          );
+          previous = next;
+        }
+      }
+      if (distance > hitPx) continue;
+      const delta = 0.05;
+      const unit = this.projectWorld(arcGripPoint(arc, arc.angle + delta));
+      const reach = Math.hypot(unit.x - projected.origin.x, unit.y - projected.origin.y);
+      if (reach < 1) continue;
+      if (best && distance >= best.distance) continue;
+      best = { handle, distance, pixelsPerRadian: reach / delta };
+    }
+    if (!best) return null;
+    // A grip is dragged by the pointer angle around the axis, so the linear
+    // axis of the arrow handles is only a fallback for the drag chip.
+    return {
+      handle: best.handle,
+      axisX: 0,
+      axisY: 0,
+      pixelsPerMm: best.pixelsPerRadian,
+      distance: best.distance,
+    };
+  }
+
+  /** Angle of the pointer around a handle's axis, or null when it is edge-on. */
+  private pointerAngleAt(arc: SceneArcHandle, clientX: number, clientY: number): number | null {
+    const axis = new THREE.Vector3(...arc.axis).normalize();
+    const raycaster = this.pointerToRay(clientX, clientY);
+    const denominator = raycaster.ray.direction.dot(axis);
+    if (Math.abs(denominator) < 1e-4) return null;
+    const center = new THREE.Vector3(...arc.center);
+    const distance = center.clone().sub(raycaster.ray.origin).dot(axis) / denominator;
+    const point = raycaster.ray.origin.clone().addScaledVector(raycaster.ray.direction, distance);
+    const offset = point.sub(center);
+    const reference = new THREE.Vector3(...arc.reference).normalize();
+    const tangent = new THREE.Vector3().crossVectors(axis, reference);
+    return Math.atan2(offset.dot(tangent), offset.dot(reference));
+  }
+
   private handleAt(
     clientX: number,
     clientY: number,
@@ -756,6 +926,8 @@ export class SceneController {
     distance: number;
   } | null {
     const local = this.localPoint(clientX, clientY);
+    const arcHit = this.handleArcAt(local);
+    if (arcHit) return arcHit;
     let best: {
       handle: SceneHandle;
       axisX: number;
@@ -845,6 +1017,11 @@ export class SceneController {
     hit: NonNullable<ReturnType<SceneController['handleAt']>>,
     event: PointerEvent,
   ): void {
+    // An angle grip is dragged by the pointer angle; when the arc is edge-on
+    // there is no angle to read, so the grab would jump.
+    const arc = hit.handle.arc;
+    const pointerAngle = arc ? this.pointerAngleAt(arc, event.clientX, event.clientY) : null;
+    if (arc && pointerAngle === null) return;
     this.transition = null;
     this.dragMode = 'handle';
     this.pointerDown = null;
@@ -853,6 +1030,7 @@ export class SceneController {
       id: hit.handle.id,
       value: hit.handle.value,
       lastValue: hit.handle.value,
+      ...(arc && pointerAngle !== null ? { arc: { ...arc, lastPointerAngle: pointerAngle } } : {}),
       startX: event.clientX,
       startY: event.clientY,
       axisX: hit.axisX,
@@ -2696,6 +2874,27 @@ export class SceneController {
   private onPointerMove = (event: PointerEvent): void => {
     if (this.dragMode === 'handle' && this.handleDrag) {
       const drag = this.handleDrag;
+      if (drag.arc) {
+        const angle = this.pointerAngleAt(drag.arc, event.clientX, event.clientY);
+        if (angle === null) return;
+        let delta = angle - drag.arc.lastPointerAngle;
+        // The pointer can cross the branch cut of atan2 between two moves.
+        if (delta > Math.PI) delta -= Math.PI * 2;
+        if (delta < -Math.PI) delta += Math.PI * 2;
+        drag.arc.lastPointerAngle = angle;
+        const value = drag.lastValue + (delta * 180) / Math.PI;
+        if (Math.abs(value - drag.lastValue) < 0.05) return;
+        drag.lastValue = value;
+        this.callbacks.onHandleDrag?.({
+          id: drag.id,
+          value,
+          phase: 'move',
+          x: event.clientX,
+          y: event.clientY,
+          shift: event.shiftKey,
+        });
+        return;
+      }
       const value = handleDragValue({
         startValue: drag.value,
         deltaX: event.clientX - drag.startX,
@@ -2854,6 +3053,14 @@ export class SceneController {
       const face = faceHit.object.userData.sketchFace as
         { sketchId: string; faceId: string } | undefined;
       if (face) return { kind: 'face', sketchId: face.sketchId, faceId: face.faceId };
+    }
+    // A sketch line is an edge too: a revolve axis can be drawn in a sketch.
+    // The line has to be in front of the body for the click to mean it.
+    if (edges) {
+      const curve = this.pickSketchCurveAt(raycaster, this.localPoint(clientX, clientY));
+      if (curve && (!bodyHit || curve.depth <= bodyHit.distance + 0.5)) {
+        return { kind: 'sketch-edge', sketchId: curve.id, entityId: curve.entityId };
+      }
     }
     if (bodyHit) {
       const bodyId = bodyHit.object.userData.bodyId as string | undefined;
@@ -3081,8 +3288,8 @@ export class SceneController {
   private pickSketchCurveAt(
     raycaster: THREE.Raycaster,
     local: { x: number; y: number },
-  ): { id: string; depth: number } | null {
-    let best: { id: string; distance: number; depth: number } | null = null;
+  ): { id: string; entityId: string; depth: number } | null {
+    let best: { id: string; entityId: string; distance: number; depth: number } | null = null;
     const byId = new Map(this.sketchData.map((sketch) => [sketch.id, sketch]));
     for (const entry of this.sketchEntries) {
       if (!entry.group.visible || entry.active) continue;
@@ -3106,7 +3313,9 @@ export class SceneController {
             a.clone().sub(raycaster.ray.origin).dot(raycaster.ray.direction),
             b.clone().sub(raycaster.ray.origin).dot(raycaster.ray.direction),
           );
-          if (!best || distance < best.distance) best = { id: entry.id, distance, depth };
+          if (!best || distance < best.distance) {
+            best = { id: entry.id, entityId: entity.id, distance, depth };
+          }
         }
       }
     }

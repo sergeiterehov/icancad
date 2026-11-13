@@ -5,6 +5,7 @@ import {
   CommandError,
   createId,
   createProject,
+  defaultRevolve,
   dependentFeaturesOf,
   objectName,
   objectVisible,
@@ -27,6 +28,7 @@ import {
   type SectionPlane,
   type SketchFeature,
   type ExtrudeFeature,
+  type RevolveAxis,
   type DeleteBodyFeature,
 } from '@icancad/model';
 import { sketchTopology } from '@icancad/sketch';
@@ -121,6 +123,10 @@ interface DocumentState {
   ) => void;
   toggleExtrudeBodyTarget: (featureId: string, bodyId: string) => void;
   setExtrudeReversed: (featureId: string, reversed: boolean) => void;
+  setExtrudeMethod: (featureId: string, method: ExtrudeFeature['method']) => void;
+  setRevolveAxis: (featureId: string, axis: RevolveAxis) => void;
+  setRevolveAngles: (featureId: string, angles: { start?: number; end?: number }) => void;
+  setRevolveInverted: (featureId: string, inverted: boolean) => void;
   toggleExtrudeSketch: (featureId: string, sketchId: string) => void;
   toggleSketchVisibility: (sketchId: string) => void;
   /** Colour of one or more objects in a single undoable step. */
@@ -777,6 +783,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       name,
       suppressed: false,
       type: 'extrude',
+      method: 'extrude',
       ...(input ? { sketchId: input.sketchId } : {}),
       regions,
       faceRefs: [],
@@ -973,6 +980,70 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     );
     if (!feature) return;
     get().apply({ type: 'feature/replace', feature: { ...feature, reversed } });
+  },
+
+  setExtrudeMethod: (featureId, method) => {
+    const feature = get().project.features.find(
+      (candidate): candidate is ExtrudeFeature =>
+        candidate.id === featureId && candidate.type === 'extrude',
+    );
+    if (!feature || feature.method === method) return;
+    get().apply({
+      type: 'feature/replace',
+      feature: {
+        ...feature,
+        method,
+        // A revolve keeps its axis between visits, so switching back and forth
+        // never loses what the user picked.
+        revolve: method === 'revolve' ? (feature.revolve ?? defaultRevolve()) : feature.revolve,
+      },
+    });
+  },
+
+  setRevolveAxis: (featureId, axis) => {
+    const feature = get().project.features.find(
+      (candidate): candidate is ExtrudeFeature =>
+        candidate.id === featureId && candidate.type === 'extrude',
+    );
+    if (!feature) return;
+    const revolve = feature.revolve ?? defaultRevolve();
+    get().apply({
+      type: 'feature/replace',
+      feature: { ...feature, revolve: { ...revolve, axis } },
+    });
+  },
+
+  setRevolveAngles: (featureId, angles) => {
+    const feature = get().project.features.find(
+      (candidate): candidate is ExtrudeFeature =>
+        candidate.id === featureId && candidate.type === 'extrude',
+    );
+    if (!feature) return;
+    const revolve = feature.revolve ?? defaultRevolve();
+    get().apply({
+      type: 'feature/replace',
+      feature: {
+        ...feature,
+        revolve: {
+          ...revolve,
+          start: angles.start ?? revolve.start,
+          end: angles.end ?? revolve.end,
+        },
+      },
+    });
+  },
+
+  setRevolveInverted: (featureId, inverted) => {
+    const feature = get().project.features.find(
+      (candidate): candidate is ExtrudeFeature =>
+        candidate.id === featureId && candidate.type === 'extrude',
+    );
+    if (!feature) return;
+    const revolve = feature.revolve ?? defaultRevolve();
+    get().apply({
+      type: 'feature/replace',
+      feature: { ...feature, revolve: { ...revolve, inverted } },
+    });
   },
 
   toggleExtrudeSketch: (featureId, sketchId) => {
@@ -1262,26 +1333,22 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   setObjectColors: (entries) => {
     if (entries.length === 0) return;
     get().apply(
-      ...entries.map(
-        (entry): Command => ({
-          type: 'metadata/patch',
-          objectId: entry.objectId,
-          patch: { color: entry.color },
-        }),
-      ),
+      ...entries.map((entry): Command => ({
+        type: 'metadata/patch',
+        objectId: entry.objectId,
+        patch: { color: entry.color },
+      })),
     );
   },
 
   setObjectsVisible: (entries) => {
     if (entries.length === 0) return;
     get().apply(
-      ...entries.map(
-        (entry): Command => ({
-          type: 'metadata/patch',
-          objectId: entry.objectId,
-          patch: { visible: entry.visible },
-        }),
-      ),
+      ...entries.map((entry): Command => ({
+        type: 'metadata/patch',
+        objectId: entry.objectId,
+        patch: { visible: entry.visible },
+      })),
     );
   },
 

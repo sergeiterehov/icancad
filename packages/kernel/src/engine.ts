@@ -9,9 +9,12 @@ import type {
   KernelStatusEvent,
   MakeBoxResult,
   MakeFacePrismParams,
+  MakeFaceRevolveParams,
   MakePrismParams,
+  MakeRevolveParams,
   ProfileCurve,
   ProfileLoop,
+  RevolveAxisLine,
   ShapeStats,
   SplitSolid,
   SplitSolidsParams,
@@ -43,7 +46,6 @@ export class KernelOpError extends Error {
     this.code = code;
   }
 }
-
 
 /** Coarse spatial bucket for matching the same topological edge seen from two faces. */
 const EDGE_BUCKET_SCALE = 100;
@@ -394,6 +396,53 @@ export class KernelEngine {
     if (!shape) throw new KernelOpError('OP_FAILED', 'Extrude produced no geometry');
 
     shape = this.unify(shape);
+    this.shapes.set(shapeId, shape);
+    return { shapeId, stats: this.countTopology(shape) };
+  }
+
+  /**
+   * Turns sketch regions around an axis. The profile face is placed at the
+   * start angle and then swept to the end angle, so the angles the user sets
+   * are exactly the angles the solid occupies.
+   */
+  makeRevolve(params: MakeRevolveParams): MakeBoxResult {
+    this.requireOc();
+    const { shapeId, regions } = params;
+    if (!shapeId) throw new KernelOpError('INVALID_PARAMS', 'shapeId is required');
+    if (regions.length === 0) {
+      throw new KernelOpError('INVALID_PARAMS', 'A revolve needs at least one region');
+    }
+    const sweep = revolveSweep(params.startAngle, params.endAngle);
+    let shape: OcctShape | null = null;
+    for (const region of regions) {
+      // Holes go the same way as a prism: cut the hole solid out of the outer
+      // one, which needs no orientation of the contour.
+      let solid = this.revolveLoop(region.outer, params, sweep);
+      for (const hole of region.holes) {
+        solid = this.boolean(solid, this.revolveLoop(hole, params, sweep), 'cut');
+      }
+      shape = shape ? this.boolean(shape, solid, 'fuse') : solid;
+    }
+    if (!shape) throw new KernelOpError('OP_FAILED', 'Revolve produced no geometry');
+
+    shape = this.unify(shape);
+    this.shapes.set(shapeId, shape);
+    return { shapeId, stats: this.countTopology(shape) };
+  }
+
+  /** Turns one face of an existing solid around an axis. */
+  makeFaceRevolve(params: MakeFaceRevolveParams): MakeBoxResult {
+    const { shapeId, sourceShapeId, faceId, axis } = params;
+    if (!shapeId) throw new KernelOpError('INVALID_PARAMS', 'shapeId is required');
+    if (!Number.isInteger(faceId) || faceId < 0) {
+      throw new KernelOpError('INVALID_PARAMS', 'Face id must be a non-negative integer');
+    }
+    const face = this.findFace(this.getShape(sourceShapeId), faceId);
+    if (!face) {
+      throw new KernelOpError('INVALID_PARAMS', `Face ${faceId} does not exist on the body`);
+    }
+    const sweep = revolveSweep(params.startAngle, params.endAngle);
+    const shape = this.unify(this.revolveFace(face, axis, sweep));
     this.shapes.set(shapeId, shape);
     return { shapeId, stats: this.countTopology(shape) };
   }
@@ -1086,6 +1135,42 @@ export class KernelEngine {
     return solid;
   }
 
+  private revolveLoop(
+    loop: ProfileLoop,
+    params: MakeRevolveParams,
+    sweep: RevolveSweep,
+  ): OcctShape {
+    const oc = this.requireOc();
+    const plane = profilePlane(params);
+    const wire = this.buildWire(loop, plane);
+    const maker = new oc.BRepBuilderAPI_MakeFace_15(wire, false);
+    if (!maker.IsDone()) {
+      throw new KernelOpError('INVALID_PARAMS', 'Sketch region contour is not closed');
+    }
+    return this.revolveFace(maker.Face(), params.axis, sweep);
+  }
+
+  /** Places the face at the start of the sweep, then turns it to the end. */
+  private revolveFace(face: OcctShape, axis: RevolveAxisLine, sweep: RevolveSweep): OcctShape {
+    const oc = this.requireOc();
+    const ax1 = revolveAxisLine(oc, axis);
+    let placed = face;
+    if (Math.abs(sweep.start) > 1e-12) {
+      const rotation = new oc.gp_Trsf_1();
+      rotation.SetRotation_1(ax1, sweep.start);
+      const transform = new oc.BRepBuilderAPI_Transform_2(face, rotation, true);
+      if (!transform.IsDone()) {
+        throw new KernelOpError('OP_FAILED', 'Revolve could not place the profile');
+      }
+      placed = transform.Shape();
+    }
+    const maker = new oc.BRepPrimAPI_MakeRevol_1(placed, ax1, sweep.angle, true);
+    if (!maker.IsDone()) {
+      throw new KernelOpError('OP_FAILED', 'Revolve failed for the profile');
+    }
+    return maker.Shape();
+  }
+
   private buildWire(loop: ProfileLoop, plane: ProfilePlane): OcctShape {
     const oc = this.requireOc();
     if (loop.curves.length === 0) {
@@ -1301,7 +1386,6 @@ function updateBounds(
   if (z > max[2]) max[2] = z;
 }
 
-
 interface ProfilePlane {
   origin: [number, number, number];
   xAxis: [number, number, number];
@@ -1315,7 +1399,11 @@ function unitVector(vector: readonly number[]): [number, number, number] {
 }
 
 // The sketch plane as an orthonormal frame; profile curves live in its 2D space.
-function profilePlane(params: MakePrismParams): ProfilePlane {
+function profilePlane(params: {
+  origin: readonly number[];
+  xAxis: readonly number[];
+  yAxis: readonly number[];
+}): ProfilePlane {
   const xAxis = unitVector(params.xAxis);
   const yAxis = unitVector(params.yAxis);
   const normal = unitVector([
@@ -1326,13 +1414,48 @@ function profilePlane(params: MakePrismParams): ProfilePlane {
   return { origin: [...params.origin] as [number, number, number], xAxis, yAxis, normal };
 }
 
+interface RevolveSweep {
+  /** Where the profile starts, in radians around the axis. */
+  start: number;
+  /** Positive angle the profile turns through, at most a full turn. */
+  angle: number;
+}
+
+const FULL_TURN = Math.PI * 2;
+
+function revolveAxisLine(oc: OcctBindings, axis: RevolveAxisLine): unknown {
+  const direction = unitVector(axis.direction);
+  if (Math.hypot(axis.direction[0]!, axis.direction[1]!, axis.direction[2]!) < 1e-9) {
+    throw new KernelOpError('INVALID_PARAMS', 'Revolve axis needs a direction');
+  }
+  return new oc.gp_Ax1_2(
+    new oc.gp_Pnt_3(axis.origin[0], axis.origin[1], axis.origin[2]),
+    new oc.gp_Dir_4(direction[0], direction[1], direction[2]),
+  );
+}
+
+/**
+ * Angles may come in either order and may pass a full turn; the sweep always
+ * runs the short way from the lower angle, so no negative angle reaches OCCT.
+ */
+function revolveSweep(startAngle: number, endAngle: number): RevolveSweep {
+  if (!Number.isFinite(startAngle) || !Number.isFinite(endAngle)) {
+    throw new KernelOpError('INVALID_PARAMS', 'Revolve angles must be numbers');
+  }
+  const start = Math.min(startAngle, endAngle);
+  const angle = Math.min(Math.abs(endAngle - startAngle), FULL_TURN);
+  if (angle <= 1e-9) {
+    throw new KernelOpError('INVALID_PARAMS', 'Revolve needs a non-zero angle');
+  }
+  return { start, angle };
+}
+
 function planePoint(oc: OcctBindings, plane: ProfilePlane, x: number, y: number) {
   const [ox, oy, oz] = plane.origin;
   const [xx, xy, xz] = plane.xAxis;
   const [yx, yy, yz] = plane.yAxis;
   return new oc.gp_Pnt_3(ox + xx * x + yx * y, oy + xy * x + yy * y, oz + xz * x + yz * y);
 }
-
 
 function curveStart(curve: ProfileCurve): [number, number] {
   if (curve.type === 'line') return [curve.x1, curve.y1];

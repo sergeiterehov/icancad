@@ -56,12 +56,29 @@ export type ScenePick =
       planar: boolean;
     }
   | { kind: 'body-edge'; bodyId: string; edgeId: string }
+  | { kind: 'sketch-edge'; sketchId: string; entityId: string }
   | {
       kind: 'body-vertex';
       bodyId: string;
       elementId: string;
       position: [number, number, number];
     };
+
+/**
+ * An angular handle: the grip turns around an axis instead of sliding along a
+ * line. `origin` is where the grip is drawn; the arc explains the angle.
+ */
+export interface SceneArcHandle {
+  /** Direction of the axis the grip turns around. */
+  axis: [number, number, number];
+  /** Point on the axis the arc is centred on. */
+  center: [number, number, number];
+  /** Direction of the zero angle, perpendicular to `axis`. */
+  reference: [number, number, number];
+  /** Angle of the grip in radians, right-handed around `axis`. */
+  angle: number;
+  radius: number;
+}
 
 /**
  * A 3D handle that belongs to an operation. The handle draws an arrow from
@@ -78,6 +95,8 @@ export interface SceneHandle {
   thickness?: number;
   /** Shown when the pointer hovers the handle. */
   tooltip?: string;
+  /** Present on an angle handle: the grip turns around an axis. */
+  arc?: SceneArcHandle;
 }
 
 /** Where a handle is on screen, for the drag chip and for tests. */

@@ -84,6 +84,7 @@ function extrude(id: string, sketchId: string): Feature {
     name: id,
     suppressed: false,
     type: 'extrude',
+    method: 'extrude',
     sketchId,
     regions: [],
     faceRefs: [],

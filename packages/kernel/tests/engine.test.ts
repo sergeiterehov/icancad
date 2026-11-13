@@ -159,6 +159,115 @@ describe('OCCT kernel engine', () => {
     expect(mesh.bbox.max[2]).toBeCloseTo(5, 5);
   });
 
+  it('revolves a region into a ring', () => {
+    const region = {
+      outer: {
+        curves: [
+          { type: 'line' as const, x1: 10, y1: 0, x2: 20, y2: 0 },
+          { type: 'line' as const, x1: 20, y1: 0, x2: 20, y2: 5 },
+          { type: 'line' as const, x1: 20, y1: 5, x2: 10, y2: 5 },
+          { type: 'line' as const, x1: 10, y1: 5, x2: 10, y2: 0 },
+        ],
+      },
+      holes: [],
+    };
+    const full = engine.makeRevolve({
+      shapeId: 'revolve-full',
+      origin: [0, 0, 0],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 0, 1],
+      regions: [region],
+      axis: { origin: [0, 0, 0], direction: [0, 0, 1] },
+      startAngle: 0,
+      endAngle: Math.PI * 2,
+    });
+    expect(full.stats.solids).toBe(1);
+    const mesh = engine.tessellate('revolve-full');
+    // A ring 10..20 mm around Z, 5 mm tall.
+    const expected = Math.PI * (20 * 20 - 10 * 10) * 5;
+    expect(meshSignedVolume(mesh)).toBeGreaterThan(expected * 0.95);
+    expect(meshSignedVolume(mesh)).toBeLessThan(expected * 1.05);
+    expect(mesh.bbox.min[2]).toBeCloseTo(0, 5);
+    expect(mesh.bbox.max[2]).toBeCloseTo(5, 5);
+  });
+
+  it('revolves part of a turn between the two angles', () => {
+    const region = {
+      outer: {
+        curves: [
+          { type: 'line' as const, x1: 10, y1: 0, x2: 20, y2: 0 },
+          { type: 'line' as const, x1: 20, y1: 0, x2: 20, y2: 5 },
+          { type: 'line' as const, x1: 20, y1: 5, x2: 10, y2: 5 },
+          { type: 'line' as const, x1: 10, y1: 5, x2: 10, y2: 0 },
+        ],
+      },
+      holes: [],
+    };
+    engine.makeRevolve({
+      shapeId: 'revolve-quarter',
+      origin: [0, 0, 0],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 0, 1],
+      regions: [region],
+      axis: { origin: [0, 0, 0], direction: [0, 0, 1] },
+      startAngle: 0,
+      endAngle: Math.PI / 2,
+    });
+    const mesh = engine.tessellate('revolve-quarter');
+    const expected = (Math.PI * (20 * 20 - 10 * 10) * 5) / 4;
+    expect(meshSignedVolume(mesh)).toBeGreaterThan(expected * 0.95);
+    expect(meshSignedVolume(mesh)).toBeLessThan(expected * 1.05);
+    // The quarter runs from +X to +Y.
+    expect(mesh.bbox.max[0]).toBeCloseTo(20, 0);
+    expect(mesh.bbox.min[2]).toBeCloseTo(0, 5);
+    expect(mesh.bbox.max[2]).toBeCloseTo(5, 5);
+  });
+
+  it('places the sweep of a revolve at its start angle', () => {
+    engine.makeRevolve({
+      shapeId: 'revolve-offset',
+      origin: [0, 0, 0],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 0, 1],
+      regions: [
+        {
+          outer: {
+            curves: [
+              { type: 'line', x1: 10, y1: 0, x2: 20, y2: 0 },
+              { type: 'line', x1: 20, y1: 0, x2: 20, y2: 5 },
+              { type: 'line', x1: 20, y1: 5, x2: 10, y2: 5 },
+              { type: 'line', x1: 10, y1: 5, x2: 10, y2: 0 },
+            ],
+          },
+          holes: [],
+        },
+      ],
+      axis: { origin: [0, 0, 0], direction: [0, 0, 1] },
+      startAngle: Math.PI / 2,
+      endAngle: Math.PI,
+    });
+    const mesh = engine.tessellate('revolve-offset');
+    // A quarter turn from +Y to -X: it lies on the negative X side.
+    expect(mesh.bbox.min[0]).toBeCloseTo(-20, 0);
+    expect(mesh.bbox.max[0]).toBeLessThan(1);
+    expect(mesh.bbox.min[1]).toBeGreaterThan(-1);
+  });
+
+  it('revolves a face of a body', () => {
+    engine.makeBox({ shapeId: 'revolve-source', dx: 20, dy: 10, dz: 5 });
+    const result = engine.makeFaceRevolve({
+      shapeId: 'revolve-face',
+      sourceShapeId: 'revolve-source',
+      faceId: 0,
+      axis: { origin: [0, 0, 0], direction: [0, 0, 1] },
+      startAngle: 0,
+      endAngle: Math.PI * 2,
+    });
+    expect(result.stats.solids).toBe(1);
+    const mesh = engine.tessellate('revolve-face');
+    expect(meshSignedVolume(mesh)).toBeGreaterThan(0);
+  });
+
   it('extrudes arcs and builds symmetric solids', () => {
     const result = engine.makePrism({
       shapeId: 'prism-arc',

@@ -2,6 +2,7 @@ import type { TessellationResult } from '@icancad/kernel';
 import { sketchTopology, tessellateEntity } from '@icancad/sketch';
 import {
   bodiesInHistory,
+  defaultRevolve,
   featureBodyId,
   objectName,
   objectShowConstruction,
@@ -19,8 +20,11 @@ import {
   AlertCircle,
   AlertTriangle,
   ArrowLeftRight,
+  ArrowRightFromLine,
+  ArrowRightToLine,
   ArrowUp,
   Box,
+  ChartPie,
   Check,
   ChevronsUpDown,
   Eye,
@@ -77,6 +81,7 @@ import { isProjectedEntity } from '../sketch/projection';
 import { referenceMenuItems } from '../sketch/referenceMenu';
 import { measureInfo, measuresForEntity } from '../sketch/measure';
 import { sketchPlaneReady } from '../sketch/sectionPlane';
+import { resolveRevolveAxis } from '../sketch/revolveAxis';
 import { SketchConstraints } from './SketchConstraints';
 import { Tooltip } from './Tooltip';
 import { translate } from './translate';
@@ -316,15 +321,31 @@ const EXTRUDE_OPS = [
   },
 ];
 
-const EXTRUDE_ENDS = [
-  { id: 'blind' as const, label: 'extrude.end_blind', icon: <ArrowUp size={12} /> },
-  { id: 'symmetric' as const, label: 'extrude.end_symmetric', icon: <ChevronsUpDown size={12} /> },
+/**
+ * One row of extents: a straight pull has three, and a revolve sits between
+ * them as the fourth way to sweep the profile.
+ */
+const EXTRUDE_EXTENTS = [
+  { id: 'blind', label: 'extrude.end_blind', icon: <ArrowUp size={12} />, revolve: false },
   {
-    id: 'through-all' as const,
+    id: 'symmetric',
+    label: 'extrude.end_symmetric',
+    icon: <ChevronsUpDown size={12} />,
+    revolve: false,
+  },
+  {
+    id: 'revolve',
+    label: 'extrude.method_revolve',
+    icon: <ChartPie size={12} />,
+    revolve: true,
+  },
+  {
+    id: 'through-all',
     label: 'extrude.end_through_all',
     icon: <InfinityIcon size={12} />,
+    revolve: false,
   },
-];
+] as const;
 
 const EXTRUDE_SECOND_ENDS = [
   { id: 'blind' as const, label: 'extrude.end_blind', icon: <ArrowUp size={12} /> },
@@ -512,6 +533,10 @@ export function Inspector() {
   const toggleExtrudeBodyFace = useDocumentStore((state) => state.toggleExtrudeBodyFace);
   const toggleExtrudeBodyTarget = useDocumentStore((state) => state.toggleExtrudeBodyTarget);
   const setExtrudeReversed = useDocumentStore((state) => state.setExtrudeReversed);
+  const setExtrudeMethod = useDocumentStore((state) => state.setExtrudeMethod);
+  const setRevolveAxis = useDocumentStore((state) => state.setRevolveAxis);
+  const setRevolveAngles = useDocumentStore((state) => state.setRevolveAngles);
+  const setRevolveInverted = useDocumentStore((state) => state.setRevolveInverted);
   const setEdgeTreatmentKind = useDocumentStore((state) => state.setEdgeTreatmentKind);
   const setEdgeTreatmentSize = useDocumentStore((state) => state.setEdgeTreatmentSize);
   const toggleEdgeTreatmentFace = useDocumentStore((state) => state.toggleEdgeTreatmentFace);
@@ -524,6 +549,8 @@ export function Inspector() {
   const pickingSketchPlane = useUiStore((state) => state.pickingSketchPlane);
   const pickingEdges = useUiStore((state) => state.pickingEdges);
   const setPickingEdges = useUiStore((state) => state.setPickingEdges);
+  const pickingRevolveAxis = useUiStore((state) => state.pickingRevolveAxis);
+  const setPickingRevolveAxis = useUiStore((state) => state.setPickingRevolveAxis);
   const setPickingExtrude = useUiStore((state) => state.setPickingExtrude);
   const setPickingExtrudeBodies = useUiStore((state) => state.setPickingExtrudeBodies);
   const setPickingSketchPlane = useUiStore((state) => state.setPickingSketchPlane);
@@ -535,6 +562,7 @@ export function Inspector() {
   const featureObjectErrors = useKernelStore((state) => state.featureObjectErrors);
   const featureLimits = useKernelStore((state) => state.featureLimits);
   const preview = useKernelStore((state) => state.preview);
+  const sketchFrames = useKernelStore((state) => state.sketchFrames);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
 
   const feature =
@@ -627,14 +655,24 @@ export function Inspector() {
     ) {
       setPickingSketchPlane(null);
     }
+    if (
+      pickingRevolveAxis &&
+      (pickingRevolveAxis !== feature?.id ||
+        feature?.type !== 'extrude' ||
+        feature.method !== 'revolve')
+    ) {
+      setPickingRevolveAxis(null);
+    }
   }, [
     picking,
     pickingBodies,
     pickingSketchPlane,
+    pickingRevolveAxis,
     feature,
     setPickingExtrude,
     setPickingExtrudeBodies,
     setPickingSketchPlane,
+    setPickingRevolveAxis,
   ]);
 
   useEffect(() => {
@@ -646,7 +684,38 @@ export function Inspector() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [pickingSketchPlane, setPickingSketchPlane]);
 
+  useEffect(() => {
+    if (!pickingRevolveAxis) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPickingRevolveAxis(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [pickingRevolveAxis, setPickingRevolveAxis]);
+
   const extrudeFeature = feature?.type === 'extrude' ? feature : undefined;
+  // A revolve keeps its line between visits; an operation switched by an older
+  // file may have no spec yet, so the default stands in.
+  const revolve =
+    extrudeFeature?.method === 'revolve' ? (extrudeFeature.revolve ?? defaultRevolve()) : null;
+  const revolveSpec = revolve ?? defaultRevolve();
+  const edgeAxis = revolve && revolve.axis.kind !== 'world' ? revolve.axis : undefined;
+  const edgeAxisLabel = edgeAxis
+    ? edgeAxis.kind === 'body-edge'
+      ? `${t('extrude.edge')} · ${objectName(project, edgeAxis.bodyId, 'Body')}`
+      : `${t('extrude.edge')} · ${
+          project.features.find((candidate) => candidate.id === edgeAxis.sketchId)?.name ?? ''
+        }`
+    : undefined;
+  const axisResolved = revolve
+    ? resolveRevolveAxis(revolve.axis, {
+        meshes,
+        sketches: project.features.filter(
+          (candidate): candidate is SketchFeature => candidate.type === 'sketch',
+        ),
+        frames: sketchFrames,
+      }) !== null
+    : true;
   const treatmentFeature = feature?.type === 'edge-treatment' ? feature : undefined;
   // The kernel reduces a size that does not fit; the inspector says so next to
   // the field instead of turning the operation into an error.
@@ -659,18 +728,27 @@ export function Inspector() {
           value: formatNumber(treatmentApplied.applied, locale, 2),
         })
       : undefined;
+  // The document is read again on every edit: two changes made by one click must
+  // build on each other, not on the render that drew the panel.
+  const replaceExtrude = (featureId: string, patch: Partial<ExtrudeFeature>) => {
+    const current = useDocumentStore
+      .getState()
+      .project.features.find(
+        (candidate): candidate is ExtrudeFeature =>
+          candidate.id === featureId && candidate.type === 'extrude',
+      );
+    const base = current ?? extrudeFeature;
+    if (!base) return;
+    apply({ type: 'feature/replace', feature: { ...base, ...patch } });
+  };
   const setExtrudeEnd = (featureId: string, end: ExtrudeFeature['end']) =>
-    apply({ type: 'feature/replace', feature: { ...extrudeFeature!, id: featureId, end } });
+    replaceExtrude(featureId, { end });
   const setExtrudeDistance = (featureId: string, distance: number) =>
-    apply({ type: 'feature/replace', feature: { ...extrudeFeature!, id: featureId, distance } });
+    replaceExtrude(featureId, { distance });
   const setExtrudeSecondDirection = (
     featureId: string,
     secondDirection: ExtrudeFeature['secondDirection'],
-  ) =>
-    apply({
-      type: 'feature/replace',
-      feature: { ...extrudeFeature!, id: featureId, secondDirection },
-    });
+  ) => replaceExtrude(featureId, { secondDirection });
 
   const bodyNameOf = (bodyId: string) => project.metadata[bodyId]?.name;
   const treatmentRows: PickableRow[] = treatmentFeature
@@ -1243,47 +1321,134 @@ export function Inspector() {
 
                 <PanelSection title={t('extrude.method')}>
                   <div className="section-stack">
-                    <Segmented ariaLabel={t('extrude.end')}>
-                      {EXTRUDE_ENDS.filter(
-                        (end) => end.id !== 'through-all' || throughAllAllowed(feature.op),
-                      ).map((end) => (
+                    <Segmented ariaLabel={t('extrude.method')}>
+                      {EXTRUDE_EXTENTS.filter(
+                        (extent) => extent.id !== 'through-all' || throughAllAllowed(feature.op),
+                      ).map((extent) => (
                         <SegmentedTab
-                          key={end.id}
-                          label={t(end.label as never)}
-                          icon={end.icon}
-                          active={feature.end === end.id}
-                          onClick={() => setExtrudeEnd(feature.id, end.id)}
+                          key={extent.id}
+                          label={t(extent.label as never)}
+                          icon={extent.icon}
+                          active={
+                            extent.revolve
+                              ? feature.method === 'revolve'
+                              : feature.method === 'extrude' && feature.end === extent.id
+                          }
+                          onClick={() => {
+                            if (extent.revolve) {
+                              setExtrudeMethod(feature.id, 'revolve');
+                              return;
+                            }
+                            setExtrudeMethod(feature.id, 'extrude');
+                            setExtrudeEnd(feature.id, extent.id);
+                          }}
                         />
                       ))}
                     </Segmented>
-                    <div className="dimension-row">
-                      {feature.end !== 'through-all' && (
-                        <DimensionField
-                          axis="↑"
-                          label={t('extrude.distance')}
-                          suffix="mm"
-                          value={feature.distance}
-                          onCommit={(distance) => setExtrudeDistance(feature.id, distance)}
-                        />
-                      )}
-                      {feature.end !== 'symmetric' && (
-                        <span className="dimension-toggle">
-                          <IconButton
-                            label={t('extrude.reverseDirection')}
-                            tooltip={t('extrude.reverseDirection')}
-                            active={feature.reversed}
-                            className="dimension-toggle-button"
-                            onClick={() => setExtrudeReversed(feature.id, !feature.reversed)}
-                          >
-                            <ArrowLeftRight size={15} />
-                          </IconButton>
-                        </span>
-                      )}
-                    </div>
+                    {feature.method === 'revolve' ? (
+                      <>
+                        <Segmented ariaLabel={t('extrude.revolveAxis')}>
+                          {(['x', 'y', 'z'] as const).map((axis) => (
+                            <SegmentedTab
+                              key={axis}
+                              label={axis.toUpperCase()}
+                              active={
+                                revolveSpec.axis.kind === 'world' && revolveSpec.axis.axis === axis
+                              }
+                              onClick={() => {
+                                setPickingRevolveAxis(null);
+                                setRevolveAxis(feature.id, { kind: 'world', axis });
+                              }}
+                            />
+                          ))}
+                          <SegmentedTab
+                            label={t('extrude.edge')}
+                            icon={<Spline size={12} />}
+                            active={Boolean(edgeAxis) || pickingRevolveAxis === feature.id}
+                            onClick={() =>
+                              setPickingRevolveAxis(
+                                pickingRevolveAxis === feature.id ? null : feature.id,
+                              )
+                            }
+                          />
+                        </Segmented>
+                        {(edgeAxis || pickingRevolveAxis === feature.id) && (
+                          <ObjectPickerField
+                            compact
+                            label={t('extrude.selectEdge')}
+                            value={edgeAxisLabel}
+                            placeholder={t('extrude.selectEdge')}
+                            icon={<Spline size={12} />}
+                            active={pickingRevolveAxis === feature.id}
+                            invalid={edgeAxis !== undefined && !axisResolved}
+                            onClick={() =>
+                              setPickingRevolveAxis(
+                                pickingRevolveAxis === feature.id ? null : feature.id,
+                              )
+                            }
+                            testId="revolve-axis-picker"
+                          />
+                        )}
+                        <div className="dimension-row">
+                          <DimensionField
+                            icon={<ArrowRightFromLine size={14} />}
+                            label={t('extrude.angleStart')}
+                            suffix="°"
+                            value={revolveSpec.start}
+                            allowNegative
+                            onCommit={(start) => setRevolveAngles(feature.id, { start })}
+                          />
+                          <DimensionField
+                            icon={<ArrowRightToLine size={14} />}
+                            label={t('extrude.angleEnd')}
+                            suffix="°"
+                            value={revolveSpec.end}
+                            allowNegative
+                            onCommit={(end) => setRevolveAngles(feature.id, { end })}
+                          />
+                          <span className="dimension-toggle">
+                            <IconButton
+                              label={t('extrude.invertRevolve')}
+                              tooltip={t('extrude.invertRevolve')}
+                              active={revolveSpec.inverted}
+                              className="dimension-toggle-button"
+                              onClick={() => setRevolveInverted(feature.id, !revolveSpec.inverted)}
+                            >
+                              <ArrowLeftRight size={15} />
+                            </IconButton>
+                          </span>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="dimension-row">
+                        {feature.end !== 'through-all' && (
+                          <DimensionField
+                            axis="↑"
+                            label={t('extrude.distance')}
+                            suffix="mm"
+                            value={feature.distance}
+                            onCommit={(distance) => setExtrudeDistance(feature.id, distance)}
+                          />
+                        )}
+                        {feature.end !== 'symmetric' && (
+                          <span className="dimension-toggle">
+                            <IconButton
+                              label={t('extrude.reverseDirection')}
+                              tooltip={t('extrude.reverseDirection')}
+                              active={feature.reversed}
+                              className="dimension-toggle-button"
+                              onClick={() => setExtrudeReversed(feature.id, !feature.reversed)}
+                            >
+                              <ArrowLeftRight size={15} />
+                            </IconButton>
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </PanelSection>
 
-                {feature.end !== 'symmetric' && (
+                {feature.method === 'extrude' && feature.end !== 'symmetric' && (
                   <PanelSection
                     title={t('extrude.secondDirection')}
                     action={

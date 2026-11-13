@@ -184,6 +184,28 @@ export interface ExtrudeSecondDirection {
   distance: number;
 }
 
+/** What sweeps the profile: a straight pull or a turn around an axis. */
+export type ExtrudeMethod = 'extrude' | 'revolve';
+
+/**
+ * The line a revolve turns its profile around. A world axis runs through the
+ * origin, a body edge keeps the pose it was picked at so a rebuild can find it
+ * again, and a sketch edge follows the line it was drawn as.
+ */
+export type RevolveAxis =
+  | { kind: 'world'; axis: 'x' | 'y' | 'z' }
+  | { kind: 'body-edge'; bodyId: string; edgeId: string; start: Vec3; end: Vec3 }
+  | { kind: 'sketch-edge'; sketchId: string; entityId: string };
+
+export interface RevolveSpec {
+  axis: RevolveAxis;
+  /** Degrees around the axis, measured right-handed; the sweep runs start…end. */
+  start: number;
+  end: number;
+  /** Turns the sweep the other way round: both angles are negated. */
+  inverted: boolean;
+}
+
 // A face of a solid body used as an extrude input. The face id is the OCCT
 // traversal index, which is stable for as long as the body rebuilds the same
 // way (persistent naming arrives in M5). The normal is captured at pick time so
@@ -237,6 +259,9 @@ export interface ExtrudeFeature extends FeatureBase {
   faceRefs: BodyFaceRef[];
   /** Picked objects in selection order: `s:<sketchId>#<regionId>` or `b:<bodyId>#<faceId>`. */
   objectOrder: string[];
+  method: ExtrudeMethod;
+  /** Axis and angles of a revolve; absent until the method is a revolve. */
+  revolve?: RevolveSpec;
   end: ExtrudeEnd;
   distance: number;
   /** Extrude along the opposite side of the sketch plane or face normal. */

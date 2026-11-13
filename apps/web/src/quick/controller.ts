@@ -1,4 +1,5 @@
 import type { TessellationResult } from '@icancad/kernel';
+import { defaultRevolve } from '@icancad/model';
 import type {
   EdgeTreatmentFeature,
   EdgeTreatmentKind,
@@ -7,7 +8,7 @@ import type {
   Vec3,
 } from '@icancad/model';
 import { useDocumentStore } from '../stores/documentStore';
-import { snapLength } from './handleDrag';
+import { snapAngle, snapLength } from './handleDrag';
 import {
   buildQuickEdgeTreatment,
   MIN_EDGE_TREATMENT,
@@ -27,6 +28,9 @@ const MIN_DISTANCE = 0.05;
 
 /** Which extent of the extrusion a handle edits. */
 export type ExtrudeHandleAxis = 'primary' | 'second';
+
+/** Which angle of a revolve a handle turns. */
+export type RevolveHandleAngle = 'start' | 'end';
 
 export interface QuickBodySource {
   id: string;
@@ -261,6 +265,86 @@ export class QuickExtrudeDrag {
 }
 
 /**
+ * One drag of a revolve angle handle. The handle reports the effective angle:
+ * an inverted revolve shows its sweep mirrored, so the stored angle is negated
+ * on the way back. The whole gesture is a single undo step.
+ */
+export class RevolveAngleDrag {
+  private before: Project | null = null;
+  private changed = false;
+  private currentValue: number;
+
+  constructor(
+    private readonly featureId: string,
+    private readonly which: RevolveHandleAngle,
+    private readonly inverted: boolean,
+    initialValue: number,
+  ) {
+    this.currentValue = initialValue;
+  }
+
+  get value(): number {
+    return this.currentValue;
+  }
+
+  get op(): ExtrudeFeature['op'] | null {
+    return null;
+  }
+
+  get kind(): EdgeTreatmentKind | null {
+    return null;
+  }
+
+  /** The chip of an angle handle reads degrees, not millimetres. */
+  get unit(): 'angle' {
+    return 'angle';
+  }
+
+  start(): void {
+    this.before = useDocumentStore.getState().project;
+    this.changed = false;
+  }
+
+  update(value: number): void {
+    if (!this.before) return;
+    const state = useDocumentStore.getState();
+    const feature = state.project.features.find(
+      (candidate): candidate is ExtrudeFeature =>
+        candidate.id === this.featureId && candidate.type === 'extrude',
+    );
+    if (!feature) return;
+    const revolve = feature.revolve ?? defaultRevolve();
+    const stored = snapAngle(this.inverted ? -value : value);
+    const next =
+      this.which === 'start' ? { ...revolve, start: stored } : { ...revolve, end: stored };
+    this.currentValue = this.inverted ? -stored : stored;
+    state.preview({ type: 'feature/replace', feature: { ...feature, revolve: next } });
+    this.changed = true;
+  }
+
+  end(): void {
+    if (this.changed && this.before) {
+      useDocumentStore.getState().commitPreview(this.before);
+    }
+    this.before = null;
+    this.changed = false;
+  }
+
+  cancel(): void {
+    const state = useDocumentStore.getState();
+    if (this.before && state.project.features.some((f) => f.id === this.featureId)) {
+      const feature = this.before.features.find(
+        (candidate): candidate is ExtrudeFeature =>
+          candidate.id === this.featureId && candidate.type === 'extrude',
+      );
+      if (feature) state.preview({ type: 'feature/replace', feature });
+    }
+    this.before = null;
+    this.changed = false;
+  }
+}
+
+/**
  * One drag of the edge treatment arrow. The first drag creates the operation: a
  * plain grab cuts a chamfer, holding shift rounds the corner, and the kind is
  * locked when the pointer is released. Later drags only change the size. The
@@ -354,12 +438,7 @@ export class QuickEdgeTreatmentDrag {
     this.currentSize = size;
 
     if (!this.featureId) {
-      const feature = buildQuickEdgeTreatment(
-        this.geometry.target,
-        kind,
-        size,
-        this.name,
-      );
+      const feature = buildQuickEdgeTreatment(this.geometry.target, kind, size, this.name);
       if (!useDocumentStore.getState().previewAddFeature(feature)) return;
       this.featureId = feature.id;
       this.created = true;

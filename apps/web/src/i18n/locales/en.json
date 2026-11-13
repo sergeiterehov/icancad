@@ -180,7 +180,10 @@
     "MISSING_ASSET": "Imported mesh data is missing",
     "IMPORT_FAILED": "Failed to import the mesh",
     "NO_EDGES": "Pick edges to treat",
-    "EDGE_TREATMENT_FAILED": "These edges cannot be rounded or chamfered"
+    "EDGE_TREATMENT_FAILED": "These edges cannot be rounded or chamfered",
+    "REVOLVE_AXIS_MISSING": "Pick the edge or axis the profile turns around",
+    "REVOLVE_EDGE_NOT_STRAIGHT": "Only a straight edge can be a revolve axis",
+    "REVOLVE_NO_ANGLE": "A revolve needs a non-zero angle between its ends"
   },
   "features": {
     "box": "Box",
@@ -389,7 +392,14 @@
     "secondDirectionUnavailable": "A symmetric extrude already goes both ways",
     "secondEnd": "Second direction extent",
     "throughAllUnavailable": "Through all works only for cut and intersect",
-    "wholeSketch": "Whole sketch"
+    "wholeSketch": "Whole sketch",
+    "method_revolve": "Revolve",
+    "revolveAxis": "Revolve axis",
+    "edge": "Edge",
+    "selectEdge": "Select edge",
+    "angleStart": "Start angle",
+    "angleEnd": "End angle",
+    "invertRevolve": "Flip revolve direction"
   },
   "delete": {
     "title": "Delete operation?",
@@ -415,7 +425,10 @@
     "curvedFace": "A curved face cannot be extruded yet.",
     "createTooltip": "Extrude — drag to create the operation",
     "distanceTooltip": "Extrude distance — drag to change",
-    "secondDistanceTooltip": "Second direction distance — drag to change"
+    "secondDistanceTooltip": "Second direction distance — drag to change",
+    "revolveStartTooltip": "Revolve start angle — drag to change",
+    "revolveEndTooltip": "Revolve end angle — drag to change",
+    "angle": "Revolve angle"
   },
   "edgeTreatment": {
     "dragTooltip": "Drag to chamfer — hold Shift to round the corner",
