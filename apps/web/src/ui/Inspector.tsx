@@ -67,7 +67,11 @@ import { useContextMenuStore } from './ContextMenu';
 import { ChamferIcon, FilletIcon } from './edgeIcons';
 import { ExtrudeOpIcon, PointIcon } from './featureIcons';
 import { SectionPanel } from './SectionPanel';
-import { constraintsGeometryIds } from '../sketch/constraintModel';
+import {
+  constraintsGeometryIds,
+  diagnoseSketch,
+  removeSketchEntities,
+} from '../sketch/constraintModel';
 import { referenceMenuItems } from '../sketch/referenceMenu';
 import { measureInfo, measuresForEntity } from '../sketch/measure';
 import { sketchPlaneReady } from '../sketch/sectionPlane';
@@ -422,6 +426,12 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
                       {
                         selectedEntityIds: selection,
                         onSelectConstraints: (ids) => selectSketchConstraints(ids),
+                        onDelete: (ids) => {
+                          const next = removeSketchEntities(feature, ids);
+                          apply({ type: 'feature/replace', feature: next });
+                          setSketchSelection([]);
+                          void diagnoseSketch(next);
+                        },
                       },
                     ),
                   );

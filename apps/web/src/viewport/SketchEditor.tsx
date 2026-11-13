@@ -838,6 +838,12 @@ export function SketchEditor() {
           {
             selectedEntityIds: entityIds.includes(entityId) ? entityIds : [entityId],
             onSelectConstraints: (ids) => selectSketchConstraints(ids),
+            onDelete: (ids) => {
+              const next = removeSketchEntities(current, ids);
+              apply({ type: 'feature/replace', feature: next });
+              setSketchSelection([]);
+              void diagnoseSketch(next);
+            },
           },
         ),
       );

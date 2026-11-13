@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import type { SketchConstraint, SketchEntity, SketchFeature } from '@icancad/model';
-import { sketchEntityIndex } from '@icancad/sketch';
+import { SKETCH_X_AXIS_ID, sketchEntityIndex } from '@icancad/sketch';
 import { Algorithm, GcsWrapper, init_planegcs_module, type ModuleStatic } from '@salusoft89/planegcs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -11,6 +11,7 @@ import {
   type ConstraintAction,
 } from '../src/sketch/constraintModel';
 import { applySolverSolution, buildSolverPrimitives } from '../src/sketch/mapping';
+import { referenceMenuItems } from '../src/sketch/referenceMenu';
 
 let gcs: GcsWrapper;
 
@@ -227,5 +228,43 @@ describe('constraint and geometry cross-selection', () => {
     expect(constraintIdsForEntities(feature, ['a', 'l'])).toEqual(['equal-lines', 'point-on-line']);
     expect(constraintIdsForEntities(feature, ['c'])).toEqual(['fix-circle']);
     expect(constraintIdsForEntities(feature, ['missing'])).toEqual([]);
+  });
+});
+
+describe('geometry context menu deletion', () => {
+  const feature = sketch([line('a', 0), line('b', 10)]);
+
+  function deleteTargets(entityId: string, selectedEntityIds: string[]): string[] | null {
+    let deleted: string[] | null = null;
+    const menu = referenceMenuItems(
+      feature,
+      entityId,
+      (key) => key,
+      'en',
+      () => {},
+      {
+        selectedEntityIds,
+        onDelete: (ids) => {
+          deleted = ids;
+        },
+      },
+    );
+    const item = menu.find((candidate) => candidate.id === 'delete-geometry');
+    if (!item || !('onSelect' in item)) return null;
+    item.onSelect();
+    return deleted;
+  }
+
+  it('deletes the whole selected group when the clicked geometry is in it', () => {
+    expect(deleteTargets('a', ['a', 'b'])).toEqual(['a', 'b']);
+  });
+
+  it('deletes only the clicked geometry when it is not selected', () => {
+    expect(deleteTargets('a', ['b'])).toEqual(['a']);
+  });
+
+  it('offers no deletion for fundamental geometry on its own', () => {
+    expect(deleteTargets(SKETCH_X_AXIS_ID, [SKETCH_X_AXIS_ID])).toBeNull();
+    expect(deleteTargets(SKETCH_X_AXIS_ID, [SKETCH_X_AXIS_ID, 'a'])).toEqual(['a']);
   });
 });

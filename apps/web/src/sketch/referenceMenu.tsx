@@ -4,7 +4,8 @@ import {
   type SketchFeature,
   type SketchMeasure,
 } from '@icancad/model';
-import { Ruler } from 'lucide-react';
+import { isFundamentalEntityId } from '@icancad/sketch';
+import { Ruler, Trash2 } from 'lucide-react';
 import type { ContextMenuItem } from '../ui/ContextMenu';
 import { constraintIdsForEntities } from './constraintModel';
 import { measureInfo, measuresForEntity } from './measure';
@@ -13,6 +14,7 @@ export interface ReferenceMenuOptions {
   /** Geometry currently selected; a right-click on a member keeps the group. */
   selectedEntityIds?: string[];
   onSelectConstraints?: (constraintIds: string[]) => void;
+  onDelete?: (entityIds: string[]) => void;
 }
 
 export function referenceMenuItems(
@@ -41,11 +43,11 @@ export function referenceMenuItems(
   };
 
   const items: ContextMenuItem[] = [];
-  const { onSelectConstraints } = options;
+  const targets = options.selectedEntityIds?.includes(entityId)
+    ? options.selectedEntityIds
+    : [entityId];
+  const { onSelectConstraints, onDelete } = options;
   if (onSelectConstraints) {
-    const targets = options.selectedEntityIds?.includes(entityId)
-      ? options.selectedEntityIds
-      : [entityId];
     const constraintIds = constraintIdsForEntities(feature, targets);
     items.push({
       id: 'select-constraints',
@@ -69,6 +71,17 @@ export function referenceMenuItems(
         } satisfies ContextMenuItem;
       }),
     );
+  }
+  const deletable = targets.filter((id) => !isFundamentalEntityId(id));
+  if (onDelete && deletable.length > 0) {
+    if (items.length > 0) items.push({ id: 'delete-separator', separator: true });
+    items.push({
+      id: 'delete-geometry',
+      label: t('common.delete'),
+      icon: <Trash2 size={14} />,
+      danger: true,
+      onSelect: () => onDelete(deletable),
+    });
   }
   return items;
 }
