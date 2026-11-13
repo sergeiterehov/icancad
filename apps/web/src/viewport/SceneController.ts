@@ -56,6 +56,12 @@ const HANDLE_IDLE_PX = 48;
 const HANDLE_HIT_PX = 9;
 /** Overlays are lifted off the surface they annotate to avoid depth fighting. */
 const FACE_OVERLAY_LIFT = 0.01;
+/**
+ * How far a hovered edge is lifted towards the viewer. Enough to clear the
+ * surface tessellation under it at any zoom, small enough that a face in front
+ * still hides it.
+ */
+const EDGE_HOVER_LIFT_PX = 12;
 const SKETCH_FACE_LIFT = 0.02;
 // Faces that lie exactly on a section plane are rejected per fragment on
 // floating-point noise, which draws them as stripes. The extra thousandth of a
@@ -910,7 +916,17 @@ export class SceneController {
     linewidth: number,
     opacity: number,
     color: number,
+    depthTest = false,
+    cameraBias = 0,
   ): void {
+    // Lifting the line towards the viewer keeps it above the surface it lies
+    // on while faces in front still hide it.
+    const lift =
+      cameraBias > 0
+        ? this.camera
+            .getWorldDirection(new THREE.Vector3())
+            .multiplyScalar(-cameraBias)
+        : null;
     for (const key of keys) {
       const separator = key.lastIndexOf('#');
       if (separator <= 0) continue;
@@ -924,13 +940,20 @@ export class SceneController {
       if (edge.closed) {
         positions.push(edge.points[0]!, edge.points[1]!, edge.points[2]!);
       }
+      if (lift) {
+        for (let index = 0; index < positions.length; index += 3) {
+          positions[index] = positions[index]! + lift.x;
+          positions[index + 1] = positions[index + 1]! + lift.y;
+          positions[index + 2] = positions[index + 2]! + lift.z;
+        }
+      }
       geometry.setPositions(positions);
       const material = new LineMaterial({
         color,
         linewidth,
         transparent: true,
         opacity,
-        depthTest: false,
+        depthTest,
         depthWrite: false,
         resolution: new THREE.Vector2(this.width, this.height),
       });
@@ -952,16 +975,33 @@ export class SceneController {
 
   /**
    * The edge a click would take while edges are being picked. Without it the
-   * thin lines of a body are hard to aim at.
+   * thin lines of a body are hard to aim at. The hover is drawn depth-tested
+   * and opaque: an edge lies over the faces only where it is not hidden.
    */
   private setHoveredEdge(key: string | null): void {
     if (key === this.hoveredEdgeKey) return;
     this.hoveredEdgeKey = key;
-    this.clearEdgeLines(this.edgeHoverEntries);
-    if (key) {
-      this.drawEdgeLines(this.edgeHoverEntries, [key], 4.6, 0.55, this.sketchHoverColor());
-    }
+    this.drawHoveredEdge();
     this.invalidate();
+  }
+
+  /**
+   * The hovered edge is lifted along the view direction: with a pure depth test
+   * the screen-space line sinks into the surface it traces, and without one it
+   * shows through the faces that hide it.
+   */
+  private drawHoveredEdge(): void {
+    this.clearEdgeLines(this.edgeHoverEntries);
+    if (!this.hoveredEdgeKey) return;
+    this.drawEdgeLines(
+      this.edgeHoverEntries,
+      [this.hoveredEdgeKey],
+      4.6,
+      1,
+      this.sketchHoverColor(),
+      true,
+      EDGE_HOVER_LIFT_PX / this.pixelsPerWorldUnit(),
+    );
   }
 
   private applyBodyMaterials(): void {
@@ -2566,6 +2606,7 @@ export class SceneController {
       ).uniforms.dashScale.value = dashScale;
     }
     this.onCameraChange?.(this.azimuth, this.polar, this.distance);
+    if (this.hoveredEdgeKey) this.drawHoveredEdge();
     this.updateGhostFades();
     if (this.handleData.length > 0) this.updateHandles();
     this.invalidate();
@@ -2659,8 +2700,10 @@ export class SceneController {
       if (event.buttons === 0 && !this.faceHighlights.picking && !this.faceHighlights.bodyPicking) {
         this.updateHandleHover(event.clientX, event.clientY);
         // Over a handle the handle speaks for itself; everywhere else the
-        // geometry under the pointer is what a click would add.
-        if (this.handleData.length > 0 && this.hoveredHandleId === null) {
+        // geometry under the pointer is what a click would add. `hoverEnabled`
+        // covers handles, but also a selected face or edge whose body offers
+        // none, such as a curved face.
+        if (this.hoveredHandleId === null && this.hoverEnabled) {
           this.scheduleHover(event.clientX, event.clientY);
         }
       }
@@ -2896,32 +2939,76 @@ export class SceneController {
     const edges = entry.hitRef.edges ?? [];
     if (edges.length === 0) return null;
     const local = this.localPoint(clientX, clientY);
-    let best: { id: string; distance: number } | null = null;
+    const candidates = new Map<string, { distance: number; point: THREE.Vector3 }>();
     for (const edge of edges) {
       const points = edge.points;
       const count = points.length / 3;
       if (count < 2) continue;
-      let previous: { x: number; y: number } | null = null;
+      let previous: { x: number; y: number; point: THREE.Vector3 } | null = null;
       for (let index = 0; index <= count; index += 1) {
         const source = index === count ? (edge.closed ? 0 : null) : index;
         if (source === null) break;
-        const projected = this.projectWorld(
-          new THREE.Vector3(points[source * 3]!, points[source * 3 + 1]!, points[source * 3 + 2]!),
+        const point = new THREE.Vector3(
+          points[source * 3]!,
+          points[source * 3 + 1]!,
+          points[source * 3 + 2]!,
         );
+        const projected = this.projectWorld(point);
         if (previous) {
-          const distance = pointSegmentDistance(
-            [local.x, local.y],
-            [previous.x, previous.y],
-            [projected.x, projected.y],
+          const dx = projected.x - previous.x;
+          const dy = projected.y - previous.y;
+          const lengthSquared = dx * dx + dy * dy;
+          const t =
+            lengthSquared > 0
+              ? Math.min(
+                  1,
+                  Math.max(
+                    0,
+                    ((local.x - previous.x) * dx + (local.y - previous.y) * dy) / lengthSquared,
+                  ),
+                )
+              : 0;
+          const distance = Math.hypot(
+            local.x - (previous.x + dx * t),
+            local.y - (previous.y + dy * t),
           );
-          if (distance <= 6 && (!best || distance < best.distance)) {
-            best = { id: edge.id, distance };
+          if (distance <= 6) {
+            const best = candidates.get(edge.id);
+            if (!best || distance < best.distance) {
+              candidates.set(edge.id, {
+                distance,
+                point: previous.point.clone().lerp(point, t),
+              });
+            }
           }
         }
-        previous = { x: projected.x, y: projected.y };
+        previous = { x: projected.x, y: projected.y, point };
       }
     }
-    return best?.id ?? null;
+    // An edge only owns the pointer where its line lies on the visible
+    // surface: the nearest one can be the far rim of a hole behind a face.
+    // Checking visibility costs a raycast per edge, so only the few nearest
+    // candidates are worth it; anything further does not want the pointer.
+    const ordered = [...candidates.entries()]
+      .sort((a, b) => a[1].distance - b[1].distance)
+      .slice(0, 3);
+    for (const [edgeId, candidate] of ordered) {
+      if (this.isEdgePointVisible(entry, candidate.point)) return edgeId;
+    }
+    return null;
+  }
+
+  private isEdgePointVisible(entry: BodyEntry, point: THREE.Vector3): boolean {
+    const ndc = point.clone().project(this.camera);
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(new THREE.Vector2(ndc.x, ndc.y), this.camera);
+    const hit = firstUnclippedHit(
+      raycaster.intersectObject(entry.hitMesh, false),
+      this.sectionClipPlanes,
+    );
+    if (!hit) return true;
+    const depth = point.clone().sub(raycaster.ray.origin).dot(raycaster.ray.direction);
+    return hit.distance >= depth - Math.max(1e-3, this.distance * 1e-4);
   }
 
   /** Nearest visible sketch curve in screen space. */
@@ -2979,7 +3066,12 @@ export class SceneController {
     return (
       this.faceHighlights.picking ||
       this.faceHighlights.bodyPicking ||
-      this.handleData.length > 0
+      this.handleData.length > 0 ||
+      // A selected face or edge opens its body for detail picking. That body
+      // offers no handle when the face is curved, so the open detail has to
+      // keep the hover alive on its own.
+      this.selectionDetail.bodyIds.size > 0 ||
+      this.selectionDetail.sketchId !== null
     );
   }
 
@@ -2995,8 +3087,13 @@ export class SceneController {
 
   private updateHover(clientX: number, clientY: number): void {
     // The edge picker also takes faces, so an edge wins only while the pointer
-    // is near its line and the face under it highlights otherwise.
-    if (this.faceHighlights.edgePicking || this.handleData.length > 0) {
+    // is near a visible part of its line and the face under it highlights
+    // otherwise. A selected face or edge opens the same detail hover.
+    if (
+      this.faceHighlights.edgePicking ||
+      this.handleData.length > 0 ||
+      this.selectionDetail.bodyIds.size > 0
+    ) {
       const pick = this.pickSceneAt(
         clientX,
         clientY,

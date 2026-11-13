@@ -19,7 +19,8 @@ selection accent is.
 | Hover weight        | A hovered curve is drawn 1 px thicker and a hovered point 1 px larger than normal, so the preview reads without changing the meaning of the colours.                                                                              |
 | Priority            | Selection wins over hover, and hover wins over the magnet highlight. The magnet highlight keeps the selection purple: it points at existing geometry that will be referenced by a constraint, not at what the pointer would pick. |
 | Where hover applies | Only while selecting in the sketch editor. A tool that creates geometry keeps its magnet feedback and shows no selection hover.                                                                                                   |
-| 3D edges            | Selected edges use the selection purple and hovered edges the hover blue; the existing widths and opacities stay.                                                                                                                 |
+| 3D edges            | Selected edges use the selection purple and hovered edges the hover blue, opaque, 1 px thicker than the body edge.                                                                                                                |
+| Edge hover depth    | Edges rank above faces only where they are visible. An edge hidden behind a face is never the hover, and a hovered edge is drawn depth-tested, lifted a few pixels towards the viewer so its own surface cannot notch the line.   |
 | Picking order       | Hover mirrors picking: stored sketch geometry is chosen before the axes or the origin lying under it.                                                                                                                             |
 
 ## Consequences
