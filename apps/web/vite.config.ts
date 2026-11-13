@@ -2,7 +2,12 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
+// GitHub Pages serves a project site under its repository path, so the base
+// comes from the deployment (VITE_BASE=/icancad/); local builds keep the root.
+const base = process.env.VITE_BASE ?? '/';
+
 export default defineConfig({
+  base,
   plugins: [react(), tailwindcss()],
   worker: {
     format: 'es',

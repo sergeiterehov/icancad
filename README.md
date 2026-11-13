@@ -61,9 +61,21 @@ scripts/copy-occt.mjs     Copies the OCCT WASM asset into the web app
 docs/adr/                 Architecture decision records
 ```
 
-## Deployment notes
+## Deployment
 
-The production build is a static site. Serve it with:
+The production build is a static site in `apps/web/dist`; it includes the OCCT WASM, so the artifact is about 63 MB.
+
+### GitHub Pages
+
+`.github/workflows/deploy.yml` builds the site on every push to `main` (and on a manual run) and publishes it with the Pages artifact API. One-time setup in the repository: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+
+The workflow takes the site path from `actions/configure-pages`, so a project site is served from `https://<owner>.github.io/<repo>/` without editing the config: `VITE_BASE` is set to that base path and [apps/web/vite.config.ts](apps/web/vite.config.ts) uses it as Vite's `base`. A local `pnpm build` keeps the domain root (`/`); pass `VITE_BASE=/icancad/` to reproduce the Pages build.
+
+Pages serves the static files as they are: `.wasm` arrives with `application/wasm` and the JS chunks are content-hashed. `apps/web/public/occt/opencascade.wasm.wasm` keeps its name across builds, so a redeploy revalidates the 63 MB download; a CDN in front of Pages would be the next step if that matters.
+
+### Any other static host
+
+Serve `apps/web/dist` with:
 
 - `Content-Type: application/wasm` for `.wasm`;
 - long-lived immutable caching for `/occt/opencascade.wasm.wasm`;
