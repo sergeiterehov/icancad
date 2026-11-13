@@ -32,6 +32,8 @@ export const RenderOrder = {
   /** Highlighted body edges and sketch preview lines. */
   annotation: 22,
   sketchDraft: 23,
+  /** Hairline under a handle, so its arrow reads on a same-coloured body. */
+  handleOutline: 23.5,
   /** Handles are gizmos: always on top of the model. */
   handle: 24,
   sketchPoint: 30,

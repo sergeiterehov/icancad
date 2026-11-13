@@ -323,6 +323,8 @@ export class SceneController {
     colors: Array<{ color: THREE.Color }>;
     line?: Line2;
     material?: LineMaterial;
+    /** Hairline drawn under the line so the arrow reads on a same-coloured body. */
+    outlineMaterial?: LineMaterial;
   }> = [];
   private hoveredHandleId: string | null = null;
   private lastHandleHover: { x: number; y: number } | null = null;
@@ -543,6 +545,11 @@ export class SceneController {
     return this.theme === 'dark' ? 0x3b82f6 : 0x2563eb;
   }
 
+  /** The space behind the model: a hairline of it keeps handles readable. */
+  private handleOutlineColor(): number {
+    return this.theme === 'dark' ? 0x0c0e12 : 0xffffff;
+  }
+
   /** Projected arrow of a handle, using the same length the user sees. */
   private handleScreenGeometry(
     handle: SceneHandle,
@@ -591,22 +598,33 @@ export class SceneController {
     const hovered = this.hoveredHandleId === handle.id;
     const color = hovered ? 0xffffff : this.handleColor();
     const thickness = handle.thickness ?? 1;
+    // The body under a handle can be the same blue, so the whole arrow is drawn
+    // a pixel wider in the colour of the space behind it.
+    const outlineColor = this.handleOutlineColor();
+    const halo = worldPerPixel;
 
-    const geometry = new LineGeometry();
-    geometry.setPositions([origin.x, origin.y, origin.z, base.x, base.y, base.z]);
-    const material = new LineMaterial({
-      color,
-      linewidth: (hovered ? 3.2 : 2.3) * thickness,
-      transparent: true,
-      opacity: 1,
-      depthTest: false,
-      depthWrite: false,
-      resolution: new THREE.Vector2(this.width, this.height),
-    });
+    const makeLine = (colorValue: number, linewidth: number, renderOrder: number) => {
+      const geometry = new LineGeometry();
+      geometry.setPositions([origin.x, origin.y, origin.z, base.x, base.y, base.z]);
+      const lineMaterial = new LineMaterial({
+        color: colorValue,
+        linewidth,
+        transparent: true,
+        opacity: 1,
+        depthTest: false,
+        depthWrite: false,
+        resolution: new THREE.Vector2(this.width, this.height),
+      });
+      const line = new Line2(geometry, lineMaterial);
+      line.renderOrder = renderOrder;
+      line.userData.handleId = handle.id;
+      return line;
+    };
 
-    const line = new Line2(geometry, material);
-    line.renderOrder = RenderOrder.handle;
-    line.userData.handleId = handle.id;
+    const linewidth = (hovered ? 3.2 : 2.3) * thickness;
+    const outline = makeLine(outlineColor, linewidth + 2, RenderOrder.handleOutline);
+    const line = makeLine(color, linewidth, RenderOrder.handle);
+    const material = line.material as LineMaterial;
 
     const coneMaterial = new THREE.MeshBasicMaterial({
       color,
@@ -627,27 +645,59 @@ export class SceneController {
     cone.renderOrder = RenderOrder.handle;
     cone.userData.handleId = handle.id;
 
+    // The outline cone grows by a pixel on each side around the same centre,
+    // which keeps the tip one pixel past the arrow tip.
+    const outlineCone = new THREE.Mesh(
+      new THREE.ConeGeometry(
+        Math.max(0.001, 4.5 * thickness * worldPerPixel + halo),
+        Math.max(0.001, coneHeight + 2 * halo),
+        16,
+      ),
+      new THREE.MeshBasicMaterial({
+        color: outlineColor,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+      }),
+    );
+    outlineCone.position.copy(cone.position);
+    outlineCone.quaternion.copy(cone.quaternion);
+    outlineCone.renderOrder = RenderOrder.handleOutline;
+    outlineCone.userData.handleId = handle.id;
+
     const anchorMaterial = new THREE.MeshBasicMaterial({
       color,
       depthTest: false,
       depthWrite: false,
       transparent: true,
     });
-    const anchor = new THREE.Mesh(
-      new THREE.SphereGeometry(Math.max(0.001, 3.4 * thickness * worldPerPixel), 14, 10),
-      anchorMaterial,
-    );
+    const anchorRadius = Math.max(0.001, 3.4 * thickness * worldPerPixel);
+    const anchor = new THREE.Mesh(new THREE.SphereGeometry(anchorRadius, 14, 10), anchorMaterial);
     anchor.position.copy(origin);
     anchor.renderOrder = RenderOrder.handle;
     anchor.userData.handleId = handle.id;
 
-    this.handleGroup.add(line, cone, anchor);
+    const outlineAnchor = new THREE.Mesh(
+      new THREE.SphereGeometry(anchorRadius + halo, 14, 10),
+      new THREE.MeshBasicMaterial({
+        color: outlineColor,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+      }),
+    );
+    outlineAnchor.position.copy(origin);
+    outlineAnchor.renderOrder = RenderOrder.handleOutline;
+    outlineAnchor.userData.handleId = handle.id;
+
+    this.handleGroup.add(outline, line, outlineCone, cone, outlineAnchor, anchor);
     this.handleEntries.push({
       handle,
-      objects: [line, cone, anchor],
+      objects: [outline, line, outlineCone, cone, outlineAnchor, anchor],
       colors: [material, coneMaterial, anchorMaterial],
       line,
       material,
+      outlineMaterial: outline.material as LineMaterial,
     });
   }
 
@@ -672,7 +722,9 @@ export class SceneController {
       const hovered = this.hoveredHandleId === entry.handle.id;
       const color = hovered ? 0xffffff : this.handleColor();
       for (const target of entry.colors) target.color.setHex(color);
-      if (entry.material) entry.material.linewidth = hovered ? 2.6 : 1.8;
+      const linewidth = hovered ? 2.6 : 1.8;
+      if (entry.material) entry.material.linewidth = linewidth;
+      if (entry.outlineMaterial) entry.outlineMaterial.linewidth = linewidth + 2;
     }
   }
 
