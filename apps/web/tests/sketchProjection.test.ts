@@ -1,4 +1,4 @@
-import type { SketchFeature, SketchFrame, Vec3 } from '@icancad/model';
+import type { SketchEntity, SketchFeature, SketchFrame, Vec3 } from '@icancad/model';
 import type { BodyEdge, TessellationResult } from '@icancad/kernel';
 import { sketchTopology } from '@icancad/sketch';
 import { describe, expect, it } from 'vitest';
@@ -99,6 +99,161 @@ describe('sketch projections', () => {
     });
     expect(next?.entities[0]).toMatchObject({ type: 'line', x1: 0, y1: 0, x2: 10, y2: 0 });
     expect(next?.projections?.[0]?.source.elementId).toBe('e-line');
+  });
+
+  it('projects the contour of a curved face as well as its boundary', () => {
+    const radius = 5;
+    const height = 10;
+    const segments = 16;
+    const rows = 4;
+    const positions: number[] = [];
+    const normals: number[] = [];
+    const indices: number[] = [];
+    const faceIds: number[] = [];
+    const at = (segment: number, row: number): number => {
+      const angle = (segment / segments) * Math.PI * 2;
+      positions.push(Math.cos(angle) * radius, Math.sin(angle) * radius, (row / rows) * height);
+      normals.push(Math.cos(angle), Math.sin(angle), 0);
+      return positions.length / 3 - 1;
+    };
+    for (let row = 0; row < rows; row += 1) {
+      for (let segment = 0; segment < segments; segment += 1) {
+        const a = at(segment, row);
+        const b = at(segment + 1, row);
+        const c = at(segment + 1, row + 1);
+        const d = at(segment, row + 1);
+        indices.push(a, b, c, a, c, d);
+        faceIds.push(0, 0);
+      }
+    }
+    const ring = (z: number) => {
+      const points: number[] = [];
+      for (let segment = 0; segment <= segments; segment += 1) {
+        const angle = (segment / segments) * Math.PI * 2;
+        points.push(Math.cos(angle) * radius, Math.sin(angle) * radius, z);
+      }
+      return points;
+    };
+    const tube: TessellationResult = {
+      positions: new Float32Array(positions),
+      normals: new Float32Array(normals),
+      indices: new Uint32Array(indices),
+      faceIds: new Uint32Array(faceIds),
+      triangleCount: faceIds.length,
+      vertexCount: positions.length / 3,
+      bbox: { min: [-radius, -radius, 0], max: [radius, radius, height] },
+      edges: [
+        { id: 'bottom', faceIds: [0], points: ring(0), closed: true },
+        { id: 'top', faceIds: [0], points: ring(height), closed: true },
+      ],
+    };
+    const yz: SketchFrame = {
+      origin: [0, 0, 0],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 0, 1],
+      normal: [0, 1, 0],
+    };
+    const next = addProjectionToSketch(sketch(), yz, tube, {
+      kind: 'face',
+      bodyId: 'body-1',
+      faceId: '0',
+    })!;
+    const contours = (next.projections ?? []).filter(
+      (projection) => projection.source.kind === 'silhouette',
+    );
+    // The tube shows two sides, each a vertical line at the extreme x.
+    expect(contours).toHaveLength(2);
+    const contourEntities = contours
+      .map((projection) => next.entities.find((entity) => entity.id === projection.entityId))
+      .filter((entity): entity is Extract<SketchEntity, { type: 'line' }> => entity?.type === 'line');
+    expect(contourEntities).toHaveLength(2);
+    for (const entity of contourEntities) {
+      expect(Math.abs(entity.x1)).toBeCloseTo(5, 1);
+      expect(Math.abs(entity.x2)).toBeCloseTo(5, 1);
+      expect(Math.abs(entity.y2 - entity.y1)).toBeCloseTo(10, 1);
+    }
+    expect(new Set(contourEntities.map((entity) => Math.sign(entity.x1))).size).toBe(2);
+    // The contour and the boundary it runs into meet, so the face is a closed
+    // region and can be extruded.
+    expect(sketchTopology(next.entities).faces).toHaveLength(1);
+  });
+
+  it('closes both faces when neighbouring faces share a boundary', () => {
+    const radius = 5;
+    const height = 10;
+    const segments = 16;
+    const rows = 4;
+    const positions: number[] = [];
+    const normals: number[] = [];
+    const indices: number[] = [];
+    const faceIds: number[] = [];
+    const grid: number[][] = [];
+    for (let row = 0; row <= rows; row += 1) {
+      grid[row] = [];
+      for (let segment = 0; segment < segments; segment += 1) {
+        const angle = (segment / segments) * Math.PI * 2;
+        positions.push(Math.cos(angle) * radius, Math.sin(angle) * radius, (row / rows) * height);
+        normals.push(Math.cos(angle), Math.sin(angle), 0);
+        grid[row]![segment] = positions.length / 3 - 1;
+      }
+    }
+    for (let row = 0; row < rows; row += 1) {
+      const faceId = row < rows / 2 ? 0 : 1;
+      for (let segment = 0; segment < segments; segment += 1) {
+        const next = (segment + 1) % segments;
+        const a = grid[row]![segment]!;
+        const b = grid[row]![next]!;
+        const c = grid[row + 1]![next]!;
+        const d = grid[row + 1]![segment]!;
+        indices.push(a, b, c, a, c, d);
+        faceIds.push(faceId, faceId);
+      }
+    }
+    const ring = (row: number) => {
+      const points: number[] = [];
+      for (let segment = 0; segment <= segments; segment += 1) {
+        const angle = (segment / segments) * Math.PI * 2;
+        points.push(
+          Math.cos(angle) * radius,
+          Math.sin(angle) * radius,
+          (row / rows) * height,
+        );
+      }
+      return points;
+    };
+    const twoBands: TessellationResult = {
+      positions: new Float32Array(positions),
+      normals: new Float32Array(normals),
+      indices: new Uint32Array(indices),
+      faceIds: new Uint32Array(faceIds),
+      triangleCount: faceIds.length,
+      vertexCount: positions.length / 3,
+      bbox: { min: [-radius, -radius, 0], max: [radius, radius, height] },
+      edges: [
+        { id: 'bottom', faceIds: [0], points: ring(0), closed: true },
+        { id: 'middle', faceIds: [0, 1], points: ring(rows / 2), closed: true },
+        { id: 'top', faceIds: [1], points: ring(rows), closed: true },
+      ],
+    };
+    const yz: SketchFrame = {
+      origin: [0, 0, 0],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 0, 1],
+      normal: [0, 1, 0],
+    };
+    const lower = addProjectionToSketch(sketch(), yz, twoBands, {
+      kind: 'face',
+      bodyId: 'body-1',
+      faceId: '0',
+    })!;
+    // The shared ring belongs to both faces; joining it to one contour only
+    // would leave the other face open.
+    const both = addProjectionToSketch(lower, yz, twoBands, {
+      kind: 'face',
+      bodyId: 'body-1',
+      faceId: '1',
+    })!;
+    expect(sketchTopology(both.entities).faces.length).toBeGreaterThanOrEqual(2);
   });
 
   it('projects a face into its boundary curves and corner points', () => {

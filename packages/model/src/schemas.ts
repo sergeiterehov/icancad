@@ -183,7 +183,7 @@ const sketchProjection = z.object({
   id: z.string().min(1),
   entityId: z.string().min(1),
   source: z.object({
-    kind: z.enum(['vertex', 'edge']),
+    kind: z.enum(['vertex', 'edge', 'silhouette']),
     bodyId: z.string().min(1),
     elementId: z.string().min(1),
   }),

@@ -159,9 +159,9 @@ export interface SketchProjection {
   id: string;
   entityId: string;
   source: {
-    kind: 'vertex' | 'edge';
+    kind: 'vertex' | 'edge' | 'silhouette';
     bodyId: string;
-    /** Vertex coordinate id, or the kernel edge id. */
+    /** Vertex coordinate id, the kernel edge id, or `face#part`. */
     elementId: string;
   };
   /** Face the projection was taken from, when it came from a face. */

@@ -10,10 +10,15 @@ import {
 import {
   projectPointToFrame,
   projectPolylineToFrame,
+  polylineSagitta,
   sketchCurveFromPolyline,
+  sketchCurvesFromPolyline,
   sketchPointFromProjected,
+  stitchCurves,
+  type Point2,
   type SketchEntityDraft,
 } from '@icancad/sketch';
+import { faceSilhouettes } from './silhouette';
 
 /** What a projection click in the 3D view landed on. */
 export type ProjectionPick =
@@ -115,7 +120,180 @@ export function isProjectedEntity(feature: SketchFeature, entityId: string): boo
 
 function projectedCurve(frame: SketchFrame, edge: BodyEdge): SketchEntityDraft | null {
   const projected = projectPolylineToFrame(frame, edgeWorldPoints(edge));
-  return sketchCurveFromPolyline(projected, edge.closed);
+  return sketchCurveFromPolyline(projected, edge.closed, {
+    tolerance: polylineSagitta(projected),
+  });
+}
+
+/**
+ * Contour curves of a face, named after the face and their place in the
+ * left-to-right order, so the same face keeps its links when the body changes.
+ * A flat face has none: its boundary edges are the whole contour.
+ */
+function silhouetteCurves(
+  mesh: TessellationResult,
+  frame: SketchFrame,
+  faceId: string,
+): Array<{ elementId: string; curve: SketchEntityDraft }> {
+  const index = Number(faceId);
+  if (!Number.isFinite(index)) return [];
+  const projected = faceSilhouettes(mesh, index, frame.normal)
+    .map((silhouette) => {
+      const points = projectPolylineToFrame(frame, silhouette.points);
+      return {
+        left: Math.min(...points.map((point) => point[0])),
+        bottom: Math.min(...points.map((point) => point[1])),
+        // The outline comes from the tessellated surface, so it misses the real
+        // curve by the sagitta of the mesh: fitting tighter than that would
+        // turn every arc into a Bezier.
+        curves: sketchCurvesFromPolyline(points, silhouette.closed, {
+          tolerance: polylineSagitta(points),
+        }),
+      };
+    })
+    .sort((first, second) => first.left - second.left || first.bottom - second.bottom);
+  const curves: Array<{ elementId: string; curve: SketchEntityDraft }> = [];
+  for (const entry of projected) {
+    for (const curve of entry.curves) {
+      curves.push({ elementId: `${faceId}#${curves.length}`, curve });
+    }
+  }
+  return curves;
+}
+
+interface FaceCurve {
+  elementId: string;
+  kind: 'edge' | 'silhouette';
+  curve: SketchEntityDraft;
+}
+
+/** How far two ends of one contour may miss each other and still be joined. */
+function contourTolerance(curves: readonly SketchEntityDraft[]): number {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const curve of curves) {
+    for (const point of curveSamples(curve)) {
+      minX = Math.min(minX, point[0]);
+      minY = Math.min(minY, point[1]);
+      maxX = Math.max(maxX, point[0]);
+      maxY = Math.max(maxY, point[1]);
+    }
+  }
+  const extent = Math.max(maxX - minX, maxY - minY, 1e-6);
+  return Math.min(Math.max(extent * 5e-3, 1e-4), 0.5);
+}
+
+function curveSamples(curve: SketchEntityDraft): Point2[] {
+  switch (curve.type) {
+    case 'line':
+      return [
+        [curve.x1, curve.y1],
+        [curve.x2, curve.y2],
+      ];
+    case 'arc':
+      return [
+        [curve.cx - curve.r, curve.cy - curve.r],
+        [curve.cx + curve.r, curve.cy + curve.r],
+      ];
+    case 'circle':
+      return [
+        [curve.cx - curve.r, curve.cy - curve.r],
+        [curve.cx + curve.r, curve.cy + curve.r],
+      ];
+    case 'ellipse': {
+      const scale = Math.max(curve.rx, curve.ry);
+      return [
+        [curve.cx - scale, curve.cy - scale],
+        [curve.cx + scale, curve.cy + scale],
+      ];
+    }
+    case 'bezier':
+      return curve.points;
+    default:
+      return [];
+  }
+}
+
+/**
+ * Everything a face contributes: its boundary edges and the contour of the
+ * surface. The pieces are fitted one by one, so their ends are joined
+ * afterwards; otherwise the projected outline is a set of curves that almost
+ * meet, which is no use as an extrudable profile.
+ */
+function faceContourCurves(
+  mesh: TessellationResult,
+  frame: SketchFrame,
+  faceId: string,
+): FaceCurve[] {
+  const index = Number(faceId);
+  if (!Number.isFinite(index)) return [];
+  const elements = bodyElements(mesh);
+  const entries: FaceCurve[] = [];
+  for (const edge of elements.edges.values()) {
+    if (!edge.faceIds.includes(index)) continue;
+    const curve = projectedCurve(frame, edge);
+    if (curve) entries.push({ elementId: edge.id, kind: 'edge', curve });
+  }
+  for (const entry of silhouetteCurves(mesh, frame, faceId)) {
+    entries.push({ elementId: entry.elementId, kind: 'silhouette', curve: entry.curve });
+  }
+  if (entries.length < 2) return entries;
+  const stitched = stitchCurves(
+    entries.map((entry) => entry.curve),
+    contourTolerance(entries.map((entry) => entry.curve)),
+  );
+  return entries.map((entry, position) => ({
+    ...entry,
+    curve: stitched[position] ?? entry.curve,
+  }));
+}
+
+// Rebuilding a sketch resolves every link of a face separately, so the contour
+// is computed once per face and shared by its links.
+const faceCurveCacheEntries = new Map<string, FaceCurve[]>();
+
+function faceCurveCache(
+  mesh: TessellationResult,
+  frame: SketchFrame,
+  bodyId: string,
+  faceId: string,
+): FaceCurve[] {
+  const key = `${bodyId}|${faceId}|${frame.origin.join(',')}|${frame.normal.join(',')}`;
+  const cached = faceCurveCacheEntries.get(key);
+  if (cached) return cached;
+  const curves = faceContourCurves(mesh, frame, faceId);
+  if (faceCurveCacheEntries.size > 64) faceCurveCacheEntries.clear();
+  faceCurveCacheEntries.set(key, curves);
+  return curves;
+}
+
+/**
+ * Joins the ends of every projected curve of the sketch. Two neighbouring faces
+ * share their boundary edge, and each face joins that edge to its own contour,
+ * so the shared edge has to meet both: stitching only inside one face leaves the
+ * other face open and unselectable for an extrude.
+ */
+function stitchProjected(entities: SketchEntity[], projectedIds: Set<string>): SketchEntity[] {
+  const positions: number[] = [];
+  const drafts: SketchEntityDraft[] = [];
+  entities.forEach((entity, index) => {
+    if (!projectedIds.has(entity.id)) return;
+    positions.push(index);
+    const { id, ...draft } = entity;
+    void id;
+    drafts.push(draft as SketchEntityDraft);
+  });
+  if (drafts.length < 2) return entities;
+  const stitched = stitchCurves(drafts, contourTolerance(drafts));
+  if (stitched.length !== drafts.length) return entities;
+  const next = [...entities];
+  positions.forEach((position, index) => {
+    const original = entities[position]!;
+    next[position] = { ...stitched[index]!, id: original.id } as SketchEntity;
+  });
+  return next;
 }
 
 /**
@@ -212,7 +390,23 @@ export function addProjectionToSketch(
       if (entity >= 0) entities.splice(entity, 1);
       changed = true;
     }
-    for (const edge of boundary) addEdge(pick.bodyId, edge.id, pick.faceId);
+    for (const entry of faceContourCurves(mesh, frame, pick.faceId)) {
+      const key = `${pick.bodyId}:${entry.kind}:${entry.elementId}`;
+      if (known.has(key)) continue;
+      known.add(key);
+      const entity = {
+        id: createStableId('entity', 'projection', key),
+        ...entry.curve,
+      } as SketchEntity;
+      replaceEntity(entities, entity);
+      projections.push({
+        id: createStableId('proj', key),
+        entityId: entity.id,
+        source: { kind: entry.kind, bodyId: pick.bodyId, elementId: entry.elementId },
+        faceId: pick.faceId,
+      });
+      changed = true;
+    }
     for (const edge of boundary) {
       if (edge.closed) continue;
       const points = edgeWorldPoints(edge);
@@ -222,7 +416,15 @@ export function addProjectionToSketch(
     }
   }
 
-  return changed ? { ...feature, entities, projections } : null;
+  if (!changed) return null;
+  return {
+    ...feature,
+    entities: stitchProjected(
+      entities,
+      new Set(projections.map((projection) => projection.entityId)),
+    ),
+    projections,
+  };
 }
 
 export interface ProjectionResolution {
@@ -267,6 +469,20 @@ export function resolveSketchProjections(
           construction: snapshot.construction,
         };
       }
+    } else if (elements && projection.faceId) {
+      const curves = faceCurveCache(mesh!, frame, projection.source.bodyId, projection.faceId);
+      const curve = curves.find(
+        (entry) =>
+          entry.kind === projection.source.kind &&
+          entry.elementId === projection.source.elementId,
+      );
+      if (curve) {
+        entity = {
+          id: projection.entityId,
+          ...curve.curve,
+          construction: snapshot.construction,
+        };
+      }
     } else if (elements) {
       const edge = elements.edges.get(projection.source.elementId);
       if (edge) {
@@ -279,8 +495,13 @@ export function resolveSketchProjections(
     if (entity) replacements.set(projection.entityId, entity);
     else lostEntityIds.push(projection.entityId);
   }
+  const resolved = feature.entities.map((entity) => replacements.get(entity.id) ?? entity);
   return {
-    entities: feature.entities.map((entity) => replacements.get(entity.id) ?? entity),
+    // Rebuilt geometry is joined the same way it was when it was projected.
+    entities: stitchProjected(
+      resolved,
+      new Set(projections.filter((projection) => !lostEntityIds.includes(projection.entityId)).map((projection) => projection.entityId)),
+    ),
     lostEntityIds,
   };
 }

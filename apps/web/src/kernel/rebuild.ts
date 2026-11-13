@@ -954,11 +954,26 @@ async function applyExtrude(
   // so a part that cannot be applied can be reported on its own row.
   const toolParts: { shapeId: string; key: string }[] = [];
   const refBodyRemap = new Map<string, string>();
-  for (const [index, profile] of selected.entries()) {
-    const shapeId = trackShape(`tool:${feature.id}:sketch-${index}`);
-    await client.request(profileRequest(shapeId, frame!, [profile]));
+  // `scope` describes the regions being extruded, so bodies to combine with are
+  // chosen separately: the ones listed on the feature, or every other body.
+  const explicitTargetsEarly = feature.bodyIds.length > 0;
+  // Parts are only needed apart when they end up as separate bodies, or when an
+  // add must report per region. Everything else goes through one kernel call:
+  // it fuses the regions and merges the walls they share, which a chain of
+  // booleans leaves behind as internal faces that make later cuts miss.
+  const separateParts = feature.op === 'add' && explicitTargetsEarly;
+  if (selected.length > 0 && !separateParts) {
+    const shapeId = trackShape(`tool:${feature.id}:sketch`);
+    await client.request(profileRequest(shapeId, frame!, selected));
     if (epoch !== rebuildEpoch) return;
-    toolParts.push({ shapeId, key: `s:${sketch!.id}#${profile.id}` });
+    toolParts.push({ shapeId, key: `s:${sketch!.id}#*` });
+  } else {
+    for (const [index, profile] of selected.entries()) {
+      const shapeId = trackShape(`tool:${feature.id}:sketch-${index}`);
+      await client.request(profileRequest(shapeId, frame!, [profile]));
+      if (epoch !== rebuildEpoch) return;
+      toolParts.push({ shapeId, key: `s:${sketch!.id}#${profile.id}` });
+    }
   }
   for (const [index, ref] of faceRefs.entries()) {
     const resolved = resolveFaceRef({ bodyShapes, meshes, bodyStats }, ref);
@@ -983,10 +998,13 @@ async function applyExtrude(
   }
   if (toolParts.length === 0) throw new Error('NO_PROFILE');
 
-  // Add handles parts individually (see the target loop); the other operations
-  // share one fused tool.
+  const explicitTargets = explicitTargetsEarly;
+
+  // An add to picked bodies handles parts individually, so a part that misses
+  // its body can be skipped (see the target loop); every other case shares one
+  // fused tool, which costs one boolean with the body instead of one per part.
   let toolShapeId = toolParts[0]!.shapeId;
-  if (feature.op !== 'add') {
+  if (feature.op !== 'add' || !explicitTargets) {
     for (const [index, part] of toolParts.slice(1).entries()) {
       const fusedId = trackShape(`tool:${feature.id}:fused-${index}`);
       await client.request({
@@ -1003,9 +1021,6 @@ async function applyExtrude(
     }
   }
 
-  // `scope` describes the regions being extruded, so bodies to combine with are
-  // chosen separately: the ones listed on the feature, or every other body.
-  const explicitTargets = feature.bodyIds.length > 0;
   const targets = explicitTargets
     ? [...new Set(feature.bodyIds.map((bodyId) => refBodyRemap.get(bodyId) ?? bodyId))]
     : [...bodyShapes.keys()].filter((bodyId) => bodyOwner.get(bodyId) !== feature.id);
@@ -1037,58 +1052,10 @@ async function applyExtrude(
     }
   }
 
-  // A join keeps the base body opaque, so only the material it actually adds is
-  // shown as a ghost: the tool minus the body it is applied to.
-  if (ghost && feature.op === 'add' && explicitTargets && targets.length === 1) {
-    // The ghost is feedback only: a tool that misses the body or produces an
-    // empty delta must not turn the operation into a failure. The real add
-    // below reports its own errors.
-    try {
-      const targetId = targets.find((bodyId) => bodyShapes.has(bodyId));
-      const baseShapeId = targetId ? bodyShapes.get(targetId) : undefined;
-      const firstPart = toolParts[0];
-      if (baseShapeId && firstPart) {
-        let ghostToolId = firstPart.shapeId;
-        for (const [index, part] of toolParts.slice(1).entries()) {
-          const fusedId = trackShape(`tool:${feature.id}:ghost-fused-${index}`);
-          await client.request({
-            type: 'boolean',
-            params: {
-              shapeId: fusedId,
-              baseShapeId: ghostToolId,
-              toolShapeId: part.shapeId,
-              op: 'fuse',
-            },
-          });
-          if (epoch !== rebuildEpoch) return;
-          ghostToolId = fusedId;
-        }
-        const deltaId = trackShape(`${feature.id}:ghost-add`);
-        await client.request({
-          type: 'boolean',
-          params: {
-            shapeId: deltaId,
-            // The added material is the tool minus the body: the body itself
-            // keeps its own colour, only the new part turns green.
-            baseShapeId: ghostToolId,
-            toolShapeId: baseShapeId,
-            op: 'cut',
-          },
-        });
-        if (epoch !== rebuildEpoch) return;
-        ghost.mesh = await client.request<TessellationResult>({
-          type: 'tessellate',
-          shapeId: deltaId,
-        });
-        if (epoch !== rebuildEpoch) return;
-        ghost.addBaseBodyId = targetId;
-      }
-    } catch {
-      if (epoch !== rebuildEpoch) return;
-      ghost.mesh = undefined;
-      ghost.addBaseBodyId = undefined;
-    }
-  }
+  // The added material is read off the result of the join below: cutting the
+  // body it started from out of the joined body is the material the operation
+  // brings, and it costs one boolean instead of fusing every part again.
+  let addGhost: { baseShapeId: string; resultShapeId: string; bodyId: string } | null = null;
 
   let applied = 0;
   /** Parts that actually affected at least one explicitly chosen body. */
@@ -1102,10 +1069,11 @@ async function applyExtrude(
       continue;
     }
 
-    // Adding applies each tool part separately. A part that would create an
-    // independent solid is skipped, so two faces on two bodies both receive
-    // their own material instead of rejecting each other's disjoint parts.
-    if (feature.op === 'add') {
+    // Adding to picked bodies applies each tool part separately. A part that
+    // would create an independent solid is skipped, so two faces on two bodies
+    // both receive their own material instead of rejecting each other's
+    // disjoint parts. An add to every body uses the fused tool below.
+    if (feature.op === 'add' && explicitTargets) {
       const initial = await client.request<ShapeStats>({
         type: 'topology',
         shapeId: baseShapeId,
@@ -1157,6 +1125,11 @@ async function applyExtrude(
         continue;
       }
 
+      // A single target is what the preview highlights: the body keeps its own
+      // colour and only the new material is drawn on top of it.
+      if (ghost && targets.length === 1) {
+        addGhost = { baseShapeId, resultShapeId: currentShapeId, bodyId };
+      }
       bodyShapes.set(bodyId, currentShapeId);
       bodySource.set(bodyId, feature.id);
       const mesh = await client.request<TessellationResult>({
@@ -1175,18 +1148,54 @@ async function applyExtrude(
     }
 
     const resultShapeId = trackShape(`${bodyId}:${feature.id}`);
-    const booleanOp = feature.op === 'subtract' ? 'cut' : 'common';
-    const operated = await client.request<MakeBoxResult>({
-      type: 'boolean',
-      params: {
-        shapeId: resultShapeId,
-        baseShapeId,
-        toolShapeId,
-        op: booleanOp,
-        trackFaces: true,
-      },
-    });
+    const booleanOp =
+      feature.op === 'add' ? 'fuse' : feature.op === 'subtract' ? 'cut' : 'common';
+    const request = (shapeId: string, base: string, tool: string) =>
+      client.request<MakeBoxResult>({
+        type: 'boolean',
+        params: { shapeId, baseShapeId: base, toolShapeId: tool, op: booleanOp, trackFaces: true },
+      });
+    let operated: MakeBoxResult;
+    try {
+      operated = await request(resultShapeId, baseShapeId, toolShapeId);
+    } catch (error) {
+      // One tool made of several parts can fail as a whole — the parts share
+      // walls, and OCCT gives up on such a boolean — while every part on its
+      // own is a small, reliable operation. Apply them one at a time instead.
+      // The parts are built here, one region at a time: the fused tool is the
+      // fragile one, and a region on its own is what the user saw work.
+      let current = baseShapeId;
+      let last: MakeBoxResult | null = null;
+      const applyPart = async (tool: string, index: number): Promise<void> => {
+        const stepId = trackShape(`${bodyId}:${feature.id}:part-${index}`);
+        try {
+          const step = await request(stepId, current, tool);
+          if (epoch !== rebuildEpoch) return;
+          current = stepId;
+          last = step;
+        } catch {
+          // A part that cannot be applied is dropped, the rest still apply.
+        }
+      };
+      if (selected.length > 0) {
+        for (const [index, profile] of selected.entries()) {
+          const toolId = trackShape(`${feature.id}:single-tool-${index}`);
+          await client.request(profileRequest(toolId, frame!, [profile]));
+          if (epoch !== rebuildEpoch) return;
+          await applyPart(toolId, index);
+          if (epoch !== rebuildEpoch) return;
+        }
+      } else {
+        for (const [index, part] of toolParts.entries()) {
+          await applyPart(part.shapeId, index);
+          if (epoch !== rebuildEpoch) return;
+        }
+      }
+      if (!last) throw error;
+      operated = last;
+    }
     if (epoch !== rebuildEpoch) return;
+    const outputShapeId = operated.shapeId;
     // Which operation owns each face of the compound result. Splitting it must
     // not lose this: a face that moves to a new body keeps its operation.
     const previousOwners = faceOwners.get(bodyId) ?? [];
@@ -1209,7 +1218,7 @@ async function applyExtrude(
       operated.stats.solids > 1
         ? await client.request<SplitSolidsResult>({
             type: 'split-solids',
-            params: { shapeId: resultShapeId, prefix: splitPrefix },
+            params: { shapeId: outputShapeId, prefix: splitPrefix },
           })
         : null;
     if (epoch !== rebuildEpoch) return;
@@ -1250,12 +1259,12 @@ async function applyExtrude(
         ...pieces.filter((piece) => piece.created).map((piece) => piece.bodyId),
       ]);
     } else {
-      bodyShapes.set(bodyId, resultShapeId);
+      bodyShapes.set(bodyId, outputShapeId);
       bodySource.set(bodyId, feature.id);
       faceOwners.set(bodyId, compoundOwners);
       const mesh = await client.request<TessellationResult>({
         type: 'tessellate',
-        shapeId: resultShapeId,
+        shapeId: outputShapeId,
       });
       if (epoch !== rebuildEpoch) return;
       meshes[bodyId] = mesh;
@@ -1272,6 +1281,35 @@ async function applyExtrude(
       );
     }
     applied += 1;
+  }
+
+  if (ghost && feature.op === 'add' && addGhost) {
+    // The ghost is feedback only: an empty delta must not turn the operation
+    // into a failure. The join above reports its own errors.
+    const target = addGhost;
+    try {
+      const deltaId = trackShape(`${feature.id}:ghost-add`);
+      await client.request({
+        type: 'boolean',
+        params: {
+          shapeId: deltaId,
+          baseShapeId: target.resultShapeId,
+          toolShapeId: target.baseShapeId,
+          op: 'cut',
+        },
+      });
+      if (epoch !== rebuildEpoch) return;
+      ghost.mesh = await client.request<TessellationResult>({
+        type: 'tessellate',
+        shapeId: deltaId,
+      });
+      if (epoch !== rebuildEpoch) return;
+      ghost.addBaseBodyId = target.bodyId;
+    } catch {
+      if (epoch !== rebuildEpoch) return;
+      ghost.mesh = undefined;
+      ghost.addBaseBodyId = undefined;
+    }
   }
 
   // A picked face that affects none of the explicitly chosen bodies would form
