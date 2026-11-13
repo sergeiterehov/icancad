@@ -1,5 +1,5 @@
-import type { SketchConstraint, SketchConstraintRef, SketchEntity } from '@icancad/model';
-import type { SketchSolveResponse, SketchSolveResult } from './protocol';
+import type { SketchConstraint, SketchEntity } from '@icancad/model';
+import type { SketchSolveResponse, SketchSolveResult, SolverPin } from './protocol';
 
 interface Pending {
   resolve: (result: SketchSolveResult) => void;
@@ -36,7 +36,7 @@ function getWorker(): Worker {
 export function solveSketch(
   entities: SketchEntity[],
   constraints: SketchConstraint[],
-  pinned: SketchConstraintRef[] = [],
+  pinned: SolverPin[] = [],
   options: { diagnose?: boolean } = {},
 ): Promise<SketchSolveResult> {
   const id = ++sequence;

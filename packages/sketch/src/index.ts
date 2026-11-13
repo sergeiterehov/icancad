@@ -16,6 +16,17 @@ export interface SketchDocument {
 
 export type Point2 = [number, number];
 
+/**
+ * Picks the representation of an angle that is closest to a reference one.
+ * Angles are stored as plain numbers, so an angle recomputed with `atan2` jumps
+ * by 2π at the branch cut. For an arc that jump reverses its sweep direction,
+ * turning it inside out, so the previous angle is used to stay on the same
+ * branch.
+ */
+export function unwrapAngle(angle: number, reference: number): number {
+  return angle + Math.round((reference - angle) / (2 * Math.PI)) * 2 * Math.PI;
+}
+
 export function createEmptySketch(): SketchDocument {
   return { entities: [], constraints: [], references: [] };
 }
@@ -221,7 +232,8 @@ export function moveEntityControlPoint(
       };
     case 'arc': {
       if (index === 0) return { ...entity, cx: point[0], cy: point[1] };
-      const angle = Math.atan2(point[1] - entity.cy, point[0] - entity.cx);
+      const reference = index === 1 ? entity.startAngle : entity.endAngle;
+      const angle = unwrapAngle(Math.atan2(point[1] - entity.cy, point[0] - entity.cx), reference);
       const r = Math.hypot(point[0] - entity.cx, point[1] - entity.cy);
       return index === 1 ? { ...entity, r, startAngle: angle } : { ...entity, r, endAngle: angle };
     }

@@ -150,3 +150,62 @@ it('does not mark a closed but unanchored profile as fully constrained', () => {
   ];
   expect(diagnoseFrozenEntities(gcs, lines, constraints, 2)).toEqual([]);
 });
+
+it('does not mark coupled geometry as frozen when a global DoF remains', () => {
+  const entities: SketchEntity[] = [
+    { id: 'c0', type: 'circle', construction: false, cx: -10, cy: 0, r: 4 },
+    { id: 'c1', type: 'circle', construction: false, cx: 10, cy: 0, r: 4 },
+    { id: 'l0', type: 'line', construction: true, x1: 0, y1: 0, x2: -10, y2: 0 },
+    { id: 'l1', type: 'line', construction: true, x1: 0, y1: 0, x2: 10, y2: 0 },
+  ];
+  const constraints: SketchConstraint[] = [
+    {
+      id: 'on-x-0',
+      type: 'point-on-line',
+      refs: [{ entityId: 'c0', pointIndex: 0 }, { entityId: 'sketch:x-axis' }],
+    },
+    {
+      id: 'on-x-1',
+      type: 'point-on-line',
+      refs: [{ entityId: 'c1', pointIndex: 0 }, { entityId: 'sketch:x-axis' }],
+    },
+    { id: 'equal-radius', type: 'equal', refs: [{ entityId: 'c0' }, { entityId: 'c1' }] },
+    {
+      id: 'start-0',
+      type: 'coincident',
+      refs: [
+        { entityId: 'l0', pointIndex: 0 },
+        { entityId: 'sketch:origin', pointIndex: 0 },
+      ],
+    },
+    {
+      id: 'end-0',
+      type: 'coincident',
+      refs: [
+        { entityId: 'l0', pointIndex: 1 },
+        { entityId: 'c0', pointIndex: 0 },
+      ],
+    },
+    {
+      id: 'start-1',
+      type: 'coincident',
+      refs: [
+        { entityId: 'l1', pointIndex: 0 },
+        { entityId: 'sketch:origin', pointIndex: 0 },
+      ],
+    },
+    {
+      id: 'end-1',
+      type: 'coincident',
+      refs: [
+        { entityId: 'l1', pointIndex: 1 },
+        { entityId: 'c1', pointIndex: 0 },
+      ],
+    },
+    { id: 'equal-length', type: 'equal', refs: [{ entityId: 'l0' }, { entityId: 'l1' }] },
+  ];
+  // Moving one circle needs both construction lines to resize, so projecting a
+  // single moved point back onto the constraints restores the old state and
+  // hides the motion. Sliding one coordinate exposes it.
+  expect(diagnoseFrozenEntities(gcs, entities, constraints, 2)).toEqual([]);
+});

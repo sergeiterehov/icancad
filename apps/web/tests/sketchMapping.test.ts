@@ -1,6 +1,7 @@
-import type { SketchConstraint, SketchConstraintRef, SketchEntity } from '@icancad/model';
+import type { SketchConstraint, SketchEntity } from '@icancad/model';
 import { describe, expect, it } from 'vitest';
-import { buildSolverPrimitives } from '../src/sketch/mapping';
+import { applySolverSolution, buildSolverPrimitives } from '../src/sketch/mapping';
+import type { SolverPin } from '../src/sketch/protocol';
 
 const line: SketchEntity = {
   id: 'line-1',
@@ -25,7 +26,7 @@ const line2: SketchEntity = {
 function primitives(
   entities: SketchEntity[],
   constraints: SketchConstraint[],
-  pinned: SketchConstraintRef[] = [],
+  pinned: SolverPin[] = [],
 ) {
   const point = (id: string) =>
     buildSolverPrimitives(entities, constraints, pinned).primitives.find(
@@ -102,5 +103,62 @@ describe('planegcs mapping', () => {
       type: 'l2l_angle_ll',
       angle: Math.PI / 2,
     });
+  });
+});
+
+describe('solver pins', () => {
+  it('holds only the pinned coordinate so the point can still slide', () => {
+    const { build, point } = primitives(
+      [line],
+      [],
+      [{ entityId: line.id, pointIndex: 1, axis: 'x' }],
+    );
+    expect(point('line-1~p1')).toMatchObject({ type: 'point', x: 10, y: 5, fixed: false });
+    expect(build.primitives.find((primitive) => primitive.id === 'line-1~p1~pin-x')).toMatchObject({
+      type: 'coordinate_x',
+      p_id: 'line-1~p1',
+      x: 10,
+    });
+    expect(
+      build.primitives.find((primitive) => primitive.id === 'line-1~p1~pin-y'),
+    ).toBeUndefined();
+  });
+});
+
+describe('solver solution mapping', () => {
+  it('keeps an arc on its side when a solved endpoint crosses the angle branch cut', () => {
+    const arc: SketchEntity = {
+      id: 'arc-1',
+      type: 'arc',
+      construction: false,
+      cx: 0,
+      cy: 0.1,
+      r: 10,
+      startAngle: Math.PI,
+      endAngle: 0,
+    };
+    const solved = [
+      { id: 'arc-1~p0', type: 'point', x: 0, y: 0.1, fixed: true },
+      // The start endpoint drops a hair below the centre, so `atan2` returns a
+      // negative angle while the arc must still sweep clockwise over the top.
+      { id: 'arc-1~p1', type: 'point', x: -10, y: 0.05, fixed: false },
+      { id: 'arc-1~p2', type: 'point', x: 10, y: 0.1, fixed: false },
+      {
+        id: 'arc-1',
+        type: 'arc',
+        c_id: 'arc-1~p0',
+        start_id: 'arc-1~p1',
+        end_id: 'arc-1~p2',
+        radius: 10,
+        start_angle: Math.PI,
+        end_angle: 0,
+      },
+    ] as Parameters<typeof applySolverSolution>[1];
+
+    const [result] = applySolverSolution([arc], solved);
+    expect(result?.type).toBe('arc');
+    if (result?.type !== 'arc') return;
+    expect(result.endAngle - result.startAngle).toBeLessThan(0);
+    expect(result.endAngle - result.startAngle).toBeCloseTo(-Math.PI, 2);
   });
 });

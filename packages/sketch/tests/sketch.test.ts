@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { SketchEntity } from '@icancad/model';
-import { entityEndpoints, tessellateEntity, translateEntity } from '../src/index';
+import {
+  entityEndpoints,
+  moveEntityControlPoint,
+  tessellateEntity,
+  translateEntity,
+  unwrapAngle,
+} from '../src/index';
 
 describe('sketch entity tessellation', () => {
   it('tessellates lines and circles', () => {
@@ -78,5 +84,32 @@ describe('sketch entity tessellation', () => {
       endAngle: Math.PI / 2,
     };
     expect(translateEntity(arc, 3, 7)).toMatchObject({ cx: 3, cy: 7, r: 10 });
+  });
+});
+
+describe('arc angle continuity', () => {
+  const arc: SketchEntity = {
+    id: 'a1',
+    type: 'arc',
+    construction: false,
+    cx: 0,
+    cy: 0,
+    r: 10,
+    startAngle: Math.PI,
+    endAngle: 0,
+  };
+
+  it('keeps the start angle on its branch when the handle crosses it', () => {
+    const moved = moveEntityControlPoint(arc, 1, [-10, -0.5]);
+    expect(moved.type).toBe('arc');
+    if (moved.type !== 'arc') return;
+    expect(moved.startAngle).toBeGreaterThan(Math.PI);
+    expect(moved.endAngle - moved.startAngle).toBeLessThan(0);
+  });
+
+  it('unwraps an angle to the representation closest to the reference', () => {
+    expect(unwrapAngle(-Math.PI + 0.01, Math.PI)).toBeCloseTo(Math.PI + 0.01, 6);
+    expect(unwrapAngle(Math.PI - 0.01, -Math.PI)).toBeCloseTo(-Math.PI - 0.01, 6);
+    expect(unwrapAngle(0.5, 0.4)).toBeCloseTo(0.5, 6);
   });
 });

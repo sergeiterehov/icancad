@@ -2,6 +2,7 @@ import { Algorithm, type GcsWrapper } from '@salusoft89/planegcs';
 import type { SketchConstraint, SketchEntity } from '@icancad/model';
 import { entityControlPoints, moveEntityControlPoint, type Point2 } from '@icancad/sketch';
 import { applySolverSolution, buildSolverPrimitives } from './mapping';
+import type { SolverPin } from './protocol';
 
 const DELTA = 0.25;
 
@@ -70,7 +71,7 @@ function solveEntities(
   gcs: GcsWrapper,
   entities: SketchEntity[],
   constraints: SketchConstraint[],
-  pinned: { entityId: string; pointIndex: number }[],
+  pinned: SolverPin[],
 ): SketchEntity[] | null {
   try {
     gcs.clear_data();
@@ -92,6 +93,7 @@ function candidateHasMotion(
   target: SketchEntity,
   moved: SketchEntity,
   pointIndex: number,
+  axis?: 'x' | 'y',
 ): boolean {
   const entities = baseline.map((entity) => (entity.id === target.id ? moved : entity));
 
@@ -99,7 +101,9 @@ function candidateHasMotion(
   const directTarget = direct?.find((entity) => entity.id === target.id);
   if (directTarget && !sameEntity(directTarget, target)) return true;
 
-  const first = solveEntities(gcs, entities, constraints, [{ entityId: target.id, pointIndex }]);
+  const first = solveEntities(gcs, entities, constraints, [
+    { entityId: target.id, pointIndex, axis },
+  ]);
   if (!first) return false;
   const firstTarget = first.find((entity) => entity.id === target.id);
   if (!firstTarget || sameEntity(firstTarget, target)) return false;
@@ -112,6 +116,13 @@ function candidateHasMotion(
   return Boolean(secondTarget && !sameEntity(secondTarget, target));
 }
 
+/**
+ * A control point can only be moved along the constraints that hold it, so the
+ * probe is repeated for each coordinate separately: a point constrained to an
+ * axis or to a line keeps the other coordinate free, and a point on a circle
+ * slides when only one coordinate is held. Holding both coordinates, as a
+ * mouse drag does, would report coupled geometry as frozen.
+ */
 function entityHasMotion(
   gcs: GcsWrapper,
   baseline: SketchEntity[],
@@ -119,15 +130,29 @@ function entityHasMotion(
   target: SketchEntity,
 ): boolean {
   const points = entityControlPoints(target);
+  // A circle exposes its radius as a second control point, but the solver has
+  // no point there: only the free projection can show that it moves.
+  const solverPoints = target.type === 'circle' ? 1 : points.length;
   for (let index = 0; index < points.length; index += 1) {
     const point = points[index]!;
-    const moved = moveEntityControlPoint(target, index, [
+    if (index < solverPoints) {
+      for (const axis of ['x', 'y'] as const) {
+        for (const sign of [1, -1]) {
+          const moved = moveEntityControlPoint(target, index, [
+            point[0] + (axis === 'x' ? sign * DELTA : 0),
+            point[1] + (axis === 'y' ? sign * DELTA : 0),
+          ] as Point2);
+          if (candidateHasMotion(gcs, baseline, constraints, target, moved, index, axis)) {
+            return true;
+          }
+        }
+      }
+    }
+    const free = moveEntityControlPoint(target, index, [
       point[0] + DELTA,
       point[1] + DELTA,
     ] as Point2);
-    if (candidateHasMotion(gcs, baseline, constraints, target, moved, index)) {
-      return true;
-    }
+    if (candidateHasMotion(gcs, baseline, constraints, target, free, index)) return true;
   }
   return false;
 }

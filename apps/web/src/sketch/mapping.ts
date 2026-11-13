@@ -8,9 +8,11 @@ import {
   SKETCH_X_AXIS_ID,
   SKETCH_Y_AXIS_ID,
   sketchEntityIndex,
+  unwrapAngle,
   withFundamentalEntities,
   type Point2,
 } from '@icancad/sketch';
+import type { SolverPin } from './protocol';
 
 const pointId = (entityId: string, index: number): string => `${entityId}~p${index}`;
 
@@ -58,10 +60,11 @@ export interface SolverPrimitives {
 export function buildSolverPrimitives(
   entities: SketchEntity[],
   constraints: SketchConstraint[],
-  pinned: SketchConstraintRef[] = [],
+  pinned: SolverPin[] = [],
 ): SolverPrimitives {
   const fixed = new Set<string>();
   const anchors = new Map<string, Point2>();
+  const axisPins: Constraint[] = [];
   const entityMap = sketchEntityIndex(entities);
   // Fundamental geometry is a priori fixed: the solver never moves it.
   for (const entity of fundamentalEntities()) {
@@ -85,7 +88,24 @@ export function buildSolverPrimitives(
   }
   for (const ref of pinned) {
     if (isFundamentalEntityId(ref.entityId)) continue;
-    for (const id of pointRefIds(ref, entityMap.get(ref.entityId))) fixed.add(id);
+    const entity = entityMap.get(ref.entityId);
+    const ids = pointRefIds(ref, entity);
+    if (!ref.axis || ref.pointIndex === undefined) {
+      for (const id of ids) fixed.add(id);
+      continue;
+    }
+    const value = entity
+      ? entityControlPoints(entity)[ref.pointIndex]?.[ref.axis === 'x' ? 0 : 1]
+      : undefined;
+    if (value === undefined) continue;
+    for (const id of ids) {
+      axisPins.push({
+        id: `${id}~pin-${ref.axis}`,
+        type: ref.axis === 'x' ? 'coordinate_x' : 'coordinate_y',
+        p_id: id,
+        [ref.axis]: value,
+      } as unknown as Constraint);
+    }
   }
 
   const primitives: SketchPrimitive[] = [];
@@ -270,6 +290,7 @@ export function buildSolverPrimitives(
     const mapped = mapConstraint(constraint, entityMap);
     if (mapped) primitives.push(mapped);
   }
+  primitives.push(...axisPins);
   return { primitives, entities: entityMap };
 }
 
@@ -553,13 +574,21 @@ export function applySolverSolution(
         const end = point(pointId(entity.id, 2));
         const primitive = map.get(entity.id);
         if (!center || !start || !end || primitive?.type !== 'arc') return entity;
+        const startAngle = unwrapAngle(
+          Math.atan2(start[1] - center[1], start[0] - center[0]),
+          entity.startAngle,
+        );
+        const endAngle = unwrapAngle(
+          Math.atan2(end[1] - center[1], end[0] - center[0]),
+          entity.endAngle,
+        );
         return {
           ...entity,
           cx: center[0],
           cy: center[1],
           r: primitive.radius,
-          startAngle: Math.atan2(start[1] - center[1], start[0] - center[0]),
-          endAngle: Math.atan2(end[1] - center[1], end[0] - center[0]),
+          startAngle,
+          endAngle,
         };
       }
       case 'ellipse': {
