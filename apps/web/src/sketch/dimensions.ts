@@ -52,10 +52,63 @@ function lineIntersection(
   return [first.x1 + t * rx, first.y1 + t * ry];
 }
 
+type SketchLine = Extract<SketchEntity, { type: 'line' }>;
+
+/** Whether a reference designates a point rather than the whole entity. */
+function refIsPoint(ref: SketchConstraint['refs'][number], entity: SketchEntity | undefined) {
+  return ref.pointIndex !== undefined || entity?.type === 'point';
+}
+
+/** The point of the line closest to `point`. */
+function footOnLine(point: Point2, line: SketchLine): Point2 | null {
+  const dx = line.x2 - line.x1;
+  const dy = line.y2 - line.y1;
+  const length2 = dx * dx + dy * dy;
+  if (length2 === 0) return null;
+  const t = ((point[0] - line.x1) * dx + (point[1] - line.y1) * dy) / length2;
+  return [line.x1 + dx * t, line.y1 + dy * t];
+}
+
+/** Halfway along the perpendicular from a point to a line. */
+function perpendicularAnchor(point: Point2, line: SketchLine): Point2 | null {
+  const foot = footOnLine(point, line);
+  return foot ? mid(point, foot) : null;
+}
+
+/** Where a distance between a point and a line, or between two lines, sits. */
+function distanceAgainstLine(
+  constraint: SketchConstraint,
+  entities: Map<string, SketchEntity>,
+): Point2 | null {
+  if (constraint.type !== 'distance' || constraint.refs.length !== 2) return null;
+  const [firstRef, secondRef] = constraint.refs as [
+    SketchConstraint['refs'][number],
+    SketchConstraint['refs'][number],
+  ];
+  const first = entities.get(firstRef.entityId);
+  const second = entities.get(secondRef.entityId);
+  const firstIsPoint = refIsPoint(firstRef, first);
+  const secondIsPoint = refIsPoint(secondRef, second);
+  if (firstIsPoint && !secondIsPoint && second?.type === 'line') {
+    const point = refPoint(firstRef, entities);
+    return point ? perpendicularAnchor(point, second) : null;
+  }
+  if (secondIsPoint && !firstIsPoint && first?.type === 'line') {
+    const point = refPoint(secondRef, entities);
+    return point ? perpendicularAnchor(point, first) : null;
+  }
+  if (!firstIsPoint && !secondIsPoint && first?.type === 'line' && second?.type === 'line') {
+    return perpendicularAnchor([first.x1, first.y1], second);
+  }
+  return null;
+}
+
 function anchorPoint(
   constraint: SketchConstraint,
   entities: Map<string, SketchEntity>,
 ): Point2 | null {
+  const againstLine = distanceAgainstLine(constraint, entities);
+  if (againstLine) return againstLine;
   if (
     constraint.type === 'distance' ||
     constraint.type === 'horizontal-distance' ||

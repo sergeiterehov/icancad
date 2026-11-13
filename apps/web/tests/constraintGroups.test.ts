@@ -195,6 +195,70 @@ describe('group constraints in the solver', () => {
   });
 });
 
+describe('distance constraints in the solver', () => {
+  function solveFit(entities: SketchEntity[], constraints: SketchConstraint[]) {
+    gcs.clear_data();
+    const { primitives: solverPrimitives } = buildSolverPrimitives(entities, constraints);
+    gcs.push_primitives_and_params(solverPrimitives);
+    const status = gcs.solve(Algorithm.DogLeg);
+    const conflicting = gcs.get_gcs_conflicting_constraints();
+    if (status >= 2) return { status, conflicting, entities };
+    gcs.apply_solution();
+    return {
+      status,
+      conflicting,
+      entities: applySolverSolution(entities, gcs.sketch_index.get_primitives()),
+    };
+  }
+
+  it('holds the gap between two parallel lines', () => {
+    const entities: SketchEntity[] = [
+      { id: 'a', type: 'line', construction: false, x1: 0, y1: 0, x2: 10, y2: 0 },
+      { id: 'b', type: 'line', construction: false, x1: 0, y1: 4, x2: 10, y2: 4 },
+    ];
+    const feature = sketch(entities);
+    const constraints: SketchConstraint[] = [
+      { id: 'fix-a0', type: 'fix', refs: [{ entityId: 'a', pointIndex: 0 }], x: 0, y: 0 },
+      { id: 'fix-a1', type: 'fix', refs: [{ entityId: 'a', pointIndex: 1 }], x: 10, y: 0 },
+      { id: 'h-b', type: 'horizontal', refs: [{ entityId: 'b' }] },
+      ...constraintsForAction(
+        action(feature, ['a', 'b'], 'distance')!,
+        sketchEntityIndex(entities),
+      ).map((constraint) => ({ ...constraint, value: 7 })),
+    ];
+
+    const result = solveFit(entities, constraints);
+    expect(result.conflicting).toEqual([]);
+    const [first, second] = result.entities as [
+      Extract<SketchEntity, { type: 'line' }>,
+      Extract<SketchEntity, { type: 'line' }>,
+    ];
+    expect(Math.abs(second.y1 - first.y1)).toBeCloseTo(7, 3);
+    expect(Math.abs(second.y2 - first.y1)).toBeCloseTo(7, 3);
+  });
+
+  it('holds the distance from a point to a line', () => {
+    const entities: SketchEntity[] = [
+      { id: 'a', type: 'line', construction: false, x1: 0, y1: 0, x2: 10, y2: 0 },
+      point('p', 4, 3),
+    ];
+    const feature = sketch(entities);
+    const constraints: SketchConstraint[] = [
+      { id: 'fix-a0', type: 'fix', refs: [{ entityId: 'a', pointIndex: 0 }], x: 0, y: 0 },
+      { id: 'fix-a1', type: 'fix', refs: [{ entityId: 'a', pointIndex: 1 }], x: 10, y: 0 },
+      ...constraintsForAction(
+        action(feature, ['p#0', 'a'], 'distance')!,
+        sketchEntityIndex(entities),
+      ).map((constraint) => ({ ...constraint, value: 6 })),
+    ];
+
+    const result = solveFit(entities, constraints);
+    expect(result.conflicting).toEqual([]);
+    const solved = result.entities.find((entity) => entity.id === 'p');
+    expect(solved?.type === 'point' ? Math.abs(solved.y) : NaN).toBeCloseTo(6, 3);
+  });
+});
+
 describe('constraint and geometry cross-selection', () => {
   const constraints: SketchConstraint[] = [
     {

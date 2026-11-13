@@ -22,27 +22,36 @@ export type ProjectionPick =
   | { kind: 'face'; bodyId: string; faceId: string };
 
 interface BodyElements {
+  /** Vertices by their stable id: the edges that meet there. */
   vertices: Map<string, Vec3>;
+  /** Position-based ids, which links written by older builds still use. */
+  vertexIds: Map<string, string>;
   edges: Map<string, BodyEdge>;
 }
 
 const elementCache = new WeakMap<TessellationResult, BodyElements>();
 
-/**
- * Vertices are the endpoints of the B-rep edges. The id is derived from the
- * rounded position: it survives a rebuild that keeps the vertex in place and
- * goes away when the vertex moves, which is exactly when the snapshot should
- * take over.
- */
+/** Id of a vertex from its rounded position; unstable once the vertex moves. */
 export function vertexElementId(point: Vec3): string {
   return `v:${point.map((value) => Math.round(value * 1e3) / 1e3).join(',')}`;
+}
+
+/**
+ * Stable id of a vertex: the edges that meet there. Resizing a body keeps the
+ * edges and their ids, so a projected corner follows the model instead of
+ * losing its link the moment the vertex moves.
+ */
+export function vertexEdgeElementId(edgeIds: Iterable<string>): string | null {
+  const ids = [...edgeIds].sort();
+  return ids.length > 0 ? `v:${ids.join('+')}` : null;
 }
 
 export function bodyElements(mesh: TessellationResult): BodyElements {
   const cached = elementCache.get(mesh);
   if (cached) return cached;
-  const vertices = new Map<string, Vec3>();
   const edges = new Map<string, BodyEdge>();
+  const byPosition = new Map<string, Vec3>();
+  const incident = new Map<string, string[]>();
   for (const edge of mesh.edges ?? []) {
     edges.set(edge.id, edge);
     if (edge.closed) continue;
@@ -54,10 +63,21 @@ export function bodyElements(mesh: TessellationResult): BodyElements {
         edge.points[index * 3 + 1]!,
         edge.points[index * 3 + 2]!,
       ];
-      vertices.set(vertexElementId(point), point);
+      const position = vertexElementId(point);
+      byPosition.set(position, point);
+      const list = incident.get(position) ?? [];
+      list.push(edge.id);
+      incident.set(position, list);
     }
   }
-  const elements = { vertices, edges };
+  const vertices = new Map<string, Vec3>();
+  const vertexIds = new Map<string, string>();
+  for (const [position, point] of byPosition) {
+    const id = vertexEdgeElementId(incident.get(position) ?? []) ?? position;
+    vertices.set(id, point);
+    vertexIds.set(position, id);
+  }
+  const elements = { vertices, vertexIds, edges };
   elementCache.set(mesh, elements);
   return elements;
 }
@@ -115,10 +135,15 @@ export function addProjectionToSketch(
   const elements = bodyElements(mesh);
   let changed = false;
 
+  const stableVertexId = (point: Vec3): string => {
+    const position = vertexElementId(point);
+    return elements.vertexIds.get(position) ?? position;
+  };
+
   const addVertex = (
     bodyId: string,
     point: Vec3,
-    elementId = vertexElementId(point),
+    elementId = stableVertexId(point),
     faceId?: string,
   ) => {
     const key = `${bodyId}:vertex:${elementId}`;
@@ -167,6 +192,26 @@ export function addProjectionToSketch(
   } else {
     const faceId = Number(pick.faceId);
     const boundary = [...elements.edges.values()].filter((edge) => edge.faceIds.includes(faceId));
+    // Corners projected before vertices were named after their edges point at a
+    // position that a resize has moved away from. Projecting the face again
+    // replaces those broken links with the corners added below.
+    const replacesBrokenCorner = (projection: SketchProjection): boolean =>
+      projection.source.kind === 'vertex' &&
+      projection.source.bodyId === pick.bodyId &&
+      projection.faceId === pick.faceId &&
+      // Position-based ids are the ones older builds wrote.
+      projection.source.elementId.includes(',') &&
+      !elements.vertices.has(projection.source.elementId) &&
+      !elements.vertexIds.has(projection.source.elementId);
+    for (let index = projections.length - 1; index >= 0; index -= 1) {
+      const projection = projections[index]!;
+      if (!replacesBrokenCorner(projection)) continue;
+      known.delete(sourceKey(projection.source));
+      projections.splice(index, 1);
+      const entity = entities.findIndex((candidate) => candidate.id === projection.entityId);
+      if (entity >= 0) entities.splice(entity, 1);
+      changed = true;
+    }
     for (const edge of boundary) addEdge(pick.bodyId, edge.id, pick.faceId);
     for (const edge of boundary) {
       if (edge.closed) continue;
@@ -209,7 +254,11 @@ export function resolveSketchProjections(
     const elements = mesh ? bodyElements(mesh) : null;
     let entity: SketchEntity | null = null;
     if (elements && projection.source.kind === 'vertex') {
-      const point = elements.vertices.get(projection.source.elementId);
+      // Links written before vertices took their ids from the incident edges
+      // carry a position instead.
+      const point =
+        elements.vertices.get(projection.source.elementId) ??
+        elements.vertices.get(elements.vertexIds.get(projection.source.elementId) ?? '');
       if (point) {
         entity = {
           id: projection.entityId,

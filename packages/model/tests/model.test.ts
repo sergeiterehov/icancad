@@ -5,6 +5,7 @@ import {
   CommandError,
   bodiesInHistory,
   createProject,
+  dependentFeaturesOf,
   featureBodyId,
   historyInsertIndex,
   HISTORY_START,
@@ -317,6 +318,63 @@ describe('history validation', () => {
         { type: 'feature/add', feature: extrude },
       ]),
     ).toThrow(CommandError);
+  });
+});
+
+describe('deleting a set of operations', () => {
+  const chain = () =>
+    applyCommands(createProject('Test'), [
+      { type: 'feature/add', feature: sketchFeature('feat_a') },
+      { type: 'feature/add', feature: extrudeFeature('feat_b', 'feat_a') },
+      { type: 'feature/add', feature: extrudeFeature('feat_c', 'feat_b') },
+    ]);
+
+  it('merges the dependents of every selected operation', () => {
+    const project = chain();
+    expect(dependentFeaturesOf(project, ['feat_a', 'feat_c']).map((entry) => entry.id)).toEqual([
+      'feat_b',
+    ]);
+  });
+
+  it('leaves out operations that are selected anyway', () => {
+    const project = createProject('Test');
+    const diamond = applyCommands(project, [
+      { type: 'feature/add', feature: sketchFeature('feat_a') },
+      { type: 'feature/add', feature: extrudeFeature('feat_b', 'feat_a') },
+      { type: 'feature/add', feature: extrudeFeature('feat_c', 'feat_a') },
+    ]);
+    expect(dependentFeaturesOf(diamond, ['feat_a', 'feat_b']).map((entry) => entry.id)).toEqual([
+      'feat_c',
+    ]);
+  });
+
+  it('rejects removing an operation whose dependents stay', () => {
+    expect(() =>
+      applyCommand(chain(), { type: 'feature/remove', featureId: 'feat_a' }),
+    ).toThrow(CommandError);
+  });
+
+  it('keeps dependents when the removal asks for it', () => {
+    const project = applyCommand(chain(), {
+      type: 'feature/remove',
+      featureId: 'feat_a',
+      keepDependents: true,
+    });
+    expect(project.features.map((feature) => feature.id)).toEqual(['feat_b', 'feat_c']);
+  });
+
+  it('stays editable after a removal that kept dependents', () => {
+    const project = applyCommand(chain(), {
+      type: 'feature/remove',
+      featureId: 'feat_a',
+      keepDependents: true,
+    });
+    expect(project.features[0]?.name).toBe('Extrude');
+    const renamed = applyCommand(project, {
+      type: 'feature/replace',
+      feature: { ...project.features[0]!, name: 'Shell' },
+    });
+    expect(renamed.features[0]?.name).toBe('Shell');
   });
 });
 

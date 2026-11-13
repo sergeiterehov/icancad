@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isDirectlySelected,
   linkedBodyIds,
+  menuFeatureIds,
   selectedBodyIds,
   selectedFeatureIds,
 } from '../src/stores/selection';
@@ -70,6 +71,24 @@ describe('selection helpers', () => {
     expect(linkedBodyIds(selection, project)).toEqual([]);
     expect(isDirectlySelected(selection, 'sketch', 'feat-sketch')).toBe(true);
     expect(isDirectlySelected(selection, 'feature', 'feat-sketch')).toBe(false);
+  });
+
+  it('deletes the whole operation selection from a timeline menu', () => {
+    const selection = [
+      { kind: 'feature' as const, id: 'feat-1' },
+      { kind: 'feature' as const, id: 'feat-2' },
+      { kind: 'body' as const, id: 'body-2' },
+    ];
+    expect(menuFeatureIds(selection, 'feat-2')).toEqual(['feat-1', 'feat-2']);
+  });
+
+  it('deletes only the clicked operation when it is not selected', () => {
+    const selection = [
+      { kind: 'feature' as const, id: 'feat-1' },
+      { kind: 'feature' as const, id: 'feat-2' },
+    ];
+    expect(menuFeatureIds(selection, 'feat-sketch')).toEqual(['feat-sketch']);
+    expect(menuFeatureIds([], 'feat-1')).toEqual(['feat-1']);
   });
 
   it('reports direct selection separately', () => {

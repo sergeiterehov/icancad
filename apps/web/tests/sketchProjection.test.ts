@@ -1,4 +1,4 @@
-import type { SketchFeature, SketchFrame } from '@icancad/model';
+import type { SketchFeature, SketchFrame, Vec3 } from '@icancad/model';
 import type { BodyEdge, TessellationResult } from '@icancad/kernel';
 import { sketchTopology } from '@icancad/sketch';
 import { describe, expect, it } from 'vitest';
@@ -58,25 +58,36 @@ function sketch(overrides: Partial<SketchFeature> = {}): SketchFeature {
   };
 }
 
+function vertexIdAt(result: TessellationResult, point: Vec3): string {
+  const elements = bodyElements(result);
+  return elements.vertexIds.get(vertexElementId(point)) ?? vertexElementId(point);
+}
+
 describe('sketch projections', () => {
-  it('derives vertices from the endpoints of B-rep edges', () => {
+  it('names vertices after the edges that meet there', () => {
     const elements = bodyElements(mesh([lineEdge, secondEdge]));
-    expect([...elements.vertices.keys()]).toHaveLength(3);
-    expect(elements.vertices.get(vertexElementId([0, 0, 5]))).toEqual([0, 0, 5]);
+    expect([...elements.vertices.keys()].sort()).toEqual([
+      'v:e-line',
+      'v:e-line+e-side',
+      'v:e-side',
+    ]);
+    expect(elements.vertices.get('v:e-line+e-side')).toEqual([10, 0, 5]);
   });
 
   it('projects a vertex into a linked point', () => {
-    const next = addProjectionToSketch(sketch(), frame, mesh([lineEdge]), {
+    const result = mesh([lineEdge]);
+    const elementId = vertexIdAt(result, [10, 0, 5]);
+    const next = addProjectionToSketch(sketch(), frame, result, {
       kind: 'vertex',
       bodyId: 'body-1',
-      elementId: vertexElementId([10, 0, 5]),
+      elementId,
       position: [10, 0, 5],
     });
     expect(next?.entities).toHaveLength(1);
     expect(next?.entities[0]).toMatchObject({ type: 'point', x: 10, y: 0 });
     expect(next?.projections?.[0]).toMatchObject({
       entityId: next?.entities[0]?.id,
-      source: { kind: 'vertex', bodyId: 'body-1', elementId: vertexElementId([10, 0, 5]) },
+      source: { kind: 'vertex', bodyId: 'body-1', elementId },
     });
   });
 
@@ -123,6 +134,76 @@ describe('sketch projections', () => {
     expect(topology.faces).toHaveLength(1);
     expect(topology.edges).toHaveLength(4);
     expect(topology.points).toHaveLength(4);
+  });
+
+  it('keeps a projected face attached when the body is resized', () => {
+    const square = (size: number): BodyEdge[] =>
+      [
+        [0, 0, 0, size, 0, 0],
+        [size, 0, 0, size, size, 0],
+        [size, size, 0, 0, size, 0],
+        [0, size, 0, 0, 0, 0],
+      ].map((points, index) => ({
+        id: `e-${index}`,
+        faceIds: [1],
+        points,
+        closed: false,
+      }));
+    const projected = addProjectionToSketch(sketch(), frame, mesh(square(20)), {
+      kind: 'face',
+      bodyId: 'body-1',
+      faceId: '1',
+    })!;
+
+    const resolved = resolveSketchProjections(projected, frame, () => mesh(square(40)));
+
+    expect(resolved.lostEntityIds).toEqual([]);
+    const points = resolved.entities.filter((entity) => entity.type === 'point');
+    expect(points).toHaveLength(4);
+    expect(points.map((entity) => (entity.type === 'point' ? entity.x : 0)).sort()).toEqual([
+      0, 0, 40, 40,
+    ]);
+  });
+
+  it('replaces a broken corner from an older build when the face is projected again', () => {
+    const square = (size: number): BodyEdge[] =>
+      [
+        [0, 0, 0, size, 0, 0],
+        [size, 0, 0, size, size, 0],
+        [size, size, 0, 0, size, 0],
+        [0, size, 0, 0, 0, 0],
+      ].map((points, index) => ({
+        id: `e-${index}`,
+        faceIds: [1],
+        points,
+        closed: false,
+      }));
+    const projected = addProjectionToSketch(sketch(), frame, mesh(square(20)), {
+      kind: 'face',
+      bodyId: 'body-1',
+      faceId: '1',
+    })!;
+    // What an older build wrote: a corner named after its position.
+    const legacy = {
+      ...projected,
+      projections: projected.projections!.map((projection, index) =>
+        index === 4 ? { ...projection, source: { ...projection.source, elementId: 'v:20,0,0' } } : projection,
+      ),
+    };
+    expect(resolveSketchProjections(legacy, frame, () => mesh(square(40))).lostEntityIds).toHaveLength(
+      1,
+    );
+
+    const repaired = addProjectionToSketch(legacy, frame, mesh(square(40)), {
+      kind: 'face',
+      bodyId: 'body-1',
+      faceId: '1',
+    })!;
+    expect(repaired.entities).toHaveLength(projected.entities.length);
+    expect(repaired.projections).toHaveLength(projected.projections!.length);
+    expect(resolveSketchProjections(repaired, frame, () => mesh(square(40))).lostEntityIds).toEqual(
+      [],
+    );
   });
 
   it('does not add the same source twice', () => {

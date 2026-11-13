@@ -370,6 +370,21 @@ function mapConstraint(
           distance: value,
         } as Constraint;
       }
+      if (refs.length === 2) {
+        // A point and a line, or two parallel lines, measure the perpendicular
+        // distance to the infinite line.
+        const first = entity(0);
+        const second = entity(1);
+        const firstPoint = point(0);
+        const secondPoint = point(1);
+        const p2l = (p: string, l: string): Constraint =>
+          ({ id, type: 'p2l_distance', p_id: p, l_id: l, distance: value }) as Constraint;
+        if (firstPoint && second?.type === 'line') return p2l(firstPoint, second.id);
+        if (secondPoint && first?.type === 'line') return p2l(secondPoint, first.id);
+        if (first?.type === 'line' && second?.type === 'line') {
+          return p2l(pointId(first.id, 0), second.id);
+        }
+      }
       const line = entity(0);
       if (line?.type === 'line') {
         return {

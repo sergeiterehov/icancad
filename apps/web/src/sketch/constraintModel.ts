@@ -74,22 +74,49 @@ function distanceBetween(
   return Math.hypot(second[0] - first[0], second[1] - first[1]);
 }
 
-function lineAngle(entities: SketchEntity[], refs: SketchConstraintRef[]): number | undefined {
-  const lines = refs
-    .map((ref) => entities.find((entity) => entity.id === ref.entityId))
-    .filter((entity): entity is Extract<SketchEntity, { type: 'line' }> => entity?.type === 'line')
-    .slice(0, 2);
-  if (lines.length !== 2) return undefined;
-  const [first, second] = lines as [
-    Extract<SketchEntity, { type: 'line' }>,
-    Extract<SketchEntity, { type: 'line' }>,
-  ];
+type Line = Extract<SketchEntity, { type: 'line' }>;
+
+/** Angle between two segments in degrees as `acos` of their direction cosine. */
+function segmentAngle(first: Line, second: Line): number | undefined {
   const a = [first.x2 - first.x1, first.y2 - first.y1] as const;
   const b = [second.x2 - second.x1, second.y2 - second.y1] as const;
   const denominator = Math.hypot(a[0], a[1]) * Math.hypot(b[0], b[1]);
   if (denominator === 0) return undefined;
   const cosine = Math.min(1, Math.max(-1, (a[0] * b[0] + a[1] * b[1]) / denominator));
   return (Math.acos(cosine) * 180) / Math.PI;
+}
+
+/** How far apart two undirected segments point, in [0, 90]. */
+function directionAngle(first: Line, second: Line): number | undefined {
+  const angle = segmentAngle(first, second);
+  return angle === undefined ? undefined : Math.min(angle, 180 - angle);
+}
+
+/** Distance from a point to the infinite line through the segment. */
+export function pointToLineDistance(point: Point2, line: Line): number | undefined {
+  const dx = line.x2 - line.x1;
+  const dy = line.y2 - line.y1;
+  const length = Math.hypot(dx, dy);
+  if (length === 0) return undefined;
+  return Math.abs((dx * (point[1] - line.y1) - dy * (point[0] - line.x1)) / length);
+}
+
+/** Whether two segments are parallel within a tolerance in degrees. */
+function isParallelWithin(first: Line, second: Line, degrees: number): boolean {
+  const angle = directionAngle(first, second);
+  return angle !== undefined && angle <= degrees;
+}
+
+/** Two lines are parallel this closely when drawn exactly or by a constraint. */
+const PARALLEL_TOLERANCE_DEGREES = 0.1;
+
+function lineAngle(entities: SketchEntity[], refs: SketchConstraintRef[]): number | undefined {
+  const lines = refs
+    .map((ref) => entities.find((entity) => entity.id === ref.entityId))
+    .filter((entity): entity is Line => entity?.type === 'line')
+    .slice(0, 2);
+  if (lines.length !== 2) return undefined;
+  return segmentAngle(lines[0]!, lines[1]!);
 }
 
 export function selectionRefs(
@@ -185,6 +212,13 @@ export function buildConstraintActions(
     if (refs.length === 2) {
       const angle = lineAngle(selectedEntities, entityRefs);
       if (angle !== undefined) push('angle', entityRefs, Math.round(angle * 100) / 100);
+      // The gap between two lines only has a meaning while they are parallel;
+      // the dimension measures it from the start of the first line.
+      const [first, second] = selectedEntities as [Line, Line];
+      if (isParallelWithin(first, second, PARALLEL_TOLERANCE_DEGREES)) {
+        const gap = pointToLineDistance([first.x1, first.y1], second);
+        if (gap !== undefined) push('distance', entityRefs, gap);
+      }
     }
   }
   if (entityRefs.length === 1 && refs.length === 1) {
@@ -211,6 +245,11 @@ export function buildConstraintActions(
     if (target?.type === 'line') push('point-on-line', refs);
     if (target?.type === 'circle' || target?.type === 'arc') push('point-on-circle', refs);
     if (target?.type === 'ellipse') push('point-on-ellipse', refs);
+    if (target?.type === 'line' && pointRefs.length === 1) {
+      const point = refPoint(pointRefs[0]!, entities);
+      const gap = point ? pointToLineDistance(point, target) : undefined;
+      if (gap !== undefined) push('distance', [pointRefs[0]!, entityRefs[0]!], gap);
+    }
   }
   if (refs.length === 3 && entityRefs.length === 1 && pointRefs.length === 2) {
     if (selectedEntities[0]?.type === 'line') push('symmetric', refs);

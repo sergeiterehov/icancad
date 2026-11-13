@@ -17,6 +17,7 @@ import {
 } from '@icancad/model';
 import {
   AlertCircle,
+  AlertTriangle,
   ArrowLeftRight,
   ArrowUp,
   Box,
@@ -365,6 +366,7 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
   const sketchSelectionIds = useUiStore((state) => state.sketchSelectionIds);
   const sketchConstraintIds = useUiStore((state) => state.sketchConstraintIds);
   const sketchFrozenEntityIds = useUiStore((state) => state.sketchFrozenEntityIds);
+  const projectionLost = useKernelStore((state) => state.projectionLost);
   const selectSketchConstraints = useUiStore((state) => state.selectSketchConstraints);
   const setSketchSelection = useUiStore((state) => state.setSketchSelection);
   const openMenu = useContextMenuStore((state) => state.open);
@@ -376,6 +378,7 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
     sketchSelectionIds.map((key) => key.split('#')[0]).filter((id): id is string => Boolean(id)),
   );
   const constraintEntityIds = new Set(constraintsGeometryIds(selectedConstraints));
+  const lostEntityIds = new Set(projectionLost[feature.id] ?? []);
 
   return (
     <PanelSection title={t('sketch.composition')} count={feature.entities.length}>
@@ -391,6 +394,9 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
             const projected = isProjectedEntity(feature, entity.id);
             const frozen =
               activeSketchId === feature.id && sketchFrozenEntityIds.includes(entity.id);
+            // A link the rebuild could not follow keeps its snapshot, which is
+            // a warning worth showing next to the geometry itself.
+            const lost = lostEntityIds.has(entity.id);
             return (
               <button
                 key={entity.id}
@@ -456,6 +462,15 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
                 <span className="tree-meta">
                   {referenceSummary(feature, entity.id, locale) ?? sketchEntityMeta(entity, locale)}
                 </span>
+                {lost && (
+                  <Tooltip
+                    content={t('sketch.projectionLost')}
+                    delay={150}
+                    className="entity-warning"
+                  >
+                    <AlertTriangle size={12} aria-label={t('sketch.projectionLost')} />
+                  </Tooltip>
+                )}
               </button>
             );
           })}

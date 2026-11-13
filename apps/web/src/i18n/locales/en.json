@@ -57,7 +57,7 @@
     "previewAdded": "Added by the operation being edited",
     "previewModified": "Changed by the operation being edited",
     "previewRemoved": "Removed by the operation being edited",
-    "projectionLost": "Projected geometry lost its source: the stored snapshot is used"
+    "projectionLost": "Projected geometry lost its source — the last known position is shown"
   },
   "inspector": {
     "project": "Project",
@@ -205,7 +205,8 @@
     "rebuildFromHere": "Rebuild from here",
     "color": "Colour",
     "rename": "Rename",
-    "deleteSelected": "Delete {{count}} objects"
+    "deleteSelected": "Delete {{count}} objects",
+    "deleteOperations": "Delete {{count}} operations"
   },
   "nav": {
     "cube": "Orientation cube",
@@ -300,7 +301,7 @@
     "liveMeasure": "Live size",
     "toolProject": "Projection",
     "detachProjection": "Detach from source",
-    "projectionLost": "The source is gone, the stored snapshot is used",
+    "projectionLost": "The source is gone — the last known position is shown",
     "projectionPickHint": "Click a point, an edge or a face in 3D"
   },
   "constraint": {
@@ -319,26 +320,22 @@
     "pointOnEllipse": "Point on ellipse",
     "tangent": "Tangent",
     "symmetric": "Symmetric",
-    "concentric": "Concentric",
-    "midpoint": "Midpoint",
     "description": {
       "fix": "Pins the selected geometry in place.",
       "coincident": "Makes the selected points share one location.",
-      "concentric": "Lines up the centers of the selected circles and arcs.",
       "horizontal": "Aligns the selected line or points along the horizontal axis.",
       "vertical": "Aligns the selected line or points along the vertical axis.",
       "parallel": "Makes the selected lines parallel; the first one stays the reference.",
       "perpendicular": "Makes the selected lines meet at a right angle; the first one stays the reference.",
       "tangent": "Makes the selected curves touch without crossing.",
       "equal": "Gives the selected lines or curves the same length or radius.",
-      "distance": "Sets the length of the line or the distance between the selected points.",
+      "distance": "Sets the length of a line, the distance between points, from a point to a line, or between two parallel lines.",
       "horizontalDistance": "Sets the horizontal distance between two points.",
       "verticalDistance": "Sets the vertical distance between two points.",
       "angle": "Sets the angle between two lines.",
       "radius": "Sets the radius of the circle or arc.",
       "diameter": "Sets the diameter of the circle or arc.",
       "symmetric": "Places the selected points symmetrically about a line.",
-      "midpoint": "Keeps the point in the middle of a line or between two points.",
       "pointOnLine": "Keeps the point on the line.",
       "pointOnCircle": "Keeps the point on the circle or arc.",
       "pointOnEllipse": "Keeps the point on the ellipse."
@@ -396,9 +393,12 @@
   },
   "delete": {
     "title": "Delete operation?",
-    "text": "\"{{name}}\" is used by other operations. They will be deleted too:",
-    "confirm": "Delete all",
-    "textMultiple": "Deleting these {{count}} operations also removes everything that depends on them:"
+    "titleMultiple": "Delete operations?",
+    "text": "\"{{name}}\" is used by other operations, which will not build without it:",
+    "textMultiple": "The {{count}} selected operations are used by others, which will not build without them:",
+    "fork": "With links — the dependent operations go too. Without links — they stay in the history without the operation they used, marked with an error until they are set up again.",
+    "confirmWithLinks": "Delete with links",
+    "confirmWithoutLinks": "Delete without links"
   },
   "quick": {
     "add": "Join",

@@ -49,11 +49,13 @@ export function Tooltip({ content, delay = 1500, className, children }: TooltipP
 
     const margin = 8;
     const gap = 8;
-    let left = anchorRect.left + anchorRect.width / 2 - bubbleRect.width / 2;
-    left = Math.max(margin, Math.min(window.innerWidth - bubbleRect.width - margin, left));
+    const maxLeft = window.innerWidth - bubbleRect.width - margin;
+    const maxTop = window.innerHeight - bubbleRect.height - margin;
+    const centered = anchorRect.left + anchorRect.width / 2 - bubbleRect.width / 2;
+    const left = Math.max(margin, Math.min(maxLeft, centered));
     let top = anchorRect.top - bubbleRect.height - gap;
     if (top < margin) top = anchorRect.bottom + gap;
-    setPosition({ top, left });
+    setPosition({ top: Math.max(margin, Math.min(maxTop, top)), left });
   }, [open, content]);
 
   if (content === null || content === undefined || content === '') {

@@ -687,14 +687,16 @@ button:disabled {
   color: var(--text);
 }
 
+/* A quiet destructive choice: a text button like Cancel, tinted red. */
 .btn-danger {
   color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+  border-color: transparent;
   background: transparent;
 }
 
 .btn-danger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
 }
 
 .stat-row {
@@ -789,10 +791,6 @@ button:disabled {
 .panel-warning:hover,
 .panel-warning[data-active='true'] {
   background: var(--accent-soft);
-}
-
-.constraint-row[data-active='true'] .constraint-label {
-  color: var(--accent);
 }
 
 .constraint-icon {
@@ -900,9 +898,11 @@ button:disabled {
   align-items: center;
 }
 
+/* Above every overlay, otherwise a hint opened inside a menu or a popover is
+   painted under the list it belongs to. */
 .tooltip {
   position: fixed;
-  z-index: 1000;
+  z-index: 1300;
   max-width: 290px;
   padding: 6px 8px;
   border: 1px solid var(--border-strong);
@@ -1613,6 +1613,13 @@ button.selection-item[data-active='true'][data-error='true'] {
   color: #6d28d9;
 }
 
+/* The badge marks a projection whose source is gone; the icon of the geometry
+   itself keeps its usual colour. */
+.selection-item .entity-warning {
+  flex: 0 0 auto;
+  color: #f59e0b;
+}
+
 .selection-item .tree-name {
   min-width: 0;
   overflow: hidden;
@@ -1653,10 +1660,6 @@ button.selection-item[data-active='true'][data-error='true'] {
 
 .sketch-entity-row[data-active='true'] {
   background: var(--accent-soft);
-}
-
-.sketch-entity-row[data-active='true'] .tree-name {
-  color: var(--accent);
 }
 
 .sketch-entity-row[data-dimmed='true'] {
@@ -2501,19 +2504,53 @@ button.selection-item[data-active='true'][data-error='true'] {
 .dialog-list {
   max-height: 180px;
   margin: 0;
-  padding: 8px 10px 8px 24px;
+  padding: 8px 10px;
   overflow: auto;
   border-radius: 6px;
   background: var(--panel-2);
   color: var(--text-dim);
   font-size: 12px;
   line-height: 1.7;
+  list-style: none;
+}
+
+.dialog-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dialog-list-icon {
+  display: inline-flex;
+  color: var(--text-dim);
+}
+
+/* The explanation of the choice is a footnote, not a second paragraph. */
+.dialog-hint {
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .dialog-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* Three choices do not fit the default width on one line. */
+.confirm-dialog {
+  width: min(460px, calc(100vw - 40px));
+}
+
+/* Cancel sits apart from the two destructive choices. */
+.dialog-cancel {
+  margin-right: auto;
+}
+
+.confirm-dialog .dialog-actions {
+  margin-top: 8px;
 }
 
 .context-menu-sub {

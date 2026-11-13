@@ -25,7 +25,7 @@ import { autoConstraintsForEntity, isNearAxis, snapHighlightIds } from '../sketc
 import { buildConstraintActions, diagnoseSketch, removeSketchEntities } from '../sketch/constraintModel';
 import { sketchToolFromShortcut } from '../sketch/tool';
 import { useApplyConstraintAction } from '../sketch/useConstraintActions';
-import { constraintFromShortcut } from '../ui/constraintCatalog';
+import { resolveConstraintShortcut } from '../ui/constraintCatalog';
 import { canEditSketch, computeSketchFrame, sketchFrameOf } from '../sketch/sectionPlane';
 import { solveDrag } from '../sketch/dragSolve';
 import { liveMeasures, measureInfo } from '../sketch/measure';
@@ -1112,19 +1112,14 @@ export function SketchEditor() {
       }
       if (event.key === 'Enter' && activeTool === 'bezier') finishBezier();
       if (event.key === 'Enter' && activeTool === 'line') finishLine();
-      const shortcutConstraint = constraintFromShortcut(event);
-      if (shortcutConstraint) {
-        const action = sketch
-          ? buildConstraintActions(sketch, selectionIds).find(
-              (candidate) => candidate.type === shortcutConstraint,
-            )
-          : undefined;
-        if (action) {
-          event.preventDefault();
-          closeContextMenu();
-          void runConstraintAction(action);
-          return;
-        }
+      const shortcutAction = sketch
+        ? resolveConstraintShortcut(buildConstraintActions(sketch, selectionIds), event)
+        : null;
+      if (shortcutAction) {
+        event.preventDefault();
+        closeContextMenu();
+        void runConstraintAction(shortcutAction);
+        return;
       }
       const shortcutTool = sketchToolFromShortcut(event);
       if (shortcutTool) {

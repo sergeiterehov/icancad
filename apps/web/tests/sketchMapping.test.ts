@@ -74,6 +74,48 @@ describe('planegcs mapping', () => {
     });
   });
 
+  it('maps a point-to-line distance to the perpendicular distance', () => {
+    const target: SketchEntity = { id: 'p', type: 'point', construction: false, x: 4, y: 3 };
+    const constraint: SketchConstraint = {
+      id: 'dl-1',
+      type: 'distance',
+      refs: [{ entityId: 'p', pointIndex: 0 }, { entityId: line.id }],
+      value: 5,
+    };
+    const { build } = primitives([target, line], [constraint]);
+    expect(build.primitives.find((primitive) => primitive.id === 'dl-1')).toMatchObject({
+      type: 'p2l_distance',
+      p_id: 'p',
+      l_id: line.id,
+      distance: 5,
+    });
+  });
+
+  it('maps the distance between two lines from the first line to the second', () => {
+    const parallel: SketchEntity = {
+      id: 'line-3',
+      type: 'line',
+      construction: false,
+      x1: 0,
+      y1: 20,
+      x2: 10,
+      y2: 20,
+    };
+    const constraint: SketchConstraint = {
+      id: 'dl-2',
+      type: 'distance',
+      refs: [{ entityId: 'line-3' }, { entityId: line.id }],
+      value: 12,
+    };
+    const { build } = primitives([parallel, line], [constraint]);
+    expect(build.primitives.find((primitive) => primitive.id === 'dl-2')).toMatchObject({
+      type: 'p2l_distance',
+      p_id: 'line-3~p0',
+      l_id: line.id,
+      distance: 12,
+    });
+  });
+
   it('maps horizontal distance through an auxiliary aligned point', () => {
     const constraint: SketchConstraint = {
       id: 'hd-1',

@@ -86,6 +86,52 @@ describe('dimension annotations', () => {
     expect(annotations[0]?.point).toEqual([20, 0]);
   });
 
+  it('anchors a line-to-line distance halfway across the gap', () => {
+    const second: SketchEntity = {
+      id: 'line3',
+      type: 'line',
+      construction: false,
+      x1: 0,
+      y1: 10,
+      x2: 40,
+      y2: 10,
+    };
+    const annotations = dimensionAnnotations(
+      sketch(
+        [line, second],
+        [
+          {
+            id: 'gap',
+            type: 'distance',
+            refs: [{ entityId: 'line' }, { entityId: 'line3' }],
+            value: 10,
+          },
+        ],
+      ),
+      'en',
+    );
+    expect(annotations[0]?.point).toEqual([0, 5]);
+  });
+
+  it('anchors a point-to-line distance halfway to the line', () => {
+    const target: SketchEntity = { id: 'p', type: 'point', construction: false, x: 10, y: 6 };
+    const annotations = dimensionAnnotations(
+      sketch(
+        [line, target],
+        [
+          {
+            id: 'to-line',
+            type: 'distance',
+            refs: [{ entityId: 'p', pointIndex: 0 }, { entityId: 'line' }],
+            value: 6,
+          },
+        ],
+      ),
+      'en',
+    );
+    expect(annotations[0]?.point).toEqual([10, 3]);
+  });
+
   it('places arc radius and diameter annotations at the arc center', () => {
     const arc: SketchEntity = {
       id: 'arc',

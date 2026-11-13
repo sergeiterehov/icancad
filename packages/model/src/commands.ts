@@ -1,4 +1,4 @@
-import { historyErrors } from './history';
+import { historyErrors, type HistoryIssue } from './history';
 import { touch } from './project';
 import { HISTORY_START, type BodyRef, type Feature, type ObjectMetadata, type Project } from './types';
 
@@ -6,7 +6,12 @@ export type Command =
   | { type: 'project/rename'; name: string }
   | { type: 'feature/add'; feature: Feature; index?: number }
   | { type: 'feature/replace'; feature: Feature }
-  | { type: 'feature/remove'; featureId: string }
+  | {
+      type: 'feature/remove';
+      featureId: string;
+      /** Leave the dependents in the history, pointing at a missing operation. */
+      keepDependents?: boolean;
+    }
   | { type: 'feature/reorder'; featureId: string; toIndex: number }
   | { type: 'feature/toggle-suppressed'; featureId: string }
   | { type: 'body/add'; body: BodyRef }
@@ -153,11 +158,28 @@ export function applyCommands(project: Project, commands: readonly Command[]): P
   for (const command of commands) {
     next = applyOne(next, command);
   }
-  const errors = historyErrors(next);
-  if (errors.length > 0) {
-    throw new CommandError('INVALID_HISTORY', errors.map((issue) => issue.message).join('; '));
+  // Deleting an operation and keeping its dependents is the one edit allowed to
+  // leave references to a missing feature behind; every later edit compares
+  // against the issues the project already carries, so the dependents stay
+  // editable until the user points them at new input or deletes them.
+  const orphans = commands.some(
+    (command) => command.type === 'feature/remove' && command.keepDependents,
+  );
+  if (!orphans) {
+    const known = new Set(historyErrors(project).map(issueKey));
+    const introduced = historyErrors(next).filter((issue) => !known.has(issueKey(issue)));
+    if (introduced.length > 0) {
+      throw new CommandError(
+        'INVALID_HISTORY',
+        introduced.map((issue) => issue.message).join('; '),
+      );
+    }
   }
   return touch(next);
+}
+
+function issueKey(issue: HistoryIssue): string {
+  return `${issue.code}:${issue.featureId ?? ''}:${issue.message}`;
 }
 
 export function applyCommand(project: Project, command: Command): Project {

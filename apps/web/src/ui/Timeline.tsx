@@ -1,54 +1,18 @@
 import { HISTORY_START, type Feature } from '@icancad/model';
 import clsx from 'clsx';
-import {
-  Box,
-  CornerUpLeft,
-  FileUp,
-  Layers,
-  PencilRuler,
-  Scissors,
-  SquareChevronsRight,
-  Trash2,
-} from 'lucide-react';
+import { CornerUpLeft, SquareChevronsRight, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
 import { useKernelStore } from '../stores/kernelStore';
-import { isDirectlySelected, selectedFeatureIds } from '../stores/selection';
+import { isDirectlySelected, menuFeatureIds, selectedFeatureIds } from '../stores/selection';
 import { canEditSketch } from '../sketch/sectionPlane';
 import { rebuildFrom } from '../kernel/rebuild';
 import { showContextMenu } from './ContextMenu';
-import { ChamferIcon, FilletIcon } from './edgeIcons';
-import { ExtrudeOpIcon } from './featureIcons';
+import { FeatureIcon } from './featureIcons';
 import { Tooltip } from './Tooltip';
 import { translate } from './translate';
 import { timelineCaretMark, type TimelineCaretMark } from './timelineCaret';
-
-function FeatureIcon({ feature }: { feature: Feature }) {
-  switch (feature.type) {
-    case 'primitive':
-      return <Box size={16} />;
-    case 'sketch':
-      return <PencilRuler size={16} />;
-    case 'extrude':
-      return <ExtrudeOpIcon op={feature.op} size={16} />;
-    case 'boolean':
-      return <Scissors size={16} />;
-    case 'import-mesh':
-      return <FileUp size={16} />;
-    case 'delete-body':
-      return <Trash2 size={16} />;
-    // The history names the concrete operation, so it shows the kind's icon.
-    case 'edge-treatment':
-      return feature.kind === 'chamfer' ? (
-        <ChamferIcon size={16} />
-      ) : (
-        <FilletIcon size={16} />
-      );
-    default:
-      return <Layers size={16} />;
-  }
-}
 
 function RollbackCaret({
   index,
@@ -96,7 +60,7 @@ export function Timeline() {
   const selection = useDocumentStore((state) => state.selection);
   const select = useDocumentStore((state) => state.select);
   const setHistoryEnd = useDocumentStore((state) => state.setHistoryEnd);
-  const removeFeature = useDocumentStore((state) => state.removeFeature);
+  const removeFeatures = useDocumentStore((state) => state.removeFeatures);
   const featureErrors = useKernelStore((state) => state.featureErrors);
   const projectionLost = useKernelStore((state) => state.projectionLost);
   const rebuildCursor = useKernelStore((state) => state.rebuildCursor);
@@ -187,7 +151,10 @@ export function Timeline() {
                         !featureErrors[feature.id] && projectionWarning(feature) && 'warning',
                       )}
                       aria-label={feature.name}
-                      onContextMenu={(event) =>
+                      onContextMenu={(event) => {
+                        // Right-clicking a chip keeps the operation selection it
+                        // belongs to, like every other menu in the app.
+                        const targets = menuFeatureIds(selection, feature.id);
                         showContextMenu(event, [
                           {
                             id: 'rollback',
@@ -205,13 +172,16 @@ export function Timeline() {
                           },
                           {
                             id: 'delete',
-                            label: t('context.deleteOperation'),
+                            label:
+                              targets.length > 1
+                                ? t('context.deleteOperations', { count: targets.length })
+                                : t('context.deleteOperation'),
                             icon: <Trash2 size={14} />,
                             danger: true,
-                            onSelect: () => removeFeature(feature.id),
+                            onSelect: () => removeFeatures(targets),
                           },
-                        ])
-                      }
+                        ]);
+                      }}
                       onClick={(event) =>
                         select(
                           { kind: 'feature', id: feature.id },

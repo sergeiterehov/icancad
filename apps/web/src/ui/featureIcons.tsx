@@ -1,17 +1,23 @@
-import type { SketchEntity } from '@icancad/model';
+import type { Feature, SketchEntity } from '@icancad/model';
 import { crosshairPlusDot } from '@lucide/lab';
 import {
   Box,
   CircleDot,
   Ellipse,
+  FileUp,
   Icon,
+  Layers,
   LineSquiggle,
   LoaderCircle,
+  PencilRuler,
+  Scissors,
   SquaresIntersect,
   SquaresSubtract,
   SquaresUnite,
+  Trash2,
   Waypoints,
 } from 'lucide-react';
+import { ChamferIcon, FilletIcon } from './edgeIcons';
 
 /** Experimental Lucide Lab point marker. */
 export function PointIcon({ size = 16 }: { size?: number }) {
@@ -62,5 +68,28 @@ export function ExtrudeOpIcon({
       return <SquaresSubtract size={size} />;
     case 'intersect':
       return <SquaresIntersect size={size} />;
+  }
+}
+
+/** The icon of an operation, shared by the timeline and the delete dialog. */
+export function FeatureIcon({ feature, size = 16 }: { feature: Feature; size?: number }) {
+  switch (feature.type) {
+    case 'primitive':
+      return <Box size={size} />;
+    case 'sketch':
+      return <PencilRuler size={size} />;
+    case 'extrude':
+      return <ExtrudeOpIcon op={feature.op} size={size} />;
+    case 'boolean':
+      return <Scissors size={size} />;
+    case 'import-mesh':
+      return <FileUp size={size} />;
+    case 'delete-body':
+      return <Trash2 size={size} />;
+    // The history names the concrete operation, so it shows the kind's icon.
+    case 'edge-treatment':
+      return feature.kind === 'chamfer' ? <ChamferIcon size={size} /> : <FilletIcon size={size} />;
+    default:
+      return <Layers size={size} />;
   }
 }

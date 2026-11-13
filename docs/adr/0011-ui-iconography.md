@@ -54,7 +54,8 @@ labels were removed.
 ### Sketch constraints
 
 Every constraint has an icon, a name, a description and a `Shift` shortcut, and
-all four come from one directory: `apps/web/src/ui/constraintCatalog.tsx`. The
+all four come from one directory: `apps/web/src/ui/constraintCatalog.tsx`. A letter
+may be shared by constraints that never apply to the same selection (ADR 0020). The
 constraint list, the add menu and the dimension chips in the sketch editor read
 that directory, so a constraint always looks the same wherever it appears.
 

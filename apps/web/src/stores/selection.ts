@@ -96,6 +96,15 @@ export function selectedMeshIds(selection: SelectionItem[]): string[] {
   return selection.filter((item) => item.kind === 'mesh').map((item) => item.id);
 }
 
+/**
+ * Operations a timeline menu acts on: the whole operation selection when the
+ * clicked chip belongs to it, otherwise just that operation.
+ */
+export function menuFeatureIds(selection: readonly SelectionItem[], clickedId: string): string[] {
+  const ids = selection.filter((item) => item.kind === 'feature').map((item) => item.id);
+  return ids.includes(clickedId) && ids.length > 1 ? ids : [clickedId];
+}
+
 export function selectedSketchIds(selection: readonly SelectionItem[]): string[] {
   return selection.filter((item) => item.kind === 'sketch').map((item) => item.id);
 }

@@ -131,10 +131,11 @@ interface DocumentState {
   setConstructionVisible: (sketchId: string, visible: boolean) => void;
   addImportedMesh: (name: string, featureId: string, format: MeshFormat) => void;
   setSectionPlanes: (planes: SectionPlane[]) => void;
-  /** Removes operations together with everything that depends on them. */
-  removeFeature: (featureId: string) => void;
+  /** Asks what to do with the operations that depend on the removed ones. */
   removeFeatures: (featureIds: string[]) => void;
   confirmRemoveFeature: (featureIds: string[]) => void;
+  /** The dialog's "without links" choice: only these operations go away. */
+  removeFeaturesOnly: (featureIds: string[]) => void;
   deleteBody: (bodyId: string, name: string) => void;
   /** Deletes the selected objects: bodies become delete operations. */
   deleteObjects: (targets: SelectionItem[]) => void;
@@ -1068,10 +1069,6 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     });
   },
 
-  removeFeature: (featureId) => {
-    get().removeFeatures([featureId]);
-  },
-
   removeFeatures: (featureIds) => {
     const project = get().project;
     const selected = new Set(featureIds);
@@ -1102,6 +1099,23 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     useUiStore.getState().showToast('toast.featureDeleted');
   },
 
+  // The dependents stay in the timeline and fail to build until they are
+  // pointed at new input or deleted, which is the point of the choice.
+  removeFeaturesOnly: (featureIds) => {
+    if (
+      !get().apply(
+        ...featureIds.map((id) => ({
+          type: 'feature/remove' as const,
+          featureId: id,
+          keepDependents: true,
+        })),
+      )
+    ) {
+      return;
+    }
+    useUiStore.getState().cancelDelete();
+    useUiStore.getState().showToast('toast.featureDeleted');
+  },
   // Deleting an object is itself an operation: the body disappears from this
   // point in the timeline while its creating operation stays editable.
   deleteBody: (bodyId, name) => {
