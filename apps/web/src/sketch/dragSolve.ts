@@ -9,6 +9,23 @@ export interface DragSolveOptions {
   pinSets: SketchConstraintRef[][];
   /** Derived entities, which stay fixed while everything else moves. */
   derived?: readonly string[];
+  /** Attempt that solved the previous frame, tried first. */
+  prefer?: string | null;
+}
+
+export interface DragSolveOutcome {
+  result: SketchSolveResult;
+  /** Key of the attempt that produced the result, for the next frame. */
+  attempt: string;
+}
+
+const AXIS_LABEL: Record<'x' | 'y', string> = { x: 'x', y: 'y' };
+
+/** Stable name of an attempt, so a drag can start from the one that worked. */
+function attemptKey(pins: SketchConstraintRef[], attempt: SolverPin[]): string {
+  const size = pins.length === 0 ? 'free' : pins.length > 1 ? 'all' : 'one';
+  const axis = attempt.find((pin) => pin.axis)?.axis;
+  return `${size}:${axis ? AXIS_LABEL[axis] : 'pin'}`;
 }
 
 /**
@@ -71,18 +88,26 @@ export async function solveDrag({
   constraints,
   pinSets,
   derived,
-}: DragSolveOptions): Promise<SketchSolveResult | null> {
-  for (const pins of pinSets) {
-    for (const attempt of pinAttempts(pins)) {
-      try {
-        const result = await solveSketch(entities, constraints, attempt, { derived });
-        if (result.conflicting.length > 0) continue;
-        if (attempt.length === 0 || (await honoursConstraints(result, constraints, derived))) {
-          return result;
-        }
-      } catch {
-        // Try the next attempt.
+  prefer,
+}: DragSolveOptions): Promise<DragSolveOutcome | null> {
+  const attempts = pinSets.flatMap((pins) =>
+    pinAttempts(pins).map((attempt) => ({ attempt, key: attemptKey(pins, attempt) })),
+  );
+  // A drag holds the same kind of attempt from frame to frame, so starting with
+  // the one that worked keeps a moving pointer down to one or two solves.
+  if (prefer) {
+    const preferred = attempts.findIndex((candidate) => candidate.key === prefer);
+    if (preferred > 0) attempts.unshift(...attempts.splice(preferred, 1));
+  }
+  for (const { attempt, key } of attempts) {
+    try {
+      const result = await solveSketch(entities, constraints, attempt, { derived });
+      if (result.conflicting.length > 0) continue;
+      if (attempt.length === 0 || (await honoursConstraints(result, constraints, derived))) {
+        return { result, attempt: key };
       }
+    } catch {
+      // Try the next attempt.
     }
   }
   return null;

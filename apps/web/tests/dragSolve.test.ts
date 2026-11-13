@@ -73,7 +73,7 @@ it('keeps a dragged line on the geometry it is constrained to', async () => {
     derived: ['proj-top', 'proj-right'],
   });
   expect(result).not.toBeNull();
-  const solved = line(result!.entities);
+  const solved = line(result!.result.entities);
   expect(solved.y1).toBeCloseTo(10, 6);
   expect(solved.x2).toBeCloseTo(10, 6);
 });
@@ -106,7 +106,7 @@ it('keeps a rigid drag the constraints already allow', async () => {
     derived: [],
   });
   expect(result).not.toBeNull();
-  const solved = result!.entities[0] as Extract<SketchEntity, { type: 'line' }>;
+  const solved = result!.result.entities[0] as Extract<SketchEntity, { type: 'line' }>;
   expect(solved.x1).toBeCloseTo(3, 6);
   expect(solved.y1).toBeCloseTo(5, 6);
   expect(solved.x2).toBeCloseTo(13, 6);
@@ -141,7 +141,7 @@ it('does not keep a drag that breaks a horizontal constraint', async () => {
     derived: [],
   });
   expect(result).not.toBeNull();
-  const solved = result!.entities[0] as Extract<SketchEntity, { type: 'line' }>;
+  const solved = result!.result.entities[0] as Extract<SketchEntity, { type: 'line' }>;
   expect(solved.y1).toBeCloseTo(solved.y2, 6);
   expect(solved.y1).not.toBeCloseTo(9, 3);
 });
@@ -170,7 +170,9 @@ it('does not move geometry held by a fix constraint', async () => {
     pinSets: entityPins,
     derived: [],
   });
-  const solved = result ? line(result.entities) : (moved as Extract<SketchEntity, { type: 'line' }>);
+  const solved = result
+    ? line(result.result.entities)
+    : (moved as Extract<SketchEntity, { type: 'line' }>);
   expect(solved.x1).toBeCloseTo(local.type === 'line' ? local.x1 : 0, 6);
   expect(solved.y1).toBeCloseTo(local.type === 'line' ? local.y1 : 0, 6);
 });

@@ -92,7 +92,30 @@ interface DragState {
   original: SketchFeature;
   before: Project;
   active: boolean;
-  version: number;
+  /** Newest pointer position while a solve is still running. */
+  target: Point2 | null;
+  solving: boolean;
+  /** Solve attempt that worked last time, so the drag starts from it. */
+  attempt: string | null;
+}
+
+/** The sketch with the dragged entity moved to where the pointer asks. */
+function dragEntities(drag: DragState, point: Point2, entities: SketchEntity[]): SketchEntity[] {
+  const moved =
+    drag.mode === 'point'
+      ? moveEntityControlPoint(drag.originalEntity, drag.pointIndex ?? 0, point)
+      : translateEntity(drag.originalEntity, point[0] - drag.startPoint[0], point[1] - drag.startPoint[1]);
+  return entities.map((entity) => (entity.id === drag.entityId ? moved : entity));
+}
+
+/** Whether any constraint can move this entity, and with it, the rest. */
+function isDraggedEntityConstrained(
+  constraints: SketchConstraint[],
+  entityId: string,
+): boolean {
+  return constraints.some((constraint) =>
+    constraint.refs.some((ref) => ref.entityId === entityId),
+  );
 }
 
 function dragPinSets(drag: DragState): SketchConstraintRef[][] {
@@ -652,8 +675,53 @@ export function SketchEditor() {
         original: sketch,
         before: useDocumentStore.getState().project,
         active: false,
-        version: 0,
+        target: null,
+        solving: false,
+        attempt: null,
       };
+    };
+    // One solve at a time, always for the newest pointer position: a queue of
+    // solves would reach the sketch long after the pointer left, which reads as
+    // the geometry jumping around.
+    const pumpDrag = async (activeDrag: DragState) => {
+      if (activeDrag.solving) return;
+      activeDrag.solving = true;
+      try {
+        while (drag.current === activeDrag && activeDrag.target) {
+          const point = activeDrag.target;
+          activeDrag.target = null;
+          const current = useDocumentStore
+            .getState()
+            .project.features.find(
+              (feature): feature is SketchFeature =>
+                feature.id === activeDrag.original.id && feature.type === 'sketch',
+            );
+          if (!current) return;
+          const solved = await solveDrag({
+            entities: dragEntities(activeDrag, point, current.entities),
+            constraints: current.constraints,
+            pinSets: dragPinSets(activeDrag),
+            derived: [...projectionEntityIds(current)],
+            prefer: activeDrag.attempt,
+          });
+          if (drag.current !== activeDrag) return;
+          if (!solved) continue;
+          activeDrag.attempt = solved.attempt;
+          const latest = useDocumentStore
+            .getState()
+            .project.features.find(
+              (feature): feature is SketchFeature =>
+                feature.id === activeDrag.original.id && feature.type === 'sketch',
+            );
+          if (!latest) return;
+          preview({
+            type: 'feature/replace',
+            feature: { ...latest, entities: solved.result.entities },
+          });
+        }
+      } finally {
+        activeDrag.solving = false;
+      }
     };
     const onPointerMove = (event: PointerEvent) => {
       const activeTool = useUiStore.getState().sketchTool;
@@ -694,42 +762,17 @@ export function SketchEditor() {
         );
         if (!current) return;
         const point: Point2 = [pick.point[0], pick.point[1]];
-        const currentEntity =
-          current.entities.find((entity) => entity.id === activeDrag.entityId) ??
-          activeDrag.originalEntity;
-        const moved =
-          activeDrag.mode === 'point'
-            ? moveEntityControlPoint(currentEntity, activeDrag.pointIndex ?? 0, point)
-            : translateEntity(
-                activeDrag.originalEntity,
-                point[0] - activeDrag.startPoint[0],
-                point[1] - activeDrag.startPoint[1],
-              );
-        const entities = current.entities.map((entity) =>
-          entity.id === activeDrag.entityId ? moved : entity,
-        );
-        const next = { ...current, entities };
-        preview({ type: 'feature/replace', feature: next });
-        const version = ++activeDrag.version;
-        void solveDrag({
-          entities,
-          constraints: current.constraints,
-          pinSets: dragPinSets(activeDrag),
-          derived: [...projectionEntityIds(current)],
-        })
-          .then((result) => {
-            if (!result) return;
-            if (drag.current !== activeDrag || activeDrag.version !== version) return;
-            const latest = useDocumentStore
-              .getState()
-              .project.features.find(
-                (feature): feature is SketchFeature =>
-                  feature.id === activeDrag.original.id && feature.type === 'sketch',
-              );
-            if (!latest) return;
-            preview({ type: 'feature/replace', feature: { ...latest, entities: result.entities } });
-          })
-          .catch(() => undefined);
+        activeDrag.target = point;
+        // Nothing depends on a free entity, so it can follow the pointer right
+        // away instead of waiting for a round trip.
+        if (!isDraggedEntityConstrained(current.constraints, activeDrag.entityId)) {
+          preview({
+            type: 'feature/replace',
+            feature: { ...current, entities: dragEntities(activeDrag, point, current.entities) },
+          });
+          return;
+        }
+        void pumpDrag(activeDrag);
         return;
       }
       const draftLength = draftToolRef.current === activeTool ? draftRef.current.length : 0;
@@ -763,15 +806,20 @@ export function SketchEditor() {
         preview({ type: 'feature/replace', feature: activeDrag.original });
         return;
       }
-      const version = ++activeDrag.version;
+      // The last pointer position may still be waiting for its solve.
+      const entities = activeDrag.target
+        ? dragEntities(activeDrag, activeDrag.target, latest.entities)
+        : latest.entities;
+      activeDrag.target = null;
       void solveDrag({
-        entities: latest.entities,
+        entities,
         constraints: latest.constraints,
         pinSets: dragPinSets(activeDrag),
         derived: [...projectionEntityIds(latest)],
+        prefer: activeDrag.attempt,
       })
-        .then((result) => {
-          if (activeDrag.version !== version) return;
+        .then((solved) => {
+          const result = solved?.result ?? null;
           if (!result) {
             preview({ type: 'feature/replace', feature: activeDrag.original });
             useUiStore.getState().showToast('constraint.conflict', 'error');
