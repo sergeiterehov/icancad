@@ -164,6 +164,29 @@ describe('project model', () => {
     const atStart = applyCommand(rolled, { type: 'history/set-end', featureId: HISTORY_START });
     expect(historyInsertIndex(atStart)).toBe(0);
   });
+
+  it('keeps the cursor at its position when the operation after it is removed', () => {
+    const project = applyCommands(createProject(), [
+      { type: 'feature/add', feature: boxFeature() },
+      { type: 'feature/add', feature: boxFeature('feat_box2') },
+      { type: 'feature/add', feature: boxFeature('feat_box3') },
+      { type: 'history/set-end', featureId: 'feat_box2' },
+    ]);
+
+    // The cursor followed the second operation, so it lands after the first
+    // one instead of jumping to the end of the history.
+    const removed = applyCommand(project, { type: 'feature/remove', featureId: 'feat_box2' });
+    expect(removed.features.map((feature) => feature.id)).toEqual(['feat_box', 'feat_box3']);
+    expect(removed.historyEnd).toBe('feat_box');
+
+    // Removing the first operation puts the cursor at the start of the history.
+    const atFirst = applyCommand(project, { type: 'history/set-end', featureId: 'feat_box' });
+    const firstRemoved = applyCommand(atFirst, {
+      type: 'feature/remove',
+      featureId: 'feat_box',
+    });
+    expect(firstRemoved.historyEnd).toBe(HISTORY_START);
+  });
 });
 
 describe('object metadata', () => {

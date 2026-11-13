@@ -119,6 +119,7 @@
     "feature": "Feature",
     "rollbackHint": "Show the model as it was after this operation. Later operations are kept.",
     "goTo": "Go to operation #{{index}}",
+    "failedNext": "The operation after this step failed",
     "locked": "Finish editing the operation to move along the timeline"
   },
   "status": {

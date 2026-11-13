@@ -1206,9 +1206,9 @@ button:disabled {
   background: transparent;
 }
 
-/* Only the cursor immediately after the failure is red. */
+/* The cursor in front of the failed operation is red: it marks the last state
+   the rebuild reached. It stays clickable, the failure is not a dead end. */
 .timeline-caret.error {
-  cursor: not-allowed;
   opacity: 1;
 }
 

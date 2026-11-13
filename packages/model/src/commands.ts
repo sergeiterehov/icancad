@@ -72,15 +72,26 @@ function applyOne(project: Project, command: Command): Project {
       return replaceFeature(project, command.feature.id, () => command.feature);
     }
     case 'feature/remove': {
-      const feature = project.features.find((candidate) => candidate.id === command.featureId);
-      if (!feature) {
+      const index = project.features.findIndex(
+        (candidate) => candidate.id === command.featureId,
+      );
+      if (index < 0) {
         throw new CommandError('UNKNOWN_FEATURE', `Unknown feature: ${command.featureId}`);
       }
+      // The cursor names a position between operations, so removing the
+      // operation it follows moves it onto the previous one: the numbered
+      // position stays where the user left it instead of jumping to the end.
+      const historyEnd =
+        project.historyEnd === command.featureId
+          ? index > 0
+            ? (project.features[index - 1]?.id ?? HISTORY_START)
+            : HISTORY_START
+          : project.historyEnd;
       return {
         ...project,
         features: project.features.filter((candidate) => candidate.id !== command.featureId),
         bodies: project.bodies.filter((body) => body.createdBy !== command.featureId),
-        historyEnd: project.historyEnd === command.featureId ? null : project.historyEnd,
+        historyEnd,
       };
     }
     case 'feature/reorder': {

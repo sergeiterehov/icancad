@@ -22,6 +22,7 @@ import { ChamferIcon, FilletIcon } from './edgeIcons';
 import { ExtrudeOpIcon } from './featureIcons';
 import { Tooltip } from './Tooltip';
 import { translate } from './translate';
+import { timelineCaretMark, type TimelineCaretMark } from './timelineCaret';
 
 function FeatureIcon({ feature }: { feature: Feature }) {
   switch (feature.type) {
@@ -53,45 +54,36 @@ function RollbackCaret({
   index,
   active,
   disabled,
-  blocked,
-  pastFailure,
+  mark,
   calculating,
   onSelect,
 }: {
   index: number;
   active: boolean;
   disabled?: boolean;
-  /** The position immediately after the failed operation: the red barrier. */
-  blocked?: boolean;
-  /** A position beyond the barrier: inactive, but not red. */
-  pastFailure?: boolean;
+  /** Position of the caret relative to the first failed operation. */
+  mark: TimelineCaretMark;
   calculating?: boolean;
   onSelect: () => void;
 }) {
   const { t } = useTranslation();
-  const label = t('timeline.goTo', { index });
-  const outsideHistory = blocked || pastFailure;
+  const label = mark === 'error' ? t('timeline.failedNext') : t('timeline.goTo', { index });
+  const unreachable = mark === 'unreachable';
   return (
     <Tooltip
-      content={
-        outsideHistory
-          ? t('timeline.blockedByError')
-          : disabled
-            ? t('timeline.locked')
-            : label
-      }
+      content={unreachable ? t('timeline.blockedByError') : disabled ? t('timeline.locked') : label}
     >
       <button
         type="button"
         className={clsx(
           'timeline-caret',
           active && 'active',
-          blocked && 'error',
+          mark === 'error' && 'error',
           calculating && 'calculating',
         )}
-        aria-label={outsideHistory ? t('timeline.blockedByError') : label}
+        aria-label={unreachable ? t('timeline.blockedByError') : label}
         aria-pressed={active}
-        disabled={disabled || outsideHistory}
+        disabled={disabled || unreachable}
         onClick={onSelect}
       />
     </Tooltip>
@@ -127,12 +119,11 @@ export function Timeline() {
   const highlightedFeatureIds = selectedFeatureIds(selection, project);
 
   // Rebuild stops at the first failed operation, so nothing after it exists.
+  // The red caret sits in front of that operation; the positions inside it and
+  // after it describe operations the model never reached.
   const failedIndex = project.features.findIndex((feature) => featureErrors[feature.id]);
-  const blockedPosition = (index: number) => failedIndex >= 0 && index > failedIndex;
-  // Only the cursor immediately after the failure is red; later ones are just
-  // inactive and never highlight on hover.
-  const barrierPosition = (index: number) => failedIndex >= 0 && index === failedIndex + 1;
-  const pastFailurePosition = (index: number) => failedIndex >= 0 && index > failedIndex + 1;
+  const caretMark = (index: number) => timelineCaretMark(index, failedIndex);
+  const blockedPosition = (index: number) => caretMark(index) === 'unreachable';
 
   const goTo = (index: number) => {
     if (index === 0) setHistoryEnd(HISTORY_START);
@@ -169,10 +160,9 @@ export function Timeline() {
                 <div key={feature.id} className="timeline-step">
                   <RollbackCaret
                     index={index}
-                    active={position === index && !pastFailurePosition(index)}
+                    active={position === index && !blockedPosition(index)}
                     disabled={locked}
-                    blocked={barrierPosition(index)}
-                    pastFailure={pastFailurePosition(index)}
+                    mark={caretMark(index)}
                     calculating={rebuildCursor === index}
                     onSelect={() => goTo(index)}
                   />
@@ -233,12 +223,10 @@ export function Timeline() {
             <RollbackCaret
               index={project.features.length}
               active={
-                position === project.features.length &&
-                !pastFailurePosition(project.features.length)
+                position === project.features.length && !blockedPosition(project.features.length)
               }
               disabled={locked}
-              blocked={barrierPosition(project.features.length)}
-              pastFailure={pastFailurePosition(project.features.length)}
+              mark={caretMark(project.features.length)}
               calculating={rebuildCursor === project.features.length}
               onSelect={() => goTo(project.features.length)}
             />
