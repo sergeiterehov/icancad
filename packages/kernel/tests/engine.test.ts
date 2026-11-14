@@ -3,6 +3,38 @@ import { KernelEngine, KernelOpError } from '../src/engine';
 import { loadOcctNode } from '../src/occt-node';
 import type { TessellationResult } from '../src/protocol';
 
+/** Face whose area-weighted normal points most in the given direction. */
+function faceFacing(mesh: TessellationResult, normal: [number, number, number]): number {
+  const sums = new Map<number, [number, number, number]>();
+  const { positions, indices, faceIds } = mesh;
+  for (let triangle = 0; triangle < faceIds.length; triangle += 1) {
+    const a = indices[triangle * 3]! * 3;
+    const b = indices[triangle * 3 + 1]! * 3;
+    const c = indices[triangle * 3 + 2]! * 3;
+    const ux = positions[b]! - positions[a]!;
+    const uy = positions[b + 1]! - positions[a + 1]!;
+    const uz = positions[b + 2]! - positions[a + 2]!;
+    const vx = positions[c]! - positions[a]!;
+    const vy = positions[c + 1]! - positions[a + 1]!;
+    const vz = positions[c + 2]! - positions[a + 2]!;
+    const sum = sums.get(faceIds[triangle]!) ?? [0, 0, 0];
+    sum[0] += uy * vz - uz * vy;
+    sum[1] += uz * vx - ux * vz;
+    sum[2] += ux * vy - uy * vx;
+    sums.set(faceIds[triangle]!, sum);
+  }
+  let best = -1;
+  let bestDot = -Infinity;
+  for (const [faceId, sum] of sums) {
+    const dot = sum[0] * normal[0] + sum[1] * normal[1] + sum[2] * normal[2];
+    if (dot > bestDot) {
+      bestDot = dot;
+      best = faceId;
+    }
+  }
+  return best;
+}
+
 function meshSignedVolume(mesh: TessellationResult): number {
   const { positions, indices } = mesh;
   let volume = 0;
@@ -996,6 +1028,95 @@ describe('OCCT kernel engine', () => {
         distances: [5],
       }),
     ).toThrowError(KernelOpError);
+  });
+
+  it('hollows a box into a closed cavity', () => {
+    engine.makeBox({ shapeId: 'shell-cavity-box', dx: 20, dy: 20, dz: 20 });
+    const result = engine.shell({
+      shapeId: 'shell-cavity',
+      sourceShapeId: 'shell-cavity-box',
+      removeFaceIds: [],
+      thickness: 2,
+      offset: 0,
+      direction: 'inward',
+    });
+    expect(result.applied).toBeCloseTo(2, 5);
+    expect(result.stats.solids).toBe(1);
+    // The wall has the outer and the inner faces of the box.
+    expect(result.stats.faces).toBe(12);
+    const mesh = engine.tessellate('shell-cavity');
+    expect(meshSignedVolume(mesh)).toBeCloseTo(20 * 20 * 20 - 16 * 16 * 16, 0);
+    expect(mesh.bbox.min).toEqual([0, 0, 0]);
+    expect(mesh.bbox.max[0]).toBeCloseTo(20, 5);
+  });
+
+  it('leaves the picked face open in a cavity', () => {
+    engine.makeBox({ shapeId: 'shell-open-box', dx: 20, dy: 20, dz: 20 });
+    const box = engine.tessellate('shell-open-box');
+    const top = faceFacing(box, [0, 0, 1]);
+    expect(top).toBeGreaterThanOrEqual(0);
+    const result = engine.shell({
+      shapeId: 'shell-open',
+      sourceShapeId: 'shell-open-box',
+      removeFaceIds: [top],
+      thickness: 2,
+      offset: 0,
+      direction: 'inward',
+    });
+    expect(result.applied).toBeCloseTo(2, 5);
+    const mesh = engine.tessellate('shell-open');
+    // 20³ minus the 16×16×18 cavity that reaches the open top.
+    expect(meshSignedVolume(mesh)).toBeCloseTo(20 * 20 * 20 - 16 * 16 * 18, 0);
+  });
+
+  it('grows an outward shell around a body', () => {
+    engine.makeBox({ shapeId: 'shell-out-box', dx: 20, dy: 20, dz: 20 });
+    const result = engine.shell({
+      shapeId: 'shell-out',
+      sourceShapeId: 'shell-out-box',
+      removeFaceIds: [],
+      thickness: 2,
+      offset: 0,
+      direction: 'outward',
+    });
+    expect(result.applied).toBeCloseTo(2, 5);
+    const mesh = engine.tessellate('shell-out');
+    expect(mesh.bbox.min[0]).toBeCloseTo(-2, 3);
+    expect(mesh.bbox.max[0]).toBeCloseTo(22, 3);
+    expect(meshSignedVolume(mesh)).toBeCloseTo(24 * 24 * 24 - 20 * 20 * 20, -1);
+  });
+
+  it('keeps the requested gap between a body and its outward shell', () => {
+    engine.makeBox({ shapeId: 'shell-gap-box', dx: 20, dy: 20, dz: 20 });
+    engine.shell({
+      shapeId: 'shell-gap',
+      sourceShapeId: 'shell-gap-box',
+      removeFaceIds: [],
+      thickness: 2,
+      offset: 2,
+      direction: 'outward',
+    });
+    const mesh = engine.tessellate('shell-gap');
+    expect(mesh.bbox.min[0]).toBeCloseTo(-4, 3);
+    expect(mesh.bbox.max[0]).toBeCloseTo(24, 3);
+    expect(meshSignedVolume(mesh)).toBeCloseTo(28 * 28 * 28 - 24 * 24 * 24, -1);
+  });
+
+  it('reduces a shell thickness that does not fit instead of failing', () => {
+    engine.makeBox({ shapeId: 'shell-thick-box', dx: 20, dy: 20, dz: 20 });
+    const result = engine.shell({
+      shapeId: 'shell-thick',
+      sourceShapeId: 'shell-thick-box',
+      removeFaceIds: [],
+      thickness: 50,
+      offset: 0,
+      direction: 'inward',
+    });
+    expect(result.applied).toBeGreaterThan(0.01);
+    expect(result.applied).toBeLessThan(10);
+    const mesh = engine.tessellate('shell-thick');
+    expect(meshSignedVolume(mesh)).toBeGreaterThan(0);
+    expect(meshSignedVolume(mesh)).toBeLessThan(20 * 20 * 20);
   });
 
   it('disposes shapes', () => {

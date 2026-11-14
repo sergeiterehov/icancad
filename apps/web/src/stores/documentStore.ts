@@ -30,6 +30,7 @@ import {
   type ExtrudeFeature,
   type RevolveAxis,
   type DeleteBodyFeature,
+  type ShellFeature,
 } from '@icancad/model';
 import { sketchTopology } from '@icancad/sketch';
 import { useMemo } from 'react';
@@ -107,6 +108,12 @@ interface DocumentState {
   addSketchOnFace: (name: string) => string | null;
   addExtrude: (name: string, input?: ExtrudeInput) => string | null;
   addEdgeTreatment: (name: string, input?: EdgeTreatmentInput) => string | null;
+  addShell: (name: string, input?: ShellInput) => string | null;
+  setShellDirection: (featureId: string, direction: ShellFeature['direction']) => void;
+  setShellThickness: (featureId: string, thickness: number) => void;
+  setShellOffset: (featureId: string, offset: number) => void;
+  toggleShellBody: (featureId: string, bodyId: string) => void;
+  toggleShellFace: (featureId: string, ref: BodyFaceRef) => void;
   setEdgeTreatmentKind: (featureId: string, kind: EdgeTreatmentKind) => void;
   setEdgeTreatmentSize: (featureId: string, size: number) => void;
   toggleEdgeTreatmentFace: (featureId: string, ref: BodyFaceRef) => void;
@@ -162,6 +169,12 @@ export interface ExtrudeInput {
 export interface EdgeTreatmentInput {
   faceRefs?: BodyFaceRef[];
   edgeRefs?: BodyEdgeRef[];
+}
+
+/** Bodies and open faces a shell starts with. */
+export interface ShellInput {
+  bodyIds?: string[];
+  faceRefs?: BodyFaceRef[];
 }
 
 /** Picked objects are keyed so sketch faces and body faces share one order. */
@@ -609,6 +622,8 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       ui.pickingExtrude ??
       ui.pickingExtrudeBodies ??
       ui.pickingEdges ??
+      ui.pickingShellBodies ??
+      ui.pickingShellFaces ??
       ui.pickingSketchPlane ??
       ui.pickingSectionFace;
     if (
@@ -636,9 +651,15 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       }
       return;
     }
-    // Edges and faces of an edge treatment are picked in the 3D view, so a
-    // click elsewhere must not replace the operation being configured.
-    if (ui.pickingEdges) return;
+    if (ui.pickingShellBodies) {
+      if (item?.kind === 'body') {
+        get().toggleShellBody(ui.pickingShellBodies, item.id);
+      }
+      return;
+    }
+    // Open faces and treatment edges are picked in the 3D view, so a click
+    // elsewhere must not replace the operation being configured.
+    if (ui.pickingEdges || ui.pickingShellFaces) return;
 
     const state = get();
     let selection: SelectionItem[];
@@ -883,6 +904,110 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         edgeRefs: exists
           ? feature.edgeRefs.filter((candidate) => `${candidate.bodyId}#${candidate.edgeId}` !== key)
           : [...feature.edgeRefs, ref],
+      },
+    });
+  },
+
+  // The operation starts from the current selection, like the extrude and the
+  // edge treatment: picked bodies and faces become its input right away.
+  addShell: (name, input) => {
+    get().endFeatureEdit();
+    const bodyIds = [...new Set(input?.bodyIds ?? [])];
+    const faceRefs = input?.faceRefs ?? [];
+    for (const ref of faceRefs) {
+      if (!bodyIds.includes(ref.bodyId)) bodyIds.push(ref.bodyId);
+    }
+    const featureId = createId('feat');
+    const feature: ShellFeature = {
+      id: featureId,
+      name,
+      suppressed: false,
+      type: 'shell',
+      bodyIds,
+      removeFaces: faceRefs,
+      thickness: 2,
+      offset: 0,
+      direction: 'inward',
+    };
+    if (!get().apply(...addFeatureCommands(get().project, feature))) return null;
+    selectFeatureForEditing(featureId, set);
+    return featureId;
+  },
+
+  setShellDirection: (featureId, direction) => {
+    const feature = get().project.features.find(
+      (candidate): candidate is ShellFeature =>
+        candidate.id === featureId && candidate.type === 'shell',
+    );
+    if (!feature || feature.direction === direction) return;
+    get().apply({ type: 'feature/replace', feature: { ...feature, direction } });
+  },
+
+  setShellThickness: (featureId, thickness) => {
+    const feature = get().project.features.find(
+      (candidate): candidate is ShellFeature =>
+        candidate.id === featureId && candidate.type === 'shell',
+    );
+    if (!feature || !Number.isFinite(thickness) || thickness <= 0) return;
+    if (feature.thickness === thickness) return;
+    get().apply({ type: 'feature/replace', feature: { ...feature, thickness } });
+  },
+
+  setShellOffset: (featureId, offset) => {
+    const feature = get().project.features.find(
+      (candidate): candidate is ShellFeature =>
+        candidate.id === featureId && candidate.type === 'shell',
+    );
+    if (!feature || !Number.isFinite(offset) || offset < 0) return;
+    if ((feature.offset ?? 0) === offset) return;
+    get().apply({ type: 'feature/replace', feature: { ...feature, offset } });
+  },
+
+  toggleShellBody: (featureId, bodyId) => {
+    const feature = get().project.features.find(
+      (candidate): candidate is ShellFeature =>
+        candidate.id === featureId && candidate.type === 'shell',
+    );
+    if (!feature) return;
+    const exists = feature.bodyIds.includes(bodyId);
+    get().apply({
+      type: 'feature/replace',
+      feature: {
+        ...feature,
+        bodyIds: exists
+          ? feature.bodyIds.filter((candidate) => candidate !== bodyId)
+          : [...feature.bodyIds, bodyId],
+        // Removing the body removes the openings that only made sense with it.
+        removeFaces: exists
+          ? feature.removeFaces.filter((ref) => ref.bodyId !== bodyId)
+          : feature.removeFaces,
+      },
+    });
+  },
+
+  toggleShellFace: (featureId, ref) => {
+    const feature = get().project.features.find(
+      (candidate): candidate is ShellFeature =>
+        candidate.id === featureId && candidate.type === 'shell',
+    );
+    if (!feature) return;
+    const key = `${ref.bodyId}#${ref.faceId}`;
+    const exists = feature.removeFaces.some(
+      (candidate) => `${candidate.bodyId}#${candidate.faceId}` === key,
+    );
+    get().apply({
+      type: 'feature/replace',
+      feature: {
+        ...feature,
+        bodyIds:
+          !exists && !feature.bodyIds.includes(ref.bodyId)
+            ? [...feature.bodyIds, ref.bodyId]
+            : feature.bodyIds,
+        removeFaces: exists
+          ? feature.removeFaces.filter(
+              (candidate) => `${candidate.bodyId}#${candidate.faceId}` !== key,
+            )
+          : [...feature.removeFaces, ref],
       },
     });
   },

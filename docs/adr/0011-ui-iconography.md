@@ -47,9 +47,10 @@ lucide's `Icon` wrapper. Both packages are dependencies of the web app.
 | History | Sketch feature | `PencilRuler` |
 | History | Extrude feature | The icon of its operation (`Box`, `SquaresUnite`, `SquaresSubtract`, `SquaresIntersect`) |
 | History | Primitive, boolean, import, delete | `Box`, `Scissors`, `FileUp`, `Trash2` |
+| Tool rail / history | Shell | `PackageOpen` (ADR 0023) |
 
-Unimplemented tools are not shown: the disabled Shell and Hole buttons and their
-labels were removed.
+Unimplemented tools are not shown: the disabled Hole button and its label were
+removed.
 
 ### Sketch constraints
 

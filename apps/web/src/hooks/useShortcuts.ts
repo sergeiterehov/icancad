@@ -36,6 +36,8 @@ export function useShortcuts(): void {
           ui.pickingExtrude ||
           ui.pickingExtrudeBodies ||
           ui.pickingEdges ||
+          ui.pickingShellBodies ||
+          ui.pickingShellFaces ||
           ui.pickingSketchPlane ||
           ui.pickingSectionFace
         ) {

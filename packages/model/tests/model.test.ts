@@ -18,6 +18,7 @@ import {
   type ExtrudeFeature,
   type PrimitiveFeature,
   type Project,
+  type ShellFeature,
   type SketchFeature,
 } from '../src/index';
 
@@ -147,6 +148,32 @@ describe('project model', () => {
       features: [feature],
     });
     expect((project.features[0] as ExtrudeFeature).revolve).toEqual(feature.revolve);
+  });
+
+  it('keeps shell targets, openings and its offset through a project file', () => {
+    const feature: ShellFeature = {
+      id: 'feat_shell',
+      name: 'Shell',
+      suppressed: false,
+      type: 'shell',
+      bodyIds: ['body-1'],
+      removeFaces: [
+        {
+          bodyId: 'body-1',
+          faceId: '5',
+          normal: [0, 0, 1],
+          origin: [10, 10, 20],
+        },
+      ],
+      thickness: 2,
+      offset: 3,
+      direction: 'outward',
+    };
+    const project = parseProject({
+      ...createProject('Shell'),
+      features: [feature],
+    });
+    expect(project.features[0]).toEqual(feature);
   });
 
   it('rejects duplicate ids', () => {

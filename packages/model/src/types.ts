@@ -274,11 +274,20 @@ export interface ExtrudeFeature extends FeatureBase {
   joinRegions: boolean;
 }
 
+/**
+ * Hollows bodies in place (`inward`, a cavity) or grows a new body around them
+ * (`outward`, a shell). Faces listed in `removeFaces` stay open.
+ */
 export interface ShellFeature extends FeatureBase {
   type: 'shell';
-  bodyId: string;
-  removeFaces: EntityRef[];
+  /** Whole bodies to hollow; a picked face also makes its body a target. */
+  bodyIds: string[];
+  /** Faces left open in the wall. */
+  removeFaces: BodyFaceRef[];
+  /** Wall thickness in millimetres. */
   thickness: number;
+  /** Gap between the input surface and an outward shell; 0 for a cavity. */
+  offset: number;
   direction: 'inward' | 'outward';
 }
 

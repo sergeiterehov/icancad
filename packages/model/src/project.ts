@@ -73,6 +73,11 @@ export function extrudeBodyId(featureId: string, regionId: string): string {
   return `${featureId}:region-${regionId}`;
 }
 
+/** A shell keeps one new body per input body, named after that body. */
+export function shellBodyId(featureId: string, sourceBodyId: string): string {
+  return `${featureId}:shell-${sourceBodyId}`;
+}
+
 export function touch(project: Project): Project {
   return { ...project, updatedAt: new Date().toISOString() };
 }

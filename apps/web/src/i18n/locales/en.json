@@ -39,7 +39,8 @@
     "construction": "Construction geometry",
     "magnet": "Magnet",
     "extrudeNeedsSketch": "Select a sketch to extrude",
-    "edgeTreatment": "Edge treatment"
+    "edgeTreatment": "Edge treatment",
+    "shell": "Shell"
   },
   "tree": {
     "bodies": "Bodies",
@@ -181,6 +182,7 @@
     "IMPORT_FAILED": "Failed to import the mesh",
     "NO_EDGES": "Pick edges to treat",
     "EDGE_TREATMENT_FAILED": "These edges cannot be rounded or chamfered",
+    "SHELL_FAILED": "This body cannot be hollowed with these settings",
     "REVOLVE_AXIS_MISSING": "Pick the edge or axis the profile turns around",
     "REVOLVE_EDGE_NOT_STRAIGHT": "Only a straight edge can be a revolve axis",
     "REVOLVE_NO_ANGLE": "A revolve needs a non-zero angle between its ends"
@@ -190,7 +192,8 @@
     "sketch": "Sketch",
     "extrude": "Extrude",
     "importMesh": "Imported mesh",
-    "edgeTreatment": "Edge treatment"
+    "edgeTreatment": "Edge treatment",
+    "shell": "Shell"
   },
   "common": {
     "close": "Close",
@@ -443,6 +446,22 @@
     "pickHint": "Click edges or faces of the body.",
     "emptyHint": "Pick edges or faces to treat.",
     "noEdges": "These edges cannot be treated. Pick different edges.",
+    "maxWarning": "The maximum {{value}} mm will be used"
+  },
+  "shell": {
+    "direction": "Direction",
+    "cavity": "Cavity",
+    "shell": "Shell",
+    "thickness": "Wall thickness",
+    "offset": "Offset",
+    "targets": "Bodies",
+    "openFaces": "Open faces",
+    "pickBodies": "Pick bodies",
+    "pickFaces": "Pick faces",
+    "emptyBodies": "Pick bodies to hollow.",
+    "emptyFaces": "Pick faces that stay open.",
+    "pickBodiesHint": "Click bodies in the 3D view.",
+    "pickFacesHint": "Click faces in the 3D view to leave them open.",
     "maxWarning": "The maximum {{value}} mm will be used"
   }
 }

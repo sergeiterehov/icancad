@@ -227,6 +227,26 @@ export interface EdgeTreatmentResult {
   edgeCount: number;
 }
 
+export interface ShellParams {
+  shapeId: string;
+  /** Body to hollow or wrap. */
+  sourceShapeId: string;
+  /** Faces of the body left open. */
+  removeFaceIds: number[];
+  thickness: number;
+  /** Gap between the input surface and an outward shell; ignored inward. */
+  offset: number;
+  /** `inward` cuts a cavity, `outward` grows a body around the input. */
+  direction: 'inward' | 'outward';
+}
+
+export interface ShellResult {
+  shapeId: string;
+  stats: ShapeStats;
+  /** Thickness the wall was actually built with; never above the request. */
+  applied: number;
+}
+
 export type KernelStatusPhase = 'loading-occt' | 'ready' | 'error';
 
 export interface KernelStatusEvent {
@@ -244,6 +264,7 @@ export type KernelErrorCode =
   | 'FACE_NOT_PLANAR'
   | 'NO_EDGES'
   | 'EDGE_TREATMENT_FAILED'
+  | 'SHELL_FAILED'
   | 'NOT_IMPLEMENTED'
   | 'OP_FAILED';
 
@@ -257,6 +278,7 @@ export type KernelRequestPayload =
   | { type: 'boolean'; params: BooleanParams }
   | { type: 'split-solids'; params: SplitSolidsParams }
   | { type: 'edge-treatment'; params: EdgeTreatmentParams }
+  | { type: 'shell'; params: ShellParams }
   | { type: 'tessellate'; shapeId: string; quality?: TessellationQuality }
   | { type: 'topology'; shapeId: string }
   | { type: 'dispose'; shapeId: string };

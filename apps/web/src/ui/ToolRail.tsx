@@ -3,6 +3,7 @@ import { Hexagon, LayersArrowUp, PencilRuler, Square } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { edgeTreatmentTargetFromSelection } from '../quick/edgeTreatment';
+import { shellInputFromSelection } from '../quick/shell';
 import { sketchPlaneFromSelection } from '../sketch/facePlane';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
@@ -10,6 +11,7 @@ import { useContextMenuStore } from './ContextMenu';
 import { useUiStore } from '../stores/uiStore';
 import { IconButton } from './Controls';
 import { EdgeToolIcon } from './edgeIcons';
+import { ShellIcon } from './featureIcons';
 import { SectionTool } from './SectionTool';
 
 // Extrude works on a whole sketch or on the faces selected inside one sketch.
@@ -41,6 +43,7 @@ export function ToolRail() {
   const addSketchOnFace = useDocumentStore((state) => state.addSketchOnFace);
   const addExtrude = useDocumentStore((state) => state.addExtrude);
   const addEdgeTreatment = useDocumentStore((state) => state.addEdgeTreatment);
+  const addShell = useDocumentStore((state) => state.addShell);
   const project = useDocumentStore((state) => state.project);
   const selection = useDocumentStore((state) => state.selection);
   const sketchSelection = extrudeInput(selection, project);
@@ -138,6 +141,23 @@ export function ToolRail() {
         }}
       >
         <EdgeToolIcon size={17} />
+      </IconButton>
+
+      <IconButton
+        label={t('tools.shell')}
+        tooltip={t('tools.shell')}
+        onClick={() => {
+          const store = useDocumentStore.getState();
+          const input = shellInputFromSelection(
+            store.project,
+            store.selection,
+            useKernelStore.getState().meshes,
+          );
+          const id = addShell(t('features.shell'), input ?? undefined);
+          if (id && !input) useUiStore.getState().setPickingShellBodies(id);
+        }}
+      >
+        <ShellIcon size={17} />
       </IconButton>
 
       <div className="tool-separator" />

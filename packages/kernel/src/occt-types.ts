@@ -99,6 +99,30 @@ export interface OcctShapeList {
   RemoveFirst(): void;
 }
 
+/** `TopTools_ListOfShape`, used for the faces a shell leaves open. */
+export interface OcctShapeListMaker {
+  Append_1(shape: OcctShape): void;
+  Size(): number;
+}
+
+/** `BRepOffsetAPI_MakeThickSolid`: offsets a whole solid into a wall. */
+export interface OcctThickSolidMaker {
+  MakeThickSolidByJoin(
+    shape: OcctShape,
+    closingFaces: OcctShapeListMaker,
+    offset: number,
+    tolerance: number,
+    mode: unknown,
+    intersection: boolean,
+    selfInter: boolean,
+    join: unknown,
+    removeIntEdges: boolean,
+  ): void;
+  Build(): void;
+  IsDone(): boolean;
+  Shape(): OcctShape;
+}
+
 /** Shared surface of `BRepFilletAPI_MakeFillet` and `MakeChamfer`. */
 export interface OcctEdgeMaker {
   /** `Add(размер, ребро)` for both makers. */
@@ -135,6 +159,7 @@ export interface OcctBindings {
   TopAbs_ShapeEnum: {
     TopAbs_FACE: number;
     TopAbs_EDGE: number;
+    TopAbs_SHELL: number;
     TopAbs_SOLID: number;
     TopAbs_SHAPE: number;
   };
@@ -154,6 +179,7 @@ export interface OcctBindings {
   TopoDS: {
     Face_1(shape: OcctShape): OcctShape;
     Edge_1(shape: OcctShape): OcctShape;
+    Shell_1(shape: OcctShape): OcctShape;
     Solid_1(shape: OcctShape): OcctShape;
   };
   GProp_GProps_1: new () => { Mass(): number; CentreOfMass(): OcctPoint3 };
@@ -228,5 +254,21 @@ export interface OcctBindings {
   BRepFilletAPI_MakeChamfer: new (shape: OcctShape) => OcctEdgeMaker;
   BRepCheck_Analyzer: new (shape: OcctShape, geometryControls: boolean) => {
     IsValid_2(): boolean;
+  };
+  BRepOffsetAPI_MakeThickSolid_1: new () => OcctThickSolidMaker;
+  TopTools_ListOfShape_1: new () => OcctShapeListMaker;
+  BRepBuilderAPI_MakeSolid_3: new (shell: OcctShape) => {
+    IsDone(): boolean;
+    Solid(): OcctShape;
+  };
+  BRepOffset_Mode: {
+    BRepOffset_Skin: unknown;
+    BRepOffset_Pipe: unknown;
+    BRepOffset_RectoVerso: unknown;
+  };
+  GeomAbs_JoinType: {
+    GeomAbs_Arc: unknown;
+    GeomAbs_Tangent: unknown;
+    GeomAbs_Intersection: unknown;
   };
 }

@@ -25,6 +25,10 @@ interface UiState {
   pickingExtrudeBodies: string | null;
   /** Edge treatment waiting for edges or faces to be picked in the 3D view. */
   pickingEdges: string | null;
+  /** Shell waiting for whole bodies to be picked in the 3D view. */
+  pickingShellBodies: string | null;
+  /** Shell waiting for the faces it should leave open. */
+  pickingShellFaces: string | null;
   /** Sketch operation waiting for its plane face to be picked in the 3D view. */
   pickingSketchPlane: string | null;
   /** Section plane waiting for the face it should follow. */
@@ -52,6 +56,8 @@ interface UiState {
   requestDelete: (request: DeleteRequest) => void;
   setPickingExtrude: (featureId: string | null) => void;
   setPickingEdges: (featureId: string | null) => void;
+  setPickingShellBodies: (featureId: string | null) => void;
+  setPickingShellFaces: (featureId: string | null) => void;
   setPickingExtrudeBodies: (featureId: string | null) => void;
   setPickingSketchPlane: (featureId: string | null) => void;
   setPickingSectionFace: (planeId: string | null) => void;
@@ -108,6 +114,8 @@ export const useUiStore = create<UiState>((set) => ({
   pickingExtrude: null,
   pickingExtrudeBodies: null,
   pickingEdges: null,
+  pickingShellBodies: null,
+  pickingShellFaces: null,
   pickingSketchPlane: null,
   pickingSectionFace: null,
   pickingRevolveAxis: null,
@@ -138,6 +146,8 @@ export const useUiStore = create<UiState>((set) => ({
             pickingExtrude,
             pickingExtrudeBodies: null,
             pickingEdges: null,
+            pickingShellBodies: null,
+            pickingShellFaces: null,
             pickingSketchPlane: null,
             pickingSectionFace: null,
             pickingRevolveAxis: null,
@@ -151,11 +161,45 @@ export const useUiStore = create<UiState>((set) => ({
             pickingEdges,
             pickingExtrude: null,
             pickingExtrudeBodies: null,
+            pickingShellBodies: null,
+            pickingShellFaces: null,
             pickingSketchPlane: null,
             pickingSectionFace: null,
             pickingRevolveAxis: null,
           }
         : { pickingEdges },
+    ),
+  setPickingShellBodies: (pickingShellBodies) =>
+    set(
+      pickingShellBodies
+        ? {
+            pickingShellBodies,
+            pickingExtrude: null,
+            pickingExtrudeBodies: null,
+            pickingEdges: null,
+            pickingShellFaces: null,
+            pickingSketchPlane: null,
+            pickingSectionFace: null,
+            pickingRevolveAxis: null,
+            sketchPlanePickThenEdit: null,
+          }
+        : { pickingShellBodies },
+    ),
+  setPickingShellFaces: (pickingShellFaces) =>
+    set(
+      pickingShellFaces
+        ? {
+            pickingShellFaces,
+            pickingExtrude: null,
+            pickingExtrudeBodies: null,
+            pickingEdges: null,
+            pickingShellBodies: null,
+            pickingSketchPlane: null,
+            pickingSectionFace: null,
+            pickingRevolveAxis: null,
+            sketchPlanePickThenEdit: null,
+          }
+        : { pickingShellFaces },
     ),
   setPickingExtrudeBodies: (pickingExtrudeBodies) =>
     set(
@@ -164,6 +208,8 @@ export const useUiStore = create<UiState>((set) => ({
             pickingExtrudeBodies,
             pickingExtrude: null,
             pickingEdges: null,
+            pickingShellBodies: null,
+            pickingShellFaces: null,
             pickingSketchPlane: null,
             pickingSectionFace: null,
             pickingRevolveAxis: null,
@@ -179,6 +225,8 @@ export const useUiStore = create<UiState>((set) => ({
             pickingExtrude: null,
             pickingExtrudeBodies: null,
             pickingEdges: null,
+            pickingShellBodies: null,
+            pickingShellFaces: null,
             pickingSectionFace: null,
             pickingRevolveAxis: null,
           }
@@ -192,6 +240,8 @@ export const useUiStore = create<UiState>((set) => ({
             pickingExtrude: null,
             pickingExtrudeBodies: null,
             pickingEdges: null,
+            pickingShellBodies: null,
+            pickingShellFaces: null,
             pickingSketchPlane: null,
             pickingRevolveAxis: null,
             sketchPlanePickThenEdit: null,
@@ -206,6 +256,8 @@ export const useUiStore = create<UiState>((set) => ({
             pickingExtrude: null,
             pickingExtrudeBodies: null,
             pickingEdges: null,
+            pickingShellBodies: null,
+            pickingShellFaces: null,
             pickingSketchPlane: null,
             pickingSectionFace: null,
             sketchPlanePickThenEdit: null,
@@ -219,6 +271,8 @@ export const useUiStore = create<UiState>((set) => ({
       pickingExtrude: null,
       pickingExtrudeBodies: null,
       pickingEdges: null,
+      pickingShellBodies: null,
+      pickingShellFaces: null,
       pickingSectionFace: null,
       pickingRevolveAxis: null,
     }),
@@ -227,6 +281,8 @@ export const useUiStore = create<UiState>((set) => ({
       pickingExtrude: null,
       pickingExtrudeBodies: null,
       pickingEdges: null,
+      pickingShellBodies: null,
+      pickingShellFaces: null,
       pickingSketchPlane: null,
       pickingSectionFace: null,
       pickingRevolveAxis: null,

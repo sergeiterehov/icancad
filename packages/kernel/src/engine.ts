@@ -16,6 +16,8 @@ import type {
   ProfileLoop,
   RevolveAxisLine,
   ShapeStats,
+  ShellParams,
+  ShellResult,
   SplitSolid,
   SplitSolidsParams,
   SplitSolidsResult,
@@ -219,6 +221,15 @@ const MIN_TREATMENT_SIZE = 0.01;
 /** Bisection steps used to find the largest size that still builds. */
 const TREATMENT_SEARCH_STEPS = 6;
 
+/** Below this a shell wall is not worth building. */
+const MIN_SHELL_THICKNESS = 0.01;
+
+/** Bisection steps used to find the largest thickness that still builds. */
+const SHELL_SEARCH_STEPS = 6;
+
+/** Tolerance handed to the offset maker. */
+const SHELL_TOLERANCE = 1e-3;
+
 export class KernelEngine {
   private oc: OcctBindings | null = null;
   private loading: Promise<OcctBindings> | null = null;
@@ -239,6 +250,11 @@ export class KernelEngine {
     string,
     { good: number; bad: number; index: number }
   >();
+  /**
+   * Shell selections that only build up to a certain thickness: the largest
+   * thickness that worked and the smallest one that was rejected.
+   */
+  private readonly shellSplits = new Map<string, { good: number; bad: number }>();
 
   constructor(
     private readonly loader: OcctLoader,
@@ -860,6 +876,240 @@ export class KernelEngine {
       facesFromBase,
       edgeCount: edges.length,
     };
+  }
+
+  /**
+   * Hollows a body in place (`inward`, a cavity) or grows a new body around it
+   * (`outward`, with an optional gap). A thickness the geometry cannot take is
+   * reduced instead of failing, and the size actually built is reported.
+   */
+  shell(params: ShellParams): ShellResult {
+    if (!params.shapeId) throw new KernelOpError('INVALID_PARAMS', 'shapeId is required');
+    if (!Number.isFinite(params.thickness) || params.thickness <= 0) {
+      throw new KernelOpError('INVALID_PARAMS', 'thickness must be positive');
+    }
+    if (!Number.isFinite(params.offset) || params.offset < 0) {
+      throw new KernelOpError('INVALID_PARAMS', 'offset must be a non-negative number');
+    }
+    const source = this.getShape(params.sourceShapeId);
+    const closing = params.removeFaceIds.map((faceId) => {
+      if (!Number.isInteger(faceId) || faceId < 0) {
+        throw new KernelOpError('INVALID_PARAMS', 'Face ids must be non-negative integers');
+      }
+      const face = this.findFace(source, faceId);
+      if (!face) {
+        throw new KernelOpError('INVALID_PARAMS', `Face ${faceId} does not exist on the body`);
+      }
+      return face;
+    });
+    const offset = params.direction === 'outward' ? params.offset : 0;
+    const requested = Math.max(MIN_SHELL_THICKNESS, params.thickness);
+    const key = `${params.sourceShapeId}|${params.direction}|${offset}|${[...params.removeFaceIds]
+      .sort((a, b) => a - b)
+      .join(',')}`;
+    const built = this.findShellBuild(source, closing, params.direction, offset, requested, key);
+    if (!built) {
+      throw new KernelOpError(
+        'SHELL_FAILED',
+        params.direction === 'inward'
+          ? 'This body cannot be hollowed with these settings'
+          : 'This body cannot be wrapped with these settings',
+      );
+    }
+    this.shapes.set(params.shapeId, built.shape);
+    return {
+      shapeId: params.shapeId,
+      stats: this.countTopology(built.shape),
+      applied: built.applied,
+    };
+  }
+
+  /** Requested thickness first, then the largest one the geometry still takes. */
+  private findShellBuild(
+    source: OcctShape,
+    closing: OcctShape[],
+    direction: ShellParams['direction'],
+    offset: number,
+    requested: number,
+    key: string,
+  ): { shape: OcctShape; applied: number } | null {
+    const direct = this.attemptShell(source, closing, direction, offset, requested);
+    if (direct) return { shape: direct, applied: requested };
+
+    // A selection that failed at a known size does not have to be searched
+    // again while the user drags the thickness up and down.
+    const known = this.shellSplits.get(key);
+    if (known && known.good < requested) {
+      const cached = this.attemptShell(source, closing, direction, offset, known.good);
+      if (cached) return { shape: cached, applied: known.good };
+      this.shellSplits.delete(key);
+    }
+
+    let low = 0;
+    let high = requested;
+    let shape: OcctShape | null = null;
+    let applied = 0;
+    for (let step = 0; step < SHELL_SEARCH_STEPS; step += 1) {
+      const mid = (low + high) / 2;
+      if (mid < MIN_SHELL_THICKNESS) break;
+      const attempt = this.attemptShell(source, closing, direction, offset, mid);
+      if (attempt) {
+        low = mid;
+        applied = mid;
+        shape = attempt;
+      } else {
+        high = mid;
+      }
+    }
+    if (!shape) return null;
+    if (this.shellSplits.size > 64) this.shellSplits.clear();
+    this.shellSplits.set(key, { good: applied, bad: Math.max(high, applied) });
+    return { shape, applied };
+  }
+
+  private attemptShell(
+    source: OcctShape,
+    closing: OcctShape[],
+    direction: ShellParams['direction'],
+    offset: number,
+    thickness: number,
+  ): OcctShape | null {
+    const oc = this.requireOc();
+    const distance = direction === 'inward' ? -thickness : offset + thickness;
+    let offsetShape: OcctShape | null = null;
+    for (const join of [
+      oc.GeomAbs_JoinType.GeomAbs_Intersection,
+      oc.GeomAbs_JoinType.GeomAbs_Arc,
+    ]) {
+      offsetShape = this.thickSolid(source, closing, distance, join);
+      if (offsetShape) break;
+    }
+    offsetShape = offsetShape ? this.ensureSolid(this.positiveVolume(offsetShape)) : null;
+    if (!offsetShape) return null;
+
+    let result: OcctShape;
+    try {
+      if (direction === 'inward') {
+        result = closing.length > 0 ? offsetShape : this.boolean(source, offsetShape, 'cut');
+      } else if (offset > 0) {
+        const inner = this.shellInnerSolid(source, offset);
+        if (!inner) return null;
+        result = this.boolean(offsetShape, inner, 'cut');
+      } else {
+        result = closing.length > 0 ? offsetShape : this.boolean(offsetShape, source, 'cut');
+      }
+    } catch {
+      return null;
+    }
+
+    const sourceVolume = this.shapeVolume(source);
+    const volume = this.shapeVolume(result);
+    if (!Number.isFinite(volume)) return null;
+    // An oversized offset can silently leave the body untouched; a wall has to
+    // change what is there, and an outward wall has to be material of its own.
+    const epsilon = Math.max(1e-9, Math.abs(sourceVolume) * 1e-9);
+    if (direction === 'inward' ? !(volume < sourceVolume - epsilon) : !(volume > epsilon)) {
+      return null;
+    }
+    try {
+      if (!new oc.BRepCheck_Analyzer(result, true).IsValid_2()) return null;
+    } catch {
+      return null;
+    }
+    return result;
+  }
+
+  /** Offset solid used as the inner surface of an outward shell with a gap. */
+  private shellInnerSolid(source: OcctShape, offset: number): OcctShape | null {
+    const oc = this.requireOc();
+    for (const join of [
+      oc.GeomAbs_JoinType.GeomAbs_Intersection,
+      oc.GeomAbs_JoinType.GeomAbs_Arc,
+    ]) {
+      const shape = this.thickSolid(source, [], offset, join);
+      const solid = shape ? this.ensureSolid(this.positiveVolume(shape)) : null;
+      if (solid) return solid;
+    }
+    return null;
+  }
+
+  private thickSolid(
+    source: OcctShape,
+    closing: OcctShape[],
+    distance: number,
+    join: unknown,
+  ): OcctShape | null {
+    const oc = this.requireOc();
+    try {
+      const maker = new oc.BRepOffsetAPI_MakeThickSolid_1();
+      const faces = new oc.TopTools_ListOfShape_1();
+      for (const face of closing) faces.Append_1(face);
+      maker.MakeThickSolidByJoin(
+        source,
+        faces,
+        distance,
+        SHELL_TOLERANCE,
+        oc.BRepOffset_Mode.BRepOffset_Skin,
+        false,
+        false,
+        join,
+        false,
+      );
+      maker.Build();
+      if (!maker.IsDone()) return null;
+      const shape = maker.Shape();
+      return shape.IsNull() ? null : shape;
+    } catch {
+      // A rejected offset throws through the binding; the next size is tried.
+      return null;
+    }
+  }
+
+  /** Flips a backwards offset solid so its material has a positive volume. */
+  private positiveVolume(shape: OcctShape): OcctShape | null {
+    if (shape.IsNull() || this.countTopology(shape).faces === 0) return null;
+    const volume = this.shapeVolume(shape);
+    if (!Number.isFinite(volume)) return null;
+    return volume < 0 ? shape.Reversed() : shape;
+  }
+
+  /** A shell the offset maker leaves as a lone closed shell becomes a solid. */
+  private ensureSolid(shape: OcctShape | null): OcctShape | null {
+    if (!shape) return null;
+    const oc = this.requireOc();
+    const stats = this.countTopology(shape);
+    if (stats.solids > 0) return shape;
+    if (stats.faces === 0) return null;
+    const shells = this.subShapesOf(shape, oc.TopAbs_ShapeEnum.TopAbs_SHELL);
+    if (shells.length !== 1) return null;
+    try {
+      const maker = new oc.BRepBuilderAPI_MakeSolid_3(oc.TopoDS.Shell_1(shells[0]!));
+      return maker.IsDone() ? maker.Solid() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private subShapesOf(shape: OcctShape, kind: number): OcctShape[] {
+    const oc = this.requireOc();
+    const found: OcctShape[] = [];
+    const explorer = new oc.TopExp_Explorer_2(shape, kind, oc.TopAbs_ShapeEnum.TopAbs_SHAPE);
+    while (explorer.More()) {
+      found.push(explorer.Current());
+      explorer.Next();
+    }
+    return found;
+  }
+
+  private shapeVolume(shape: OcctShape): number {
+    const oc = this.requireOc();
+    try {
+      const props = new oc.GProp_GProps_1();
+      oc.BRepGProp.VolumeProperties_1(shape, props, false, false, false);
+      return props.Mass();
+    } catch {
+      return NaN;
+    }
   }
 
   /**

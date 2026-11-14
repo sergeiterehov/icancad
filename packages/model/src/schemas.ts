@@ -254,9 +254,10 @@ const extrudeFeature = z.object({
 const shellFeature = z.object({
   ...featureBase,
   type: z.literal('shell'),
-  bodyId: z.string().min(1),
-  removeFaces: z.array(entityRef),
+  bodyIds: z.array(z.string().min(1)).default([]),
+  removeFaces: z.array(bodyFaceRef).default([]),
   thickness: z.number().positive(),
+  offset: z.number().nonnegative().default(0),
   direction: z.enum(['inward', 'outward']),
 });
 

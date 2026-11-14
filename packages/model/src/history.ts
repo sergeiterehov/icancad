@@ -102,6 +102,10 @@ function referencedBodyIds(feature: Feature): string[] {
     case 'extrude':
       return [...feature.bodyIds, ...(feature.faceRefs ?? []).map((ref) => ref.bodyId)];
     case 'shell':
+      return [
+        ...(feature.bodyIds ?? []),
+        ...(feature.removeFaces ?? []).map((ref) => ref.bodyId),
+      ];
     case 'hole':
     case 'transform':
       return [feature.bodyId];

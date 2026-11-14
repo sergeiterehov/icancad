@@ -2,6 +2,7 @@ import type {
   EdgeTreatmentResult,
   MakeBoxResult,
   ShapeStats,
+  ShellResult,
   SplitSolid,
   SplitSolidsResult,
   TessellationResult,
@@ -15,12 +16,14 @@ import {
   extrudeBodyId,
   featureBodyId,
   isMeshObject,
+  shellBodyId,
   type BodyFaceRef,
   type EdgeTreatmentFeature,
   type ExtrudeFeature,
   type Feature,
   type ImportMeshFeature,
   type Project,
+  type ShellFeature,
   type SketchFeature,
   type SketchFrame,
 } from '@icancad/model';
@@ -41,6 +44,7 @@ import { parseMeshInWorker } from '../io/client';
 import { i18n } from '../i18n';
 import { getKernelClient } from './client';
 import { faceRegion, pointInMesh } from '../quick/geometry';
+import { resolveShellFaceRef } from '../quick/shell';
 import { resolveEdgeRef } from './edgeLookup';
 import { edgeTreatmentLimit } from './edgeTreatment';
 import { resolveFaceRef } from './faceLookup';
@@ -511,7 +515,11 @@ function buildPreview(
       kind: 'modified',
       ...describe(bodyId),
       baseMesh: before,
-      ...(keepsBodySolid || feature.type === 'edge-treatment' ? { translucent: false } : {}),
+      ...(keepsBodySolid ||
+      feature.type === 'edge-treatment' ||
+      (feature.type === 'shell' && feature.direction === 'inward')
+        ? { translucent: false }
+        : {}),
       // A treatment keeps its body as it is: the mark is only there so picking
       // still targets the input shape, and the colour matches the real result.
       ...(feature.type === 'edge-treatment' ? { silent: true } : {}),
@@ -672,6 +680,19 @@ async function evaluateFeature(
     state.createdBodies.set(feature.id, []);
     try {
       await applyEdgeTreatment(feature, state, context);
+    } catch (error) {
+      state.featureErrors[feature.id] = kernelErrorCode(error);
+      state.blockedFeatureId = feature.id;
+      return;
+    }
+    if (state.featureErrors[feature.id]) state.blockedFeatureId = feature.id;
+    return;
+  }
+
+  if (feature.type === 'shell') {
+    state.createdBodies.set(feature.id, []);
+    try {
+      await applyShell(feature, state, context);
     } catch (error) {
       state.featureErrors[feature.id] = kernelErrorCode(error);
       state.blockedFeatureId = feature.id;
@@ -1457,6 +1478,124 @@ async function applyEdgeTreatment(
   const bodyErrors = Object.values(featureBodyErrors[feature.id] ?? {});
   if (!appliedAny || bodyErrors.length > 0) {
     state.featureErrors[feature.id] = bodyErrors[0] ?? 'TARGET_FAILED';
+  }
+}
+
+/**
+ * Hollows bodies in place (`inward`) or gives each of them a new covering body
+ * (`outward`). Faces left open are resolved like any other stored face ref, so
+ * a body renumbered by an earlier operation still finds them.
+ */
+async function applyShell(
+  feature: ShellFeature,
+  state: RebuildState,
+  context: EvalContext,
+): Promise<void> {
+  const { client, epoch } = context;
+  const { bodyShapes, bodyOwner, bodySource, faceOwners, meshes, bodyStats, createdBodies } =
+    state;
+
+  const targets = new Set<string>(feature.bodyIds ?? []);
+  const openings = new Map<string, number[]>();
+  const markBodyError = (bodyId: string, code: string) => {
+    const errors = state.featureBodyErrors[feature.id] ?? {};
+    errors[bodyId] = code;
+    state.featureBodyErrors[feature.id] = errors;
+  };
+  const bodyErrorCode = (bodyId: string) =>
+    bodyShapes.has(bodyId) ? 'TARGET_FAILED' : meshes[bodyId] ? 'BODY_NOT_SOLID' : 'UNKNOWN_BODY';
+
+  for (const ref of feature.removeFaces ?? []) {
+    const resolved = resolveShellFaceRef({ bodyShapes, meshes, bodyStats }, ref);
+    if (!resolved) {
+      markBodyError(ref.bodyId, bodyErrorCode(ref.bodyId));
+      continue;
+    }
+    const faces = openings.get(resolved.bodyId) ?? [];
+    if (!faces.includes(resolved.faceId)) faces.push(resolved.faceId);
+    openings.set(resolved.bodyId, faces);
+    targets.add(resolved.bodyId);
+  }
+
+  if (targets.size === 0 && (feature.removeFaces ?? []).length === 0) return;
+
+  const newBodies: string[] = [];
+  let applied = Infinity;
+  let appliedAny = false;
+
+  for (const bodyId of targets) {
+    const sourceShapeId = bodyShapes.get(bodyId);
+    if (!sourceShapeId) {
+      markBodyError(bodyId, bodyErrorCode(bodyId));
+      continue;
+    }
+    // Inward wall thickness can never exceed half of the body across its
+    // smallest side; starting below that keeps OCCT out of a degenerate offset.
+    const mesh = meshes[bodyId];
+    const extent = mesh
+      ? Math.min(
+          mesh.bbox.max[0] - mesh.bbox.min[0],
+          mesh.bbox.max[1] - mesh.bbox.min[1],
+          mesh.bbox.max[2] - mesh.bbox.min[2],
+        )
+      : 0;
+    const ceiling =
+      feature.direction === 'inward' && extent > 0 ? extent / 2 : feature.thickness;
+    const thickness = Math.min(feature.thickness, ceiling);
+    const resultShapeId = trackShape(`${bodyId}:${feature.id}:shell`);
+    let result: ShellResult;
+    try {
+      result = await client.request<ShellResult>({
+        type: 'shell',
+        params: {
+          shapeId: resultShapeId,
+          sourceShapeId,
+          removeFaceIds: openings.get(bodyId) ?? [],
+          thickness,
+          offset: feature.direction === 'outward' ? Math.max(0, feature.offset ?? 0) : 0,
+          direction: feature.direction,
+        },
+      });
+    } catch (error) {
+      markBodyError(bodyId, kernelErrorCode(error));
+      continue;
+    }
+    if (epoch !== rebuildEpoch) return;
+
+    const meshAfter = await client.request<TessellationResult>({
+      type: 'tessellate',
+      shapeId: resultShapeId,
+    });
+    if (epoch !== rebuildEpoch) return;
+
+    if (feature.direction === 'inward') {
+      bodyShapes.set(bodyId, resultShapeId);
+      bodySource.set(bodyId, feature.id);
+      bodyStats[bodyId] = result.stats;
+      meshes[bodyId] = meshAfter;
+      ownAllFaces(faceOwners, bodyId, result.stats.faces, feature.id);
+    } else {
+      const newBodyId = shellBodyId(feature.id, bodyId);
+      bodyShapes.set(newBodyId, resultShapeId);
+      bodyOwner.set(newBodyId, feature.id);
+      bodySource.set(newBodyId, feature.id);
+      bodyStats[newBodyId] = result.stats;
+      meshes[newBodyId] = meshAfter;
+      ownAllFaces(faceOwners, newBodyId, result.stats.faces, feature.id);
+      newBodies.push(newBodyId);
+    }
+    applied = Math.min(applied, result.applied);
+    appliedAny = true;
+  }
+
+  createdBodies.set(feature.id, newBodies);
+
+  if (appliedAny) {
+    state.featureLimits[feature.id] = { requested: feature.thickness, applied };
+  }
+  const bodyErrors = Object.values(state.featureBodyErrors[feature.id] ?? {});
+  if (!appliedAny || bodyErrors.length > 0) {
+    state.featureErrors[feature.id] = bodyErrors[0] ?? 'NO_TARGET_BODY';
   }
 }
 

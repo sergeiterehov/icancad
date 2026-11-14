@@ -70,7 +70,7 @@ import {
 import { formatNumber } from './format';
 import { useContextMenuStore } from './ContextMenu';
 import { ChamferIcon, FilletIcon } from './edgeIcons';
-import { ExtrudeOpIcon, PointIcon, SketchEntityIcon } from './featureIcons';
+import { ExtrudeOpIcon, PointIcon, ShellIcon, SketchEntityIcon } from './featureIcons';
 import { SectionPanel } from './SectionPanel';
 import {
   constraintsGeometryIds,
@@ -294,6 +294,8 @@ function featureTypeLabel(t: (key: string) => string, feature: Feature): string 
       return t('inspector.mesh');
     case 'edge-treatment':
       return t('features.edgeTreatment');
+    case 'shell':
+      return t('features.shell');
     default:
       return t('inspector.operation');
   }
@@ -541,6 +543,11 @@ export function Inspector() {
   const setEdgeTreatmentSize = useDocumentStore((state) => state.setEdgeTreatmentSize);
   const toggleEdgeTreatmentFace = useDocumentStore((state) => state.toggleEdgeTreatmentFace);
   const toggleEdgeTreatmentEdge = useDocumentStore((state) => state.toggleEdgeTreatmentEdge);
+  const setShellDirection = useDocumentStore((state) => state.setShellDirection);
+  const setShellThickness = useDocumentStore((state) => state.setShellThickness);
+  const setShellOffset = useDocumentStore((state) => state.setShellOffset);
+  const toggleShellBody = useDocumentStore((state) => state.toggleShellBody);
+  const toggleShellFace = useDocumentStore((state) => state.toggleShellFace);
   const toggleBodyVisibility = useDocumentStore((state) => state.toggleBodyVisibility);
   const toggleSketchVisibility = useDocumentStore((state) => state.toggleSketchVisibility);
   const setConstructionVisible = useDocumentStore((state) => state.setConstructionVisible);
@@ -549,6 +556,10 @@ export function Inspector() {
   const pickingSketchPlane = useUiStore((state) => state.pickingSketchPlane);
   const pickingEdges = useUiStore((state) => state.pickingEdges);
   const setPickingEdges = useUiStore((state) => state.setPickingEdges);
+  const pickingShellBodies = useUiStore((state) => state.pickingShellBodies);
+  const pickingShellFaces = useUiStore((state) => state.pickingShellFaces);
+  const setPickingShellBodies = useUiStore((state) => state.setPickingShellBodies);
+  const setPickingShellFaces = useUiStore((state) => state.setPickingShellFaces);
   const pickingRevolveAxis = useUiStore((state) => state.pickingRevolveAxis);
   const setPickingRevolveAxis = useUiStore((state) => state.setPickingRevolveAxis);
   const setPickingExtrude = useUiStore((state) => state.setPickingExtrude);
@@ -648,6 +659,18 @@ export function Inspector() {
     if (picking && picking !== feature?.id) setPickingExtrude(null);
     if (pickingBodies && pickingBodies !== feature?.id) setPickingExtrudeBodies(null);
     if (
+      pickingShellBodies &&
+      (pickingShellBodies !== feature?.id || feature?.type !== 'shell')
+    ) {
+      setPickingShellBodies(null);
+    }
+    if (
+      pickingShellFaces &&
+      (pickingShellFaces !== feature?.id || feature?.type !== 'shell')
+    ) {
+      setPickingShellFaces(null);
+    }
+    if (
       pickingSketchPlane &&
       (pickingSketchPlane !== feature?.id ||
         feature?.type !== 'sketch' ||
@@ -666,11 +689,15 @@ export function Inspector() {
   }, [
     picking,
     pickingBodies,
+    pickingShellBodies,
+    pickingShellFaces,
     pickingSketchPlane,
     pickingRevolveAxis,
     feature,
     setPickingExtrude,
     setPickingExtrudeBodies,
+    setPickingShellBodies,
+    setPickingShellFaces,
     setPickingSketchPlane,
     setPickingRevolveAxis,
   ]);
@@ -728,6 +755,14 @@ export function Inspector() {
           value: formatNumber(treatmentApplied.applied, locale, 2),
         })
       : undefined;
+  const shellFeature = feature?.type === 'shell' ? feature : undefined;
+  const shellApplied = shellFeature ? featureLimits[shellFeature.id] : undefined;
+  const shellWarning =
+    shellFeature && shellApplied && shellApplied.applied < shellFeature.thickness
+      ? t('shell.maxWarning', {
+          value: formatNumber(shellApplied.applied, locale, 2),
+        })
+      : undefined;
   // The document is read again on every edit: two changes made by one click must
   // build on each other, not on the render that drew the panel.
   const replaceExtrude = (featureId: string, patch: Partial<ExtrudeFeature>) => {
@@ -770,6 +805,42 @@ export function Inspector() {
           onRemove: () => toggleEdgeTreatmentEdge(treatmentFeature.id, ref),
         })),
       ]
+    : [];
+
+  const shellErrors = shellFeature ? (featureBodyErrors[shellFeature.id] ?? {}) : {};
+  const shellBodyIds = shellFeature
+    ? [...new Set([...shellFeature.bodyIds, ...shellFeature.removeFaces.map((ref) => ref.bodyId)])]
+    : [];
+  const shellBodyRows: PickableRow[] = shellFeature
+    ? shellBodyIds.map((bodyId) => {
+        const body = project.bodies.find((candidate) => candidate.id === bodyId);
+        const resolved = body ? resolveBody(project, body) : undefined;
+        const error = shellErrors[bodyId] ?? (body ? undefined : 'UNKNOWN_BODY');
+        return {
+          key: bodyId,
+          icon: resolved ? (
+            <Box size={14} style={{ color: resolved.color }} />
+          ) : (
+            <Box size={14} />
+          ),
+          name: resolved?.name ?? bodyId,
+          ...(error ? { error: translate(t, `errors.${error}`, error) } : {}),
+          onRemove: () => toggleShellBody(shellFeature.id, bodyId),
+        };
+      })
+    : [];
+  const shellFaceRows: PickableRow[] = shellFeature
+    ? shellFeature.removeFaces.map((ref, index) => {
+        const error = shellErrors[ref.bodyId];
+        return {
+          key: `face:${ref.bodyId}#${ref.faceId}`,
+          name: t('sketch.face', { index: index + 1 }),
+          meta: bodyNameOf(ref.bodyId),
+          icon: <Hexagon size={13} />,
+          ...(error ? { error: translate(t, `errors.${error}`, error) } : {}),
+          onRemove: () => toggleShellFace(shellFeature.id, ref),
+        };
+      })
     : [];
 
   // What an extrude works on: the whole sketch, or the faces picked from it.
@@ -1608,6 +1679,94 @@ export function Inspector() {
                   removeLabel={t('extrude.removeObject')}
                   rows={treatmentRows}
                 />
+              </>
+            )}
+
+            {shellFeature && (
+              <>
+                <PanelSection title={t('shell.direction')}>
+                  <Segmented ariaLabel={t('shell.direction')}>
+                    <SegmentedTab
+                      label={t('shell.cavity')}
+                      icon={<Box size={12} />}
+                      active={shellFeature.direction === 'inward'}
+                      onClick={() => setShellDirection(shellFeature.id, 'inward')}
+                    />
+                    <SegmentedTab
+                      label={t('shell.shell')}
+                      icon={<ShellIcon size={12} />}
+                      active={shellFeature.direction === 'outward'}
+                      onClick={() => setShellDirection(shellFeature.id, 'outward')}
+                    />
+                  </Segmented>
+                </PanelSection>
+
+                <PanelSection title={t('shell.thickness')}>
+                  <div className="dimension-row">
+                    <DimensionField
+                      icon={<MoveVertical size={13} />}
+                      label={t('shell.thickness')}
+                      suffix="mm"
+                      value={shellFeature.thickness}
+                      warning={shellWarning}
+                      onCommit={(thickness) => setShellThickness(shellFeature.id, thickness)}
+                    />
+                    {shellFeature.direction === 'outward' && (
+                      <DimensionField
+                        icon={<ArrowLeftRight size={13} />}
+                        label={t('shell.offset')}
+                        suffix="mm"
+                        allowNegative
+                        value={shellFeature.offset ?? 0}
+                        onCommit={(offset) =>
+                          setShellOffset(shellFeature.id, Math.max(0, offset))
+                        }
+                      />
+                    )}
+                  </div>
+                </PanelSection>
+
+                <PickableSection
+                  title={t('shell.targets')}
+                  count={shellBodyRows.length}
+                  picking={pickingShellBodies === shellFeature.id}
+                  onTogglePicking={() =>
+                    setPickingShellBodies(
+                      pickingShellBodies === shellFeature.id ? null : shellFeature.id,
+                    )
+                  }
+                  pickLabel={t('shell.pickBodies')}
+                  finishLabel={t('extrude.finishPick')}
+                  emptyHint={t('shell.emptyBodies')}
+                  pickHint={t('shell.pickBodiesHint')}
+                  removeLabel={t('extrude.removeObject')}
+                  rows={shellBodyRows}
+                />
+
+                <PickableSection
+                  title={t('shell.openFaces')}
+                  count={shellFaceRows.length}
+                  picking={pickingShellFaces === shellFeature.id}
+                  onTogglePicking={() =>
+                    setPickingShellFaces(
+                      pickingShellFaces === shellFeature.id ? null : shellFeature.id,
+                    )
+                  }
+                  pickLabel={t('shell.pickFaces')}
+                  finishLabel={t('extrude.finishPick')}
+                  emptyHint={t('shell.emptyFaces')}
+                  pickHint={t('shell.pickFacesHint')}
+                  removeLabel={t('extrude.removeObject')}
+                  rows={shellFaceRows}
+                />
+
+                {featureError && (
+                  <PanelSection title={t('inspector.operationError')} className="operation-error">
+                    <p className="operation-error-text">
+                      {translate(t, `errors.${featureError}`, featureError)}
+                    </p>
+                  </PanelSection>
+                )}
               </>
             )}
 

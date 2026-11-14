@@ -56,6 +56,7 @@ import {
   edgeTreatmentEdgeRef,
   edgeTreatmentFaceRef,
 } from '../quick/edgeTreatment';
+import { shellFaceRef } from '../quick/shell';
 import { findBoundExtrude, quickTargetFromSelection } from '../quick/target';
 import { bodyEdgeAxisRef } from '../sketch/revolveAxis';
 import { formatNumber } from '../ui/format';
@@ -152,6 +153,8 @@ export function Viewport() {
   const pickingExtrude = useUiStore((state) => state.pickingExtrude);
   const pickingExtrudeBodies = useUiStore((state) => state.pickingExtrudeBodies);
   const pickingEdges = useUiStore((state) => state.pickingEdges);
+  const pickingShellBodies = useUiStore((state) => state.pickingShellBodies);
+  const pickingShellFaces = useUiStore((state) => state.pickingShellFaces);
   const pickingSketchPlane = useUiStore((state) => state.pickingSketchPlane);
   const pickingSectionFace = useUiStore((state) => state.pickingSectionFace);
   const pickingRevolveAxis = useUiStore((state) => state.pickingRevolveAxis);
@@ -208,6 +211,8 @@ export function Viewport() {
     Boolean(pickingExtrude) ||
     Boolean(pickingExtrudeBodies) ||
     Boolean(pickingEdges) ||
+    Boolean(pickingShellBodies) ||
+    Boolean(pickingShellFaces) ||
     Boolean(pickingSketchPlane) ||
     Boolean(pickingSectionFace) ||
     Boolean(pickingRevolveAxis) ||
@@ -360,6 +365,35 @@ export function Viewport() {
           if (pick?.kind === 'body') {
             store.select({ kind: 'body', id: pick.id });
           }
+          return;
+        }
+        if (ui.pickingShellBodies) {
+          if (pick?.kind !== 'body') return;
+          const body = store.project.bodies.find((candidate) => candidate.id === pick.id);
+          if (!body || body.kind === 'mesh') return;
+          store.toggleShellBody(ui.pickingShellBodies, pick.id);
+          return;
+        }
+        if (ui.pickingShellFaces) {
+          if (pick?.kind !== 'body-face') return;
+          const body = store.project.bodies.find(
+            (candidate) => candidate.id === pick.bodyId,
+          );
+          if (!body || body.kind === 'mesh') return;
+          // Picking runs against the input of the edited operation: its own
+          // result has bodies and faces the document does not have yet.
+          const kernelState = useKernelStore.getState();
+          const mark = kernelState.preview?.bodies.find(
+            (candidate) => candidate.id === pick.bodyId,
+          );
+          if (mark?.kind === 'added') return;
+          const mesh = mark?.baseMesh ?? kernelState.meshes[pick.bodyId];
+          if (!mesh) return;
+          const ref = shellFaceRef(mesh, pick.bodyId, pick.faceId, {
+            normal: pick.normal,
+            origin: pick.origin,
+          });
+          if (ref) store.toggleShellFace(ui.pickingShellFaces, ref);
           return;
         }
         if (ui.pickingSketchPlane) {
@@ -860,11 +894,14 @@ export function Viewport() {
         : undefined;
     const extrude = selectedFeature?.type === 'extrude' ? selectedFeature : undefined;
     const treatment = selectedFeature?.type === 'edge-treatment' ? selectedFeature : undefined;
+    const shell = selectedFeature?.type === 'shell' ? selectedFeature : undefined;
     const errors = extrude
       ? (featureBodyErrors[extrude.id] ?? {})
       : treatment
         ? (featureBodyErrors[treatment.id] ?? {})
-        : {};
+        : shell
+          ? (featureBodyErrors[shell.id] ?? {})
+          : {};
     const selected: string[] = [];
     const invalid: string[] = [];
     // Faces picked in the tree or inspector stay highlighted even without an
@@ -893,6 +930,11 @@ export function Viewport() {
       if (errors[ref.bodyId]) invalid.push(key);
       else selected.push(key);
     }
+    for (const ref of shell?.removeFaces ?? []) {
+      const key = `b:${ref.bodyId}#${ref.faceId}`;
+      if (errors[ref.bodyId]) invalid.push(key);
+      else selected.push(key);
+    }
     const planeSketch = selectedFeature?.type === 'sketch' ? selectedFeature : undefined;
     // While the sketch is being edited its plane is context, not a selected
     // target, so the reference face is not highlighted.
@@ -911,11 +953,12 @@ export function Viewport() {
       picking:
         Boolean(pickingExtrude) ||
         Boolean(pickingEdges) ||
+        Boolean(pickingShellFaces) ||
         Boolean(pickingSketchPlane) ||
         Boolean(pickingSectionFace) ||
         Boolean(pickingRevolveAxis) ||
         sketchProjecting,
-      bodyPicking: Boolean(pickingExtrudeBodies),
+      bodyPicking: Boolean(pickingExtrudeBodies) || Boolean(pickingShellBodies),
       edgePicking: Boolean(pickingEdges) || Boolean(pickingRevolveAxis) || sketchProjecting,
       projecting: sketchProjecting,
       bodyFacesOnly: Boolean(pickingSketchPlane) || Boolean(pickingSectionFace),
@@ -929,6 +972,8 @@ export function Viewport() {
     pickingSketchPlane,
     pickingSectionFace,
     pickingEdges,
+    pickingShellBodies,
+    pickingShellFaces,
     pickingRevolveAxis,
     sketchProjecting,
     activeSketchId,

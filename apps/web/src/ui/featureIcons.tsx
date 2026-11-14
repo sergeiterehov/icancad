@@ -9,6 +9,7 @@ import {
   Layers,
   LineSquiggle,
   LoaderCircle,
+  PackageOpen,
   PencilRuler,
   Scissors,
   SquaresIntersect,
@@ -18,6 +19,11 @@ import {
   Waypoints,
 } from 'lucide-react';
 import { ChamferIcon, FilletIcon } from './edgeIcons';
+
+/** The shell operation: a body with its inside exposed. */
+export function ShellIcon({ size = 16 }: { size?: number }) {
+  return <PackageOpen size={size} />;
+}
 
 /** Experimental Lucide Lab point marker. */
 export function PointIcon({ size = 16 }: { size?: number }) {
@@ -89,6 +95,8 @@ export function FeatureIcon({ feature, size = 16 }: { feature: Feature; size?: n
     // The history names the concrete operation, so it shows the kind's icon.
     case 'edge-treatment':
       return feature.kind === 'chamfer' ? <ChamferIcon size={size} /> : <FilletIcon size={size} />;
+    case 'shell':
+      return <ShellIcon size={size} />;
     default:
       return <Layers size={size} />;
   }
