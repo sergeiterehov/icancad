@@ -42,6 +42,8 @@ import {
 } from '../stores/kernelStore';
 import { parseMeshInWorker } from '../io/client';
 import { i18n } from '../i18n';
+import { primitiveKernelParams } from '../primitive/params';
+import { primitivePreview } from '../primitive/preview';
 import { getKernelClient } from './client';
 import { faceRegion, pointInMesh } from '../quick/geometry';
 import { resolveShellFaceRef } from '../quick/shell';
@@ -382,35 +384,41 @@ async function runRebuild(
   let preview: ScenePreview | null = null;
 
   if (previewFeature && previewIndex === endIndex + 1 && !base.blockedFeatureId) {
-    const ghost: GhostCollector = {};
-    // Opening the settings of an operation that was already evaluated just
-    // reuses its snapshot: only real edits force a recalculation. A cut has to
-    // be evaluated again because its tool volume is only tessellated for the
-    // preview.
-    // A cut shows the removed volume; an add shows the material it will add.
-    // Both need the tool solid only the preview tessellates.
-    const needsGhost =
-      previewFeature.type === 'extrude' &&
-      (previewFeature.op === 'subtract' || previewFeature.op === 'add');
-    const cachedPreview = needsGhost ? null : rebuildCache.find(features, previewIndex);
-    if (cachedPreview && cachedPreview.index === previewIndex) {
-      published = cachedPreview.state;
-      preview = buildPreview(previewFeature, base, published, ghost, project);
+    if (previewFeature.type === 'primitive') {
+      // A primitive in edit mode is a delta: a cheap overlay mesh instead of a
+      // kernel body, so it ignores sections and stays above the model.
+      if (!previewFeature.suppressed) preview = primitivePreview(previewFeature, project);
     } else {
-      const next = cloneState(base);
-      if (!previewFeature.suppressed) {
-        await evaluateFeature(previewFeature, next, { client, epoch, project, ghost });
-        if (epoch !== rebuildEpoch) return;
-        if (!next.blockedFeatureId) {
-          produced.push({
-            index: previewIndex,
-            prefix: features.slice(0, previewIndex + 1),
-            state: cloneState(next),
-          });
+      const ghost: GhostCollector = {};
+      // Opening the settings of an operation that was already evaluated just
+      // reuses its snapshot: only real edits force a recalculation. A cut has to
+      // be evaluated again because its tool volume is only tessellated for the
+      // preview.
+      // A cut shows the removed volume; an add shows the material it will add.
+      // Both need the tool solid only the preview tessellates.
+      const needsGhost =
+        previewFeature.type === 'extrude' &&
+        (previewFeature.op === 'subtract' || previewFeature.op === 'add');
+      const cachedPreview = needsGhost ? null : rebuildCache.find(features, previewIndex);
+      if (cachedPreview && cachedPreview.index === previewIndex) {
+        published = cachedPreview.state;
+        preview = buildPreview(previewFeature, base, published, ghost, project);
+      } else {
+        const next = cloneState(base);
+        if (!previewFeature.suppressed) {
+          await evaluateFeature(previewFeature, next, { client, epoch, project, ghost });
+          if (epoch !== rebuildEpoch) return;
+          if (!next.blockedFeatureId) {
+            produced.push({
+              index: previewIndex,
+              prefix: features.slice(0, previewIndex + 1),
+              state: cloneState(next),
+            });
+          }
         }
+        published = next;
+        preview = buildPreview(previewFeature, base, next, ghost, project);
       }
-      published = next;
-      preview = buildPreview(previewFeature, base, next, ghost, project);
     }
   }
 
@@ -632,8 +640,8 @@ async function evaluateFeature(
       const bodyId = featureBodyId(feature.id);
       const shapeId = trackShape(`feat:${feature.id}`);
       const result = await client.request<MakeBoxResult>({
-        type: 'make-box',
-        params: { shapeId, ...feature.params, at: feature.transform.translation },
+        type: 'make-primitive',
+        params: primitiveKernelParams(feature, shapeId),
       });
       if (epoch !== rebuildEpoch) return;
       const mesh = await client.request<TessellationResult>({ type: 'tessellate', shapeId });

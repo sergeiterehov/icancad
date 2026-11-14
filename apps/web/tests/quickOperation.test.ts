@@ -102,6 +102,23 @@ const labels = {
   edgeTreatmentDistanceTooltip: 'Chamfer distance',
   revolveStart: 'Revolve start angle',
   revolveEnd: 'Revolve end angle',
+  move: 'Move',
+  moveLabel: 'Move',
+  moveX: 'Move X',
+  moveY: 'Move Y',
+  moveZ: 'Move Z',
+  width: 'Width',
+  height: 'Height',
+  depth: 'Depth',
+  radius: 'Radius',
+  diameter: 'Diameter',
+  bottomRadius: 'Bottom radius',
+  topRadius: 'Top radius',
+  baseRadius: 'Base radius',
+  ringDiameter: 'Ring diameter',
+  tubeDiameter: 'Tube diameter',
+  sides: 'Sides',
+  sidesTooltip: 'Sides tooltip',
 };
 
 function handles(context: {

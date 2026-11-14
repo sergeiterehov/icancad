@@ -65,6 +65,23 @@ export interface BoxParams {
   at?: [number, number, number];
 }
 
+interface PrimitiveParamsBase {
+  shapeId: string;
+  /** Anchor of the primitive: a corner for a box, a centre otherwise. */
+  at?: [number, number, number];
+}
+
+export type MakePrimitiveParams = PrimitiveParamsBase &
+  (
+    | { kind: 'box'; dx: number; dy: number; dz: number }
+    | { kind: 'sphere'; radius: number }
+    | { kind: 'cylinder'; radius: number; height: number }
+    | { kind: 'cone'; bottomRadius: number; topRadius: number; height: number }
+    | { kind: 'torus'; majorRadius: number; tubeRadius: number }
+    | { kind: 'pyramid'; sides: number; radius: number; height: number }
+    | { kind: 'capsule'; radius: number; height: number }
+  );
+
 export interface MakeBoxResult {
   shapeId: string;
   stats: ShapeStats;
@@ -274,6 +291,7 @@ export type KernelErrorCode =
 export type KernelRequestPayload =
   | { type: 'health' }
   | { type: 'make-box'; params: BoxParams }
+  | { type: 'make-primitive'; params: MakePrimitiveParams }
   | { type: 'make-prism'; params: MakePrismParams }
   | { type: 'make-face-prism'; params: MakeFacePrismParams }
   | { type: 'make-revolve'; params: MakeRevolveParams }

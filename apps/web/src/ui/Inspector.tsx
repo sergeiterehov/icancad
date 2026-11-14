@@ -27,6 +27,8 @@ import {
   ChartPie,
   Check,
   ChevronsUpDown,
+  Circle,
+  Torus,
   Eye,
   EyeOff,
   Hexagon,
@@ -37,7 +39,6 @@ import {
   Pencil,
   Spline,
   SquareArrowRightExit,
-  SquareArrowUpExit,
   X,
 } from 'lucide-react';
 import { useEffect, type ReactNode } from 'react';
@@ -56,6 +57,12 @@ import {
   selectedSketchDetailId,
 } from '../stores/selection';
 import { findBoundExtrude, quickTargetFromSelection } from '../quick/target';
+import {
+  PYRAMID_MAX_SIDES,
+  PYRAMID_MIN_SIDES,
+  withPrimitiveParam,
+  type PrimitiveSizeKey,
+} from '../primitive/params';
 import { isPlanarFace } from '../viewport/planarFace';
 import { useUiStore } from '../stores/uiStore';
 import {
@@ -74,13 +81,7 @@ import {
 import { formatNumber } from './format';
 import { useContextMenuStore } from './ContextMenu';
 import { ChamferIcon, FilletIcon } from './edgeIcons';
-import {
-  ExtrudeOpIcon,
-  PointIcon,
-  ShellIcon,
-  SketchEntityIcon,
-  SketchIcon,
-} from './featureIcons';
+import { ExtrudeOpIcon, PointIcon, ShellIcon, SketchEntityIcon, SketchIcon } from './featureIcons';
 import { SectionPanel } from './SectionPanel';
 import {
   constraintsGeometryIds,
@@ -190,11 +191,7 @@ function PickableSection({
                   {row.error && <ErrorBadge message={row.error} />}
                 </span>
                 {picking && row.onRemove && (
-                  <IconButton
-                    label={removeLabel}
-                    tooltip={removeLabel}
-                    onClick={row.onRemove}
-                  >
+                  <IconButton label={removeLabel} tooltip={removeLabel} onClick={row.onRemove}>
                     <X size={13} />
                   </IconButton>
                 )}
@@ -297,6 +294,22 @@ function featureTypeLabel(t: (key: string) => string, feature: Feature): string 
     case 'sketch':
       return t('inspector.sketch');
     case 'primitive':
+      switch (feature.kind) {
+        case 'box':
+          return t('inspector.box');
+        case 'sphere':
+          return t('features.sphere');
+        case 'cylinder':
+          return t('features.cylinder');
+        case 'cone':
+          return t('features.cone');
+        case 'torus':
+          return t('features.torus');
+        case 'pyramid':
+          return t('features.pyramid');
+        case 'capsule':
+          return t('features.capsule');
+      }
       return t('inspector.box');
     case 'extrude':
       return t('inspector.extrude');
@@ -592,11 +605,9 @@ export function Inspector() {
       : undefined;
   // A selected face or edge keeps its body panel open: the panel is still
   // about that object, plus the quick operation the detail offers.
-  const detailBodyId =
-    selection.length === 1 ? selectedDetailBodyId(selection[0]!) : null;
+  const detailBodyId = selection.length === 1 ? selectedDetailBodyId(selection[0]!) : null;
   const bodyRef =
-    selection.length === 1 &&
-    (selection[0]?.kind === 'body' || selection[0]?.kind === 'mesh')
+    selection.length === 1 && (selection[0]?.kind === 'body' || selection[0]?.kind === 'mesh')
       ? project.bodies.find((candidate) => candidate.id === selection[0]?.id)
       : detailBodyId
         ? project.bodies.find((candidate) => candidate.id === detailBodyId)
@@ -666,16 +677,10 @@ export function Inspector() {
   useEffect(() => {
     if (picking && picking !== feature?.id) setPickingExtrude(null);
     if (pickingBodies && pickingBodies !== feature?.id) setPickingExtrudeBodies(null);
-    if (
-      pickingShellBodies &&
-      (pickingShellBodies !== feature?.id || feature?.type !== 'shell')
-    ) {
+    if (pickingShellBodies && (pickingShellBodies !== feature?.id || feature?.type !== 'shell')) {
       setPickingShellBodies(null);
     }
-    if (
-      pickingShellFaces &&
-      (pickingShellFaces !== feature?.id || feature?.type !== 'shell')
-    ) {
+    if (pickingShellFaces && (pickingShellFaces !== feature?.id || feature?.type !== 'shell')) {
       setPickingShellFaces(null);
     }
     if (
@@ -754,9 +759,7 @@ export function Inspector() {
   const treatmentFeature = feature?.type === 'edge-treatment' ? feature : undefined;
   // The kernel reduces a size that does not fit; the inspector says so next to
   // the field instead of turning the operation into an error.
-  const treatmentApplied = treatmentFeature
-    ? featureLimits[treatmentFeature.id]
-    : undefined;
+  const treatmentApplied = treatmentFeature ? featureLimits[treatmentFeature.id] : undefined;
   const treatmentWarning =
     treatmentFeature && treatmentApplied && treatmentApplied.applied < treatmentFeature.size
       ? t('edgeTreatment.maxWarning', {
@@ -826,11 +829,7 @@ export function Inspector() {
         const error = shellErrors[bodyId] ?? (body ? undefined : 'UNKNOWN_BODY');
         return {
           key: bodyId,
-          icon: resolved ? (
-            <Box size={14} style={{ color: resolved.color }} />
-          ) : (
-            <Box size={14} />
-          ),
+          icon: resolved ? <Box size={14} style={{ color: resolved.color }} /> : <Box size={14} />,
           name: resolved?.name ?? bodyId,
           ...(error ? { error: translate(t, `errors.${error}`, error) } : {}),
           onRemove: () => toggleShellBody(shellFeature.id, bodyId),
@@ -852,9 +851,7 @@ export function Inspector() {
     : [];
 
   // What an extrude works on: the whole sketch, or the faces picked from it.
-  const targetErrors = extrudeFeature
-    ? (featureBodyErrors[extrudeFeature.id] ?? {})
-    : {};
+  const targetErrors = extrudeFeature ? (featureBodyErrors[extrudeFeature.id] ?? {}) : {};
   interface ExtrudeObject {
     key: string;
     kind: 'sketch' | 'face' | 'body-face';
@@ -909,13 +906,7 @@ export function Inspector() {
         meta: owner ? objectName(project, owner.id, 'Body') : ref.bodyId,
         ...(error ? { error } : {}),
         remove: () =>
-          toggleExtrudeBodyFace(
-            extrudeFeature.id,
-            ref.bodyId,
-            ref.faceId,
-            ref.normal,
-            ref.origin,
-          ),
+          toggleExtrudeBodyFace(extrudeFeature.id, ref.bodyId, ref.faceId, ref.normal, ref.origin),
       });
     }
 
@@ -947,14 +938,10 @@ export function Inspector() {
       )
     : [];
   const unknownTargets = extrudeFeature
-    ? extrudeFeature.bodyIds.filter(
-        (bodyId) => !otherObjects.some((body) => body.id === bodyId),
-      )
+    ? extrudeFeature.bodyIds.filter((bodyId) => !otherObjects.some((body) => body.id === bodyId))
     : [];
 
-  const objectErrors = extrudeFeature
-    ? (featureObjectErrors[extrudeFeature.id] ?? {})
-    : {};
+  const objectErrors = extrudeFeature ? (featureObjectErrors[extrudeFeature.id] ?? {}) : {};
   const faceRows: PickableRow[] = extrudeObjects.map((entry) => {
     const error = objectErrors[entry.key] ?? entry.error;
     return {
@@ -1000,12 +987,8 @@ export function Inspector() {
       ]
     : [];
 
-  const updatePrimitive = (patch: Partial<PrimitiveFeature['params']>) => {
-    if (!isPrimitive(feature)) return;
-    apply({
-      type: 'feature/replace',
-      feature: { ...feature, params: { ...feature.params, ...patch } },
-    });
+  const updatePrimitive = (primitive: PrimitiveFeature, key: PrimitiveSizeKey, value: number) => {
+    apply({ type: 'feature/replace', feature: withPrimitiveParam(primitive, key, value) });
   };
 
   // A box grows from its corner, so the position is the corner itself.
@@ -1017,6 +1000,186 @@ export function Inspector() {
       type: 'feature/replace',
       feature: { ...feature, transform: { ...feature.transform, translation } },
     });
+  };
+
+  // Every primitive edits the same position fields and its own sizes. The
+  // diameters shown here are the stored radii doubled, so the model keeps the
+  // numbers the kernel makers take.
+  const primitiveSizeFields = (primitive: PrimitiveFeature) => {
+    const change = (key: PrimitiveSizeKey, value: number) => updatePrimitive(primitive, key, value);
+    switch (primitive.kind) {
+      case 'box':
+        return (
+          <div className="dimension-row">
+            <DimensionField
+              icon={<SquareArrowRightExit size={13} />}
+              label={`${t('inspector.width')} · mm`}
+              suffix="mm"
+              value={primitive.params.dx}
+              onCommit={(value) => change('dx', value)}
+            />
+            <DimensionField
+              icon={<LayerArrowUp size={13} />}
+              label={`${t('inspector.depth')} · mm`}
+              suffix="mm"
+              value={primitive.params.dy}
+              onCommit={(value) => change('dy', value)}
+            />
+            <DimensionField
+              icon={<MoveVertical size={13} />}
+              label={`${t('inspector.height')} · mm`}
+              suffix="mm"
+              value={primitive.params.dz}
+              onCommit={(value) => change('dz', value)}
+            />
+          </div>
+        );
+      case 'sphere':
+        return (
+          <>
+            <div className="dimension-row">
+              <DimensionField
+                icon={<Circle size={13} />}
+                label={`${t('inspector.diameter')} · mm`}
+                suffix="mm"
+                value={primitive.params.radius * 2}
+                onCommit={(value) => change('radius', value / 2)}
+              />
+            </div>
+            <StatRow
+              label={t('inspector.radius')}
+              value={`${formatNumber(primitive.params.radius, locale)} mm`}
+            />
+          </>
+        );
+      case 'cylinder':
+        return (
+          <div className="dimension-row">
+            <DimensionField
+              icon={<Circle size={13} />}
+              label={`${t('inspector.radius')} · mm`}
+              suffix="mm"
+              value={primitive.params.radius}
+              onCommit={(value) => change('radius', value)}
+            />
+            <DimensionField
+              icon={<MoveVertical size={13} />}
+              label={`${t('inspector.height')} · mm`}
+              suffix="mm"
+              value={primitive.params.height}
+              onCommit={(value) => change('height', value)}
+            />
+          </div>
+        );
+      case 'cone':
+        return (
+          <>
+            <div className="dimension-row">
+              <DimensionField
+                icon={<Circle size={13} />}
+                label={`${t('inspector.bottomRadius')} · mm`}
+                suffix="mm"
+                value={primitive.params.bottomRadius}
+                onCommit={(value) => change('bottomRadius', value)}
+              />
+              <DimensionField
+                icon={<Circle size={13} />}
+                label={`${t('inspector.topRadius')} · mm`}
+                suffix="mm"
+                allowNegative
+                value={primitive.params.topRadius}
+                onCommit={(value) => change('topRadius', value)}
+              />
+              <DimensionField
+                icon={<MoveVertical size={13} />}
+                label={`${t('inspector.height')} · mm`}
+                suffix="mm"
+                value={primitive.params.height}
+                onCommit={(value) => change('height', value)}
+              />
+            </div>
+            <p className="hint">{t('primitive.coneHint')}</p>
+          </>
+        );
+      case 'torus':
+        return (
+          <>
+            <div className="dimension-row">
+              <DimensionField
+                icon={<Torus size={13} />}
+                label={`${t('inspector.ringDiameter')} · mm`}
+                suffix="mm"
+                value={primitive.params.majorRadius * 2}
+                onCommit={(value) => change('majorRadius', value / 2)}
+              />
+              <DimensionField
+                icon={<Circle size={13} />}
+                label={`${t('inspector.tubeDiameter')} · mm`}
+                suffix="mm"
+                value={primitive.params.tubeRadius * 2}
+                onCommit={(value) => change('tubeRadius', value / 2)}
+              />
+            </div>
+            <p className="hint">{t('primitive.torusHint')}</p>
+          </>
+        );
+      case 'pyramid':
+        return (
+          <>
+            <div className="dimension-row">
+              <DimensionField
+                axis="N"
+                label={`${t('inspector.sides')} (${PYRAMID_MIN_SIDES}–${PYRAMID_MAX_SIDES})`}
+                tooltip={t('primitive.pyramidHint')}
+                value={primitive.params.sides}
+                onCommit={(value) => change('sides', value)}
+              />
+              <DimensionField
+                icon={<Circle size={13} />}
+                label={`${t('inspector.baseRadius')} · mm`}
+                suffix="mm"
+                value={primitive.params.radius}
+                onCommit={(value) => change('radius', value)}
+              />
+              <DimensionField
+                icon={<MoveVertical size={13} />}
+                label={`${t('inspector.height')} · mm`}
+                suffix="mm"
+                value={primitive.params.height}
+                onCommit={(value) => change('height', value)}
+              />
+            </div>
+          </>
+        );
+      case 'capsule':
+        return (
+          <>
+            <div className="dimension-row">
+              <DimensionField
+                icon={<Circle size={13} />}
+                label={`${t('inspector.radius')} · mm`}
+                suffix="mm"
+                value={primitive.params.radius}
+                onCommit={(value) => change('radius', value)}
+              />
+              <DimensionField
+                icon={<MoveVertical size={13} />}
+                label={`${t('inspector.height')} · mm`}
+                suffix="mm"
+                value={primitive.params.height}
+                onCommit={(value) => change('height', value)}
+              />
+            </div>
+            <StatRow
+              label={t('inspector.totalLength')}
+              value={`${formatNumber(
+                primitive.params.height + primitive.params.radius * 2,
+                locale,
+              )} mm`}
+            />
+          </>
+        );
+    }
   };
 
   const boundsOf = (candidate: typeof mesh) =>
@@ -1254,9 +1417,7 @@ export function Inspector() {
                         }
                       >
                         <span className="tree-name">{t('sketch.edge', { index: index + 1 })}</span>
-                        <span className="tree-meta">
-                          {formatNumber(edge.length, locale, 1)} mm
-                        </span>
+                        <span className="tree-meta">{formatNumber(edge.length, locale, 1)} mm</span>
                       </button>
                     );
                   })}
@@ -1394,9 +1555,7 @@ export function Inspector() {
                       active={pickingSketchPlane === feature.id}
                       invalid={!sketchPlaneReady(feature) || Boolean(featureErrors[feature.id])}
                       onClick={() =>
-                        setPickingSketchPlane(
-                          pickingSketchPlane === feature.id ? null : feature.id,
-                        )
+                        setPickingSketchPlane(pickingSketchPlane === feature.id ? null : feature.id)
                       }
                       testId="sketch-face-picker"
                     />
@@ -1634,9 +1793,7 @@ export function Inspector() {
                     }
                     pickLabel={t('extrude.pickBodies')}
                     finishLabel={t('extrude.finishPick')}
-                    hint={
-                      feature.bodyIds.length === 0 ? t('extrude.allBodiesHint') : undefined
-                    }
+                    hint={feature.bodyIds.length === 0 ? t('extrude.allBodiesHint') : undefined}
                     emptyHint={t('extrude.allBodiesHint')}
                     pickHint={t('extrude.pickBodiesHint')}
                     removeLabel={t('extrude.removeObject')}
@@ -1708,7 +1865,9 @@ export function Inspector() {
                   count={treatmentRows.length}
                   picking={pickingEdges === treatmentFeature.id}
                   onTogglePicking={() =>
-                    setPickingEdges(pickingEdges === treatmentFeature.id ? null : treatmentFeature.id)
+                    setPickingEdges(
+                      pickingEdges === treatmentFeature.id ? null : treatmentFeature.id,
+                    )
                   }
                   pickLabel={t('extrude.pickFaces')}
                   finishLabel={t('extrude.finishPick')}
@@ -1756,9 +1915,7 @@ export function Inspector() {
                         suffix="mm"
                         allowNegative
                         value={shellFeature.offset ?? 0}
-                        onCommit={(offset) =>
-                          setShellOffset(shellFeature.id, Math.max(0, offset))
-                        }
+                        onCommit={(offset) => setShellOffset(shellFeature.id, Math.max(0, offset))}
                       />
                     )}
                   </div>
@@ -1826,29 +1983,7 @@ export function Inspector() {
                   </div>
                 </PanelSection>
                 <PanelSection title={t('inspector.size')}>
-                  <div className="dimension-row">
-                    <DimensionField
-                      icon={<SquareArrowRightExit size={13} />}
-                      label={`${t('inspector.width')} · mm`}
-                      suffix="mm"
-                      value={feature.params.dx}
-                      onCommit={(dx) => updatePrimitive({ dx })}
-                    />
-                    <DimensionField
-                      icon={<SquareArrowUpExit size={13} />}
-                      label={`${t('inspector.height')} · mm`}
-                      suffix="mm"
-                      value={feature.params.dy}
-                      onCommit={(dy) => updatePrimitive({ dy })}
-                    />
-                    <DimensionField
-                      icon={<LayerArrowUp size={13} />}
-                      label={`${t('inspector.depth')} · mm`}
-                      suffix="mm"
-                      value={feature.params.dz}
-                      onCommit={(dz) => updatePrimitive({ dz })}
-                    />
-                  </div>
+                  {primitiveSizeFields(feature)}
                 </PanelSection>
               </>
             )}

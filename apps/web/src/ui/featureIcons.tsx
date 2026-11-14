@@ -2,7 +2,11 @@ import type { Feature, SketchEntity } from '@icancad/model';
 import { crosshairPlusDot } from '@lucide/lab';
 import {
   Box,
+  Circle,
   CircleDot,
+  Cone,
+  Cylinder,
+  Torus,
   DraftingCompass,
   Ellipse,
   FileUp,
@@ -11,6 +15,8 @@ import {
   LineSquiggle,
   LoaderCircle,
   PackageOpen,
+  Pill,
+  Pyramid,
   Scissors,
   SquaresIntersect,
   SquaresSubtract,
@@ -86,6 +92,22 @@ export function ExtrudeOpIcon({
 export function FeatureIcon({ feature, size = 16 }: { feature: Feature; size?: number }) {
   switch (feature.type) {
     case 'primitive':
+      switch (feature.kind) {
+        case 'box':
+          return <Box size={size} />;
+        case 'sphere':
+          return <Circle size={size} />;
+        case 'cylinder':
+          return <Cylinder size={size} />;
+        case 'cone':
+          return <Cone size={size} />;
+        case 'torus':
+          return <Torus size={size} />;
+        case 'pyramid':
+          return <Pyramid size={size} />;
+        case 'capsule':
+          return <Pill size={size} />;
+      }
       return <Box size={size} />;
     case 'sketch':
       return <SketchIcon size={size} />;

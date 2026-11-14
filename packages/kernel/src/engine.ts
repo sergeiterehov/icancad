@@ -10,6 +10,7 @@ import type {
   MakeBoxResult,
   MakeFacePrismParams,
   MakeFaceRevolveParams,
+  MakePrimitiveParams,
   MakePrismParams,
   MakeRevolveParams,
   ProfileCurve,
@@ -321,6 +322,128 @@ export class KernelEngine {
     return { shapeId, stats: this.countTopology(shape) };
   }
 
+  /** Builds any of the primitive operations; a box keeps its corner anchor. */
+  makePrimitive(params: MakePrimitiveParams): MakeBoxResult {
+    const oc = this.requireOc();
+    const { shapeId } = params;
+    if (!shapeId) throw new KernelOpError('INVALID_PARAMS', 'shapeId is required');
+    const at = params.at ?? [0, 0, 0];
+    const axis = new oc.gp_Ax2_2(
+      new oc.gp_Pnt_3(at[0], at[1], at[2]),
+      new oc.gp_Dir_4(0, 0, 1),
+      new oc.gp_Dir_4(1, 0, 0),
+    );
+
+    let shape: OcctShape;
+    switch (params.kind) {
+      case 'box':
+        return this.makeBox({ shapeId, dx: params.dx, dy: params.dy, dz: params.dz, at });
+      case 'sphere':
+        this.primitiveLength('radius', params.radius);
+        shape = new oc.BRepPrimAPI_MakeSphere_5(
+          new oc.gp_Pnt_3(at[0], at[1], at[2]),
+          params.radius,
+        ).Shape();
+        break;
+      case 'cylinder':
+        this.primitiveLength('radius', params.radius);
+        this.primitiveLength('height', params.height);
+        shape = new oc.BRepPrimAPI_MakeCylinder_3(axis, params.radius, params.height).Shape();
+        break;
+      case 'cone': {
+        this.primitiveLength('bottomRadius', params.bottomRadius);
+        this.primitiveLength('topRadius', params.topRadius, true);
+        this.primitiveLength('height', params.height);
+        if (params.bottomRadius <= 1e-6 && params.topRadius <= 1e-6) {
+          throw new KernelOpError('INVALID_PARAMS', 'A cone needs a non-zero radius');
+        }
+        shape = new oc.BRepPrimAPI_MakeCone_3(
+          axis,
+          params.bottomRadius,
+          params.topRadius,
+          params.height,
+        ).Shape();
+        break;
+      }
+      case 'torus':
+        this.primitiveLength('majorRadius', params.majorRadius);
+        this.primitiveLength('tubeRadius', params.tubeRadius);
+        if (params.tubeRadius >= params.majorRadius) {
+          throw new KernelOpError(
+            'INVALID_PARAMS',
+            'The tube radius must be smaller than the major radius',
+          );
+        }
+        shape = new oc.BRepPrimAPI_MakeTorus_5(axis, params.majorRadius, params.tubeRadius).Shape();
+        break;
+      case 'pyramid': {
+        this.primitiveLength('radius', params.radius);
+        this.primitiveLength('height', params.height);
+        if (!Number.isInteger(params.sides) || params.sides < 3 || params.sides > 120) {
+          throw new KernelOpError('INVALID_PARAMS', 'A pyramid needs 3 to 120 sides');
+        }
+        const polygon = new oc.BRepBuilderAPI_MakePolygon_1();
+        // The first vertex sits half a step from +X, so the +X axis points at
+        // the centre of an edge; the next vertex is the one nearest that axis.
+        for (let side = 0; side < params.sides; side += 1) {
+          const angle = Math.PI / params.sides + (Math.PI * 2 * side) / params.sides;
+          polygon.Add_1(
+            new oc.gp_Pnt_3(
+              at[0] + params.radius * Math.cos(angle),
+              at[1] + params.radius * Math.sin(angle),
+              at[2],
+            ),
+          );
+        }
+        polygon.Close();
+        const apex = new oc.BRepBuilderAPI_MakeVertex(
+          new oc.gp_Pnt_3(at[0], at[1], at[2] + params.height),
+        ).Vertex();
+        const loft = new oc.BRepOffsetAPI_ThruSections(true, true, 1e-6);
+        loft.AddWire(polygon.Wire());
+        loft.AddVertex(apex);
+        loft.Build();
+        if (!loft.IsDone()) {
+          throw new KernelOpError('OP_FAILED', 'Pyramid loft failed');
+        }
+        shape = this.positiveVolume(loft.Shape()) ?? loft.Shape();
+        break;
+      }
+      case 'capsule': {
+        this.primitiveLength('radius', params.radius);
+        this.primitiveLength('height', params.height);
+        const bottom = new oc.BRepPrimAPI_MakeSphere_5(
+          new oc.gp_Pnt_3(at[0], at[1], at[2]),
+          params.radius,
+        ).Shape();
+        const top = new oc.BRepPrimAPI_MakeSphere_5(
+          new oc.gp_Pnt_3(at[0], at[1], at[2] + params.height),
+          params.radius,
+        ).Shape();
+        const cylinder = new oc.BRepPrimAPI_MakeCylinder_3(
+          axis,
+          params.radius,
+          params.height,
+        ).Shape();
+        shape = this.boolean(this.boolean(cylinder, bottom, 'fuse'), top, 'fuse');
+        shape = this.unify(shape);
+        break;
+      }
+    }
+
+    this.shapes.set(shapeId, shape);
+    return { shapeId, stats: this.countTopology(shape) };
+  }
+
+  private primitiveLength(label: string, value: number, allowZero = false): void {
+    if (!Number.isFinite(value) || (allowZero ? value < 0 : value <= 1e-6)) {
+      throw new KernelOpError(
+        'INVALID_PARAMS',
+        `Primitive ${label} must be ${allowZero ? 'non-negative' : 'positive'}`,
+      );
+    }
+  }
+
   makePrism(params: MakePrismParams): MakeBoxResult {
     this.requireOc();
     const { shapeId, regions } = params;
@@ -384,30 +507,47 @@ export class KernelEngine {
     }
     // Only a flat face can be swept into a closed prism; a cylindrical or
     // spherical side would sweep into a self-intersecting shell.
-    if (new oc.BRepAdaptor_Surface_2(face, true).GetType() !== oc.GeomAbs_SurfaceType.GeomAbs_Plane) {
+    if (
+      new oc.BRepAdaptor_Surface_2(face, true).GetType() !== oc.GeomAbs_SurfaceType.GeomAbs_Plane
+    ) {
       throw new KernelOpError('FACE_NOT_PLANAR', `Face ${faceId} is not planar`);
     }
-    const [nx, ny, nz] = normal.map((value) => value / normalLength) as [
-      number,
-      number,
-      number,
-    ];
+    const [nx, ny, nz] = normal.map((value) => value / normalLength) as [number, number, number];
 
     // A tool that only stands on the face it was made from touches the body it
     // joins without intersecting it, and the union leaves slivers behind. A
     // sliver of overlap behind the face turns the contact into a real one, so
     // the tool reaches back into material that is already there. A body of its
     // own must not grow, so only a tool does this.
+    //
+    // The overlap is a part of the first prism, never a second prism stacked on
+    // it: on a slanted face two stacked prisms have faces in the very planes of
+    // the body, and merging them leaves a seam that stops the later union from
+    // joining the tool to the body.
     const first = distances[0]!;
-    const steps = embed && first > 0 ? [-FACE_PRISM_EMBED, ...distances] : distances;
+    const embedded = embed && first > 0;
     let shape: OcctShape | null = null;
-    for (const distance of steps) {
-      const vector = new oc.gp_Vec_4(nx * distance, ny * distance, nz * distance);
+    for (const [index, distance] of distances.entries()) {
+      // The overlap is part of the first prism, not a second prism stacked on
+      // it: on a slanted face two stacked prisms have faces in the very planes
+      // of the body, and merging them leaves a seam that stops the later union
+      // from joining the tool to the body.
+      const overlap = index === 0 && embedded ? FACE_PRISM_EMBED : 0;
+      const length = distance + overlap;
+      const vector = new oc.gp_Vec_4(nx * length, ny * length, nz * length);
       const prism = new oc.BRepPrimAPI_MakePrism_1(face, vector, false, true);
       if (!prism.IsDone()) {
         throw new KernelOpError('OP_FAILED', 'Extrude failed for a body face');
       }
-      shape = shape ? this.boolean(shape, prism.Shape(), 'fuse') : prism.Shape();
+      let part = prism.Shape();
+      if (overlap > 0) {
+        // The part grew along the normal, so it moves back into the material
+        // by the overlap it was given.
+        const back = new oc.gp_Trsf_1();
+        back.SetTranslation_1(new oc.gp_Vec_4(-nx * overlap, -ny * overlap, -nz * overlap));
+        part = new oc.BRepBuilderAPI_Transform_2(part, back, true).Shape();
+      }
+      shape = shape ? this.boolean(shape, part, 'fuse') : part;
     }
     if (!shape) throw new KernelOpError('OP_FAILED', 'Extrude produced no geometry');
 
@@ -558,7 +698,10 @@ export class KernelEngine {
     return { solids };
   }
 
-  tessellate(shapeId: string, quality: TessellationQuality = DEFAULT_TESSELLATION_QUALITY): TessellationResult {
+  tessellate(
+    shapeId: string,
+    quality: TessellationQuality = DEFAULT_TESSELLATION_QUALITY,
+  ): TessellationResult {
     const oc = this.requireOc();
     const shape = this.getShape(shapeId);
 
@@ -727,9 +870,7 @@ export class KernelEngine {
     }
     this.shapeEdges.set(shapeId, {
       edges: keptEdges,
-      shapes: new Map(
-        keptEdges.map((edge) => [edge.id, edgeShapes.get(edge.id)!] as const),
-      ),
+      shapes: new Map(keptEdges.map((edge) => [edge.id, edgeShapes.get(edge.id)!] as const)),
     });
 
     return {
@@ -800,9 +941,7 @@ export class KernelEngine {
     let splitFirst: { shape: OcctShape; maker: OcctEdgeMaker } | null = null;
     let applied = params.size;
 
-    const direct = mixed
-      ? null
-      : this.buildTreatment(params.kind, source, edges, params.size);
+    const direct = mixed ? null : this.buildTreatment(params.kind, source, edges, params.size);
     if (direct) {
       shape = direct.shape;
       maker = direct.maker;
@@ -1128,7 +1267,8 @@ export class KernelEngine {
       resultFaces.push(resultExplorer.Current());
       resultExplorer.Next();
     }
-    const indexOf = (face: OcctShape) => resultFaces.findIndex((candidate) => candidate.IsSame(face));
+    const indexOf = (face: OcctShape) =>
+      resultFaces.findIndex((candidate) => candidate.IsSame(face));
 
     const mapping = resultFaces.map(() => -1);
     const sourceExplorer = new oc.TopExp_Explorer_2(
@@ -1360,11 +1500,7 @@ export class KernelEngine {
     );
   }
 
-  private extrudeLoop(
-    loop: ProfileLoop,
-    vectors: unknown[],
-    params: MakePrismParams,
-  ): OcctShape {
+  private extrudeLoop(loop: ProfileLoop, vectors: unknown[], params: MakePrismParams): OcctShape {
     const oc = this.requireOc();
     const plane = profilePlane(params);
     const wire = this.buildWire(loop, plane);

@@ -18,9 +18,9 @@ function faceFacing(mesh: TessellationResult, normal: [number, number, number]):
     const vy = positions[c + 1]! - positions[a + 1]!;
     const vz = positions[c + 2]! - positions[a + 2]!;
     const sum = sums.get(faceIds[triangle]!) ?? [0, 0, 0];
-    sum[0] += uy * vz - uz * vy;
-    sum[1] += uz * vx - ux * vz;
-    sum[2] += ux * vy - uy * vx;
+    sum[0]! += uy * vz - uz * vy;
+    sum[1]! += uz * vx - ux * vz;
+    sum[2]! += ux * vy - uy * vx;
     sums.set(faceIds[triangle]!, sum);
   }
   let best = -1;
@@ -33,6 +33,34 @@ function faceFacing(mesh: TessellationResult, normal: [number, number, number]):
     }
   }
   return best;
+}
+
+/** Outward normal of every tessellated face, keyed by face id. */
+function faceNormals(mesh: TessellationResult): Map<number, [number, number, number]> {
+  const sums = new Map<number, number[]>();
+  const { positions, indices, faceIds } = mesh;
+  for (let triangle = 0; triangle < faceIds.length; triangle += 1) {
+    const a = indices[triangle * 3]! * 3;
+    const b = indices[triangle * 3 + 1]! * 3;
+    const c = indices[triangle * 3 + 2]! * 3;
+    const ux = positions[b]! - positions[a]!;
+    const uy = positions[b + 1]! - positions[a + 1]!;
+    const uz = positions[b + 2]! - positions[a + 2]!;
+    const vx = positions[c]! - positions[a]!;
+    const vy = positions[c + 1]! - positions[a + 1]!;
+    const vz = positions[c + 2]! - positions[a + 2]!;
+    const sum = sums.get(faceIds[triangle]!) ?? [0, 0, 0];
+    sum[0] = (sum[0] ?? 0) + uy * vz - uz * vy;
+    sum[1] = (sum[1] ?? 0) + uz * vx - ux * vz;
+    sum[2] = (sum[2] ?? 0) + ux * vy - uy * vx;
+    sums.set(faceIds[triangle]!, sum);
+  }
+  const normals = new Map<number, [number, number, number]>();
+  for (const [faceId, sum] of sums) {
+    const length = Math.hypot(sum[0]!, sum[1]!, sum[2]!);
+    normals.set(faceId, [sum[0]! / length, sum[1]! / length, sum[2]! / length]);
+  }
+  return normals;
 }
 
 function meshSignedVolume(mesh: TessellationResult): number {
@@ -51,8 +79,7 @@ function meshSignedVolume(mesh: TessellationResult): number {
     const cx = positions[c]!;
     const cy = positions[c + 1]!;
     const cz = positions[c + 2]!;
-    volume +=
-      ax * (by * cz - bz * cy) + ay * (bz * cx - bx * cz) + az * (bx * cy - by * cx);
+    volume += ax * (by * cz - bz * cy) + ay * (bz * cx - bx * cz) + az * (bx * cy - by * cx);
   }
   return volume / 6;
 }
@@ -84,6 +111,160 @@ describe('OCCT kernel engine', () => {
     expect(mesh.bbox.max[0]).toBeCloseTo(12, 5);
     expect(mesh.bbox.max[1]).toBeCloseTo(-17, 5);
     expect(mesh.bbox.max[2]).toBeCloseTo(34, 5);
+  });
+
+  it('creates every primitive kind', () => {
+    expect(
+      engine.makePrimitive({ kind: 'sphere', shapeId: 'sphere-1', radius: 10, at: [0, 20, 0] })
+        .stats,
+    ).toMatchObject({ faces: 1, solids: 1 });
+    expect(
+      engine.makePrimitive({
+        kind: 'cylinder',
+        shapeId: 'cylinder-1',
+        radius: 10,
+        height: 20,
+        at: [0, 20, 0],
+      }).stats,
+    ).toMatchObject({ faces: 3, solids: 1 });
+    expect(
+      engine.makePrimitive({
+        kind: 'cone',
+        shapeId: 'cone-1',
+        bottomRadius: 10,
+        topRadius: 0,
+        height: 20,
+        at: [0, 20, 0],
+      }).stats,
+    ).toMatchObject({ faces: 2, solids: 1 });
+    expect(
+      engine.makePrimitive({
+        kind: 'torus',
+        shapeId: 'torus-1',
+        majorRadius: 20,
+        tubeRadius: 5,
+        at: [0, 20, 0],
+      }).stats,
+    ).toMatchObject({ faces: 1, solids: 1 });
+    expect(
+      engine.makePrimitive({
+        kind: 'pyramid',
+        shapeId: 'pyramid-1',
+        sides: 4,
+        radius: 10,
+        height: 20,
+        at: [0, 20, 0],
+      }).stats,
+    ).toMatchObject({ faces: 5, solids: 1 });
+    expect(
+      engine.makePrimitive({
+        kind: 'capsule',
+        shapeId: 'capsule-1',
+        radius: 5,
+        height: 20,
+        at: [0, 20, 0],
+      }).stats,
+    ).toMatchObject({ faces: 3, solids: 1 });
+  });
+
+  it('stands round primitives on the Z axis', () => {
+    engine.makePrimitive({ kind: 'cylinder', shapeId: 'cylinder-z', radius: 5, height: 10 });
+    const cylinder = engine.tessellate('cylinder-z');
+    expect(cylinder.bbox.min[2]).toBeCloseTo(0, 2);
+    expect(cylinder.bbox.max[2]).toBeCloseTo(10, 2);
+    expect(cylinder.bbox.min[0]).toBeLessThan(-4);
+    expect(cylinder.bbox.max[0]).toBeGreaterThan(4);
+    expect(cylinder.bbox.min[1]).toBeLessThan(-4);
+    expect(cylinder.bbox.max[1]).toBeGreaterThan(4);
+
+    engine.makePrimitive({
+      kind: 'cone',
+      shapeId: 'cone-z',
+      bottomRadius: 5,
+      topRadius: 0,
+      height: 10,
+    });
+    const cone = engine.tessellate('cone-z');
+    expect(cone.bbox.min[2]).toBeCloseTo(0, 2);
+    expect(cone.bbox.max[2]).toBeCloseTo(10, 2);
+
+    engine.makePrimitive({ kind: 'torus', shapeId: 'torus-z', majorRadius: 20, tubeRadius: 5 });
+    const torus = engine.tessellate('torus-z');
+    expect(torus.bbox.min[2]).toBeCloseTo(-5, 1);
+    expect(torus.bbox.max[2]).toBeCloseTo(5, 1);
+    expect(torus.bbox.max[0]).toBeGreaterThan(24);
+
+    engine.makePrimitive({
+      kind: 'pyramid',
+      shapeId: 'pyramid-z',
+      sides: 4,
+      radius: 10,
+      height: 15,
+    });
+    const pyramid = engine.tessellate('pyramid-z');
+    expect(pyramid.bbox.min[2]).toBeCloseTo(0, 2);
+    expect(pyramid.bbox.max[2]).toBeCloseTo(15, 2);
+
+    engine.makePrimitive({ kind: 'capsule', shapeId: 'capsule-z', radius: 4, height: 10 });
+    const capsule = engine.tessellate('capsule-z');
+    expect(capsule.bbox.min[2]).toBeCloseTo(-4, 1);
+    expect(capsule.bbox.max[2]).toBeCloseTo(14, 1);
+  });
+
+  it('joins a prism from every flat face to its body', () => {
+    // A slanted face is the hard case: the tool reaches back into the material
+    // to overlap it, and a seam there used to keep the union from merging.
+    engine.makePrimitive({ kind: 'box', shapeId: 'extrude-box', dx: 20, dy: 20, dz: 20 });
+    engine.makePrimitive({
+      kind: 'pyramid',
+      shapeId: 'extrude-pyramid',
+      sides: 4,
+      radius: 10,
+      height: 20,
+    });
+    for (const bodyId of ['extrude-box', 'extrude-pyramid']) {
+      const { faceIds } = engine.tessellate(bodyId);
+      const normals = faceNormals(engine.tessellate(bodyId));
+      expect(faceIds.length).toBeGreaterThan(0);
+      for (const [faceId, normal] of normals) {
+        const toolId = `${bodyId}-tool-${faceId}`;
+        engine.makeFacePrism({
+          shapeId: toolId,
+          sourceShapeId: bodyId,
+          faceId,
+          normal,
+          distances: [15.7],
+          embed: true,
+        });
+        const fused = engine.booleanShape({
+          shapeId: `${bodyId}-fused-${faceId}`,
+          baseShapeId: bodyId,
+          toolShapeId: toolId,
+          op: 'fuse',
+        });
+        expect(fused.stats.solids).toBe(1);
+      }
+    }
+  });
+
+  it('rejects primitive parameters the makers cannot build', () => {
+    expect(() =>
+      engine.makePrimitive({
+        kind: 'torus',
+        shapeId: 'torus-bad',
+        majorRadius: 5,
+        tubeRadius: 5,
+      }),
+    ).toThrow(/tube radius/i);
+    expect(() =>
+      engine.makePrimitive({
+        kind: 'pyramid',
+        shapeId: 'pyramid-bad',
+        sides: 2,
+        radius: 10,
+        height: 10,
+      }),
+    ).toThrow(/3 to 120/);
   });
 
   it('tessellates a box into a closed mesh', () => {
@@ -336,7 +517,15 @@ describe('OCCT kernel engine', () => {
           outer: {
             curves: [
               { type: 'line', x1: 0, y1: 0, x2: 10, y2: 0 },
-              { type: 'arc', cx: 0, cy: 0, r: 10, startAngle: -Math.PI / 2, endAngle: 0, reversed: true },
+              {
+                type: 'arc',
+                cx: 0,
+                cy: 0,
+                r: 10,
+                startAngle: -Math.PI / 2,
+                endAngle: 0,
+                reversed: true,
+              },
               { type: 'line', x1: 0, y1: -10, x2: 0, y2: 0 },
             ],
           },
@@ -361,10 +550,35 @@ describe('OCCT kernel engine', () => {
         {
           outer: {
             curves: [
-              { type: 'line', x1: -54.19636757449335, y1: -47.860781122154016, x2: 6.960966347011371, y2: -47.860781122154016 },
-              { type: 'arc', cx: 6.960966577512058, cy: -13.647069516322679, r: 34.213711605831335, startAngle: -1.5707963335319817, endAngle: 3.2696327140518344e-8 },
-              { type: 'line', x1: 41.174678183343396, y1: -13.647068397659972, x2: 41.174678183343396, y2: 43.48162904284042 },
-              { type: 'line', x1: 41.174678183343396, y1: 43.48162904284042, x2: -54.19636757449335, y2: -47.860781122154016 },
+              {
+                type: 'line',
+                x1: -54.19636757449335,
+                y1: -47.860781122154016,
+                x2: 6.960966347011371,
+                y2: -47.860781122154016,
+              },
+              {
+                type: 'arc',
+                cx: 6.960966577512058,
+                cy: -13.647069516322679,
+                r: 34.213711605831335,
+                startAngle: -1.5707963335319817,
+                endAngle: 3.2696327140518344e-8,
+              },
+              {
+                type: 'line',
+                x1: 41.174678183343396,
+                y1: -13.647068397659972,
+                x2: 41.174678183343396,
+                y2: 43.48162904284042,
+              },
+              {
+                type: 'line',
+                x1: 41.174678183343396,
+                y1: 43.48162904284042,
+                x2: -54.19636757449335,
+                y2: -47.860781122154016,
+              },
             ],
           },
           holes: [],
@@ -379,7 +593,14 @@ describe('OCCT kernel engine', () => {
   });
 
   it('extrudes the same region in every datum plane', () => {
-    const frames: Record<string, { origin: [number, number, number]; xAxis: [number, number, number]; yAxis: [number, number, number] }> = {
+    const frames: Record<
+      string,
+      {
+        origin: [number, number, number];
+        xAxis: [number, number, number];
+        yAxis: [number, number, number];
+      }
+    > = {
       xy: { origin: [0, 0, 0], xAxis: [1, 0, 0], yAxis: [0, 1, 0] },
       xz: { origin: [0, 0, 0], xAxis: [1, 0, 0], yAxis: [0, 0, 1] },
       yz: { origin: [0, 0, 0], xAxis: [0, 1, 0], yAxis: [0, 0, 1] },
@@ -620,9 +841,7 @@ describe('OCCT kernel engine', () => {
       (edge) =>
         edge !== first &&
         [0, edge.points.length / 3 - 1].some((index) =>
-          [point(first, 0), point(first, first.points.length / 3 - 1)].includes(
-            point(edge, index),
-          ),
+          [point(first, 0), point(first, first.points.length / 3 - 1)].includes(point(edge, index)),
         ),
     )!;
     const result = engine.treatEdges({
@@ -663,7 +882,13 @@ describe('OCCT kernel engine', () => {
           outer: {
             curves: outline.map((point, index) => {
               const next = outline[(index + 1) % outline.length]!;
-              return { type: 'line' as const, x1: point[0], y1: point[1], x2: next[0], y2: next[1] };
+              return {
+                type: 'line' as const,
+                x1: point[0],
+                y1: point[1],
+                x2: next[0],
+                y2: next[1],
+              };
             }),
           },
           holes: [],
@@ -811,7 +1036,13 @@ describe('OCCT kernel engine', () => {
           outer: {
             curves: outline.map((point, index) => {
               const next = outline[(index + 1) % outline.length]!;
-              return { type: 'line' as const, x1: point[0], y1: point[1], x2: next[0], y2: next[1] };
+              return {
+                type: 'line' as const,
+                x1: point[0],
+                y1: point[1],
+                x2: next[0],
+                y2: next[1],
+              };
             }),
           },
           holes: [],
@@ -833,7 +1064,8 @@ describe('OCCT kernel engine', () => {
           middle[2]! += edge.points[index + 2]! / (edge.points.length / 3);
         }
         return (
-          Math.hypot(middle[0]! - target[0]!, middle[1]! - target[1]!, middle[2]! - target[2]!) < 0.5
+          Math.hypot(middle[0]! - target[0]!, middle[1]! - target[1]!, middle[2]! - target[2]!) <
+          0.5
         );
       }),
     );
@@ -852,8 +1084,8 @@ describe('OCCT kernel engine', () => {
     expect(result.stats.solids).toBe(1);
     // The concave edge fills in, the two convex ones break off: a right-angle
     // chamfer of `size` moves size²/2 per unit of length either way.
-    const filled = (size * size * 0.5) * 35.8;
-    const broken = (size * size * 0.5) * 46 * 2;
+    const filled = size * size * 0.5 * 35.8;
+    const broken = size * size * 0.5 * 46 * 2;
     const expected = plain + filled - broken;
     const volume = meshSignedVolume(engine.tessellate('mixed-chamfer'));
     // The corners where the chamfers meet account for a fraction of a percent.

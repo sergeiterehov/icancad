@@ -12,7 +12,9 @@ import {
   resolveBody,
   SKETCH_COLOR,
   sketchObjectId,
+  type PrimitiveFeature,
   type SketchFeature,
+  type Vec3,
 } from '@icancad/model';
 import { faceFrame, sketchTopology } from '@icancad/sketch';
 import { constraintsGeometryIds } from '../sketch/constraintModel';
@@ -39,11 +41,7 @@ import {
 } from '../stores/selection';
 import { useThemeStore } from '../stores/themeStore';
 import { Button } from '../ui/Controls';
-import {
-  showContextMenu,
-  useContextMenuStore,
-  type ContextMenuItem,
-} from '../ui/ContextMenu';
+import { showContextMenu, useContextMenuStore, type ContextMenuItem } from '../ui/ContextMenu';
 import {
   colorMenuItem,
   deleteMenuItem,
@@ -58,11 +56,9 @@ import {
   type OperationHandle,
   type OperationHandleDrag,
 } from '../quick/operationHandles';
+import { primitivePreview } from '../primitive/preview';
 import { resolveEdgeRef } from '../kernel/edgeLookup';
-import {
-  edgeTreatmentEdgeRef,
-  edgeTreatmentFaceRef,
-} from '../quick/edgeTreatment';
+import { edgeTreatmentEdgeRef, edgeTreatmentFaceRef } from '../quick/edgeTreatment';
 import { shellFaceRef } from '../quick/shell';
 import { findBoundExtrude, quickTargetFromSelection } from '../quick/target';
 import { bodyEdgeAxisRef } from '../sketch/revolveAxis';
@@ -134,6 +130,7 @@ function projectPickIntoSketch(sketchId: string, pick: ScenePick | null): void {
 function chipLabel(drag: OperationHandleDrag, translate: (key: never) => string): string {
   if (drag.op) return translate(`quick.${drag.op}` as never);
   if (drag.kind) return translate(`edgeTreatment.${drag.kind}` as never);
+  if (drag.label) return drag.label;
   if (drag.unit === 'angle') return translate('quick.angle' as never);
   return '';
 }
@@ -150,6 +147,18 @@ export function Viewport() {
   const seenBodyIds = useRef(new Set<string>());
 
   const project = useViewProject();
+  const documentProject = useDocumentStore((state) => state.project);
+  const editingFeatureId = useDocumentStore((state) => state.editingFeatureId);
+  const editingPrimitive = useMemo(() => {
+    const feature = documentProject.features.find((candidate) => candidate.id === editingFeatureId);
+    return feature?.type === 'primitive' ? (feature as PrimitiveFeature) : null;
+  }, [documentProject, editingFeatureId]);
+  // The delta mesh is generated here, in the same render as the handles, so
+  // dragging a handle moves the object and the grip in one frame.
+  const primitiveDelta = useMemo(
+    () => (editingPrimitive ? primitivePreview(editingPrimitive, documentProject) : null),
+    [editingPrimitive, documentProject],
+  );
   const bodies = bodiesInHistory(project);
   const sectionPlanes = project.view.sectionPlanes;
   const sectionEnabled = useUiStore((state) => state.sectionEnabled);
@@ -249,6 +258,23 @@ export function Viewport() {
       edgeTreatmentDistanceTooltip: t('edgeTreatment.distanceTooltip'),
       revolveStart: t('quick.revolveStartTooltip'),
       revolveEnd: t('quick.revolveEndTooltip'),
+      move: t('handles.move'),
+      moveLabel: t('handles.moveLabel'),
+      moveX: t('handles.moveX'),
+      moveY: t('handles.moveY'),
+      moveZ: t('handles.moveZ'),
+      width: t('inspector.width'),
+      height: t('inspector.height'),
+      depth: t('inspector.depth'),
+      radius: t('inspector.radius'),
+      diameter: t('inspector.diameter'),
+      bottomRadius: t('inspector.bottomRadius'),
+      topRadius: t('inspector.topRadius'),
+      baseRadius: t('inspector.baseRadius'),
+      ringDiameter: t('inspector.ringDiameter'),
+      tubeDiameter: t('inspector.tubeDiameter'),
+      sides: t('inspector.sides'),
+      sidesTooltip: t('handles.sides'),
     }),
     [t],
   );
@@ -266,16 +292,7 @@ export function Viewport() {
             bodies: quickBodies,
             labels: handleLabels,
           }),
-    [
-      quickBlocked,
-      project,
-      selection,
-      meshes,
-      baseMeshes,
-      sketchFrames,
-      quickBodies,
-      handleLabels,
-    ],
+    [quickBlocked, project, selection, meshes, baseMeshes, sketchFrames, quickBodies, handleLabels],
   );
   const handles = useMemo(
     () =>
@@ -287,7 +304,13 @@ export function Viewport() {
         enabled: handle.enabled,
         thickness: handle.thickness,
         tooltip: handle.tooltip,
+        ...(handle.kind ? { kind: handle.kind } : {}),
+        ...(handle.axis ? { axis: handle.axis } : {}),
+        ...(handle.fixedLengthPx ? { fixedLengthPx: handle.fixedLengthPx } : {}),
+        ...(handle.shaft ? { shaft: handle.shaft } : {}),
+        ...(handle.tipOnly ? { tipOnly: handle.tipOnly } : {}),
         ...(handle.arc ? { arc: handle.arc } : {}),
+        ...(handle.orbit ? { orbit: handle.orbit } : {}),
       })),
     [operationHandleList],
   );
@@ -299,10 +322,7 @@ export function Viewport() {
       )
     : undefined;
   const sketchSection =
-    activeSketch &&
-    activeSketchReady &&
-    sketchSectionEnabled &&
-    sketchPlaneReady(activeSketch)
+    activeSketch && activeSketchReady && sketchSectionEnabled && sketchPlaneReady(activeSketch)
       ? sketchSectionPlane(
           activeSketch,
           computeSketchFrame(
@@ -337,7 +357,7 @@ export function Viewport() {
     y: number;
     label: string;
     value: number;
-    unit: 'length' | 'angle';
+    unit: 'length' | 'angle' | 'count';
   } | null>(null);
   const [handleHover, setHandleHover] = useState<{
     x: number;
@@ -381,9 +401,7 @@ export function Viewport() {
         }
         if (ui.pickingShellFaces) {
           if (pick?.kind !== 'body-face') return;
-          const body = store.project.bodies.find(
-            (candidate) => candidate.id === pick.bodyId,
-          );
+          const body = store.project.bodies.find((candidate) => candidate.id === pick.bodyId);
           if (!body || body.kind === 'mesh') return;
           // Picking runs against the input of the edited operation: its own
           // result has bodies and faces the document does not have yet.
@@ -409,8 +427,7 @@ export function Viewport() {
           }
           const feature = store.project.features.find(
             (candidate): candidate is SketchFeature =>
-              candidate.id === ui.pickingSketchPlane &&
-              candidate.type === 'sketch',
+              candidate.id === ui.pickingSketchPlane && candidate.type === 'sketch',
           );
           if (!feature) return;
           store.apply({
@@ -575,9 +592,12 @@ export function Viewport() {
           pick.kind === 'body-edge' ||
           pick.kind === 'body-vertex'
         ) {
-          store.select({ kind: 'body', id: pick.kind === 'body' ? pick.id : pick.bodyId }, {
-            additive,
-          });
+          store.select(
+            { kind: 'body', id: pick.kind === 'body' ? pick.id : pick.bodyId },
+            {
+              additive,
+            },
+          );
           return;
         }
         if (pick.kind === 'face') {
@@ -669,7 +689,15 @@ export function Viewport() {
           }
           store.select(resolution.item, { additive: resolution.additive });
         },
-        onHandleDrag: (event) => {
+        onHandleDrag: (event: {
+          id: string;
+          value: number;
+          phase: 'start' | 'move' | 'end' | 'cancel';
+          x: number;
+          y: number;
+          shift: boolean;
+          move?: Vec3;
+        }) => {
           if (event.phase === 'start') {
             const handle = handlesRef.current.find((candidate) => candidate.id === event.id);
             if (!handle) return;
@@ -687,12 +715,12 @@ export function Viewport() {
           const drag = quickDragRef.current;
           if (!drag) return;
           if (event.phase === 'move') {
-            drag.update(event.value, event.shift);
+            drag.update(event.value, event.shift, event.move);
             setQuickChip({
               x: event.x,
               y: event.y,
               label: chipLabel(drag, translationRef.current),
-              value: event.value,
+              value: drag.value,
               unit: drag.unit ?? 'length',
             });
             return;
@@ -828,7 +856,7 @@ export function Viewport() {
     // Bodies the edited operation will create are shown translucent and cannot
     // be picked: they are not part of the document yet.
     for (const mark of preview?.bodies ?? []) {
-      if (mark.kind !== 'added') continue;
+      if (mark.kind !== 'added' || mark.ghostOnly) continue;
       if (bodies.some((body) => body.id === mark.id)) continue;
       const mesh = meshes[mark.id];
       if (!mesh) continue;
@@ -858,7 +886,7 @@ export function Viewport() {
       [...new Set([...linkedBodyIds(selection, project), ...targetBodyIds])],
       errorBodyIds,
     );
-    controller.setGhosts(preview?.ghosts ?? []);
+    controller.setGhosts(primitiveDelta ? primitiveDelta.ghosts : (preview?.ghosts ?? []));
     controller.setTreatmentMarks(preview?.faceMarks ?? []);
     // A sketch is edited with the timeline rolled in front of it, so bodies
     // created later vanish from the scene and reappear on exit. A body that
@@ -871,7 +899,16 @@ export function Viewport() {
       controller.fit();
     }
     previousCount.current = sceneBodies.length;
-  }, [activeSketchId, bodies, meshes, preview, project, selection, featureBodyErrors]);
+  }, [
+    activeSketchId,
+    bodies,
+    meshes,
+    preview,
+    primitiveDelta,
+    project,
+    selection,
+    featureBodyErrors,
+  ]);
 
   // Which bodies are open for detail picking, and which sketch shows regions.
   useEffect(() => {
@@ -1163,8 +1200,12 @@ export function Viewport() {
         >
           <span>{quickChip.label}</span>
           <span className="quick-chip-value">
-            {formatNumber(Math.abs(quickChip.value), i18n.language, 1)}
-            {quickChip.unit === 'angle' ? '°' : ' mm'}
+            {formatNumber(
+              Math.abs(quickChip.value),
+              i18n.language,
+              quickChip.unit === 'count' ? 0 : 1,
+            )}
+            {quickChip.unit === 'angle' ? '°' : quickChip.unit === 'count' ? '' : ' mm'}
           </span>
         </div>
       )}

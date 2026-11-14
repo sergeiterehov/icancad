@@ -17,17 +17,77 @@ const featureBase = {
   suppressed: z.boolean().default(false),
 };
 
-const primitiveFeature = z.object({
+const primitiveBase = {
   ...featureBase,
   type: z.literal('primitive'),
-  kind: z.literal('box'),
-  params: z.object({
-    dx: z.number().positive(),
-    dy: z.number().positive(),
-    dz: z.number().positive(),
-  }),
   transform,
-});
+};
+
+const primitiveFeature = z
+  .discriminatedUnion('kind', [
+    z.object({
+      ...primitiveBase,
+      kind: z.literal('box'),
+      params: z.object({
+        dx: z.number().positive(),
+        dy: z.number().positive(),
+        dz: z.number().positive(),
+      }),
+    }),
+    z.object({
+      ...primitiveBase,
+      kind: z.literal('sphere'),
+      params: z.object({ radius: z.number().positive() }),
+    }),
+    z.object({
+      ...primitiveBase,
+      kind: z.literal('cylinder'),
+      params: z.object({ radius: z.number().positive(), height: z.number().positive() }),
+    }),
+    z.object({
+      ...primitiveBase,
+      kind: z.literal('cone'),
+      params: z.object({
+        bottomRadius: z.number().positive(),
+        topRadius: z.number().nonnegative(),
+        height: z.number().positive(),
+      }),
+    }),
+    z.object({
+      ...primitiveBase,
+      kind: z.literal('torus'),
+      params: z.object({
+        majorRadius: z.number().positive(),
+        tubeRadius: z.number().positive(),
+      }),
+    }),
+    z.object({
+      ...primitiveBase,
+      kind: z.literal('pyramid'),
+      params: z.object({
+        sides: z.number().int().min(3).max(120),
+        radius: z.number().positive(),
+        height: z.number().positive(),
+      }),
+    }),
+    z.object({
+      ...primitiveBase,
+      kind: z.literal('capsule'),
+      params: z.object({
+        radius: z.number().positive(),
+        height: z.number().positive(),
+      }),
+    }),
+  ])
+  .superRefine((value, context) => {
+    if (value.kind === 'torus' && value.params.tubeRadius >= value.params.majorRadius) {
+      context.addIssue({
+        code: 'custom',
+        path: ['params', 'tubeRadius'],
+        message: 'The tube radius must be smaller than the major radius',
+      });
+    }
+  });
 
 const importMeshFeature = z.object({
   ...featureBase,
@@ -343,19 +403,23 @@ const transformFeature = z.object({
   transform,
 });
 
-export const featureSchema = z.discriminatedUnion('type', [
+// Primitives share `type` and differ by `kind`, so they form their own
+// discriminated union; the rest keep the faster discriminator on `type`.
+export const featureSchema = z.union([
   primitiveFeature,
-  importMeshFeature,
-  convertToSolidFeature,
-  sketchFeature,
-  extrudeFeature,
-  shellFeature,
-  holeFeature,
-  ribFeature,
-  edgeTreatmentFeature,
-  booleanFeature,
-  deleteBodyFeature,
-  transformFeature,
+  z.discriminatedUnion('type', [
+    importMeshFeature,
+    convertToSolidFeature,
+    sketchFeature,
+    extrudeFeature,
+    shellFeature,
+    holeFeature,
+    ribFeature,
+    edgeTreatmentFeature,
+    booleanFeature,
+    deleteBodyFeature,
+    transformFeature,
+  ]),
 ]);
 
 const bodyRef = z.object({

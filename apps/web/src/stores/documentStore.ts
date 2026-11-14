@@ -23,7 +23,7 @@ import {
   type Feature,
   type ImportMeshFeature,
   type MeshFormat,
-  type PrimitiveFeature,
+  type PrimitiveKind,
   type Project,
   type SectionPlane,
   type SketchFeature,
@@ -36,6 +36,7 @@ import { sketchTopology } from '@icancad/sketch';
 import { useMemo } from 'react';
 import { create } from 'zustand';
 import { i18n } from '../i18n';
+import { defaultPrimitiveFeature } from '../primitive/params';
 import { useKernelStore, isModelRebuilding } from './kernelStore';
 import { useUiStore } from './uiStore';
 
@@ -104,6 +105,7 @@ interface DocumentState {
   /** Ends operation editing, so the model returns to the user's cursor. */
   endFeatureEdit: () => void;
   setSaveState: (state: SaveState) => void;
+  addPrimitive: (name: string, kind: PrimitiveKind) => string | null;
   addPrimitiveBox: (name: string) => void;
   addSketch: (name: string, plane: 'XY' | 'XZ' | 'YZ') => string | null;
   addSketchOnFace: (name: string) => string | null;
@@ -711,24 +713,16 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 
   setSaveState: (saveState) => set({ saveState }),
 
-  addPrimitiveBox: (name) => {
+  addPrimitive: (name, kind) => {
     // Creating an object commits whatever operation was being configured: the
     // new operation belongs at the user's cursor, not in the middle of an edit.
     get().endFeatureEdit();
     const state = get();
     const featureId = createId('feat');
-    const feature: PrimitiveFeature = {
-      id: featureId,
-      name,
-      suppressed: false,
-      type: 'primitive',
-      kind: 'box',
-      params: { dx: 20, dy: 20, dz: 20 },
-      transform: { translation: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
-    };
+    const feature = defaultPrimitiveFeature(kind, name, featureId);
     const body: BodyRef = { id: featureBodyId(featureId), createdBy: featureId };
     if (
-      state.apply(
+      !state.apply(
         ...addFeatureCommands(state.project, feature),
         { type: 'body/add', body },
         {
@@ -742,8 +736,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         },
       )
     ) {
-      selectFeatureForEditing(featureId, set);
+      return null;
     }
+    selectFeatureForEditing(featureId, set);
+    return featureId;
+  },
+
+  addPrimitiveBox: (name) => {
+    get().addPrimitive(name, 'box');
   },
 
   addSketch: (name, plane) => {

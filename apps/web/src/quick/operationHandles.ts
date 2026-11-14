@@ -32,6 +32,7 @@ import {
   quickTargetFromSelection,
   resolveQuickTarget,
 } from './target';
+import { primitiveHandles } from './primitiveHandles';
 import { quickTargetKey, type QuickTargetGeometry } from './types';
 
 /** A drag started by an operation handle. */
@@ -43,9 +44,11 @@ export interface OperationHandleDrag {
   /** Value the operation currently has: the distance or the treatment size. */
   readonly value: number;
   /** Angle handles report degrees; every other handle reports millimetres. */
-  readonly unit?: 'length' | 'angle';
+  readonly unit?: 'length' | 'angle' | 'count';
+  /** What the drag chip calls this gesture, e.g. a primitive size or an axis. */
+  readonly label?: string;
   /** `shift` asks an edge treatment for the other kind while the grab lasts. */
-  update(value: number, shift?: boolean): void;
+  update(value: number, shift?: boolean, move?: Vec3): void;
   end(): void;
   cancel(): void;
 }
@@ -72,6 +75,18 @@ export interface OperationHandle {
   tooltip: string;
   /** Present on an angle handle: the grip turns around an axis. */
   arc?: SceneArcHandle;
+  /** Present on a radial orbit handle: the grip slides along a circle. */
+  orbit?: SceneArcHandle;
+  /** A move grip is a circle; every other handle is an arrow. */
+  kind?: 'arrow' | 'move';
+  /** Translation arrows take the colour of their world axis. */
+  axis?: 'x' | 'y' | 'z';
+  /** A short translation arrow keeps its screen length instead of a model size. */
+  fixedLengthPx?: number;
+  /** Size handles draw a dashed shaft; move arrows keep it solid. */
+  shaft?: 'solid' | 'dashed';
+  /** Only the arrowhead is grabbable; the shaft is just a dimension line. */
+  tipOnly?: boolean;
   beginDrag(): OperationHandleDrag;
 }
 
@@ -105,6 +120,25 @@ export interface OperationHandleContext {
     /** The two ends of a revolve sweep. */
     revolveStart: string;
     revolveEnd: string;
+    /** Translation gizmo of a primitive. */
+    move: string;
+    moveLabel: string;
+    moveX: string;
+    moveY: string;
+    moveZ: string;
+    /** Primitive size handles. */
+    width: string;
+    height: string;
+    depth: string;
+    radius: string;
+    diameter: string;
+    bottomRadius: string;
+    topRadius: string;
+    baseRadius: string;
+    ringDiameter: string;
+    tubeDiameter: string;
+    sides: string;
+    sidesTooltip: string;
   };
 }
 
@@ -113,7 +147,11 @@ export interface OperationHandleContext {
  * its own provider here; the viewport never builds a handle itself.
  */
 export function operationHandles(context: OperationHandleContext): OperationHandle[] {
-  return [...extrudeHandles(context), ...edgeTreatmentHandles(context)];
+  return [
+    ...extrudeHandles(context),
+    ...edgeTreatmentHandles(context),
+    ...primitiveHandles(context),
+  ];
 }
 
 function selectedExtrude(context: OperationHandleContext): ExtrudeFeature | undefined {

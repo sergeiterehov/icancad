@@ -1,11 +1,6 @@
 import { KernelEngine, KernelOpError, type OcctLoader } from './engine';
 import { loadOcctBrowser } from './occt-browser';
-import type {
-  KernelFailure,
-  KernelRequest,
-  KernelSuccess,
-  KernelStatusEvent,
-} from './protocol';
+import type { KernelFailure, KernelRequest, KernelSuccess, KernelStatusEvent } from './protocol';
 
 export interface KernelWorkerScope {
   location: { origin: string };
@@ -39,6 +34,11 @@ export function startKernelWorker(options: KernelWorkerOptions = {}): void {
         case 'make-box': {
           await engine.init();
           postSuccess(scope, request.id, engine.makeBox(request.params));
+          break;
+        }
+        case 'make-primitive': {
+          await engine.init();
+          postSuccess(scope, request.id, engine.makePrimitive(request.params));
           break;
         }
         case 'make-prism': {

@@ -1,6 +1,7 @@
 import {
   activeFeatureIds,
   bodiesInHistory,
+  featureBodyId,
   objectColor,
   objectVisible,
   SKETCH_COLOR,
@@ -23,23 +24,14 @@ import {
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { canEditSketch, sketchPlaneReady } from '../sketch/sectionPlane';
-import {
-  useDocumentStore,
-  useViewProject,
-  type SelectionKind,
-} from '../stores/documentStore';
+import { useDocumentStore, useViewProject, type SelectionKind } from '../stores/documentStore';
 import { useKernelStore, type PreviewMarkKind } from '../stores/kernelStore';
 import { isDirectlySelected, linkedBodyIds } from '../stores/selection';
 import { useUiStore } from '../stores/uiStore';
 import { IconButton } from './Controls';
-import {
-  colorMenuItem,
-  deleteMenuItem,
-  objectTargets,
-  visibilityMenuItem,
-} from './objectMenu';
+import { colorMenuItem, deleteMenuItem, objectTargets, visibilityMenuItem } from './objectMenu';
 import { showContextMenu, type ContextMenuItem } from './ContextMenu';
-import { SketchIcon } from './featureIcons';
+import { FeatureIcon, SketchIcon } from './featureIcons';
 import { Tooltip } from './Tooltip';
 
 // The tree renames in place; committing happens on Enter or on blur.
@@ -104,9 +96,7 @@ export function LeftPanel() {
     useDocumentStore.getState().apply({ type: 'metadata/patch', objectId, patch: { name } });
   };
   const renameSketch = (feature: SketchFeature, name: string) => {
-    useDocumentStore
-      .getState()
-      .apply({ type: 'feature/replace', feature: { ...feature, name } });
+    useDocumentStore.getState().apply({ type: 'feature/replace', feature: { ...feature, name } });
   };
   // The context menu acts on the whole selection: right-clicking a row that is
   // not selected selects it first.
@@ -229,7 +219,10 @@ export function LeftPanel() {
         )}
         {mark && (
           <Tooltip content={markLabel(mark.kind)}>
-            <span className={clsx('tree-preview-icon', mark.kind)} aria-label={markLabel(mark.kind)}>
+            <span
+              className={clsx('tree-preview-icon', mark.kind)}
+              aria-label={markLabel(mark.kind)}
+            >
               {markIcon(mark.kind)}
             </span>
           </Tooltip>
@@ -277,12 +270,7 @@ export function LeftPanel() {
     return (
       <div
         key={feature.id}
-        className={clsx(
-          'tree-row',
-          direct && 'selected',
-          linked && 'linked',
-          !visible && 'muted',
-        )}
+        className={clsx('tree-row', direct && 'selected', linked && 'linked', !visible && 'muted')}
         onContextMenu={(event) => {
           ensureSelected('sketch', feature.id);
           showContextMenu(event, [
@@ -396,7 +384,12 @@ export function LeftPanel() {
       >
         <span className="tree-main">
           <span className="tree-icon" style={{ color: mark.color }}>
-            <Box size={14} />
+            {(() => {
+              const feature = project.features.find(
+                (candidate) => featureBodyId(candidate.id) === mark.id,
+              );
+              return feature ? <FeatureIcon feature={feature} size={14} /> : <Box size={14} />;
+            })()}
           </span>
           <span className="tree-name">{mark.name}</span>
         </span>

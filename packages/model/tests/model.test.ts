@@ -445,6 +445,67 @@ describe('project serialization', () => {
     expect(restored.bodies).toHaveLength(1);
   });
 
+  it('round-trips every primitive kind', () => {
+    const primitives: PrimitiveFeature[] = [
+      {
+        ...boxFeature('feat_box_kind'),
+        kind: 'sphere',
+        params: { radius: 8 },
+      } as PrimitiveFeature,
+      {
+        ...boxFeature('feat_cylinder_kind'),
+        kind: 'cylinder',
+        params: { radius: 8, height: 12 },
+      } as PrimitiveFeature,
+      {
+        ...boxFeature('feat_cone_kind'),
+        kind: 'cone',
+        params: { bottomRadius: 8, topRadius: 2, height: 12 },
+      } as PrimitiveFeature,
+      {
+        ...boxFeature('feat_torus_kind'),
+        kind: 'torus',
+        params: { majorRadius: 20, tubeRadius: 4 },
+      } as PrimitiveFeature,
+      {
+        ...boxFeature('feat_pyramid_kind'),
+        kind: 'pyramid',
+        params: { sides: 5, radius: 10, height: 15 },
+      } as PrimitiveFeature,
+      {
+        ...boxFeature('feat_capsule_kind'),
+        kind: 'capsule',
+        params: { radius: 4, height: 10 },
+      } as PrimitiveFeature,
+    ];
+    const project: Project = {
+      ...createProject(),
+      features: [boxFeature(), ...primitives],
+      bodies: [boxFeature(), ...primitives].map((feature) => bodyFor(feature.id)),
+    };
+    const restored = parseProject(JSON.parse(JSON.stringify(project)));
+    expect(
+      restored.features.map((feature) =>
+        feature.type === 'primitive' ? feature.kind : feature.type,
+      ),
+    ).toEqual(['box', 'sphere', 'cylinder', 'cone', 'torus', 'pyramid', 'capsule']);
+  });
+
+  it('rejects a torus whose tube fills the hole', () => {
+    const project: Project = {
+      ...createProject(),
+      features: [
+        {
+          ...boxFeature('feat_bad_torus'),
+          kind: 'torus',
+          params: { majorRadius: 10, tubeRadius: 10 },
+        } as PrimitiveFeature,
+      ],
+      bodies: [bodyFor('feat_bad_torus')],
+    };
+    expect(() => parseProject(JSON.parse(JSON.stringify(project)))).toThrow(ProjectFileError);
+  });
+
   it('rejects unsupported schema versions', () => {
     const project = { ...withBox(), schemaVersion: 99 };
     expect(() => parseProject(project)).toThrow(ProjectFileError);

@@ -1,5 +1,16 @@
-import type { SketchFeature } from '@icancad/model';
-import { Box, Hexagon, Square } from 'lucide-react';
+import type { PrimitiveKind, SketchFeature } from '@icancad/model';
+import {
+  Box,
+  Circle,
+  Cone,
+  Cylinder,
+  Torus,
+  Hexagon,
+  Pill,
+  Pyramid,
+  Shapes,
+  Square,
+} from 'lucide-react';
 import type { MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { edgeTreatmentTargetFromSelection } from '../quick/edgeTreatment';
@@ -44,6 +55,7 @@ export function ToolRail() {
   const addExtrude = useDocumentStore((state) => state.addExtrude);
   const addEdgeTreatment = useDocumentStore((state) => state.addEdgeTreatment);
   const addShell = useDocumentStore((state) => state.addShell);
+  const addPrimitive = useDocumentStore((state) => state.addPrimitive);
   const project = useDocumentStore((state) => state.project);
   const selection = useDocumentStore((state) => state.selection);
   const sketchSelection = extrudeInput(selection, project);
@@ -109,6 +121,67 @@ export function ToolRail() {
     ]);
   };
 
+  const openPrimitiveMenu = (event: MouseEvent<HTMLButtonElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const create = (
+      kind: PrimitiveKind,
+      labelKey:
+        | 'features.cube'
+        | 'features.sphere'
+        | 'features.cylinder'
+        | 'features.cone'
+        | 'features.torus'
+        | 'features.pyramid'
+        | 'features.capsule',
+    ) => {
+      addPrimitive(t(labelKey), kind);
+    };
+    openMenu(rect.left, rect.bottom + 6, [
+      {
+        id: 'box',
+        label: t('features.cube'),
+        icon: <Box size={14} />,
+        onSelect: () => create('box', 'features.cube'),
+      },
+      {
+        id: 'sphere',
+        label: t('features.sphere'),
+        icon: <Circle size={14} />,
+        onSelect: () => create('sphere', 'features.sphere'),
+      },
+      {
+        id: 'cylinder',
+        label: t('features.cylinder'),
+        icon: <Cylinder size={14} />,
+        onSelect: () => create('cylinder', 'features.cylinder'),
+      },
+      {
+        id: 'cone',
+        label: t('features.cone'),
+        icon: <Cone size={14} />,
+        onSelect: () => create('cone', 'features.cone'),
+      },
+      {
+        id: 'torus',
+        label: t('features.torus'),
+        icon: <Torus size={14} />,
+        onSelect: () => create('torus', 'features.torus'),
+      },
+      {
+        id: 'pyramid',
+        label: t('features.pyramid'),
+        icon: <Pyramid size={14} />,
+        onSelect: () => create('pyramid', 'features.pyramid'),
+      },
+      {
+        id: 'capsule',
+        label: t('features.capsule'),
+        icon: <Pill size={14} />,
+        onSelect: () => create('capsule', 'features.capsule'),
+      },
+    ]);
+  };
+
   return (
     <nav className="tool-rail" aria-label={t('panels.tools')}>
       <IconButton
@@ -161,6 +234,14 @@ export function ToolRail() {
         }}
       >
         <EdgeToolIcon size={17} />
+      </IconButton>
+
+      <IconButton
+        label={t('tools.primitives')}
+        tooltip={t('tools.primitives')}
+        onClick={openPrimitiveMenu}
+      >
+        <Shapes size={17} />
       </IconButton>
 
       <div className="tool-separator" />

@@ -17,6 +17,7 @@ export interface OcctTransformation {
 /** A `gp_Trsf`: a placement the shape makers accept. */
 export interface OcctTransformation3 {
   SetRotation_1(axis: unknown, angle: number): void;
+  SetTranslation_1(vector: unknown): void;
 }
 
 export interface OcctTriangle {
@@ -90,6 +91,26 @@ export interface OcctShapeMaker {
   Shape(): OcctShape;
 }
 
+/** `BRepBuilderAPI_MakePolygon`: a closed wire from straight edges. */
+export interface OcctPolygonMaker {
+  Add_1(point: OcctPoint3): void;
+  Close(): void;
+  Wire(): OcctShape;
+}
+
+export interface OcctVertexMaker {
+  Vertex(): OcctShape;
+}
+
+/** `BRepOffsetAPI_ThruSections`: lofts a base wire to a single apex vertex. */
+export interface OcctThruSectionsMaker {
+  AddWire(wire: OcctShape): void;
+  AddVertex(vertex: OcctShape): void;
+  Build(): void;
+  IsDone(): boolean;
+  Shape(): OcctShape;
+}
+
 /** `TopTools_ListOfShape`: the faces a base face became. */
 export interface OcctShapeList {
   Size(): number;
@@ -148,6 +169,26 @@ export interface OcctBindings {
     dy: number,
     dz: number,
   ) => OcctShapeMaker;
+  BRepPrimAPI_MakeSphere_5: new (center: OcctPoint3, radius: number) => OcctShapeMaker;
+  BRepPrimAPI_MakeCylinder_3: new (axis: unknown, radius: number, height: number) => OcctShapeMaker;
+  BRepPrimAPI_MakeCone_3: new (
+    axis: unknown,
+    bottomRadius: number,
+    topRadius: number,
+    height: number,
+  ) => OcctShapeMaker;
+  BRepPrimAPI_MakeTorus_5: new (
+    axis: unknown,
+    majorRadius: number,
+    tubeRadius: number,
+  ) => OcctShapeMaker;
+  BRepBuilderAPI_MakePolygon_1: new () => OcctPolygonMaker;
+  BRepBuilderAPI_MakeVertex: new (point: OcctPoint3) => OcctVertexMaker;
+  BRepOffsetAPI_ThruSections: new (
+    isSolid: boolean,
+    ruled: boolean,
+    pres3d: number,
+  ) => OcctThruSectionsMaker;
   BRepMesh_IncrementalMesh_2: new (
     shape: OcctShape,
     linearDeflection: number,
@@ -172,10 +213,7 @@ export interface OcctBindings {
   GeomAbs_SurfaceType: {
     GeomAbs_Plane: unknown;
   };
-  BRepAdaptor_Surface_2: new (
-    face: OcctShape,
-    restriction: boolean,
-  ) => { GetType(): unknown };
+  BRepAdaptor_Surface_2: new (face: OcctShape, restriction: boolean) => { GetType(): unknown };
   TopoDS: {
     Face_1(shape: OcctShape): OcctShape;
     Edge_1(shape: OcctShape): OcctShape;
@@ -252,7 +290,10 @@ export interface OcctBindings {
   /** Both makers take the shape, and a fillet also takes its surface kind. */
   BRepFilletAPI_MakeFillet: new (shape: OcctShape, surface: unknown) => OcctEdgeMaker;
   BRepFilletAPI_MakeChamfer: new (shape: OcctShape) => OcctEdgeMaker;
-  BRepCheck_Analyzer: new (shape: OcctShape, geometryControls: boolean) => {
+  BRepCheck_Analyzer: new (
+    shape: OcctShape,
+    geometryControls: boolean,
+  ) => {
     IsValid_2(): boolean;
   };
   BRepOffsetAPI_MakeThickSolid_1: new () => OcctThickSolidMaker;

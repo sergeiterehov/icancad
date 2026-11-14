@@ -99,6 +99,18 @@ export interface SceneHandle {
   tooltip?: string;
   /** Present on an angle handle: the grip turns around an axis. */
   arc?: SceneArcHandle;
+  /** Present on a radial orbit handle: the grip slides along a circle. */
+  orbit?: SceneArcHandle;
+  /** A move grip is a circle; every other handle is an arrow. */
+  kind?: 'arrow' | 'move';
+  /** Translation arrows take the colour of their world axis. */
+  axis?: 'x' | 'y' | 'z';
+  /** A short translation arrow keeps its screen length instead of a model size. */
+  fixedLengthPx?: number;
+  /** Size handles draw a dashed shaft; move arrows keep it solid. */
+  shaft?: 'solid' | 'dashed';
+  /** Only the arrowhead is grabbable; the shaft is just a dimension line. */
+  tipOnly?: boolean;
 }
 
 /** Where a handle is on screen, for the drag chip and for tests. */
@@ -110,6 +122,7 @@ export interface SceneHandleScreen {
   tipY: number;
   value: number;
   enabled: boolean;
+  kind?: 'arrow' | 'move';
 }
 
 /** A preview ghost as the scene draws it; exposed for tests and diagnostics. */

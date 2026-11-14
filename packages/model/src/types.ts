@@ -30,12 +30,62 @@ export interface FeatureBase {
   suppressed: boolean;
 }
 
-export interface PrimitiveFeature extends FeatureBase {
+export type PrimitiveKind =
+  'box' | 'sphere' | 'cylinder' | 'cone' | 'torus' | 'pyramid' | 'capsule';
+
+interface PrimitiveBase extends FeatureBase {
   type: 'primitive';
-  kind: 'box';
-  params: { dx: number; dy: number; dz: number };
   transform: Transform;
 }
+
+export interface BoxPrimitive extends PrimitiveBase {
+  kind: 'box';
+  params: { dx: number; dy: number; dz: number };
+}
+
+/** The radius is stored; the inspector shows the diameter. */
+export interface SpherePrimitive extends PrimitiveBase {
+  kind: 'sphere';
+  params: { radius: number };
+}
+
+export interface CylinderPrimitive extends PrimitiveBase {
+  kind: 'cylinder';
+  params: { radius: number; height: number };
+}
+
+export interface ConePrimitive extends PrimitiveBase {
+  kind: 'cone';
+  /** A zero top radius makes a sharp cone. */
+  params: { bottomRadius: number; topRadius: number; height: number };
+}
+
+/** The radii are stored; the inspector shows the diameters. */
+export interface TorusPrimitive extends PrimitiveBase {
+  kind: 'torus';
+  params: { majorRadius: number; tubeRadius: number };
+}
+
+/** A regular pyramid: `radius` is the circumradius of the base polygon. */
+export interface PyramidPrimitive extends PrimitiveBase {
+  kind: 'pyramid';
+  params: { sides: number; radius: number; height: number };
+}
+
+/** A capsule: `height` is the length of the straight cylindrical section. */
+export interface CapsulePrimitive extends PrimitiveBase {
+  kind: 'capsule';
+  params: { radius: number; height: number };
+}
+
+export type PrimitiveFeature =
+  | BoxPrimitive
+  | SpherePrimitive
+  | CylinderPrimitive
+  | ConePrimitive
+  | TorusPrimitive
+  | PyramidPrimitive
+  | CapsulePrimitive;
 
 export interface ImportMeshFeature extends FeatureBase {
   type: 'import-mesh';

@@ -256,7 +256,6 @@ export function ObjectPickerField({
 /** A wheel notch is a hundred pixels; line-mode deltas are scaled to it. */
 const WHEEL_NOTCH_PX = 100;
 
-
 /**
  * Wheel stepping while the field has the caret. The listener is native because
  * React's wheel handlers are passive and could not keep the panel from
@@ -443,6 +442,7 @@ export function DimensionField({
   axis,
   icon,
   label,
+  tooltip,
   value,
   suffix,
   allowNegative,
@@ -452,6 +452,8 @@ export function DimensionField({
   axis?: string;
   icon?: ReactNode;
   label: string;
+  /** Longer explanation shown on hover; the label itself stays short. */
+  tooltip?: ReactNode;
   value: number;
   suffix?: string;
   /** Positions are signed and may be zero; sizes are positive lengths. */
@@ -461,7 +463,7 @@ export function DimensionField({
   onCommit: (value: number) => void;
 }) {
   return (
-    <Tooltip content={label}>
+    <Tooltip content={tooltip ?? label}>
       <NumberField
         label={label}
         value={value}

@@ -11,10 +11,7 @@ import type { KernelTask } from '../kernel/scheduler';
 
 export type KernelStatus = 'idle' | 'loading' | 'ready' | 'error';
 
-export function isModelRebuilding(state: {
-  status: KernelStatus;
-  tasks: KernelTask[];
-}): boolean {
+export function isModelRebuilding(state: { status: KernelStatus; tasks: KernelTask[] }): boolean {
   return state.status !== 'ready' || state.tasks.some((task) => task.key === 'rebuild');
 }
 
@@ -44,6 +41,8 @@ export interface PreviewBodyMark {
    * the tree does not report it as changed.
    */
   silent?: boolean;
+  /** The tree gets an added row, but the viewport draws the delta as a ghost. */
+  ghostOnly?: boolean;
 }
 
 /** A translucent volume that only exists in the preview, such as a cut tool. */
@@ -51,6 +50,8 @@ export interface SceneGhost {
   id: string;
   mesh: TessellationResult;
   color: string;
+  /** Opacity of the delta volume; the operation ghosts keep the default. */
+  opacity?: number;
   /**
    * Soft edges of the ghost: beyond the given plane the opacity fades out over
    * roughly 100 screen pixels, so a through cut does not end abruptly.

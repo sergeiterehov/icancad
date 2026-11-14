@@ -44,7 +44,8 @@
     "magnet": "Magnet",
     "extrudeNeedsSketch": "Select a sketch to extrude",
     "edgeTreatment": "Edge treatment",
-    "shell": "Shell"
+    "shell": "Shell",
+    "primitives": "Primitives"
   },
   "tree": {
     "bodies": "Bodies",
@@ -71,8 +72,8 @@
     "features": "Features",
     "size": "Size",
     "width": "Width (X)",
-    "height": "Height (Y)",
-    "depth": "Depth (Z)",
+    "height": "Height (Z)",
+    "depth": "Depth (Y)",
     "faces": "Faces",
     "edges": "Edges",
     "triangles": "Triangles",
@@ -111,13 +112,22 @@
     "positionY": "Position Y",
     "positionZ": "Position Z",
     "box": "Box",
+    "radius": "Radius",
+    "diameter": "Diameter",
+    "bottomRadius": "Bottom radius",
+    "topRadius": "Top radius",
+    "baseRadius": "Base radius",
+    "ringDiameter": "Ring diameter",
+    "tubeDiameter": "Tube diameter",
+    "sides": "Sides N",
+    "totalLength": "Total length",
     "extrude": "Extrusion",
     "metrics": "Metrics",
     "objects": "Objects"
   },
   "timeline": {
     "blockedByError": "Cannot move past the failed operation",
-    "empty": "No operations yet. Add a box or import a mesh.",
+    "empty": "No operations yet. Add a primitive or import a mesh.",
     "errorHint": "Cannot complete this operation because of an error",
     "rollback": "Roll back to this step",
     "feature": "Feature",
@@ -145,6 +155,9 @@
   "kernelStatus": {
     "details": "Kernel status and task queue",
     "ready": "All operations are calculated",
+    "operationError": "An operation finished with an error",
+    "operationErrors": "Operations with errors: {{count}}",
+    "operationErrorsTitle": "Operation errors",
     "errorHint": "The kernel failed to load",
     "elapsed": "{{time}} s",
     "queued": "{{count}} queued"
@@ -200,11 +213,31 @@
   },
   "features": {
     "box": "Box",
+    "cube": "Cube",
+    "sphere": "Sphere",
+    "cylinder": "Cylinder",
+    "cone": "Cone",
+    "torus": "Torus",
+    "pyramid": "Pyramid",
+    "capsule": "Capsule",
     "sketch": "Sketch",
     "extrude": "Extrude",
     "importMesh": "Imported mesh",
     "edgeTreatment": "Edge treatment",
     "shell": "Shell"
+  },
+  "primitive": {
+    "coneHint": "A top radius of 0 makes a sharp cone.",
+    "torusHint": "The tube diameter must be smaller than the ring diameter.",
+    "pyramidHint": "N = 3 gives a triangular base, N = 4 a square one. The circle at the base changes N."
+  },
+  "handles": {
+    "move": "Move in the view plane",
+    "moveLabel": "Move",
+    "moveX": "Move along X — drag",
+    "moveY": "Move along Y — drag",
+    "moveZ": "Move along Z — drag",
+    "sides": "Sides N — drag around the circle"
   },
   "common": {
     "close": "Close",

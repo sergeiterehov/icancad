@@ -389,6 +389,8 @@ export class SceneController {
     id: string;
     /** Value when the pointer went down. */
     value: number;
+    /** The grip moves in the view plane instead of sliding along an axis. */
+    move: boolean;
     /** Angle handles turn with the pointer instead of sliding along an axis. */
     arc?: SceneArcHandle & { lastPointerAngle: number };
     lastValue: number;
@@ -426,6 +428,8 @@ export class SceneController {
         y: number;
         /** Shift is the second kind of an edge treatment while the grab lasts. */
         shift: boolean;
+        /** World-space movement of a move grip since the grab started. */
+        move?: [number, number, number];
       }) => void;
       /** Handle under the pointer, or null when it leaves the handle. */
       onHandleHover?: (event: {
@@ -566,7 +570,6 @@ export class SceneController {
   }
 
 
-
   getGhosts(): SceneGhostInfo[] {
     return this.ghostSources.map((ghost) => ({
       id: ghost.id,
@@ -588,6 +591,7 @@ export class SceneController {
           tipY: 0,
           value: handle.value,
           enabled: false,
+          ...(handle.kind ? { kind: handle.kind } : {}),
         };
       }
       return {
@@ -598,6 +602,7 @@ export class SceneController {
         tipY: geometry.tip.y + rect.top,
         value: handle.value,
         enabled: handle.enabled,
+        ...(handle.kind ? { kind: handle.kind } : {}),
       };
     });
   }
@@ -605,6 +610,19 @@ export class SceneController {
   /** Handles are blue; selection stays purple. */
   private handleColor(): number {
     return this.theme === 'dark' ? 0x3b82f6 : 0x2563eb;
+  }
+
+  /** Translation arrows follow the usual X/Y/Z colours. */
+  private handleColorFor(handle: SceneHandle): number {
+    if (!handle.axis) return this.handleColor();
+    switch (handle.axis) {
+      case 'x':
+        return this.theme === 'dark' ? 0xf06a6a : 0xd64545;
+      case 'y':
+        return this.theme === 'dark' ? 0x6ccf78 : 0x2f9e44;
+      case 'z':
+        return this.theme === 'dark' ? 0x64a0f8 : 0x2f6fd0;
+    }
   }
 
   /** The space behind the model: a hairline of it keeps handles readable. */
@@ -616,15 +634,23 @@ export class SceneController {
   private handleScreenGeometry(
     handle: SceneHandle,
   ): { origin: { x: number; y: number }; tip: { x: number; y: number } } | null {
-    if (handle.arc) {
-      const grip = arcGripPoint(handle.arc, handle.arc.angle);
-      const next = arcGripPoint(handle.arc, handle.arc.angle + 0.05);
+    const arc = handle.arc ?? handle.orbit;
+    if (arc) {
+      const grip = arcGripPoint(arc, arc.angle);
+      const next = arcGripPoint(arc, arc.angle + 0.05);
       return {
         origin: this.projectWorld(grip),
         tip: this.projectWorld(next),
       };
     }
     const origin = new THREE.Vector3(...handle.origin);
+    if (handle.kind === 'move') {
+      const projected = this.projectWorld(origin);
+      return {
+        origin: { x: projected.x, y: projected.y },
+        tip: { x: projected.x, y: projected.y },
+      };
+    }
     const direction = new THREE.Vector3(...handle.direction);
     if (direction.lengthSq() < 1e-12) return null;
     direction.normalize();
@@ -632,9 +658,11 @@ export class SceneController {
     const worldPerPixel = 1 / this.pixelsPerWorldUnit();
     const minimum = 18 * worldPerPixel;
     const length =
-      handle.value === 0
-        ? HANDLE_IDLE_PX * worldPerPixel
-        : Math.max(Math.abs(handle.value), minimum);
+      handle.fixedLengthPx !== undefined
+        ? handle.fixedLengthPx * worldPerPixel
+        : handle.value === 0
+          ? HANDLE_IDLE_PX * worldPerPixel
+          : Math.max(Math.abs(handle.value), minimum);
     const tip = origin.clone().addScaledVector(arrowDirection, length);
     const projectedOrigin = this.projectWorld(origin);
     const projectedTip = this.projectWorld(tip);
@@ -648,8 +676,16 @@ export class SceneController {
     this.clearHandleGroup();
     if (this.handleData.length === 0) return;
     for (const handle of this.handleData) {
+      if (handle.orbit) {
+        this.addOrbitHandle(handle);
+        continue;
+      }
       if (handle.arc) {
         this.addArcHandle(handle);
+        continue;
+      }
+      if (handle.kind === 'move') {
+        this.addMoveHandle(handle);
         continue;
       }
       if (!this.handleScreenGeometry(handle)) continue;
@@ -663,19 +699,22 @@ export class SceneController {
     const direction = new THREE.Vector3(...handle.direction).normalize();
     const arrowDirection = handle.value < 0 ? direction.clone().negate() : direction;
     const length =
-      handle.value === 0
-        ? HANDLE_IDLE_PX * worldPerPixel
-        : Math.max(Math.abs(handle.value), 18 * worldPerPixel);
+      handle.fixedLengthPx !== undefined
+        ? handle.fixedLengthPx * worldPerPixel
+        : handle.value === 0
+          ? HANDLE_IDLE_PX * worldPerPixel
+          : Math.max(Math.abs(handle.value), 18 * worldPerPixel);
     const tip = origin.clone().addScaledVector(arrowDirection, length);
     const coneHeight = Math.min(12 * worldPerPixel, length * 0.7);
     const base = tip.clone().addScaledVector(arrowDirection, -coneHeight);
     const hovered = this.hoveredHandleId === handle.id;
-    const color = hovered ? 0xffffff : this.handleColor();
+    const color = hovered ? 0xffffff : this.handleColorFor(handle);
     const thickness = handle.thickness ?? 1;
     // The body under a handle can be the same blue, so the whole arrow is drawn
     // a pixel wider in the colour of the space behind it.
     const outlineColor = this.handleOutlineColor();
     const halo = worldPerPixel;
+    const dashed = handle.shaft === 'dashed';
 
     const makeLine = (colorValue: number, linewidth: number, renderOrder: number) => {
       const geometry = new LineGeometry();
@@ -696,9 +735,31 @@ export class SceneController {
     };
 
     const linewidth = (hovered ? 3.2 : 2.3) * thickness;
-    const outline = makeLine(outlineColor, linewidth + 2, RenderOrder.handleOutline);
-    const line = makeLine(color, linewidth, RenderOrder.handle);
-    const material = line.material as LineMaterial;
+    const outline = dashed
+      ? null
+      : makeLine(outlineColor, linewidth + 2, RenderOrder.handleOutline);
+    const line = dashed ? null : makeLine(color, linewidth, RenderOrder.handle);
+    const material = line ? (line.material as LineMaterial) : undefined;
+
+    // A size handle is only its arrowhead: the shaft is a muted dashed
+    // dimension line that never reacts to the pointer.
+    let dashedLine: THREE.Line | null = null;
+    if (dashed) {
+      const geometry = new THREE.BufferGeometry().setFromPoints([origin, base]);
+      const dashedMaterial = new THREE.LineDashedMaterial({
+        color,
+        dashSize: 5 * worldPerPixel,
+        gapSize: 4 * worldPerPixel,
+        transparent: true,
+        opacity: 0.65,
+        depthTest: false,
+        depthWrite: false,
+      });
+      dashedLine = new THREE.Line(geometry, dashedMaterial);
+      dashedLine.computeLineDistances();
+      dashedLine.renderOrder = RenderOrder.handleOutline;
+      dashedLine.userData.handleId = handle.id;
+    }
 
     const coneMaterial = new THREE.MeshBasicMaterial({
       color,
@@ -739,39 +800,236 @@ export class SceneController {
     outlineCone.renderOrder = RenderOrder.handleOutline;
     outlineCone.userData.handleId = handle.id;
 
-    const anchorMaterial = new THREE.MeshBasicMaterial({
+    const anchorMaterial = dashed
+      ? null
+      : new THREE.MeshBasicMaterial({
+          color,
+          depthTest: false,
+          depthWrite: false,
+          transparent: true,
+        });
+    const anchorRadius = Math.max(0.001, 3.4 * thickness * worldPerPixel);
+    const anchor =
+      anchorMaterial && new THREE.Mesh(new THREE.SphereGeometry(anchorRadius, 14, 10), anchorMaterial);
+    if (anchor) {
+      anchor.position.copy(origin);
+      anchor.renderOrder = RenderOrder.handle;
+      anchor.userData.handleId = handle.id;
+    }
+
+    const outlineAnchor = dashed
+      ? null
+      : new THREE.Mesh(
+          new THREE.SphereGeometry(anchorRadius + halo, 14, 10),
+          new THREE.MeshBasicMaterial({
+            color: outlineColor,
+            depthTest: false,
+            depthWrite: false,
+            transparent: true,
+          }),
+        );
+    if (outlineAnchor) {
+      outlineAnchor.position.copy(origin);
+      outlineAnchor.renderOrder = RenderOrder.handleOutline;
+      outlineAnchor.userData.handleId = handle.id;
+    }
+
+    const objects: THREE.Object3D[] = [outlineCone, cone];
+    if (outline) objects.push(outline);
+    if (line) objects.push(line);
+    if (dashedLine) objects.push(dashedLine);
+    if (outlineAnchor) objects.push(outlineAnchor);
+    if (anchor) objects.push(anchor);
+    this.handleGroup.add(...objects);
+
+    const colors: Array<{ color: THREE.Color }> = [coneMaterial];
+    if (anchorMaterial) colors.push(anchorMaterial);
+    if (material) colors.push(material);
+    this.handleEntries.push({
+      handle,
+      objects,
+      colors,
+      ...(line ? { line, material } : {}),
+      ...(outline ? { outlineMaterial: outline.material as LineMaterial } : {}),
+    });
+  }
+
+  /**
+   * The centre of a translation gizmo: a screen-sized circle that moves the
+   * object in the plane facing the camera.
+   */
+  private addMoveHandle(handle: SceneHandle): void {
+    const worldPerPixel = 1 / this.pixelsPerWorldUnit();
+    const origin = new THREE.Vector3(...handle.origin);
+    const hovered = this.hoveredHandleId === handle.id;
+    const color = hovered ? 0xffffff : this.handleColorFor(handle);
+    const outlineColor = this.handleOutlineColor();
+    const halo = worldPerPixel;
+    const outer = Math.max(0.001, 6.5 * worldPerPixel);
+    const inner = Math.max(0.001, 3.4 * worldPerPixel);
+    const ringMaterial = new THREE.MeshBasicMaterial({
       color,
       depthTest: false,
       depthWrite: false,
       transparent: true,
+      side: THREE.DoubleSide,
     });
-    const anchorRadius = Math.max(0.001, 3.4 * thickness * worldPerPixel);
-    const anchor = new THREE.Mesh(new THREE.SphereGeometry(anchorRadius, 14, 10), anchorMaterial);
-    anchor.position.copy(origin);
-    anchor.renderOrder = RenderOrder.handle;
-    anchor.userData.handleId = handle.id;
-
-    const outlineAnchor = new THREE.Mesh(
-      new THREE.SphereGeometry(anchorRadius + halo, 14, 10),
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(Math.max(0.001, inner - halo), Math.max(0.001, outer + halo), 28),
       new THREE.MeshBasicMaterial({
         color: outlineColor,
         depthTest: false,
         depthWrite: false,
         transparent: true,
+        side: THREE.DoubleSide,
       }),
     );
-    outlineAnchor.position.copy(origin);
-    outlineAnchor.renderOrder = RenderOrder.handleOutline;
-    outlineAnchor.userData.handleId = handle.id;
+    ring.position.copy(origin);
+    ring.quaternion.copy(this.camera.quaternion);
+    ring.renderOrder = RenderOrder.handleOutline;
+    ring.userData.handleId = handle.id;
 
-    this.handleGroup.add(outline, line, outlineCone, cone, outlineAnchor, anchor);
+    const ringMain = new THREE.Mesh(new THREE.RingGeometry(inner, outer, 28), ringMaterial);
+    ringMain.position.copy(origin);
+    ringMain.quaternion.copy(this.camera.quaternion);
+    ringMain.renderOrder = RenderOrder.handle;
+    ringMain.userData.handleId = handle.id;
+
+    const dotMaterial = new THREE.MeshBasicMaterial({
+      color,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+      side: THREE.DoubleSide,
+    });
+    const dot = new THREE.Mesh(
+      new THREE.CircleGeometry(Math.max(0.001, 1.7 * worldPerPixel), 20),
+      dotMaterial,
+    );
+    dot.position.copy(origin);
+    dot.quaternion.copy(this.camera.quaternion);
+    dot.renderOrder = RenderOrder.handle;
+    dot.userData.handleId = handle.id;
+
+    const dotOutline = new THREE.Mesh(
+      new THREE.CircleGeometry(Math.max(0.001, 2.7 * worldPerPixel), 20),
+      new THREE.MeshBasicMaterial({
+        color: outlineColor,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        side: THREE.DoubleSide,
+      }),
+    );
+    dotOutline.position.copy(origin);
+    dotOutline.quaternion.copy(this.camera.quaternion);
+    dotOutline.renderOrder = RenderOrder.handleOutline;
+    dotOutline.userData.handleId = handle.id;
+
+    this.handleGroup.add(ring, ringMain, dotOutline, dot);
     this.handleEntries.push({
       handle,
-      objects: [outline, line, outlineCone, cone, outlineAnchor, anchor],
-      colors: [material, coneMaterial, anchorMaterial],
-      line,
-      material,
-      outlineMaterial: outline.material as LineMaterial,
+      objects: [ring, ringMain, dotOutline, dot],
+      colors: [ringMaterial, dotMaterial],
+    });
+  }
+
+  /**
+   * A radial orbit handle: a dashed line from the centre to a circular grip.
+   * Only the grip is interactive; it slides along the circle it sits on.
+   */
+  private addOrbitHandle(handle: SceneHandle): void {
+    const arc = handle.orbit;
+    if (!arc) return;
+    const worldPerPixel = 1 / this.pixelsPerWorldUnit();
+    const center = new THREE.Vector3(...arc.center);
+    const grip = arcGripPoint(arc, arc.angle);
+    const hovered = this.hoveredHandleId === handle.id;
+    const color = hovered ? 0xffffff : this.handleColorFor(handle);
+    const outlineColor = this.handleOutlineColor();
+    const halo = worldPerPixel;
+
+    const lineGeometry = new THREE.BufferGeometry().setFromPoints([center, grip]);
+    const lineMaterial = new THREE.LineDashedMaterial({
+      color: this.handleColorFor(handle),
+      dashSize: 5 * worldPerPixel,
+      gapSize: 4 * worldPerPixel,
+      transparent: true,
+      opacity: 0.65,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const line = new THREE.Line(lineGeometry, lineMaterial);
+    line.computeLineDistances();
+    line.renderOrder = RenderOrder.handleOutline;
+    line.userData.handleId = handle.id;
+
+    const ringMaterial = new THREE.MeshBasicMaterial({
+      color,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+      side: THREE.DoubleSide,
+    });
+    const outer = Math.max(0.001, 5.4 * worldPerPixel);
+    const inner = Math.max(0.001, 3 * worldPerPixel);
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(Math.max(0.001, inner - halo), Math.max(0.001, outer + halo), 24),
+      new THREE.MeshBasicMaterial({
+        color: outlineColor,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        side: THREE.DoubleSide,
+      }),
+    );
+    ring.position.copy(grip);
+    ring.quaternion.copy(this.camera.quaternion);
+    ring.renderOrder = RenderOrder.handleOutline;
+    ring.userData.handleId = handle.id;
+
+    const ringMain = new THREE.Mesh(new THREE.RingGeometry(inner, outer, 24), ringMaterial);
+    ringMain.position.copy(grip);
+    ringMain.quaternion.copy(this.camera.quaternion);
+    ringMain.renderOrder = RenderOrder.handle;
+    ringMain.userData.handleId = handle.id;
+
+    const dotMaterial = new THREE.MeshBasicMaterial({
+      color,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+      side: THREE.DoubleSide,
+    });
+    const dot = new THREE.Mesh(
+      new THREE.CircleGeometry(Math.max(0.001, 1.4 * worldPerPixel), 18),
+      dotMaterial,
+    );
+    dot.position.copy(grip);
+    dot.quaternion.copy(this.camera.quaternion);
+    dot.renderOrder = RenderOrder.handle;
+    dot.userData.handleId = handle.id;
+
+    const dotOutline = new THREE.Mesh(
+      new THREE.CircleGeometry(Math.max(0.001, 2.2 * worldPerPixel), 18),
+      new THREE.MeshBasicMaterial({
+        color: outlineColor,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        side: THREE.DoubleSide,
+      }),
+    );
+    dotOutline.position.copy(grip);
+    dotOutline.quaternion.copy(this.camera.quaternion);
+    dotOutline.renderOrder = RenderOrder.handleOutline;
+    dotOutline.userData.handleId = handle.id;
+
+    this.handleGroup.add(line, ring, ringMain, dotOutline, dot);
+    this.handleEntries.push({
+      handle,
+      objects: [line, ring, ringMain, dotOutline, dot],
+      colors: [ringMaterial, dotMaterial],
     });
   }
 
@@ -863,6 +1121,9 @@ export class SceneController {
         if (object instanceof Line2) {
           object.geometry.dispose();
           (object.material as THREE.Material).dispose();
+        } else if (object instanceof THREE.Line) {
+          object.geometry.dispose();
+          (object.material as THREE.Material).dispose();
         } else if (object instanceof THREE.Mesh) {
           object.geometry.dispose();
           (object.material as THREE.Material).dispose();
@@ -875,12 +1136,79 @@ export class SceneController {
   private applyHandleStyles(): void {
     for (const entry of this.handleEntries) {
       const hovered = this.hoveredHandleId === entry.handle.id;
-      const color = hovered ? 0xffffff : this.handleColor();
+      const color = hovered ? 0xffffff : this.handleColorFor(entry.handle);
       for (const target of entry.colors) target.color.setHex(color);
       const linewidth = hovered ? 2.6 : 1.8;
       if (entry.material) entry.material.linewidth = linewidth;
       if (entry.outlineMaterial) entry.outlineMaterial.linewidth = linewidth + 2;
     }
+  }
+
+  /** World-space pointer displacement of a move grip since the grab started. */
+  private moveDelta(
+    drag: { startX: number; startY: number },
+    event: PointerEvent,
+  ): [number, number, number] {
+    const worldPerPixel = (this.camera.top - this.camera.bottom) / Math.max(1, this.height);
+    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+    const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
+    const delta = right
+      .multiplyScalar((event.clientX - drag.startX) * worldPerPixel)
+      .add(up.multiplyScalar(-(event.clientY - drag.startY) * worldPerPixel));
+    return [delta.x, delta.y, delta.z];
+  }
+
+  /** The move grip under the pointer, if any. */
+  private handleMoveAt(local: { x: number; y: number }): {
+    handle: SceneHandle;
+    axisX: number;
+    axisY: number;
+    pixelsPerMm: number;
+    distance: number;
+  } | null {
+    let best: {
+      handle: SceneHandle;
+      axisX: number;
+      axisY: number;
+      pixelsPerMm: number;
+      distance: number;
+    } | null = null;
+    for (const handle of this.handleData) {
+      if (!handle.enabled || handle.kind !== 'move') continue;
+      const projected = this.projectWorld(new THREE.Vector3(...handle.origin));
+      const distance = Math.hypot(local.x - projected.x, local.y - projected.y);
+      if (distance > HANDLE_HIT_PX + 3) continue;
+      if (best && distance >= best.distance) continue;
+      best = { handle, axisX: 0, axisY: 0, pixelsPerMm: 1, distance };
+    }
+    return best;
+  }
+
+  /** The circular grip of a radial orbit handle under the pointer. */
+  private handleOrbitAt(local: { x: number; y: number }): {
+    handle: SceneHandle;
+    axisX: number;
+    axisY: number;
+    pixelsPerMm: number;
+    distance: number;
+  } | null {
+    let best: {
+      handle: SceneHandle;
+      axisX: number;
+      axisY: number;
+      pixelsPerMm: number;
+      distance: number;
+    } | null = null;
+    for (const handle of this.handleData) {
+      if (!handle.enabled || !handle.orbit) continue;
+      const grip = arcGripPoint(handle.orbit, handle.orbit.angle);
+      const projected = this.projectWorld(grip);
+      const distance = Math.hypot(local.x - projected.x, local.y - projected.y);
+      if (distance > HANDLE_HIT_PX + 4) continue;
+      if (best && distance >= best.distance) continue;
+      best = { handle, axisX: 0, axisY: 0, pixelsPerMm: 1, distance };
+    }
+    return best;
   }
 
   /** The angle handle whose grip or arc is under the pointer. */
@@ -957,8 +1285,48 @@ export class SceneController {
     distance: number;
   } | null {
     const local = this.localPoint(clientX, clientY);
+    const moveHit = this.handleMoveAt(local);
+    if (moveHit) return moveHit;
+    const orbitHit = this.handleOrbitAt(local);
+    if (orbitHit) return orbitHit;
     const arcHit = this.handleArcAt(local);
     if (arcHit) return arcHit;
+
+    // A size handle is only its arrowhead: the dashed shaft is a dimension
+    // line, not a grip, so it must not steal the pointer from the move arrows.
+    let tipBest: {
+      handle: SceneHandle;
+      axisX: number;
+      axisY: number;
+      pixelsPerMm: number;
+      distance: number;
+      tipDistance: number;
+    } | null = null;
+    for (const handle of this.handleData) {
+      if (!handle.enabled || !handle.tipOnly) continue;
+      const projected = this.handleScreenGeometry(handle);
+      if (!projected) continue;
+      const direction = new THREE.Vector3(...handle.direction).normalize();
+      const unit = this.projectWorld(new THREE.Vector3(...handle.origin).add(direction));
+      const axisX = unit.x - projected.origin.x;
+      const axisY = unit.y - projected.origin.y;
+      const pixelsPerMm = Math.hypot(axisX, axisY);
+      if (pixelsPerMm < 0.5) continue;
+      const tipDistance = Math.hypot(local.x - projected.tip.x, local.y - projected.tip.y);
+      const hitPx = HANDLE_HIT_PX * (handle.thickness ?? 1) + 4;
+      if (tipDistance > hitPx) continue;
+      if (tipBest && tipDistance >= tipBest.tipDistance) continue;
+      tipBest = {
+        handle,
+        axisX: axisX / pixelsPerMm,
+        axisY: axisY / pixelsPerMm,
+        pixelsPerMm,
+        distance: tipDistance,
+        tipDistance,
+      };
+    }
+    if (tipBest) return tipBest;
+
     let best: {
       handle: SceneHandle;
       axisX: number;
@@ -968,13 +1336,11 @@ export class SceneController {
       tipDistance: number;
     } | null = null;
     for (const handle of this.handleData) {
-      if (!handle.enabled) continue;
+      if (!handle.enabled || handle.tipOnly) continue;
       const projected = this.handleScreenGeometry(handle);
       if (!projected) continue;
       const direction = new THREE.Vector3(...handle.direction).normalize();
-      const unit = this.projectWorld(
-        new THREE.Vector3(...handle.origin).add(direction),
-      );
+      const unit = this.projectWorld(new THREE.Vector3(...handle.origin).add(direction));
       // `direction` is the positive axis even when the arrow is drawn on the
       // opposite side, so dragging past zero keeps moving the same way.
       const axisX = unit.x - projected.origin.x;
@@ -1050,7 +1416,7 @@ export class SceneController {
   ): void {
     // An angle grip is dragged by the pointer angle; when the arc is edge-on
     // there is no angle to read, so the grab would jump.
-    const arc = hit.handle.arc;
+    const arc = hit.handle.arc ?? hit.handle.orbit;
     const pointerAngle = arc ? this.pointerAngleAt(arc, event.clientX, event.clientY) : null;
     if (arc && pointerAngle === null) return;
     this.transition = null;
@@ -1061,6 +1427,7 @@ export class SceneController {
       id: hit.handle.id,
       value: hit.handle.value,
       lastValue: hit.handle.value,
+      move: hit.handle.kind === 'move',
       ...(arc && pointerAngle !== null ? { arc: { ...arc, lastPointerAngle: pointerAngle } } : {}),
       startX: event.clientX,
       startY: event.clientY,
@@ -1136,9 +1503,7 @@ export class SceneController {
     // on while faces in front still hide it.
     const lift =
       cameraBias > 0
-        ? this.camera
-            .getWorldDirection(new THREE.Vector3())
-            .multiplyScalar(-cameraBias)
+        ? this.camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(-cameraBias)
         : null;
     for (const key of keys) {
       const separator = key.lastIndexOf('#');
@@ -1410,7 +1775,7 @@ export class SceneController {
       roughness: 0.6,
       metalness: 0,
       transparent: true,
-      opacity: 0.4,
+      opacity: ghost.opacity ?? 0.4,
       depthWrite: false,
       // The delta is feedback for the operation, not part of the model: it stays
       // visible through the body it changes. Sketch lines draw in a later render
@@ -2988,6 +3353,22 @@ export class SceneController {
         });
         return;
       }
+      if (drag.move) {
+        const move = this.moveDelta(drag, event);
+        const distance = Math.hypot(move[0], move[1], move[2]);
+        if (Math.abs(distance - drag.lastValue) < 0.02) return;
+        drag.lastValue = distance;
+        this.callbacks.onHandleDrag?.({
+          id: drag.id,
+          value: distance,
+          phase: 'move',
+          x: event.clientX,
+          y: event.clientY,
+          shift: event.shiftKey,
+          move,
+        });
+        return;
+      }
       const value = handleDragValue({
         startValue: drag.value,
         deltaX: event.clientX - drag.startX,
@@ -3071,7 +3452,8 @@ export class SceneController {
         const double =
           previous !== null &&
           now - previous.time < DOUBLE_CLICK_MS &&
-          Math.hypot(event.clientX - previous.x, event.clientY - previous.y) <= DOUBLE_CLICK_SLOP_PX;
+          Math.hypot(event.clientX - previous.x, event.clientY - previous.y) <=
+            DOUBLE_CLICK_SLOP_PX;
         this.lastClick = double ? null : { time: now, x: event.clientX, y: event.clientY };
         if (double) {
           // The pair means "open what made this face", so it must not also
@@ -3557,11 +3939,7 @@ export class SceneController {
           const b = this.sketchWorld(entry.frame, points[index + 1]!);
           const pa = this.projectWorld(a);
           const pb = this.projectWorld(b);
-          const distance = pointSegmentDistance(
-            [local.x, local.y],
-            [pa.x, pa.y],
-            [pb.x, pb.y],
-          );
+          const distance = pointSegmentDistance([local.x, local.y], [pa.x, pa.y], [pb.x, pb.y]);
           if (distance > 6) continue;
           const depth = Math.min(
             a.clone().sub(raycaster.ray.origin).dot(raycaster.ray.direction),
@@ -3647,7 +4025,11 @@ export class SceneController {
   /** Highlights a whole object, the way a click on it would select it. */
   private hoverObject(objectId: string | null): void {
     if (this.hoveredEdgeKey !== null) this.setHoveredEdge(null);
-    if (objectId === this.hoveredBodyId && this.hoveredFaceKey === null && this.hoveredSketchId === null) {
+    if (
+      objectId === this.hoveredBodyId &&
+      this.hoveredFaceKey === null &&
+      this.hoveredSketchId === null
+    ) {
       return;
     }
     this.hoveredBodyId = objectId;

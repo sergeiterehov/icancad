@@ -309,29 +309,31 @@ button:disabled {
   color: var(--text);
 }
 
-/* The contextual tool set stays centred in the window; the side docks only
-   squeeze its available width. */
+/* Both floating bars are centred in the free space between the docks, so an
+   open dock squeezes and moves them instead of covering them. */
 .tool-dock {
   position: absolute;
   top: var(--dock-gap);
-  left: 8px;
-  right: 8px;
+  left: calc(var(--dock-left) + 8px);
+  right: calc(var(--dock-right) + 8px);
   z-index: 22;
   display: flex;
   justify-content: center;
   pointer-events: none;
+  transition:
+    left 0.24s ease,
+    right 0.24s ease;
 }
 
 .tool-dock > .tool-rail {
   pointer-events: auto;
-  max-width: max(0px, calc(100% - var(--dock-left) - var(--dock-right)));
+  max-width: 100%;
   overflow-x: auto;
   padding: 4px 6px;
   border: 1px solid var(--border);
   border-radius: 11px;
   background: var(--panel);
   box-shadow: var(--shadow);
-  transition: max-width 0.24s ease;
   scrollbar-width: none;
 }
 
@@ -339,18 +341,21 @@ button:disabled {
 .operations-dock {
   position: absolute;
   bottom: var(--dock-gap);
-  left: 8px;
-  right: 8px;
+  left: calc(var(--dock-left) + 8px);
+  right: calc(var(--dock-right) + 8px);
   z-index: 22;
   display: flex;
   justify-content: center;
   pointer-events: none;
+  transition:
+    left 0.24s ease,
+    right 0.24s ease;
 }
 
 .operations-dock > .timeline-panel {
   pointer-events: auto;
   width: max-content;
-  max-width: max(0px, calc(100% - var(--dock-left) - var(--dock-right)));
+  max-width: 100%;
   height: 46px;
   flex-direction: row;
   align-items: stretch;
@@ -1196,13 +1201,12 @@ button:disabled {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  background: var(--bg);
+  background: var(--viewport);
 }
 
 .skeleton-body > .skeleton-3d {
   position: absolute;
   inset: 0;
-  background: var(--viewport);
 }
 
 .viewport-wrap > .skeleton-3d {
@@ -2112,6 +2116,33 @@ button.selection-item[data-active='true'][data-error='true'] {
 .kernel-row-value {
   color: var(--text);
   font-variant-numeric: tabular-nums;
+}
+
+.kernel-errors {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.kernel-error {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.kernel-error-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+.kernel-error-text {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-dim);
 }
 
 .kernel-queue {

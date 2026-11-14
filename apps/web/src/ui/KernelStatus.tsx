@@ -1,4 +1,4 @@
-import { bodiesInHistory, solidBodiesInHistory } from '@icancad/model';
+import { bodiesInHistory, solidBodiesInHistory, type Feature } from '@icancad/model';
 import { Check, TriangleAlert, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -9,6 +9,7 @@ import { useKernelStore } from '../stores/kernelStore';
 import { Button } from './Controls';
 import { formatNumber } from './format';
 import { Tooltip } from './Tooltip';
+import { translate } from './translate';
 
 const POPOVER_WIDTH = 268;
 
@@ -22,7 +23,9 @@ export function KernelStatus() {
   const ratio = useKernelStore((state) => state.ratio);
   const version = useKernelStore((state) => state.version);
   const loadMs = useKernelStore((state) => state.loadMs);
+  const kernelError = useKernelStore((state) => state.error);
   const tasks = useKernelStore((state) => state.tasks);
+  const featureErrors = useKernelStore((state) => state.featureErrors);
   const project = useViewProject();
   const featureCount = project.features.length;
   const bodyCount = solidBodiesInHistory(project).length;
@@ -39,7 +42,13 @@ export function KernelStatus() {
   const runningTaskId = runningTask?.id ?? null;
   const queuedCount = tasks.filter((task) => task.status === 'queued').length;
   const busy = status !== 'ready' || tasks.length > 0;
-  const failed = status === 'error';
+  // A failed operation is as bad as a failed kernel: the model the user sees is
+  // missing a step, so the indicator says so and the popover names the step.
+  const failures: { feature: Feature; code: string }[] = project.features
+    .filter((feature) => Boolean(featureErrors[feature.id]))
+    .map((feature) => ({ feature, code: featureErrors[feature.id]! }));
+  const failed = status === 'error' || failures.length > 0;
+  const kernelFailed = status === 'error';
 
   // A running rebuild has no timestamp of its own, so the indicator counts from
   // the moment the task appeared.
@@ -59,7 +68,9 @@ export function KernelStatus() {
 
   const statusLabel =
     status === 'ready'
-      ? t('inspector.ready')
+      ? failures.length > 0
+        ? t('inspector.error')
+        : t('inspector.ready')
       : status === 'loading'
         ? t('inspector.loading')
         : status === 'error'
@@ -73,17 +84,21 @@ export function KernelStatus() {
         })
       : null;
 
-  const hint = failed
+  const hint = kernelFailed
     ? t('kernelStatus.errorHint')
-    : status !== 'ready'
-      ? `${t('status.kernelLoading')}${ratio !== undefined ? ` ${Math.round(ratio * 100)}%` : ''}`
-      : runningTask
-        ? `${runningTask.label}${elapsed ? ` · ${elapsed}` : ''}${
-            queuedCount > 0 ? ` · ${t('kernelStatus.queued', { count: queuedCount })}` : ''
-          }`
-        : version && loadMs !== null
-          ? t('status.kernelReady', { version, ms: formatNumber(loadMs, locale, 0) })
-          : t('kernelStatus.ready');
+    : failures.length > 0
+      ? failures.length === 1
+        ? t('kernelStatus.operationError')
+        : t('kernelStatus.operationErrors', { count: failures.length })
+      : status !== 'ready'
+        ? `${t('status.kernelLoading')}${ratio !== undefined ? ` ${Math.round(ratio * 100)}%` : ''}`
+        : runningTask
+          ? `${runningTask.label}${elapsed ? ` · ${elapsed}` : ''}${
+              queuedCount > 0 ? ` · ${t('kernelStatus.queued', { count: queuedCount })}` : ''
+            }`
+          : version && loadMs !== null
+            ? t('status.kernelReady', { version, ms: formatNumber(loadMs, locale, 0) })
+            : t('kernelStatus.ready');
 
   useLayoutEffect(() => {
     if (!detailsOpen) {
@@ -187,6 +202,25 @@ export function KernelStatus() {
                 <span className="kernel-row-value">{meshCount}</span>
               </div>
             </div>
+
+            {(kernelFailed || failures.length > 0) && (
+              <div className="kernel-errors" data-testid="kernel-errors">
+                <span className="kernel-queue-title">{t('kernelStatus.operationErrorsTitle')}</span>
+                {kernelFailed && (
+                  <p className="kernel-error-text">
+                    {kernelError ?? t('errors.KERNEL_LOAD_FAILED')}
+                  </p>
+                )}
+                {failures.map(({ feature, code }) => (
+                  <div key={feature.id} className="kernel-error">
+                    <span className="kernel-error-name">{feature.name}</span>
+                    <span className="kernel-error-text">
+                      {translate(t, `errors.${code}`, code)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {tasks.length > 0 && (
               <div className="kernel-queue">
