@@ -29,7 +29,11 @@ export function AppSkeleton() {
   return (
     <div className="skeleton-body" data-testid="app-skeleton" aria-busy="true">
       <SkeletonStage action={t('status.openingProject')} />
-      <span className="skeleton-logo" aria-hidden="true" />
+      {/* The logo place: the mark and the name it now spells out beside it. */}
+      <span className="skeleton-logo" aria-hidden="true">
+        <span className="skeleton-logo-mark" />
+        <span className="skeleton-logo-name" />
+      </span>
       <SkeletonDock side="left" rows={6} />
       <SkeletonDock side="right" rows={4} />
       <div className="skeleton-tool-pill" aria-hidden="true">

@@ -143,15 +143,27 @@ button:disabled {
 
 .project-button {
   position: relative;
-  width: 40px;
   height: 40px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  padding: 0;
+  gap: 8px;
+  padding: 0 12px 0 6px;
   border: none;
   border-radius: 12px;
   background: transparent;
+}
+
+.brand-badge {
+  position: relative;
+  display: inline-flex;
+}
+
+.brand-name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text);
+  white-space: nowrap;
 }
 
 .project-button:hover,
@@ -159,10 +171,12 @@ button:disabled {
   background: color-mix(in srgb, var(--panel) 82%, transparent);
 }
 
+/* The marker sits on the corner of the mark and hangs slightly over its edge,
+   so it reads as a badge rather than a part of the letters. */
 .project-button .save-dot {
   position: absolute;
-  right: 7px;
-  bottom: 7px;
+  right: -3px;
+  bottom: -3px;
   width: 9px;
   height: 9px;
   border: 2px solid var(--bg);
@@ -262,6 +276,9 @@ button:disabled {
 
 .dock-right .dock-trigger {
   right: 0;
+  /* The cube owns the bottom-right corner: an edge that opened the panel there
+     would push the cube out from under the pointer. */
+  bottom: calc(144px + var(--nav-lift, 0px));
 }
 
 
@@ -1226,11 +1243,27 @@ button:disabled {
   position: absolute;
   top: 10px;
   left: 10px;
-  width: 40px;
   height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 0 6px;
   border-radius: 12px;
-  background: linear-gradient(135deg, #6b9bff 0%, #3557d6 100%);
   opacity: 0.55;
+}
+
+.skeleton-logo-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #6b9bff 0%, #3557d6 100%);
+}
+
+.skeleton-logo-name {
+  width: 57px;
+  height: 11px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text) 20%, transparent);
 }
 
 .skeleton-dock {

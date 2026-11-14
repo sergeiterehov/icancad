@@ -241,6 +241,26 @@ function closestOnSegment(
   return { point: closest, distance: Math.hypot(point[0] - closest[0], point[1] - closest[1]) };
 }
 
+/** Camera angles of the named view; world Z is up. */
+function viewAngles(name: ViewName): { azimuth: number; polar: number } {
+  switch (name) {
+    case 'front':
+      return { azimuth: -Math.PI / 2, polar: Math.PI / 2 };
+    case 'back':
+      return { azimuth: Math.PI / 2, polar: Math.PI / 2 };
+    case 'right':
+      return { azimuth: 0, polar: Math.PI / 2 };
+    case 'left':
+      return { azimuth: Math.PI, polar: Math.PI / 2 };
+    case 'top':
+      return { azimuth: -Math.PI / 2, polar: 0.001 };
+    case 'bottom':
+      return { azimuth: -Math.PI / 2, polar: Math.PI - 0.001 };
+    case 'iso':
+      return { azimuth: -Math.PI / 4, polar: Math.PI / 3 };
+  }
+}
+
 export class SceneController {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
@@ -1890,7 +1910,9 @@ export class SceneController {
     this.invalidate();
   }
 
-  fit(): void {
+  /** Fits the model in view; `view` also aims the camera, in the same move. */
+  fit(view?: ViewName): void {
+    const angles = view ? viewAngles(view) : { azimuth: this.azimuth, polar: this.polar };
     const box = new THREE.Box3();
     let hasGeometry = false;
 
@@ -1904,12 +1926,7 @@ export class SceneController {
     }
 
     if (!hasGeometry) {
-      this.transitionTo({
-        target: new THREE.Vector3(0, 0, 0),
-        distance: 200,
-        azimuth: this.azimuth,
-        polar: this.polar,
-      });
+      this.transitionTo({ target: new THREE.Vector3(0, 0, 0), distance: 200, ...angles });
       return;
     }
 
@@ -1919,45 +1936,16 @@ export class SceneController {
     this.transitionTo({
       target: center,
       distance: (radius * 1.35) / Math.tan((FOV_DEGREES * Math.PI) / 180 / 2),
-      azimuth: this.azimuth,
-      polar: this.polar,
+      ...angles,
     });
   }
 
   setView(name: ViewName): void {
-    let azimuth = this.azimuth;
-    let polar = this.polar;
-    switch (name) {
-      case 'front':
-        azimuth = -Math.PI / 2;
-        polar = Math.PI / 2;
-        break;
-      case 'back':
-        azimuth = Math.PI / 2;
-        polar = Math.PI / 2;
-        break;
-      case 'right':
-        azimuth = 0;
-        polar = Math.PI / 2;
-        break;
-      case 'left':
-        azimuth = Math.PI;
-        polar = Math.PI / 2;
-        break;
-      case 'top':
-        azimuth = -Math.PI / 2;
-        polar = 0.001;
-        break;
-      case 'bottom':
-        azimuth = -Math.PI / 2;
-        polar = Math.PI - 0.001;
-        break;
-      case 'iso':
-        azimuth = -Math.PI / 4;
-        polar = Math.PI / 3;
-        break;
-    }
-    this.transitionTo({ target: this.target.clone(), distance: this.distance, azimuth, polar });
+    this.transitionTo({
+      target: this.target.clone(),
+      distance: this.distance,
+      ...viewAngles(name),
+    });
   }
 
   getOrientation(): { azimuth: number; polar: number } {

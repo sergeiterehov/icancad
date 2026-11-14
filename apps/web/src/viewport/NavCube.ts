@@ -44,7 +44,21 @@ function faceOfAxis(axis: number, sign: number): NavFace {
   return sign >= 0 ? pair[1] : pair[0];
 }
 
-function createLabelTexture(label: string, theme: Theme, sideways: boolean): THREE.CanvasTexture {
+/**
+ * Each face of a box carries its own UV layout, so a label has to be turned to
+ * read upright from outside: the side faces run vertically and the back face is
+ * laid out the other way round.
+ */
+const FACE_ROTATION: Record<NavFace, number> = {
+  right: -Math.PI / 2,
+  left: Math.PI / 2,
+  back: Math.PI,
+  front: 0,
+  top: 0,
+  bottom: 0,
+};
+
+function createLabelTexture(label: string, theme: Theme, rotation: number): THREE.CanvasTexture {
   const size = 256;
   const canvas = document.createElement('canvas');
   canvas.width = size;
@@ -63,7 +77,7 @@ function createLabelTexture(label: string, theme: Theme, sideways: boolean): THR
     context.textBaseline = 'middle';
     context.save();
     context.translate(size / 2, size / 2);
-    if (sideways) context.rotate(-Math.PI / 2);
+    context.rotate(rotation);
     context.fillText(label.toUpperCase(), 0, 0, size - 36);
     context.restore();
   }
@@ -216,11 +230,7 @@ export class NavCube {
   private buildMaterials(): THREE.Material[] {
     this.disposeMaterials();
     this.materials = MATERIAL_ORDER.map((face) => {
-      const texture = createLabelTexture(
-        this.labels[face],
-        this.theme,
-        face === 'left' || face === 'right',
-      );
+      const texture = createLabelTexture(this.labels[face], this.theme, FACE_ROTATION[face]);
       return new THREE.MeshBasicMaterial({
         map: texture,
         color: 0xffffff,

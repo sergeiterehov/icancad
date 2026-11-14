@@ -27,8 +27,8 @@ export function useNavCubeLift(nav: RefObject<HTMLDivElement | null>): void {
     const workspace = element?.closest('.workspace');
     const dock = workspace?.querySelector('.operations-dock');
     const panel = dock?.querySelector('.timeline-panel');
-    if (!element || !workspace || !(dock instanceof HTMLElement) || !(panel instanceof HTMLElement))
-      return;
+    if (!element || !(workspace instanceof HTMLElement)) return;
+    if (!(dock instanceof HTMLElement) || !(panel instanceof HTMLElement)) return;
 
     const update = () => {
       const width = window.innerWidth;
@@ -49,7 +49,9 @@ export function useNavCubeLift(nav: RefObject<HTMLDivElement | null>): void {
 
       const overlaps = navLeft < panelRight + GAP && navRight > panelLeft - GAP;
       const lift = overlaps ? Math.max(0, height - BOTTOM - (panelTop - GAP)) : 0;
-      element.style.setProperty('--nav-lift', `${Math.round(lift)}px`);
+      // On the workspace: the cube inherits it, and so does the dock edge that
+      // has to stay clear of the cube.
+      workspace.style.setProperty('--nav-lift', `${Math.round(lift)}px`);
     };
 
     // Observers report before the next layout in some browsers, so the measure

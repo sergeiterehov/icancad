@@ -1,5 +1,5 @@
 import type { TessellationResult } from '@icancad/kernel';
-import { ScanBox, ScanSquare } from 'lucide-react';
+import { House, ScanBox, ScanSquare } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { retryKernel } from '../kernel/client';
@@ -784,8 +784,11 @@ export function Viewport() {
           {
             id: 'iso',
             label: labels('nav.iso'),
-            onSelect: () => controller.setView('iso'),
+            icon: <House size={14} />,
+            // Home: the usual orientation and the whole model in view at once.
+            onSelect: () => controller.fit('iso'),
           },
+          { id: 'iso-separator', separator: true },
           ...(['front', 'back', 'left', 'right', 'top', 'bottom'] as const).map((view) => {
             const hint = AXIS_HINTS[view];
             return {

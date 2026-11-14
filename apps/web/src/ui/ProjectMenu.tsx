@@ -348,8 +348,12 @@ export function ProjectMenu() {
           data-state={saveState}
           onClick={(event) => void openProjectMenu(event)}
         >
-          <span className="brand-mark">IC</span>
-          <span className="save-dot" aria-hidden="true" />
+          <span className="brand-badge">
+            <span className="brand-mark">IC</span>
+            <span className="save-dot" aria-hidden="true" />
+          </span>
+          {/* The name is spelled out: the mark alone does not say who we are yet. */}
+          <span className="brand-name">{t('app.name')}</span>
         </button>
       </Tooltip>
 
