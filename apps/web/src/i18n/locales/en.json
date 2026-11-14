@@ -3,26 +3,29 @@
     "name": "ICanCAD",
     "subtitle": "Browser CAD for 3D printing"
   },
-  "topbar": {
+  "project": {
+    "menu": "Project menu",
+    "name": "Project name",
+    "untitled": "Untitled project",
+    "new": "New project",
+    "open": "Open",
+    "local": "Local projects",
+    "noProjects": "No saved projects",
+    "delete": "Delete project",
+    "export": "Export",
+    "exportProject": "Project",
+    "exportStl": "STL",
+    "exportStlSelected": "STL, {{count}} selected",
     "undo": "Undo",
     "redo": "Redo",
-    "fit": "Fit view",
-    "import": "Open project",
-    "export": "Export",
-    "language": "Language",
-    "theme": "Theme",
+    "theme": "Color theme",
     "themeDark": "Dark",
     "themeLight": "Light",
-    "save": "Save",
+    "language": "Language",
     "saving": "Saving…",
     "saved": "Saved",
     "saveError": "Save failed",
-    "projectName": "Project name",
-    "exportStl": "STL",
-    "exportProject": "Project",
-    "exportStlSelected": "STL, {{count}} selected",
-    "undoShortcut": "Undo ({{shortcut}})",
-    "redoShortcut": "Redo ({{shortcut}})"
+    "fit": "Fit view"
   },
   "panels": {
     "model": "Model",
@@ -128,17 +131,24 @@
   "status": {
     "kernelLoading": "Loading OCCT kernel…",
     "kernelReady": "OCCT {{version}} · {{ms}} ms",
-    "kernelError": "Kernel failed to load",
-    "features": "{{count}} features",
-    "bodies": "{{count}} bodies",
     "rebuild": "Rebuilding model",
     "queue": "Queue",
     "taskRunning": "running",
     "taskQueued": "waiting",
     "cancel": "Cancel operation",
-    "ms": "{{ms}} ms",
-    "detailsHint": "Kernel status and task queue",
     "openingProject": "Opening the project and restoring operation history…"
+  },
+  "projectDelete": {
+    "title": "Delete project?",
+    "text": "“{{name}}” and its whole history will be deleted from this browser.",
+    "confirm": "Delete project"
+  },
+  "kernelStatus": {
+    "details": "Kernel status and task queue",
+    "ready": "All operations are calculated",
+    "errorHint": "The kernel failed to load",
+    "elapsed": "{{time}} s",
+    "queued": "{{count}} queued"
   },
   "empty": {
     "retry": "Retry",
@@ -154,7 +164,9 @@
     "stlExported": "STL exported",
     "importFailed": "Could not import mesh",
     "pickAfterRebuild": "Selection will be available after the model finishes recalculating",
-    "noGeometry": "Nothing to export"
+    "noGeometry": "Nothing to export",
+    "projectDeleted": "Project deleted",
+    "projectDeleteFailed": "Could not delete the project"
   },
   "errors": {
     "KERNEL_LOAD_FAILED": "Failed to load the geometry kernel",

@@ -52,6 +52,11 @@ export async function loadAsset(id: string): Promise<Blob | undefined> {
   return database.get('assets', id);
 }
 
+export async function deleteAsset(id: string): Promise<void> {
+  const database = await openDatabase();
+  await database.delete('assets', id);
+}
+
 export async function getSetting(key: string): Promise<string | null> {
   const database = await openDatabase();
   return (await database.get('settings', key)) ?? null;

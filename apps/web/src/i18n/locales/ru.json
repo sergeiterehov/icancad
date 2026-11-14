@@ -3,26 +3,29 @@
     "name": "ICanCAD",
     "subtitle": "Браузерный CAD для 3D-печати"
   },
-  "topbar": {
+  "project": {
+    "menu": "Меню проекта",
+    "name": "Название проекта",
+    "untitled": "Новый проект",
+    "new": "Новый проект",
+    "open": "Открыть",
+    "local": "Локальные проекты",
+    "noProjects": "Нет сохранённых проектов",
+    "delete": "Удалить проект",
+    "export": "Экспорт",
+    "exportProject": "Проект",
+    "exportStl": "STL",
+    "exportStlSelected": "STL, выбрано {{count}}",
     "undo": "Отменить",
     "redo": "Повторить",
-    "fit": "Вписать в вид",
-    "import": "Открыть проект",
-    "export": "Экспорт",
-    "language": "Язык",
-    "theme": "Тема",
+    "theme": "Цветовая тема",
     "themeDark": "Тёмная",
     "themeLight": "Светлая",
-    "save": "Сохранить",
+    "language": "Язык",
     "saving": "Сохранение…",
     "saved": "Сохранено",
     "saveError": "Ошибка сохранения",
-    "projectName": "Название проекта",
-    "exportStl": "STL",
-    "exportProject": "Проект",
-    "exportStlSelected": "STL, выбрано {{count}}",
-    "undoShortcut": "Отменить ({{shortcut}})",
-    "redoShortcut": "Повторить ({{shortcut}})"
+    "fit": "Вписать в вид"
   },
   "panels": {
     "model": "Модель",
@@ -128,17 +131,24 @@
   "status": {
     "kernelLoading": "Загрузка ядра OCCT…",
     "kernelReady": "OCCT {{version}} · {{ms}} мс",
-    "kernelError": "Не удалось загрузить ядро",
-    "features": "{{count}} операций",
-    "bodies": "{{count}} тел",
     "rebuild": "Пересчёт модели",
     "queue": "Очередь",
     "taskRunning": "выполняется",
     "taskQueued": "в очереди",
     "cancel": "Отменить операцию",
-    "ms": "{{ms}} мс",
-    "detailsHint": "Состояние ядра и очередь задач",
     "openingProject": "Открываем проект и восстанавливаем историю операций…"
+  },
+  "projectDelete": {
+    "title": "Удалить проект?",
+    "text": "«{{name}}» и вся его история будут удалены из этого браузера.",
+    "confirm": "Удалить проект"
+  },
+  "kernelStatus": {
+    "details": "Состояние ядра и очередь задач",
+    "ready": "Все операции рассчитаны",
+    "errorHint": "Не удалось загрузить ядро",
+    "elapsed": "{{time}} с",
+    "queued": "в очереди: {{count}}"
   },
   "empty": {
     "retry": "Повторить",
@@ -154,7 +164,9 @@
     "stlExported": "STL экспортирован",
     "importFailed": "Не удалось импортировать сетку",
     "pickAfterRebuild": "Выбор станет доступен после завершения расчёта модели",
-    "noGeometry": "Нечего экспортировать"
+    "noGeometry": "Нечего экспортировать",
+    "projectDeleted": "Проект удалён",
+    "projectDeleteFailed": "Не удалось удалить проект"
   },
   "errors": {
     "KERNEL_LOAD_FAILED": "Не удалось загрузить геометрическое ядро",

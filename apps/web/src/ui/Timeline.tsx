@@ -10,6 +10,7 @@ import { canEditSketch } from '../sketch/sectionPlane';
 import { rebuildFrom } from '../kernel/rebuild';
 import { showContextMenu } from './ContextMenu';
 import { FeatureIcon } from './featureIcons';
+import { KernelStatus } from './KernelStatus';
 import { Tooltip } from './Tooltip';
 import { translate } from './translate';
 import { timelineCaretMark, type TimelineCaretMark } from './timelineCaret';
@@ -118,7 +119,11 @@ export function Timeline() {
     );
 
   return (
-    <div className="panel timeline-panel" data-locked={locked ? 'true' : undefined}>
+    <div
+      className="panel timeline-panel"
+      data-testid="timeline"
+      data-locked={locked ? 'true' : undefined}
+    >
       <div className="timeline-body">
         {project.features.length === 0 ? (
           <p className="empty-row">{t('timeline.empty')}</p>
@@ -213,6 +218,7 @@ export function Timeline() {
           </div>
         )}
       </div>
+      <KernelStatus />
     </div>
   );
 }

@@ -1,0 +1,46 @@
+# ADR 0024 — Floating shell and project switching
+
+## Context
+
+The workspace was a fixed three-column layout: a top bar with the project name, tools,
+undo/redo and import/export; two resizable side panels; a timeline strip under the 3D view;
+and a status bar with the kernel state, language and theme. The 3D view was therefore a
+small rectangle between chrome, and every new placement tool competed for space in the top
+bar.
+
+Projects were equally fixed: IndexedDB stored every project, but only `lastProjectId` was
+ever read. Starting a second part meant exporting the first one first, and a project had no
+in-app list.
+
+## Decision
+
+| Area             | Decision                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workspace        | `workspace` is the whole window and the 3D view fills it (`position: absolute; inset: 0`). The shell has no top bar and no status bar.                                                                                                                                                                                                                                                      |
+| Side panels      | Model and inspector are floating docks with a margin, rounded corners and a shadow. They overlay the 3D view.                                                                                                                                                                                                                                                                               |
+| Auto-hide        | A dock slides out of the screen one second after pointer and focus leave it, and leaves a 16 px tab at the screen edge. Hovering or clicking the tab brings it back. Automated UI tests (`navigator.webdriver`) keep both docks open.                                                                                                                                                       |
+| Shared insets    | Dock state lives in `uiStore`; `App` writes `data-left-dock` / `data-right-dock` on the workspace. CSS variables `--dock-left` and `--dock-right` expose the occupied width to the tool dock, the operations panel, the nav cube and the toast.                                                                                                                                             |
+| Tool dock        | `ToolRail` and `SketchToolRail` float as one pill centred between the side docks. The contextual switch stays: one rail is on screen at a time.                                                                                                                                                                                                                                             |
+| Operations panel | The timeline floats at the bottom, `width: max-content` and centred between the docks. It grows with its operations, can stretch up to the docks and scrolls inside, so collapsing the docks widens it.                                                                                                                                                                                     |
+| Pinned inspector | Selecting an operation pins the inspector open: it opens at once, ignores auto-hide and stays in place while the operation is selected or edited, because its parameters live there. Clearing the selection unpins it and resumes the normal auto-hide. |
+| Project switcher | The logo is a permanent floating button in the top-left corner: clicking it opens the project menu (new, open, local projects with delete, export, undo/redo, theme, language). It also carries the autosave indicator as a dot and the save text as a tooltip.                                                                                                                             |
+| Project list     | `listProjects()` feeds a submenu sorted by `updatedAt`; the open project is checked. Deleting asks for confirmation, removes imported assets no other project references, and opens the next project (or a new document) when the open one was deleted.                                                                                                                                     |
+| Switching        | `switchToProject` writes the open project through the save queue before hydrating the next one, so switching cannot lose the edits still waiting in the autosave debounce.                                                                                                                                                                                                                  |
+| Kernel state     | The kernel state and the task queue icon are pinned to the right of the operations panel behind a divider, so they do not scroll with the operations. A check means everything is calculated, a spinner means a rebuild is running, a red triangle means the kernel failed. The tooltip reports the kernel load time or the running rebuild time; clicking still opens the details popover. |
+
+## Consequences
+
+- `TopBar`, `StatusBar` and `react-resizable-panels` are gone; the panels are fixed width and
+  the viewport no longer shrinks when they open.
+- The toast sits above the operations panel and the nav cube moved to the bottom-right corner
+  so the floating docks do not cover either of them.
+- The project menu is the only entry point for settings, so a collapsed model panel cannot
+  hide the project switcher: the logo is not part of the dock.
+- The project name input lives in the model dock (`--dock-left` width), next to the model
+  tree it names.
+- E2E specs scope the tool buttons to `.tool-dock` instead of `.topbar`, open the project
+  menu for undo/redo and export, and use `data-testid="left"`/`"right"` on the docks;
+  auto-hide is off under automation so that panel slots remain stable between synthetic
+  clicks. Specs that click the canvas by pixel offset need recalibration: the canvas now
+  covers the whole window instead of the old centre column, so its height and aspect
+  changed.

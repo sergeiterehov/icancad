@@ -744,7 +744,7 @@ export function Viewport() {
             : []),
           {
             id: 'fit',
-            label: labels('topbar.fit'),
+            label: labels('project.fit'),
             icon: <ScanBox size={14} />,
             onSelect: () => controller.fit(),
           },

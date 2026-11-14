@@ -22,6 +22,8 @@ export type ContextMenuItem =
       danger?: boolean;
       disabled?: boolean;
       checked?: boolean;
+      /** A trailing icon action on the row, such as deleting a list entry. */
+      action?: { label: string; icon: ReactNode; onSelect: () => void };
       onSelect: () => void;
     }
   | {
@@ -78,6 +80,9 @@ type MenuActionItem = Extract<ContextMenuItem, { onSelect: () => void }>;
 
 function MenuButton({ item, onSelect }: { item: MenuActionItem; onSelect: () => void }) {
   const close = useContextMenuStore((state) => state.close);
+  // A checked row without an icon keeps the check in the icon column; a row
+  // with an icon keeps it and shows the check on the trailing side.
+  const checkInIcon = item.checked !== undefined && !item.icon;
   const button = (
     <button
       type="button"
@@ -90,20 +95,47 @@ function MenuButton({ item, onSelect }: { item: MenuActionItem; onSelect: () => 
         onSelect();
       }}
     >
-      {item.checked !== undefined ? (
+      {checkInIcon ? (
         <span className="context-menu-icon">{item.checked ? <Check size={14} /> : null}</span>
       ) : (
         item.icon && <span className="context-menu-icon">{item.icon}</span>
       )}
       <span className="context-menu-label">{item.label}</span>
       {item.hint && <span className="context-menu-hint">{item.hint}</span>}
+      {!checkInIcon && item.checked && (
+        <span className="context-menu-hint">
+          <Check size={13} />
+        </span>
+      )}
     </button>
   );
-  if (!item.tooltip) return button;
-  return (
+  const entry = item.tooltip ? (
     <Tooltip content={item.tooltip} delay={600} className="context-menu-tip">
       {button}
     </Tooltip>
+  ) : (
+    button
+  );
+  if (!item.action) return entry;
+  const action = item.action;
+  return (
+    <div className="context-menu-entry">
+      {entry}
+      <Tooltip content={action.label}>
+        <button
+          type="button"
+          aria-label={action.label}
+          className="context-menu-action"
+          onClick={(event) => {
+            event.stopPropagation();
+            close();
+            action.onSelect();
+          }}
+        >
+          {action.icon}
+        </button>
+      </Tooltip>
+    </div>
   );
 }
 

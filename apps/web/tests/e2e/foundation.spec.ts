@@ -11,6 +11,22 @@ async function openApp(page: Page) {
   await waitForWorkspace(page);
 }
 
+/** Undo and redo live in the project menu since the header was removed. */
+async function undo(page: Page) {
+  await page.getByRole('button', { name: 'Project menu' }).click();
+  await page.getByRole('menuitem', { name: 'Undo' }).click();
+}
+
+async function redo(page: Page) {
+  await page.getByRole('button', { name: 'Project menu' }).click();
+  await page.getByRole('menuitem', { name: 'Redo' }).click();
+}
+
+async function openExportMenu(page: Page) {
+  await page.getByRole('button', { name: 'Project menu' }).click();
+  await page.getByRole('menuitem', { name: 'Export' }).hover();
+}
+
 function cubeStl(size: number): Buffer {
   const h = size / 2;
   const vertices: [number, number, number][] = [
@@ -146,14 +162,14 @@ test.describe('ICANCad foundation', () => {
     await width.press('Enter');
     await expect(page.getByText('30 × 20 × 20 mm')).toBeVisible();
 
-    await page.getByRole('button', { name: 'Undo' }).click();
+    await undo(page);
     await expect(page.getByText('20 × 20 × 20 mm')).toBeVisible();
-    await page.getByRole('button', { name: 'Redo' }).click();
+    await redo(page);
     await expect(page.getByText('30 × 20 × 20 mm')).toBeVisible();
 
     const downloadPromise = page.waitForEvent('download');
-    await page.getByRole('button', { name: 'Export', exact: true }).click();
-    await page.getByRole('menuitem', { name: 'Project' }).click();
+    await openExportMenu(page);
+    await page.getByRole('menuitem', { name: 'Project', exact: true }).click();
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toBe('untitled-project.icad');
     const projectFile = await download.path();
@@ -404,7 +420,7 @@ test.describe('ICANCad foundation', () => {
     await bodiesSection.getByRole('button', { name: 'Finish picking' }).click();
 
     const downloadPromise = page.waitForEvent('download');
-    await page.getByRole('button', { name: 'Export', exact: true }).click();
+    await openExportMenu(page);
     await page.getByRole('menuitem', { name: 'STL', exact: true }).click();
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toBe('untitled-project.stl');
@@ -514,15 +530,23 @@ test.describe('ICANCad foundation', () => {
     await expect(page.locator('.timeline-op.muted')).toHaveCount(0);
     await expect(bodyRows).toHaveCount(2);
 
-    await page.getByRole('button', { name: 'Language' }).click();
+    await page.getByRole('button', { name: 'Project menu' }).click();
+    await page.getByRole('menuitem', { name: 'Language' }).hover();
     await page.getByRole('menuitem', { name: 'Русский' }).click();
     await expect(inspectorTitle(page)).toHaveText('Проект');
-    await expect(page.getByRole('button', { name: 'Отменить', exact: true })).toBeVisible();
 
-    await page.getByRole('button', { name: 'Светлая' }).click();
+    await page.getByRole('button', { name: 'Меню проекта' }).click();
+    await expect(page.getByRole('menuitem', { name: 'Отменить' })).toBeVisible();
+    await page.keyboard.press('Escape');
+
+    await page.getByRole('button', { name: 'Меню проекта' }).click();
+    await page.getByRole('menuitem', { name: 'Цветовая тема' }).hover();
+    await page.getByRole('menuitem', { name: 'Светлая' }).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 
-    await page.getByRole('button', { name: 'Тёмная' }).click();
+    await page.getByRole('button', { name: 'Меню проекта' }).click();
+    await page.getByRole('menuitem', { name: 'Цветовая тема' }).hover();
+    await page.getByRole('menuitem', { name: 'Тёмная' }).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 
     await page.getByRole('button', { name: 'Добавить объект' }).hover();
@@ -705,7 +729,7 @@ test.describe('ICANCad foundation', () => {
     await offset.press('Enter');
 
     const downloadPromise = page.waitForEvent('download');
-    await page.getByRole('button', { name: 'Export', exact: true }).click();
+    await openExportMenu(page);
     // The item names the selection that will be exported.
     await page.getByRole('menuitem', { name: /^STL/ }).click();
     const download = await downloadPromise;
@@ -764,9 +788,9 @@ test.describe('ICANCad foundation', () => {
     await page.mouse.click(box!.x + 470, box!.y + 440);
     await expect(page.locator('.tree-row').first()).toContainText('Sketch');
 
-    const topbar = page.locator('.topbar');
-    await topbar.getByRole('button', { name: 'Select', exact: true }).click();
-    const deleteButton = topbar.getByRole('button', { name: 'Delete', exact: true });
+    const tools = page.locator('.tool-dock');
+    await tools.getByRole('button', { name: 'Select', exact: true }).click();
+    const deleteButton = tools.getByRole('button', { name: 'Delete', exact: true });
     await expect(deleteButton).toBeDisabled();
     await page.locator('.sketch-entity-row').click();
     await expect(deleteButton).toBeEnabled();
@@ -1296,8 +1320,8 @@ test.describe('ICANCad foundation', () => {
     const box = await canvas.boundingBox();
     await page.mouse.click(box!.x + 260, box!.y + 320);
     await page.mouse.click(box!.x + 470, box!.y + 440);
-    const topbar = page.locator('.topbar');
-    await topbar.getByRole('button', { name: 'Select', exact: true }).click();
+    const tools = page.locator('.tool-dock');
+    await tools.getByRole('button', { name: 'Select', exact: true }).click();
 
     const composition = page.locator('.panel-section', { hasText: 'Geometry' });
     const constraintsSection = page.locator('.panel-section', { hasText: 'Constraints' });
@@ -1309,7 +1333,7 @@ test.describe('ICANCad foundation', () => {
     await page.mouse.up();
     await expect(composition).not.toContainText('50.6 mm');
 
-    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await undo(page);
     await expect(composition).toContainText('50.6 mm');
 
     await page.mouse.move(box!.x + 365, box!.y + 380);
@@ -1317,10 +1341,10 @@ test.describe('ICANCad foundation', () => {
     await page.mouse.move(box!.x + 415, box!.y + 330, { steps: 8 });
     await page.mouse.up();
     await expect(composition).toContainText('50.6 mm');
-    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await undo(page);
 
     await page.mouse.click(box!.x + 260, box!.y + 320);
-    await topbar.getByRole('button', { name: 'Constraints', exact: true }).click();
+    await tools.getByRole('button', { name: 'Constraints', exact: true }).click();
     await page.getByRole('menuitem', { name: 'Fix', exact: true }).click();
     await expect(constraintsSection).toContainText('Fix');
 
@@ -1331,11 +1355,11 @@ test.describe('ICANCad foundation', () => {
     await expect(composition).toContainText('50.6 mm');
 
     await page.mouse.click(box!.x + 365, box!.y + 380);
-    await topbar.getByRole('button', { name: 'Constraints', exact: true }).click();
+    await tools.getByRole('button', { name: 'Constraints', exact: true }).click();
     await page.getByRole('menuitem', { name: 'Horizontal', exact: true }).click();
     await expect(constraintsSection).toContainText('Horizontal');
 
-    await topbar.getByRole('button', { name: 'Constraints', exact: true }).click();
+    await tools.getByRole('button', { name: 'Constraints', exact: true }).click();
     await page.getByRole('menuitem', { name: 'Distance', exact: true }).click();
     const annotation = page.locator('.sketch-annotation').last();
     await expect(annotation).toContainText('mm');
@@ -1348,29 +1372,29 @@ test.describe('ICANCad foundation', () => {
   });
   test('switches the toolbar with the editing context', async ({ page }) => {
     await openApp(page);
-    const topbar = page.locator('.topbar');
-    await expect(topbar.getByRole('button', { name: 'Select', exact: true })).toHaveCount(0);
-    await expect(topbar.getByRole('button', { name: 'Section', exact: true })).toBeVisible();
+    const tools = page.locator('.tool-dock');
+    await expect(tools.getByRole('button', { name: 'Select', exact: true })).toHaveCount(0);
+    await expect(tools.getByRole('button', { name: 'Section', exact: true })).toBeVisible();
 
-    await topbar.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
     await page.getByRole('menuitem', { name: 'XY plane' }).click();
-    await expect(topbar.getByRole('button', { name: 'Line', exact: true })).toBeVisible();
-    await expect(topbar.getByRole('button', { name: 'Delete', exact: true })).toBeVisible();
-    await expect(topbar.getByRole('button', { name: 'Finish sketch', exact: true })).toBeVisible();
-    await expect(topbar.getByRole('button', { name: 'Section', exact: true })).toBeVisible();
+    await expect(tools.getByRole('button', { name: 'Line', exact: true })).toBeVisible();
+    await expect(tools.getByRole('button', { name: 'Delete', exact: true })).toBeVisible();
+    await expect(tools.getByRole('button', { name: 'Finish sketch', exact: true })).toBeVisible();
+    await expect(tools.getByRole('button', { name: 'Section', exact: true })).toBeVisible();
     await expect(page.locator('.sketch-toolbar')).toHaveCount(0);
 
     // While a sketch is open the sketch plane is already a section entry.
-    const sectionButton = topbar.getByRole('button', { name: 'Section', exact: true });
+    const sectionButton = tools.getByRole('button', { name: 'Section', exact: true });
     await expect(page.locator('.section-plane')).toHaveCount(1);
     await sectionButton.click();
     await expect(page.locator('.section-plane')).toHaveCount(0);
     await sectionButton.click();
     await expect(page.locator('.section-plane')).toHaveCount(1);
 
-    await topbar.getByRole('button', { name: 'Finish sketch', exact: true }).click();
-    await expect(topbar.getByRole('button', { name: 'Line', exact: true })).toHaveCount(0);
-    await expect(topbar.getByRole('button', { name: 'Select', exact: true })).toHaveCount(0);
+    await tools.getByRole('button', { name: 'Finish sketch', exact: true }).click();
+    await expect(tools.getByRole('button', { name: 'Line', exact: true })).toHaveCount(0);
+    await expect(tools.getByRole('button', { name: 'Select', exact: true })).toHaveCount(0);
   });
   test('prioritizes sketch points over curves when selecting', async ({ page }) => {
     await openApp(page);
@@ -1380,7 +1404,7 @@ test.describe('ICANCad foundation', () => {
     // Entering a sketch animates the camera; wait so clicks map to the settled view.
     await page.waitForTimeout(600);
 
-    const topbar = page.locator('.topbar');
+    const tools = page.locator('.tool-dock');
     const canvas = page.getByTestId('viewport-canvas');
     const box = await canvas.boundingBox();
     await page.getByRole('button', { name: 'Line', exact: true }).click();
@@ -1389,9 +1413,9 @@ test.describe('ICANCad foundation', () => {
     await page.getByRole('button', { name: 'Point', exact: true }).click();
     await page.mouse.click(box!.x + 400, box!.y + 300);
 
-    await topbar.getByRole('button', { name: 'Select', exact: true }).click();
+    await tools.getByRole('button', { name: 'Select', exact: true }).click();
     await page.mouse.click(box!.x + 400, box!.y + 300);
-    await topbar.getByRole('button', { name: 'Constraints', exact: true }).click();
+    await tools.getByRole('button', { name: 'Constraints', exact: true }).click();
     await expect(page.getByRole('menuitem')).toHaveCount(1);
     await expect(page.getByRole('menuitem', { name: 'Fix', exact: true })).toBeVisible();
   });
@@ -1438,8 +1462,8 @@ test.describe('ICANCad foundation', () => {
     // Entering a sketch animates the camera; wait so clicks map to the settled view.
     await page.waitForTimeout(600);
 
-    const topbar = page.locator('.topbar');
-    const magnet = topbar.getByRole('button', { name: 'Magnet', exact: true });
+    const tools = page.locator('.tool-dock');
+    const magnet = tools.getByRole('button', { name: 'Magnet', exact: true });
     await expect(magnet).toHaveAttribute('data-active', 'true');
     const constraints = page.locator('.panel-section', { hasText: 'Constraints' });
     const canvas = page.getByTestId('viewport-canvas');
@@ -1466,10 +1490,10 @@ test.describe('ICANCad foundation', () => {
     await page.mouse.click(box!.x + 500, box!.y + 525);
     await expect(constraints).toContainText('Horizontal');
 
-    await topbar.getByRole('button', { name: 'Select', exact: true }).click();
+    await tools.getByRole('button', { name: 'Select', exact: true }).click();
     const firstEntity = page.locator('.sketch-entity-row').first();
     await firstEntity.click();
-    const construction = topbar.getByRole('button', {
+    const construction = tools.getByRole('button', {
       name: 'Construction geometry',
       exact: true,
     });
@@ -1504,10 +1528,10 @@ test.describe('ICANCad foundation', () => {
     await expect(constraints).toContainText('Coincident');
     const rowsBefore = await page.locator('.constraint-row').count();
 
-    const topbar = page.locator('.topbar');
-    await topbar.getByRole('button', { name: 'Select', exact: true }).click();
+    const tools = page.locator('.tool-dock');
+    await tools.getByRole('button', { name: 'Select', exact: true }).click();
     await page.locator('.sketch-entity-row').first().click();
-    await topbar.getByRole('button', { name: 'Delete', exact: true }).click();
+    await tools.getByRole('button', { name: 'Delete', exact: true }).click();
 
     await expect(page.locator('.sketch-entity-row')).toHaveCount(1);
     await expect(constraints).not.toContainText('Coincident');
@@ -1588,8 +1612,8 @@ test.describe('ICANCad foundation', () => {
     const composition = page.locator('.panel-section', { hasText: 'Geometry' });
     const before = await composition.innerText();
 
-    const topbar = page.locator('.topbar');
-    await topbar.getByRole('button', { name: 'Select', exact: true }).click();
+    const tools = page.locator('.tool-dock');
+    await tools.getByRole('button', { name: 'Select', exact: true }).click();
     await page.mouse.move(box!.x + 600, box!.y + 250);
     await page.mouse.down();
     await page.mouse.move(box!.x + 520, box!.y + 210, { steps: 12 });
@@ -1612,11 +1636,11 @@ test.describe('ICANCad foundation', () => {
     await expect(page.locator('.sketch-overlay')).toBeVisible();
     await page.waitForTimeout(600);
 
-    const topbar = page.locator('.topbar');
+    const tools = page.locator('.tool-dock');
     const canvas = page.getByTestId('viewport-canvas');
     const box = await canvas.boundingBox();
-    const line = topbar.getByRole('button', { name: 'Line', exact: true });
-    const select = topbar.getByRole('button', { name: 'Select', exact: true });
+    const line = tools.getByRole('button', { name: 'Line', exact: true });
+    const select = tools.getByRole('button', { name: 'Select', exact: true });
 
     await line.click();
     for (const [x, y] of [
@@ -1664,9 +1688,9 @@ test.describe('ICANCad foundation', () => {
     await step(300, 300);
     await step(650, 420);
 
-    const topbar = page.locator('.topbar');
-    const constraintsButton = topbar.getByRole('button', { name: 'Constraints', exact: true });
-    await topbar.getByRole('button', { name: 'Select', exact: true }).click();
+    const tools = page.locator('.tool-dock');
+    const constraintsButton = tools.getByRole('button', { name: 'Constraints', exact: true });
+    await tools.getByRole('button', { name: 'Select', exact: true }).click();
     const entityRow = page.locator('.sketch-entity-row').first();
     await entityRow.click();
     await constraintsButton.click();
@@ -1732,9 +1756,9 @@ test.describe('ICANCad foundation', () => {
     await expect(page.locator('.sketch-reference')).toHaveCount(2);
     await expect(composition).toContainText('°');
 
-    const topbar = page.locator('.topbar');
+    const tools = page.locator('.tool-dock');
     await row.click();
-    await topbar.getByRole('button', { name: 'Constraints', exact: true }).click();
+    await tools.getByRole('button', { name: 'Constraints', exact: true }).click();
     await page.getByRole('menuitem', { name: 'Distance', exact: true }).click();
     await expect(page.locator('.constraint-row')).toHaveCount(1);
 
@@ -1763,11 +1787,11 @@ test.describe('ICANCad foundation', () => {
     await expect(constraints).toContainText('Horizontal');
     await expect(page.locator('.sketch-entity-row')).toHaveCount(1);
 
-    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await undo(page);
     await expect(page.locator('.sketch-entity-row')).toHaveCount(0);
     await expect(constraints).toContainText('No constraints yet');
 
-    await page.getByRole('button', { name: 'Redo', exact: true }).click();
+    await redo(page);
     await expect(page.locator('.sketch-entity-row')).toHaveCount(1);
     await expect(constraints).toContainText('Horizontal');
   });
@@ -1954,10 +1978,10 @@ test.describe('ICANCad foundation', () => {
     await page.mouse.click(box!.x + 250, box!.y + 450);
     await page.mouse.click(box!.x + 450, box!.y + 500);
 
-    const topbar = page.locator('.topbar');
-    await topbar.getByRole('button', { name: 'Select', exact: true }).click();
+    const tools = page.locator('.tool-dock');
+    await tools.getByRole('button', { name: 'Select', exact: true }).click();
     await page.mouse.click(box!.x + 350, box!.y + 300);
-    await topbar.getByRole('button', { name: 'Constraints', exact: true }).click();
+    await tools.getByRole('button', { name: 'Constraints', exact: true }).click();
     await page.getByRole('menuitem', { name: 'Distance', exact: true }).click();
 
     await page.locator('.constraint-row').click();
@@ -1997,14 +2021,14 @@ test.describe('ICANCad foundation', () => {
     await page.mouse.click(box!.x + 500, box!.y + 300);
     await page.mouse.click(box!.x + 400, box!.y + 380);
 
-    const topbar = page.locator('.topbar');
-    await topbar.getByRole('button', { name: 'Select', exact: true }).click();
+    const tools = page.locator('.tool-dock');
+    await tools.getByRole('button', { name: 'Select', exact: true }).click();
     await page.mouse.click(box!.x + 300, box!.y + 300);
     await page.keyboard.down('Shift');
     await page.mouse.click(box!.x + 500, box!.y + 300);
     await page.mouse.click(box!.x + 400, box!.y + 380);
     await page.keyboard.up('Shift');
-    await topbar.getByRole('button', { name: 'Constraints', exact: true }).click();
+    await tools.getByRole('button', { name: 'Constraints', exact: true }).click();
     await page.getByRole('menuitem', { name: 'Symmetric', exact: true }).click();
     await expect(page.locator('.constraint-list')).toContainText('Symmetric');
 

@@ -16,9 +16,22 @@ export interface ToastMessage {
   params?: Record<string, unknown>;
 }
 
+export interface ProjectDeleteRequest {
+  id: string;
+  name: string;
+}
+
 interface UiState {
   toast: ToastMessage | null;
   deleteRequest: DeleteRequest | null;
+  projectDeleteRequest: ProjectDeleteRequest | null;
+  /** Floating side panels slide off screen when the pointer leaves them. */
+  leftDockOpen: boolean;
+  rightDockOpen: boolean;
+  setLeftDockOpen: (open: boolean) => void;
+  setRightDockOpen: (open: boolean) => void;
+  requestProjectDelete: (request: ProjectDeleteRequest) => void;
+  cancelProjectDelete: () => void;
   /** Operation waiting for faces to be picked in the 3D view. */
   pickingExtrude: string | null;
   /** Operation waiting for target bodies to be picked in the 3D view. */
@@ -111,6 +124,13 @@ function loadSectionEnabled(): boolean {
 export const useUiStore = create<UiState>((set) => ({
   toast: null,
   deleteRequest: null,
+  projectDeleteRequest: null,
+  leftDockOpen: true,
+  rightDockOpen: true,
+  setLeftDockOpen: (leftDockOpen) => set({ leftDockOpen }),
+  setRightDockOpen: (rightDockOpen) => set({ rightDockOpen }),
+  requestProjectDelete: (projectDeleteRequest) => set({ projectDeleteRequest }),
+  cancelProjectDelete: () => set({ projectDeleteRequest: null }),
   pickingExtrude: null,
   pickingExtrudeBodies: null,
   pickingEdges: null,

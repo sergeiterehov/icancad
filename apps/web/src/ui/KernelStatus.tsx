@@ -1,48 +1,32 @@
 import { bodiesInHistory, solidBodiesInHistory } from '@icancad/model';
-import clsx from 'clsx';
-import { Check, Globe, Moon, Sun, X } from 'lucide-react';
-import {
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type MouseEvent,
-} from 'react';
+import { Check, TriangleAlert, X } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { setLocale, type Locale } from '../i18n';
 import { cancelKernelWork } from '../kernel/client';
-import { useDocumentStore, useViewProject } from '../stores/documentStore';
+import { useViewProject } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
-import { useThemeStore } from '../stores/themeStore';
-import { Button, IconButton } from './Controls';
-import { useContextMenuStore } from './ContextMenu';
+import { Button } from './Controls';
 import { formatNumber } from './format';
 import { Tooltip } from './Tooltip';
 
-const LOCALES: { value: Locale; label: string }[] = [
-  { value: 'en', label: 'English' },
-  { value: 'ru', label: 'Русский' },
-];
-
 const POPOVER_WIDTH = 268;
 
-export function StatusBar() {
+/**
+ * Kernel state of the operations panel: a fixed icon after the divider shows
+ * whether everything is calculated, still running or failed.
+ */
+export function KernelStatus() {
   const { t, i18n } = useTranslation();
-  const locale: Locale = (i18n.resolvedLanguage ?? 'en').startsWith('ru') ? 'ru' : 'en';
   const status = useKernelStore((state) => state.status);
   const ratio = useKernelStore((state) => state.ratio);
   const version = useKernelStore((state) => state.version);
   const loadMs = useKernelStore((state) => state.loadMs);
+  const tasks = useKernelStore((state) => state.tasks);
   const project = useViewProject();
   const featureCount = project.features.length;
   const bodyCount = solidBodiesInHistory(project).length;
   const meshCount = bodiesInHistory(project).filter((body) => body.kind === 'mesh').length;
-  const saveState = useDocumentStore((state) => state.saveState);
-  const theme = useThemeStore((state) => state.theme);
-  const toggleTheme = useThemeStore((state) => state.toggle);
-  const tasks = useKernelStore((state) => state.tasks);
-  const openMenu = useContextMenuStore((state) => state.open);
 
   const [detailsOpen, setDetailsOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -52,7 +36,26 @@ export function StatusBar() {
   );
 
   const runningTask = tasks.find((task) => task.status === 'running');
+  const runningTaskId = runningTask?.id ?? null;
   const queuedCount = tasks.filter((task) => task.status === 'queued').length;
+  const busy = status !== 'ready' || tasks.length > 0;
+  const failed = status === 'error';
+
+  // A running rebuild has no timestamp of its own, so the indicator counts from
+  // the moment the task appeared.
+  const [taskStartedAt, setTaskStartedAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    setTaskStartedAt(runningTaskId === null ? null : Date.now());
+  }, [runningTaskId]);
+  useEffect(() => {
+    if (runningTaskId === null) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 500);
+    return () => window.clearInterval(timer);
+  }, [runningTaskId]);
+
+  const locale = (i18n.resolvedLanguage ?? 'en').startsWith('ru') ? 'ru' : 'en';
 
   const statusLabel =
     status === 'ready'
@@ -63,28 +66,24 @@ export function StatusBar() {
           ? t('inspector.error')
           : '—';
 
-  const saveLabel =
-    saveState === 'saving'
-      ? t('topbar.saving')
-      : saveState === 'error'
-        ? t('topbar.saveError')
-        : saveState === 'saved'
-          ? t('topbar.saved')
-          : '';
+  const elapsed =
+    runningTask && taskStartedAt !== null
+      ? t('kernelStatus.elapsed', {
+          time: formatNumber(Math.max(0, now - taskStartedAt) / 1000, locale, 1),
+        })
+      : null;
 
-  const openLanguageMenu = (event: MouseEvent<HTMLButtonElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    openMenu(
-      rect.left,
-      rect.bottom + 6,
-      LOCALES.map((item) => ({
-        id: item.value,
-        label: item.label,
-        icon: item.value === locale ? <Check size={14} /> : undefined,
-        onSelect: () => void setLocale(item.value),
-      })),
-    );
-  };
+  const hint = failed
+    ? t('kernelStatus.errorHint')
+    : status !== 'ready'
+      ? `${t('status.kernelLoading')}${ratio !== undefined ? ` ${Math.round(ratio * 100)}%` : ''}`
+      : runningTask
+        ? `${runningTask.label}${elapsed ? ` · ${elapsed}` : ''}${
+            queuedCount > 0 ? ` · ${t('kernelStatus.queued', { count: queuedCount })}` : ''
+          }`
+        : version && loadMs !== null
+          ? t('status.kernelReady', { version, ms: formatNumber(loadMs, locale, 0) })
+          : t('kernelStatus.ready');
 
   useLayoutEffect(() => {
     if (!detailsOpen) {
@@ -93,7 +92,10 @@ export function StatusBar() {
     }
     const anchor = buttonRef.current?.getBoundingClientRect();
     if (!anchor) return;
-    const left = Math.max(8, Math.min(anchor.right - POPOVER_WIDTH, window.innerWidth - POPOVER_WIDTH - 8));
+    const left = Math.max(
+      8,
+      Math.min(anchor.right - POPOVER_WIDTH, window.innerWidth - POPOVER_WIDTH - 8),
+    );
     setPopoverPosition({ left, bottom: window.innerHeight - anchor.top + 8 });
   }, [detailsOpen]);
 
@@ -122,62 +124,27 @@ export function StatusBar() {
   }, [detailsOpen]);
 
   return (
-    <footer className="statusbar">
-      <span
-        className={clsx('save-state', saveState)}
-        data-testid="save-state"
-        data-state={saveState}
-      >
-        <span className="save-dot" />
-        {saveLabel}
-      </span>
-
-      <span className="status-hint" />
-
-      <Tooltip content={t('status.detailsHint')}>
+    <div className="timeline-status" data-state={failed ? 'error' : busy ? 'busy' : 'ready'}>
+      <Tooltip content={hint} delay={400}>
         <button
           ref={buttonRef}
           type="button"
-          className="status-button"
+          className="kernel-indicator"
           data-testid="kernel-state"
+          aria-label={t('kernelStatus.details')}
           aria-haspopup="dialog"
           aria-expanded={detailsOpen}
           onClick={() => setDetailsOpen((open) => !open)}
         >
-          {runningTask ? (
-            <>
-              <span className="spinner tiny-spinner" />
-              {runningTask.label}
-              {queuedCount > 0 ? ` +${queuedCount}` : ''}
-            </>
+          {failed ? (
+            <TriangleAlert size={16} />
+          ) : busy ? (
+            <span className="spinner tiny-spinner" />
           ) : (
-            <>
-              {status === 'loading' && (
-                <>
-                  <span className="spinner tiny-spinner" />
-                  {t('status.kernelLoading')}
-                  {ratio !== undefined ? ` ${Math.round(ratio * 100)}%` : ''}
-                </>
-              )}
-              {status === 'ready' &&
-                loadMs !== null &&
-                t('status.ms', { ms: formatNumber(loadMs, locale, 0) })}
-              {status === 'error' && <span className="error">{t('status.kernelError')}</span>}
-            </>
+            <Check size={16} />
           )}
         </button>
       </Tooltip>
-
-      <IconButton label={t('topbar.language')} onClick={openLanguageMenu}>
-        <Globe size={15} />
-      </IconButton>
-
-      <IconButton
-        label={theme === 'dark' ? t('topbar.themeLight') : t('topbar.themeDark')}
-        onClick={toggleTheme}
-      >
-        {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
-      </IconButton>
 
       {detailsOpen &&
         createPortal(
@@ -204,9 +171,7 @@ export function StatusBar() {
               {loadMs !== null && (
                 <div className="kernel-row">
                   <span>{t('inspector.loadTime')}</span>
-                  <span className="kernel-row-value">
-                    {formatNumber(loadMs, locale, 0)} ms
-                  </span>
+                  <span className="kernel-row-value">{formatNumber(loadMs, locale, 0)} ms</span>
                 </div>
               )}
               <div className="kernel-row">
@@ -227,12 +192,10 @@ export function StatusBar() {
               <div className="kernel-queue">
                 <span className="kernel-queue-title">{t('status.queue')}</span>
                 {tasks.map((task) => (
-                  <div key={task.id} className={clsx('kernel-queue-item', task.status)}>
+                  <div key={task.id} className={`kernel-queue-item ${task.status}`}>
                     <span className="kernel-queue-label">{task.label}</span>
                     <span className="kernel-queue-state">
-                      {task.status === 'running'
-                        ? t('status.taskRunning')
-                        : t('status.taskQueued')}
+                      {task.status === 'running' ? t('status.taskRunning') : t('status.taskQueued')}
                     </span>
                   </div>
                 ))}
@@ -245,6 +208,6 @@ export function StatusBar() {
           </div>,
           document.body,
         )}
-    </footer>
+    </div>
   );
 }

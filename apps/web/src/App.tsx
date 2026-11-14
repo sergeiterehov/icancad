@@ -1,4 +1,4 @@
-import { Group, Panel, Separator } from 'react-resizable-panels';
+import { useTranslation } from 'react-i18next';
 import { useShortcuts } from './hooks/useShortcuts';
 import { useApplyTheme } from './hooks/useTheme';
 import {
@@ -8,18 +8,23 @@ import {
   useRebuildScene,
 } from './hooks/usePersistence';
 import { useDocumentStore } from './stores/documentStore';
+import { useUiStore } from './stores/uiStore';
 import { ConfirmDialog } from './ui/ConfirmDialog';
 import { ContextMenuHost } from './ui/ContextMenu';
+import { FloatDock } from './ui/FloatDock';
 import { Inspector } from './ui/Inspector';
 import { LeftPanel } from './ui/LeftPanel';
+import { ProjectDeleteDialog } from './ui/ProjectDeleteDialog';
+import { ProjectMenu, ProjectName } from './ui/ProjectMenu';
 import { AppSkeleton } from './ui/Skeleton';
-import { StatusBar } from './ui/StatusBar';
+import { SketchToolRail } from './ui/SketchToolRail';
 import { Timeline } from './ui/Timeline';
 import { Toast } from './ui/Toast';
-import { TopBar } from './ui/TopBar';
+import { ToolRail } from './ui/ToolRail';
 import { Viewport } from './viewport/Viewport';
 
 export default function App() {
+  const { t } = useTranslation();
   useHydrateProject();
   useKernelBoot();
   useAutosave();
@@ -28,45 +33,62 @@ export default function App() {
   useShortcuts();
 
   const hydrated = useDocumentStore((state) => state.hydrated);
+  const activeSketchId = useUiStore((state) => state.activeSketchId);
+  const leftDockOpen = useUiStore((state) => state.leftDockOpen);
+  const rightDockOpen = useUiStore((state) => state.rightDockOpen);
+  // The inspector carries the parameters of the selected operation, so it stays
+  // in place while one is selected or being edited. The sketch editor owns the
+  // workspace instead and lets the panel auto-hide again.
+  const operationSelected = useDocumentStore(
+    (state) =>
+      state.editingFeatureId !== null ||
+      state.selection.some((item) => item.kind === 'feature'),
+  );
+  const inspectorPinned = activeSketchId === null && operationSelected;
 
   return (
     <div className="app-shell">
-      <TopBar />
-      <div className="app-body">
+      <div
+        className="workspace"
+        data-left-dock={leftDockOpen ? 'open' : 'closed'}
+        data-right-dock={rightDockOpen ? 'open' : 'closed'}
+      >
         {hydrated ? (
-          <Group orientation="horizontal">
-            <Panel id="left" defaultSize="17%" minSize="170px" maxSize="32%" className="pane-fill">
+          <>
+            <Viewport />
+            <ProjectMenu />
+
+            <FloatDock side="left" label={t('panels.model')} testId="left">
+              <div className="project-strip">
+                <ProjectName />
+              </div>
               <LeftPanel />
-            </Panel>
+            </FloatDock>
 
-            <Separator className="resize-handle" />
-
-            <Panel id="center" defaultSize="57%" minSize="280px" className="pane-fill">
-              <Group orientation="vertical">
-                <Panel id="viewport" defaultSize="76%" minSize="30%" className="pane-fill">
-                  <Viewport />
-                </Panel>
-                <Separator className="resize-handle" />
-                <Panel id="timeline" defaultSize="38px" minSize="38px" maxSize="38px" className="pane-fill">
-                  <Timeline />
-                </Panel>
-              </Group>
-            </Panel>
-
-            <Separator className="resize-handle" />
-
-            <Panel id="right" defaultSize="26%" minSize="250px" maxSize="38%" className="pane-fill">
+            <FloatDock
+              side="right"
+              label={t('panels.inspector')}
+              testId="right"
+              pinned={inspectorPinned}
+            >
               <Inspector />
-            </Panel>
-          </Group>
+            </FloatDock>
+
+            <div className="tool-dock">{activeSketchId ? <SketchToolRail /> : <ToolRail />}</div>
+
+            <div className="operations-dock">
+              <Timeline />
+            </div>
+          </>
         ) : (
           <AppSkeleton />
         )}
       </div>
-      <StatusBar />
+
       <ContextMenuHost />
       <Toast />
       <ConfirmDialog />
+      <ProjectDeleteDialog />
     </div>
   );
 }

@@ -104,58 +104,321 @@ button:disabled {
   display: flex;
   flex-direction: column;
   height: 100%;
+  overflow: hidden;
   background: var(--bg);
 }
 
-.app-body {
+/* The 3D view fills the window; every panel floats above it. */
+.workspace {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
+  --dock-left-width: 300px;
+  --dock-right-width: 312px;
+  --dock-gap: 12px;
+  --dock-left: 0px;
+  --dock-right: 0px;
+}
+
+.workspace[data-left-dock='open'] {
+  --dock-left: calc(var(--dock-left-width) + 20px);
+}
+
+.workspace[data-right-dock='open'] {
+  --dock-right: calc(var(--dock-right-width) + 20px);
+}
+
+.workspace > .viewport-wrap {
+  position: absolute;
+  inset: 0;
+  height: auto;
+}
+
+.project-anchor {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 30;
+}
+
+.project-button {
+  position: relative;
+  width: 40px;
+  height: 40px;
   display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
 }
 
-.app-body > [data-group] {
-  flex: 1 1 auto;
-  min-width: 0;
+.project-button:hover,
+.project-button[aria-expanded='true'] {
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
 }
 
-.panel-row {
+.project-button .save-dot {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--bg);
+  background: var(--text-faint);
+}
+
+.project-button[data-state='saving'] .save-dot {
+  background: var(--warn);
+}
+
+.project-button[data-state='saved'] .save-dot {
+  background: var(--ok);
+}
+
+.project-button[data-state='error'] .save-dot {
+  background: var(--danger);
+}
+
+.dock {
+  position: absolute;
+  bottom: var(--dock-gap);
+  z-index: 25;
+  width: 0;
+  pointer-events: none;
+}
+
+.dock-left {
+  top: 58px;
+  left: 0;
+}
+
+.dock-right {
+  top: var(--dock-gap);
+  right: 0;
+}
+
+.dock-surface {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: var(--dock-left-width);
   display: flex;
-  height: 100%;
-  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+  transition:
+    transform 0.24s cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 0.18s ease;
 }
 
-.panel-row > .panel {
+.dock-surface > .panel {
   flex: 1 1 auto;
-  min-width: 0;
+  height: auto;
+  min-height: 0;
+  background: transparent;
 }
 
-.pane-fill {
-  height: 100%;
-  min-height: 0;
+.dock-left .dock-surface {
+  left: var(--dock-gap);
+}
+
+.dock-right .dock-surface {
+  right: var(--dock-gap);
+  width: var(--dock-right-width);
+}
+
+.dock[data-open='false'] .dock-surface {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dock-left[data-open='false'] .dock-surface {
+  transform: translateX(calc(-100% - var(--dock-gap) - 2px));
+}
+
+.dock-right[data-open='false'] .dock-surface {
+  transform: translateX(calc(100% + var(--dock-gap) + 2px));
+}
+
+/* The whole screen edge brings a panel back, as if the tongue were full height. */
+.dock-trigger {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  width: 16px;
+  z-index: 24;
+  pointer-events: auto;
+}
+
+.dock-left .dock-trigger {
+  left: 0;
+}
+
+.dock-right .dock-trigger {
+  right: 0;
+}
+
+
+/* The tongue left at the screen edge when a panel is away. */
+.dock-tab {
+  position: absolute;
+  top: 50%;
+  width: 16px;
+  height: 64px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-dim);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+  transition:
+    opacity 0.18s ease,
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.dock-left .dock-tab {
+  left: 0;
+  border-left: none;
+  border-radius: 0 8px 8px 0;
+}
+
+.dock-right .dock-tab {
+  right: 0;
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+}
+
+.dock[data-open='true'] .dock-tab {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dock-tab:hover {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
+/* The contextual tool set stays centred in the window; the side docks only
+   squeeze its available width. */
+.tool-dock {
+  position: absolute;
+  top: var(--dock-gap);
+  left: 8px;
+  right: 8px;
+  z-index: 22;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.tool-dock > .tool-rail {
+  pointer-events: auto;
+  max-width: max(0px, calc(100% - var(--dock-left) - var(--dock-right)));
+  overflow-x: auto;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  transition: max-width 0.24s ease;
+  scrollbar-width: none;
+}
+
+/* Operations grow the panel until it reaches the side panels, then scroll. */
+.operations-dock {
+  position: absolute;
+  bottom: var(--dock-gap);
+  left: 8px;
+  right: 8px;
+  z-index: 22;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.operations-dock > .timeline-panel {
+  pointer-events: auto;
+  width: max-content;
+  max-width: max(0px, calc(100% - var(--dock-left) - var(--dock-right)));
+  height: 46px;
+  flex-direction: row;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
   overflow: hidden;
 }
 
-.topbar {
-  flex: 0 0 46px;
+.timeline-panel .timeline-body {
+  min-width: 0;
+}
+
+.timeline-status {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 10px;
-  background: var(--panel);
+  padding: 0 4px 0 6px;
+  margin: 6px 0;
+  border-left: 1px solid var(--border);
+}
+
+.kernel-indicator {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.kernel-indicator:hover,
+.kernel-indicator[aria-expanded='true'] {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
+.timeline-status[data-state='ready'] .kernel-indicator {
+  color: var(--ok);
+}
+
+.timeline-status[data-state='error'] .kernel-indicator {
+  color: var(--danger);
+}
+
+.project-strip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 8px 0 10px;
   border-bottom: 1px solid var(--border);
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-right: 6px;
+.project-strip .project-name {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
 }
 
 .brand-mark {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -165,11 +428,6 @@ button:disabled {
   color: #ffffff;
   background: linear-gradient(135deg, #6b9bff 0%, #3557d6 100%);
   box-shadow: 0 2px 8px rgba(53, 87, 214, 0.4);
-}
-
-.brand-name {
-  font-weight: 600;
-  letter-spacing: 0.01em;
 }
 
 .project-name {
@@ -193,23 +451,6 @@ button:disabled {
   background: var(--panel-2);
   border-color: var(--border-strong);
   outline: none;
-}
-
-.topbar-group {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.topbar-separator {
-  width: 1px;
-  height: 18px;
-  background: var(--border);
-  margin: 0 4px;
-}
-
-.topbar-spacer {
-  flex: 1 1 auto;
 }
 
 .icon-btn {
@@ -255,32 +496,8 @@ button:disabled {
   color: var(--danger);
 }
 
-.save-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  color: var(--text-faint);
-  white-space: nowrap;
-}
-
 .save-dot {
-  width: 6px;
-  height: 6px;
   border-radius: 50%;
-  background: var(--text-faint);
-}
-
-.save-state.saving .save-dot {
-  background: var(--warn);
-}
-
-.save-state.saved .save-dot {
-  background: var(--ok);
-}
-
-.save-state.error .save-dot {
-  background: var(--danger);
 }
 
 .select {
@@ -869,30 +1086,6 @@ button:disabled {
   gap: 2px;
 }
 
-.topbar-left {
-  flex: 1 1 0;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.topbar-center {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.topbar-right {
-  flex: 1 1 0;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 2px;
-}
-
 .tooltip-anchor {
   display: inline-flex;
   align-items: center;
@@ -985,8 +1178,9 @@ button:disabled {
 /* Until the project and the kernel are ready the workspace paints a skeleton,
    with the action in progress where the 3D view will be. */
 .skeleton-body {
+  position: absolute;
+  inset: 0;
   display: grid;
-  flex: 1 1 auto;
   grid-template-columns: 17% minmax(280px, 1fr) 26%;
   gap: 1px;
   min-width: 0;
@@ -1092,6 +1286,13 @@ button:disabled {
   .skeleton-line,
   .skeleton-pill {
     animation: none;
+  }
+
+  .dock-surface,
+  .tool-dock,
+  .operations-dock,
+  .viewport-nav {
+    transition: none;
   }
 }
 
@@ -1315,64 +1516,6 @@ button:disabled {
   color: var(--warn);
 }
 
-.statusbar {
-  flex: 0 0 32px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px;
-  border-top: 1px solid var(--border);
-  background: var(--panel);
-  font-size: 10px;
-  color: var(--text-faint);
-}
-
-.statusbar .icon-btn {
-  width: 24px;
-  height: 24px;
-}
-
-.statusbar .tooltip-anchor {
-  flex: 0 0 auto;
-}
-
-.status-hint {
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.status-button {
-  height: 24px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 8px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-faint);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.status-button:hover,
-.status-button[aria-expanded='true'] {
-  background: var(--panel-3);
-  color: var(--text);
-}
-
-.status-kernel {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-variant-numeric: tabular-nums;
-  cursor: default;
-  white-space: nowrap;
-}
-
 .spinner {
   width: 18px;
   height: 18px;
@@ -1397,7 +1540,7 @@ button:disabled {
 
 .toast {
   position: fixed;
-  bottom: 38px;
+  bottom: 74px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -1429,29 +1572,6 @@ button:disabled {
 .toast-close:hover {
   background: var(--panel-3);
   color: var(--text);
-}
-
-.resize-handle {
-  background: var(--border);
-  transition: background 0.15s ease;
-  flex: 0 0 auto;
-}
-
-.resize-handle[aria-orientation='vertical'] {
-  width: 1px;
-  min-width: 1px;
-  cursor: col-resize;
-}
-
-.resize-handle[aria-orientation='horizontal'] {
-  height: 1px;
-  min-height: 1px;
-  cursor: row-resize;
-}
-
-.resize-handle:hover,
-.resize-handle[data-separator='active'] {
-  background: var(--accent);
 }
 
 .tooltip-queue {
@@ -1717,8 +1837,16 @@ button.selection-item[data-active='true'][data-error='true'] {
 }
 
 .context-menu-icon {
+  flex: 0 0 14px;
   display: inline-flex;
+  justify-content: center;
   color: var(--text-faint);
+}
+
+.context-menu-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .context-menu-heading {
@@ -1744,6 +1872,38 @@ button.selection-item[data-active='true'][data-error='true'] {
   flex: 1 1 auto;
 }
 
+.context-menu-entry {
+  display: flex;
+  align-items: center;
+}
+
+.context-menu-entry > .tooltip-anchor {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.context-menu-entry .context-menu-item {
+  width: 100%;
+}
+
+.context-menu-action {
+  width: 24px;
+  height: 24px;
+  margin-right: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-faint);
+}
+
+.context-menu-action:hover {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
 .context-menu-hint {
   margin-left: auto;
   padding-left: 14px;
@@ -1755,11 +1915,13 @@ button.selection-item[data-active='true'][data-error='true'] {
   color: inherit;
 }
 
+/* The nav cube keeps clear of the operations panel and the right dock. */
 .viewport-nav {
   position: absolute;
-  top: 14px;
-  right: 14px;
+  right: calc(var(--dock-right, 0px) + 14px);
+  bottom: 24px;
   z-index: 3;
+  transition: right 0.24s ease;
 }
 
 .nav-cube-canvas {
@@ -2588,7 +2750,6 @@ button.selection-item[data-active='true'][data-error='true'] {
   outline: 2px solid var(--text);
   outline-offset: 1px;
 }
-
 
 /* Method and distance while a 3D handle is being dragged. */
 .quick-chip {
