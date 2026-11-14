@@ -51,6 +51,7 @@ import {
 import { SkeletonStage } from '../ui/Skeleton';
 import { Tooltip } from '../ui/Tooltip';
 import { NavCube, type NavFace } from './NavCube';
+import { useNavCubeLift } from './useNavCubeLift';
 import {
   operationHandles,
   type OperationHandle,
@@ -140,6 +141,8 @@ export function Viewport() {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const navCubeCanvasRef = useRef<HTMLCanvasElement>(null);
+  const navRef = useRef<HTMLDivElement>(null);
+  useNavCubeLift(navRef);
   const controllerRef = useRef<SceneController | null>(null);
   const navCubeRef = useRef<NavCube | null>(null);
   const previousCount = useRef(0);
@@ -1220,7 +1223,7 @@ export function Viewport() {
         </div>
       )}
 
-      <div className="viewport-nav">
+      <div className="viewport-nav" ref={navRef}>
         <Tooltip content={t('nav.hint')}>
           <canvas
             ref={navCubeCanvasRef}

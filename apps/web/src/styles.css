@@ -309,31 +309,36 @@ button:disabled {
   color: var(--text);
 }
 
-/* Both floating bars are centred in the free space between the docks, so an
-   open dock squeezes and moves them instead of covering them. */
+/* Both floating bars stay centred in the window: `--bar-shift` (see
+   useFloatingBarShift) moves a bar only as far as a side dock needs to stop
+   covering it, and the width limit shrinks it when no room is left. */
 .tool-dock {
   position: absolute;
   top: var(--dock-gap);
-  left: calc(var(--dock-left) + 8px);
-  right: calc(var(--dock-right) + 8px);
+  left: 8px;
+  right: 8px;
   z-index: 22;
   display: flex;
   justify-content: center;
   pointer-events: none;
-  transition:
-    left 0.24s ease,
-    right 0.24s ease;
 }
 
 .tool-dock > .tool-rail {
   pointer-events: auto;
-  max-width: 100%;
+  max-width: max(0px, calc(100% - var(--dock-left) - var(--dock-right)));
   overflow-x: auto;
   padding: 4px 6px;
   border: 1px solid var(--border);
   border-radius: 11px;
   background: var(--panel);
   box-shadow: var(--shadow);
+  /* Relative, not a transform: a transform would take over the containing
+     block of the fixed tooltips opened inside the bar. */
+  position: relative;
+  left: var(--bar-shift, 0px);
+  transition:
+    max-width 0.24s ease,
+    left 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
   scrollbar-width: none;
 }
 
@@ -341,21 +346,23 @@ button:disabled {
 .operations-dock {
   position: absolute;
   bottom: var(--dock-gap);
-  left: calc(var(--dock-left) + 8px);
-  right: calc(var(--dock-right) + 8px);
+  left: 8px;
+  right: 8px;
   z-index: 22;
   display: flex;
   justify-content: center;
   pointer-events: none;
-  transition:
-    left 0.24s ease,
-    right 0.24s ease;
 }
 
 .operations-dock > .timeline-panel {
   pointer-events: auto;
   width: max-content;
-  max-width: 100%;
+  max-width: max(0px, calc(100% - var(--dock-left) - var(--dock-right)));
+  position: relative;
+  left: var(--bar-shift, 0px);
+  transition:
+    max-width 0.24s ease,
+    left 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
   height: 46px;
   flex-direction: row;
   align-items: stretch;
@@ -1980,9 +1987,12 @@ button.selection-item[data-active='true'][data-error='true'] {
 .viewport-nav {
   position: absolute;
   right: calc(var(--dock-right, 0px) + 14px);
-  bottom: 24px;
+  /* Lifted by the script when the operations panel reaches the cube. */
+  bottom: calc(24px + var(--nav-lift, 0px));
   z-index: 3;
-  transition: right 0.24s ease;
+  transition:
+    right 0.24s ease,
+    bottom 0.24s ease;
 }
 
 .nav-cube-canvas {

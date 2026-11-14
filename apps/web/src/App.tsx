@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShortcuts } from './hooks/useShortcuts';
 import { useApplyTheme } from './hooks/useTheme';
@@ -21,6 +22,7 @@ import { SketchToolRail } from './ui/SketchToolRail';
 import { Timeline } from './ui/Timeline';
 import { Toast } from './ui/Toast';
 import { ToolRail } from './ui/ToolRail';
+import { useFloatingBarShift } from './ui/useFloatingBarShift';
 import { Viewport } from './viewport/Viewport';
 
 export default function App() {
@@ -45,6 +47,11 @@ export default function App() {
       state.selection.some((item) => item.kind === 'feature'),
   );
   const inspectorPinned = activeSketchId === null && operationSelected;
+  // Both floating bars stay centred until a dock reaches them.
+  const toolDock = useRef<HTMLDivElement>(null);
+  const operationsDock = useRef<HTMLDivElement>(null);
+  useFloatingBarShift(toolDock);
+  useFloatingBarShift(operationsDock);
 
   return (
     <div className="app-shell">
@@ -74,9 +81,11 @@ export default function App() {
               <Inspector />
             </FloatDock>
 
-            <div className="tool-dock">{activeSketchId ? <SketchToolRail /> : <ToolRail />}</div>
+            <div className="tool-dock" ref={toolDock}>
+              {activeSketchId ? <SketchToolRail /> : <ToolRail />}
+            </div>
 
-            <div className="operations-dock">
+            <div className="operations-dock" ref={operationsDock}>
               <Timeline />
             </div>
           </>
