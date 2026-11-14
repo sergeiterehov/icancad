@@ -12,13 +12,37 @@ function SkeletonDock({ side, rows }: { side: 'left' | 'right'; rows: number }) 
   );
 }
 
-/** The 3D area of the skeleton, with the action that is being carried out. */
-export function SkeletonStage({ action, testId }: { action: string; testId?: string }) {
+/**
+ * The 3D area of the skeleton, with the action that is being carried out and,
+ * when the work can report how far it got, a bar under it.
+ */
+export function SkeletonStage({
+  action,
+  testId,
+  progress,
+}: {
+  action: string;
+  testId?: string;
+  /** 0..1; nothing means the work has no measurable progress. */
+  progress?: number;
+}) {
+  const percent = progress === undefined ? null : Math.round(progress * 100);
   return (
     <div className="skeleton-3d" data-testid={testId} aria-busy="true">
       <span className="skeleton-caption" role="status">
         {action}
       </span>
+      {percent !== null && (
+        <div
+          className="skeleton-progress"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percent}
+        >
+          <span className="skeleton-progress-fill" style={{ width: `${percent}%` }} />
+        </div>
+      )}
     </div>
   );
 }

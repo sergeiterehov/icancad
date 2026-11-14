@@ -196,6 +196,7 @@ export function Viewport() {
   const featureBodyErrors = useKernelStore((state) => state.featureBodyErrors);
   const featureErrors = useKernelStore((state) => state.featureErrors);
   const status = useKernelStore((state) => state.status);
+  const bootRatio = useKernelStore((state) => state.ratio);
   const error = useKernelStore((state) => state.error);
   const theme = useThemeStore((state) => state.theme);
   const openMenu = useContextMenuStore((state) => state.open);
@@ -1237,9 +1238,13 @@ export function Viewport() {
         </Tooltip>
       </div>
 
-      {/* The kernel reports its own progress in the status bar. */}
+      {/* The kernel streams its wasm, so it can report how far the download got. */}
       {showLoading && (
-        <SkeletonStage action={t('status.kernelLoading')} testId="viewport-skeleton" />
+        <SkeletonStage
+          action={t('status.kernelLoading')}
+          testId="viewport-skeleton"
+          progress={bootRatio ?? 0}
+        />
       )}
 
       {showError && (

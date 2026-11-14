@@ -154,7 +154,7 @@ export function KernelStatus() {
           {failed ? (
             <TriangleAlert size={16} />
           ) : busy ? (
-            <span className="spinner tiny-spinner" />
+            <span className="spinner indicator-spinner" />
           ) : (
             <Check size={16} />
           )}
