@@ -43,10 +43,10 @@ import { isPlanarFace } from './planarFace';
 import { OUTLINE_CREASE_RADIANS, outlineSegments } from './bodyOutline';
 import { bodyElements } from '../sketch/projection';
 import { RenderOrder } from './renderOrder';
-import { firstUnclippedHit } from './sectionPick';
+import { firstUnclippedHit, sectionCrossings } from './sectionPick';
 import { hoverTargetOf } from './hoverMode';
 import { handleDragValue } from '../quick/handleDrag';
-import { outwardNormal } from '../quick/geometry';
+import { outwardNormal, pointInMesh } from '../quick/geometry';
 import type { SelectionHit } from './selectionPick';
 
 function lineGeometry(positions: Float32Array): THREE.BufferGeometry | null {
@@ -274,8 +274,12 @@ export class SceneController {
   private readonly capGeometry = new THREE.PlaneGeometry(4000, 4000);
   private sectionPlanes: SectionPlane[] = [];
   private sectionClipPlanes: THREE.Plane[] = [];
-  private sectionEntries: { group: THREE.Group; cap: THREE.Mesh; materials: THREE.Material[] }[] =
-    [];
+  private sectionEntries: {
+    group: THREE.Group;
+    cap: THREE.Mesh;
+    materials: THREE.Material[];
+    bodyId: string;
+  }[] = [];
   private sketchData: SceneSketch[] = [];
   private sketchEntries: {
     id: string;
@@ -538,6 +542,8 @@ export class SceneController {
 
       this.syncHitMesh(entry, body);
       if (entry.group.visible !== body.visible) sectionChanged = true;
+      // The cap keeps its own copy of the body colour.
+      if (entry.color !== body.color) sectionChanged = true;
       entry.group.visible = body.visible;
       entry.kind = body.kind;
       entry.color = body.color;
@@ -1609,6 +1615,44 @@ export class SceneController {
         continue;
       }
       this.applySolidMaterial(entry);
+    }
+    this.updateSectionColors();
+  }
+
+  /**
+   * The colour a body currently reads as. Selection, hover and errors light a
+   * body with an emissive tint, and the section cap has to follow it: the cut
+   * is the same face seen through the hatch.
+   */
+  private bodyColorOf(entry: BodyEntry): THREE.Color {
+    const color = entry.material.color.clone();
+    if (entry.material.emissiveIntensity > 0) {
+      color.add(entry.material.emissive.clone().multiplyScalar(entry.material.emissiveIntensity));
+    }
+    return color;
+  }
+
+  private sectionCapColors(entry: BodyEntry): { fill: THREE.Color; line: THREE.Color } {
+    const background = new THREE.Color(this.theme === 'dark' ? 0x0d1015 : 0xffffff);
+    const highlight = new THREE.Color(this.theme === 'dark' ? 0xffffff : 0x000000);
+    const color = this.bodyColorOf(entry);
+    return {
+      fill: color.clone().lerp(background, 0.55),
+      line: color.clone().lerp(highlight, this.theme === 'dark' ? 0.2 : 0.25),
+    };
+  }
+
+  private updateSectionColors(): void {
+    for (const entry of this.sectionEntries) {
+      const body = this.bodies.get(entry.bodyId);
+      if (!body) continue;
+      const uniforms = (entry.cap.material as THREE.ShaderMaterial).uniforms as {
+        uFill: { value: THREE.Color };
+        uLine: { value: THREE.Color };
+      };
+      const colors = this.sectionCapColors(body);
+      uniforms.uFill.value.copy(colors.fill);
+      uniforms.uLine.value.copy(colors.line);
     }
   }
 
@@ -2890,9 +2934,6 @@ export class SceneController {
     this.disposeSection();
     if (this.sectionPlanes.length === 0) return;
 
-    const background = new THREE.Color(this.theme === 'dark' ? 0x0d1015 : 0xffffff);
-    const highlight = new THREE.Color(this.theme === 'dark' ? 0xffffff : 0x000000);
-
     this.sectionPlanes.forEach((section, index) => {
       const effectiveNormal = new THREE.Vector3(...section.normal).normalize();
       const point = new THREE.Vector3(...section.origin).addScaledVector(
@@ -2900,7 +2941,7 @@ export class SceneController {
         section.offset,
       );
       const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(effectiveNormal, point);
-      for (const body of this.bodies.values()) {
+      for (const [bodyId, body] of this.bodies) {
         if (!body.group.visible) continue;
 
         const back = new THREE.MeshBasicMaterial({
@@ -2922,9 +2963,7 @@ export class SceneController {
         front.stencilZFail = THREE.DecrementWrapStencilOp;
         front.stencilZPass = THREE.DecrementWrapStencilOp;
 
-        const color = body.material.color;
-        const fill = color.clone().lerp(background, 0.55);
-        const line = color.clone().lerp(highlight, this.theme === 'dark' ? 0.2 : 0.25);
+        const { fill, line } = this.sectionCapColors(body);
 
         const capMaterial = new THREE.ShaderMaterial({
           uniforms: {
@@ -2991,7 +3030,7 @@ export class SceneController {
         group.visible = false;
 
         this.sectionScene.add(group);
-        this.sectionEntries.push({ group, cap, materials: [back, front, capMaterial] });
+        this.sectionEntries.push({ group, cap, materials: [back, front, capMaterial], bodyId });
       }
     });
   }
@@ -3510,6 +3549,13 @@ export class SceneController {
       raycaster.intersectObjects(bodyMeshes, false),
       this.sectionClipPlanes,
     );
+    // The cut itself is not a face of the B-rep, so it stands for the body as
+    // a whole and wins over anything the ray reaches behind it.
+    const section = this.pickSectionAt(raycaster, bodyHit);
+    const visibleDistance = Math.min(
+      bodyHit?.distance ?? Infinity,
+      section?.distance ?? Infinity,
+    );
     // While faces are being picked they win over the solids they produced, so a
     // face stays clickable after it has been extruded.
     if (faces && faceHit && !preferBody) {
@@ -3521,9 +3567,15 @@ export class SceneController {
     // The line has to be in front of the body for the click to mean it.
     if (edges) {
       const curve = this.pickSketchCurveAt(raycaster, this.localPoint(clientX, clientY));
-      if (curve && (!bodyHit || curve.depth <= bodyHit.distance + 0.5)) {
+      if (curve && curve.depth <= visibleDistance + 0.5) {
         return { kind: 'sketch-edge', sketchId: curve.id, entityId: curve.entityId };
       }
+    }
+    if (section) {
+      const entry = this.bodies.get(section.bodyId);
+      return entry?.kind === 'mesh'
+        ? { kind: 'mesh', id: section.bodyId }
+        : { kind: 'body', id: section.bodyId };
     }
     if (bodyHit) {
       const bodyId = bodyHit.object.userData.bodyId as string | undefined;
@@ -3585,9 +3637,12 @@ export class SceneController {
       raycaster.intersectObjects(bodyMeshes, false),
       this.sectionClipPlanes,
     );
+    const visibleDistance = Math.min(
+      bodyHit?.distance ?? Infinity,
+      this.pickSectionAt(raycaster, bodyHit)?.distance ?? Infinity,
+    );
     const curve = this.pickSketchCurveAt(raycaster, this.localPoint(clientX, clientY), sketchId);
-    const visibleCurve =
-      curve && (!bodyHit || curve.depth <= bodyHit.distance + 0.5) ? curve : null;
+    const visibleCurve = curve && curve.depth <= visibleDistance + 0.5 ? curve : null;
     let faceKey: string | null = null;
     if (!visibleCurve) {
       const pickers = this.facePickMeshes.filter((mesh) => {
@@ -3597,7 +3652,7 @@ export class SceneController {
       const hit = raycaster.intersectObjects(pickers, false)[0];
       const face = hit?.object.userData.sketchFace as
         { sketchId: string; faceId: string } | undefined;
-      if (face && (!bodyHit || hit!.distance <= bodyHit.distance + 0.5)) {
+      if (face && hit!.distance <= visibleDistance + 0.5) {
         faceKey = `s:${sketchId}#${face.faceId}`;
       }
     }
@@ -3726,9 +3781,13 @@ export class SceneController {
       raycaster.intersectObjects(bodyMeshes, false),
       this.sectionClipPlanes,
     );
-    const bodyId = bodyHit?.object.userData.bodyId as string | undefined;
+    const section = this.pickSectionAt(raycaster, bodyHit);
+    const bodyId = section?.bodyId ?? (bodyHit?.object.userData.bodyId as string | undefined);
     const entry = bodyId ? this.bodies.get(bodyId) : undefined;
-
+    const visibleDistance = Math.min(
+      bodyHit?.distance ?? Infinity,
+      section?.distance ?? Infinity,
+    );
     // A sketch the user has selected shows its regions; they win over the body
     // the sketch lies on, because the click is meant for the sketch.
     if (this.selectionDetail.sketchId) {
@@ -3739,7 +3798,7 @@ export class SceneController {
         this.localPoint(clientX, clientY),
         this.selectionDetail.sketchId,
       );
-      if (curve && (!bodyHit || curve.depth <= bodyHit.distance + 0.5)) {
+      if (curve && curve.depth <= visibleDistance + 0.5) {
         return { sketchEdge: { sketchId: curve.id, entityId: curve.entityId } };
       }
       const pickers = this.facePickMeshes.filter((mesh) => {
@@ -3749,9 +3808,19 @@ export class SceneController {
       const hit = raycaster.intersectObjects(pickers, false)[0];
       const face = hit?.object.userData.sketchFace as
         { sketchId: string; faceId: string } | undefined;
-      if (face && (!bodyHit || hit!.distance <= bodyHit.distance + 0.5)) {
+      if (face && hit!.distance <= visibleDistance + 0.5) {
         return { sketchFace: { sketchId: face.sketchId, faceId: face.faceId } };
       }
+    }
+
+    // A cut face belongs to the body as a whole. Once the body is open for
+    // detail picking there is no face here to take, so the click takes nothing.
+    if (section) {
+      const open =
+        this.selectionDetail.bodyIds.has(section.bodyId) ||
+        this.selectionDetail.geometrySelected;
+      if (open) return null;
+      return { body: { id: section.bodyId, kind: entry?.kind ?? 'solid' } };
     }
 
     // A body that is already selected is open, and so is every body while a
@@ -3779,7 +3848,7 @@ export class SceneController {
     const local = this.localPoint(clientX, clientY);
     const curve = this.pickSketchCurveAt(raycaster, local);
     // A sketch behind a solid is not visible, so it cannot be clicked.
-    if (curve && (!bodyHit || curve.depth <= bodyHit.distance + 0.5)) {
+    if (curve && curve.depth <= visibleDistance + 0.5) {
       return { sketch: { id: curve.id } };
     }
 
@@ -3893,6 +3962,54 @@ export class SceneController {
     return null;
   }
 
+  /** Whether the body encloses a section plane point. */
+  private meshContains(entry: BodyEntry, point: THREE.Vector3): boolean {
+    const bounds = entry.geometry.boundingBox;
+    if (bounds && !bounds.containsPoint(point)) return false;
+    return pointInMesh(entry.meshRef, [point.x, point.y, point.z]);
+  }
+
+  /**
+   * The body whose section cap is the visible surface under the pointer. A
+   * cut face is the material a plane removed, so it is not a face of the body:
+   * it can only stand for the whole object. Nothing solid the section kept may
+   * lie in front of the plane, and the plane point has to be inside the body.
+   */
+  private pickSectionAt(
+    raycaster: THREE.Raycaster,
+    bodyHit: THREE.Intersection | undefined,
+  ): { bodyId: string; distance: number } | null {
+    const limit = bodyHit?.distance ?? Infinity;
+    for (const crossing of sectionCrossings(raycaster.ray, this.sectionClipPlanes)) {
+      if (crossing.distance >= limit) break;
+      const point = new THREE.Vector3(...crossing.point);
+      for (const [id, entry] of this.bodies) {
+        if (!entry.group.visible || !entry.interactive) continue;
+        if (!this.meshContains(entry, point)) continue;
+        return { bodyId: id, distance: crossing.distance };
+      }
+    }
+    return null;
+  }
+
+  /** Whether a visible cut hides a point of the body at this ray depth. */
+  private isCutInFront(
+    raycaster: THREE.Raycaster,
+    depth: number,
+    mesh: TessellationResult,
+  ): boolean {
+    for (const crossing of sectionCrossings(raycaster.ray, this.sectionClipPlanes)) {
+      if (crossing.distance >= depth) break;
+      const [x, y, z] = crossing.point;
+      const { min, max } = mesh.bbox;
+      if (x < min[0] || y < min[1] || z < min[2] || x > max[0] || y > max[1] || z > max[2]) {
+        continue;
+      }
+      if (pointInMesh(mesh, crossing.point)) return true;
+    }
+    return false;
+  }
+
   private isEdgePointVisible(entry: BodyEntry, point: THREE.Vector3): boolean {
     const ndc = point.clone().project(this.camera);
     const raycaster = new THREE.Raycaster();
@@ -3901,8 +4018,10 @@ export class SceneController {
       raycaster.intersectObject(entry.hitMesh, false),
       this.sectionClipPlanes,
     );
-    if (!hit) return true;
     const depth = point.clone().sub(raycaster.ray.origin).dot(raycaster.ray.direction);
+    // A cut face is a surface like any other: it hides the edges behind it.
+    if (this.isCutInFront(raycaster, depth, entry.meshRef)) return false;
+    if (!hit) return true;
     return hit.distance >= depth - Math.max(1e-3, this.distance * 1e-4);
   }
 

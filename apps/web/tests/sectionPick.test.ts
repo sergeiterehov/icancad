@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { firstUnclippedHit, isPointClipped, type ClipPlane } from '../src/viewport/sectionPick';
+import {
+  firstUnclippedHit,
+  isPointClipped,
+  sectionCrossings,
+  type ClipPlane,
+} from '../src/viewport/sectionPick';
 
 const cutX: ClipPlane = { normal: { x: 1, y: 0, z: 0 }, constant: 0 };
 
@@ -105,3 +110,61 @@ describe('picking through a section', () => {
     expect(hit?.point.toArray()).toEqual([8, 5, 5]);
   });
 });
+
+describe('section plane crossings along a ray', () => {
+  const ray = {
+    origin: { x: 20, y: 1, z: 5 },
+    direction: { x: -1, y: 0, z: 0 },
+  };
+
+  it('reports where the ray meets the plane', () => {
+    const [crossing] = sectionCrossings(ray, [section]);
+    expect(crossing?.point).toEqual([9, 1, 5]);
+    expect(crossing?.distance).toBeCloseTo(11, 9);
+  });
+
+  it('keeps the crossings nearest first', () => {
+    // A slab: one plane keeps x <= 10, the other x >= -10.
+    const inner = new THREE.Plane().setFromNormalAndCoplanarPoint(
+      new THREE.Vector3(-1, 0, 0),
+      new THREE.Vector3(10, 0, 0),
+    );
+    const outer = new THREE.Plane().setFromNormalAndCoplanarPoint(
+      new THREE.Vector3(1, 0, 0),
+      new THREE.Vector3(-10, 0, 0),
+    );
+    expect(sectionCrossings(ray, [outer, inner]).map((crossing) => crossing.point[0])).toEqual([
+      10, -10,
+    ]);
+  });
+
+  it('leaves out a crossing another visible section cut away', () => {
+    // This plane keeps x <= 11, so the cut at x = 12 is not on screen.
+    const cutter = new THREE.Plane().setFromNormalAndCoplanarPoint(
+      new THREE.Vector3(-1, 0, 0),
+      new THREE.Vector3(11, 0, 0),
+    );
+    expect(sectionCrossings(ray, [near(12), cutter]).map((crossing) => crossing.point[0])).toEqual([
+      11,
+    ]);
+  });
+
+  it('ignores planes behind the camera and planes the ray runs along', () => {
+    const behind = new THREE.Plane().setFromNormalAndCoplanarPoint(
+      new THREE.Vector3(-1, 0, 0),
+      new THREE.Vector3(30, 0, 0),
+    );
+    const parallel = new THREE.Plane().setFromNormalAndCoplanarPoint(
+      new THREE.Vector3(0, 1, 0),
+      new THREE.Vector3(0, 1, 0),
+    );
+    expect(sectionCrossings(ray, [behind, parallel])).toHaveLength(0);
+  });
+});
+
+function near(x: number): THREE.Plane {
+  return new THREE.Plane().setFromNormalAndCoplanarPoint(
+    new THREE.Vector3(-1, 0, 0),
+    new THREE.Vector3(x, 0, 0),
+  );
+}
