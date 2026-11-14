@@ -778,6 +778,15 @@ button:disabled {
   color: var(--text-faint);
 }
 
+/* An empty panel has nothing to align to, so its placeholder sits in the middle. */
+.panel-empty {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
 .field {
   display: flex;
   flex-direction: column;

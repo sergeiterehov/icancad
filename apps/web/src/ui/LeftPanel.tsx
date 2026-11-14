@@ -404,7 +404,9 @@ export function LeftPanel() {
     <div className="panel">
       <div className="panel-body">
         {isEmpty ? (
-          <p className="empty-row">{t('tree.emptyObjects')}</p>
+          <div className="panel-empty">
+            <p className="empty-row">{t('tree.emptyObjects')}</p>
+          </div>
         ) : (
           <div className="tree-list">{rows}</div>
         )}

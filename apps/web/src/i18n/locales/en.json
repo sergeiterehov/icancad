@@ -127,7 +127,7 @@
   },
   "timeline": {
     "blockedByError": "Cannot move past the failed operation",
-    "empty": "No operations yet. Add a primitive or import a mesh.",
+    "empty": "No operations yet",
     "errorHint": "Cannot complete this operation because of an error",
     "rollback": "Roll back to this step",
     "feature": "Feature",
