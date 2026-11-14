@@ -3,6 +3,7 @@ import { crosshairPlusDot } from '@lucide/lab';
 import {
   Box,
   CircleDot,
+  DraftingCompass,
   Ellipse,
   FileUp,
   Icon,
@@ -10,7 +11,6 @@ import {
   LineSquiggle,
   LoaderCircle,
   PackageOpen,
-  PencilRuler,
   Scissors,
   SquaresIntersect,
   SquaresSubtract,
@@ -23,6 +23,11 @@ import { ChamferIcon, FilletIcon } from './edgeIcons';
 /** The shell operation: a body with its inside exposed. */
 export function ShellIcon({ size = 16 }: { size?: number }) {
   return <PackageOpen size={size} />;
+}
+
+/** A sketch is drawn as a drafting compass, wherever the object is shown. */
+export function SketchIcon({ size = 16 }: { size?: number }) {
+  return <DraftingCompass size={size} />;
 }
 
 /** Experimental Lucide Lab point marker. */
@@ -83,7 +88,7 @@ export function FeatureIcon({ feature, size = 16 }: { feature: Feature; size?: n
     case 'primitive':
       return <Box size={size} />;
     case 'sketch':
-      return <PencilRuler size={size} />;
+      return <SketchIcon size={size} />;
     case 'extrude':
       return <ExtrudeOpIcon op={feature.op} size={size} />;
     case 'boolean':

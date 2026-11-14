@@ -409,6 +409,11 @@ button:disabled {
   border-bottom: 1px solid var(--border);
 }
 
+.project-strip-icon {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
 .project-strip .project-name {
   flex: 1 1 auto;
   width: auto;
@@ -680,7 +685,8 @@ button:disabled {
 .context-menu-swatch {
   width: 12px;
   height: 12px;
-  border-radius: 50%;
+  /* Square, like the palette swatches the item opens. */
+  border-radius: 3px;
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 30%);
 }
 
@@ -1175,32 +1181,13 @@ button:disabled {
   min-width: 150px;
 }
 
-/* Until the project and the kernel are ready the workspace paints a skeleton,
-   with the action in progress where the 3D view will be. */
+/* Until the project is ready the shell paints the same floating layout: a
+   full-bleed 3D stage with ghost docks, a tool pill and the operations strip. */
 .skeleton-body {
   position: absolute;
   inset: 0;
-  display: grid;
-  grid-template-columns: 17% minmax(280px, 1fr) 26%;
-  gap: 1px;
-  min-width: 0;
-  background: var(--border);
-}
-
-.skeleton-pane {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 14px 12px;
-  background: var(--panel);
-}
-
-.skeleton-center {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-  background: var(--border);
+  overflow: hidden;
+  background: var(--viewport);
 }
 
 .skeleton-3d {
@@ -1212,15 +1199,93 @@ button:disabled {
   background: var(--bg);
 }
 
-.skeleton-center > .skeleton-3d {
-  flex: 1;
-  min-height: 0;
+.skeleton-body > .skeleton-3d {
+  position: absolute;
+  inset: 0;
+  background: var(--viewport);
 }
 
 .viewport-wrap > .skeleton-3d {
   position: absolute;
   inset: 0;
   z-index: 4;
+}
+
+.skeleton-logo {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #6b9bff 0%, #3557d6 100%);
+  opacity: 0.55;
+}
+
+.skeleton-dock {
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.skeleton-dock-left {
+  top: 58px;
+  left: 12px;
+}
+
+.skeleton-dock-right {
+  right: 12px;
+  width: 312px;
+}
+
+.skeleton-tool-pill {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  height: 38px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.skeleton-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--panel-2) 20%, var(--panel-3) 40%, var(--panel-2) 60%);
+  background-size: 300% 100%;
+  animation: skeleton-sweep 1.4s linear infinite;
+}
+
+.skeleton-operations {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  height: 46px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
 }
 
 .skeleton-caption {
@@ -1258,15 +1323,6 @@ button:disabled {
   width: 62%;
 }
 
-.skeleton-timeline {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 8px;
-  height: 38px;
-  padding: 0 12px;
-  background: var(--panel);
-}
 
 .skeleton-pill {
   width: 62px;
@@ -1284,7 +1340,8 @@ button:disabled {
 
 @media (prefers-reduced-motion: reduce) {
   .skeleton-line,
-  .skeleton-pill {
+  .skeleton-pill,
+  .skeleton-icon {
     animation: none;
   }
 

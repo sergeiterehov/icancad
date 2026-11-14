@@ -156,6 +156,7 @@ const sketchPlaneRef = z.union([
     type: z.literal('datum'),
     plane: z.enum(['XY', 'XZ', 'YZ']),
     offset: z.number(),
+    inverted: z.boolean().optional(),
   }),
   z.object({
     type: z.literal('face'),
@@ -170,6 +171,7 @@ const sketchPlaneRef = z.union([
         normal: vec3,
       })
       .optional(),
+    inverted: z.boolean().optional(),
   }),
 ]);
 

@@ -10,6 +10,8 @@ import {
 export interface SelectionHit {
   /** A visible sketch line: selects the sketch object. */
   sketch?: { id: string };
+  /** A curve of the sketch the user has already opened. */
+  sketchEdge?: { sketchId: string; entityId: string };
   /** A region of the sketch the user has already opened. */
   sketchFace?: { sketchId: string; faceId: string };
   /** A solid body or an imported mesh under the cursor. */
@@ -35,10 +37,17 @@ function bodyOfItem(item: SelectionItem): string | null {
   return null;
 }
 
+/** A face or an edge is selected: every body is open for detail picking. */
+function detailsSelected(selection: readonly SelectionItem[]): boolean {
+  return selection.some((item) => item.kind === 'body-face' || item.kind === 'edge');
+}
+
 /**
  * First click selects the object, the next click inside it selects a face or an
- * edge. The rule is derived from the current selection, so there is no separate
- * drill mode to enter or leave.
+ * edge. Once a face or an edge is selected, the same click works on any body,
+ * because the pointer highlights geometry there as well. The rule is derived
+ * from the current selection, so there is no separate drill mode to enter or
+ * leave.
  */
 export function resolveSelectionHit(
   hit: SelectionHit | null,
@@ -48,6 +57,15 @@ export function resolveSelectionHit(
   if (!hit) return null;
   const additive = Boolean(options.additive);
 
+  if (hit.sketchEdge) {
+    return {
+      item: {
+        kind: 'sketch-edge',
+        id: `${hit.sketchEdge.sketchId}#${hit.sketchEdge.entityId}`,
+      },
+      additive,
+    };
+  }
   if (hit.sketchFace) {
     return {
       item: { kind: 'face', id: `${hit.sketchFace.sketchId}#${hit.sketchFace.faceId}` },
@@ -58,7 +76,11 @@ export function resolveSelectionHit(
 
   if (hit.body) {
     const { id, kind, faceId, edgeId } = hit.body;
-    const open = selection.some((item) => bodyOfItem(item) === id);
+    // A body is open when the selection holds it, and every body is open once a
+    // face or an edge is selected: the pointer then shows geometry everywhere,
+    // so a click has to take geometry everywhere too.
+    const open =
+      selection.some((item) => bodyOfItem(item) === id) || detailsSelected(selection);
     if (open && kind === 'solid') {
       if (edgeId) return { item: { kind: 'edge', id: bodyEdgeId(id, edgeId) }, additive };
       if (faceId) return { item: { kind: 'body-face', id: bodyFaceId(id, faceId) }, additive };

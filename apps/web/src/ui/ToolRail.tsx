@@ -1,5 +1,5 @@
 import type { SketchFeature } from '@icancad/model';
-import { Hexagon, LayersArrowUp, PencilRuler, Square } from 'lucide-react';
+import { Box, Hexagon, Square } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { edgeTreatmentTargetFromSelection } from '../quick/edgeTreatment';
@@ -11,7 +11,7 @@ import { useContextMenuStore } from './ContextMenu';
 import { useUiStore } from '../stores/uiStore';
 import { IconButton } from './Controls';
 import { EdgeToolIcon } from './edgeIcons';
-import { ShellIcon } from './featureIcons';
+import { ShellIcon, SketchIcon } from './featureIcons';
 import { SectionTool } from './SectionTool';
 
 // Extrude works on a whole sketch or on the faces selected inside one sketch.
@@ -116,31 +116,17 @@ export function ToolRail() {
         active={Boolean(activeSketchId)}
         onClick={openSketchMenu}
       >
-        <PencilRuler size={17} />
+        <SketchIcon size={17} />
       </IconButton>
+
+      <div className="tool-separator" />
+
       <IconButton
         label={t('tools.extrude')}
         tooltip={t('tools.extrude')}
         onClick={() => addExtrude(t('features.extrude'), sketchSelection ?? undefined)}
       >
-        <LayersArrowUp size={17} />
-      </IconButton>
-
-      <IconButton
-        label={t('tools.edgeTreatment')}
-        tooltip={t('tools.edgeTreatment')}
-        onClick={() => {
-          const store = useDocumentStore.getState();
-          const input = edgeTreatmentTargetFromSelection(
-            store.project,
-            store.selection,
-            useKernelStore.getState().meshes,
-          );
-          const id = addEdgeTreatment(t('features.edgeTreatment'), input ?? undefined);
-          if (id && !input) useUiStore.getState().setPickingEdges(id);
-        }}
-      >
-        <EdgeToolIcon size={17} />
+        <Box size={17} />
       </IconButton>
 
       <IconButton
@@ -158,6 +144,23 @@ export function ToolRail() {
         }}
       >
         <ShellIcon size={17} />
+      </IconButton>
+
+      <IconButton
+        label={t('tools.edgeTreatment')}
+        tooltip={t('tools.edgeTreatment')}
+        onClick={() => {
+          const store = useDocumentStore.getState();
+          const input = edgeTreatmentTargetFromSelection(
+            store.project,
+            store.selection,
+            useKernelStore.getState().meshes,
+          );
+          const id = addEdgeTreatment(t('features.edgeTreatment'), input ?? undefined);
+          if (id && !input) useUiStore.getState().setPickingEdges(id);
+        }}
+      >
+        <EdgeToolIcon size={17} />
       </IconButton>
 
       <div className="tool-separator" />

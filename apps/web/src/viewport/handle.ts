@@ -32,6 +32,8 @@ export interface SceneSketch {
   /** Geometry under the pointer while selecting. */
   hoverIds: string[];
   active: boolean;
+  /** Draws over the bodies: the sketch is edited, selected, or its operation is. */
+  onTop: boolean;
 }
 
 export interface ViewportCamera {

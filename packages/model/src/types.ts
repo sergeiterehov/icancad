@@ -130,7 +130,13 @@ export interface SketchFrame {
 }
 
 export type SketchPlaneRef =
-  | { type: 'datum'; plane: 'XY' | 'XZ' | 'YZ'; offset: number }
+  | {
+      type: 'datum';
+      plane: 'XY' | 'XZ' | 'YZ';
+      offset: number;
+      /** The sketch looks at the back of the plane, like a flipped section. */
+      inverted?: boolean;
+    }
   | {
       type: 'face';
       /** Absent until a face is picked; such a sketch is invalid. */
@@ -139,6 +145,8 @@ export type SketchPlaneRef =
       /** Distance along the face normal, away from the face. */
       offset?: number;
       frame?: SketchFrame;
+      /** The sketch looks at the back of the face, like a flipped section. */
+      inverted?: boolean;
     };
 
 export type SketchMeasure = 'length' | 'angle' | 'radius' | 'diameter' | 'x' | 'y' | 'rx' | 'ry';

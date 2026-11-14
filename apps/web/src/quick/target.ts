@@ -40,7 +40,7 @@ export function quickTargetFromSelection(
   selection: readonly SelectionItem[],
 ): QuickTarget | null {
   if (selection.length === 0) return null;
-  if (selection.some((item) => item.kind === 'edge')) return null;
+  if (selection.some((item) => item.kind === 'edge' || item.kind === 'sketch-edge')) return null;
 
   const bodyFaces = selectedBodyFaces(selection);
   if (bodyFaces.length > 0) {

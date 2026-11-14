@@ -44,6 +44,7 @@ import { OUTLINE_CREASE_RADIANS, outlineSegments } from './bodyOutline';
 import { bodyElements } from '../sketch/projection';
 import { RenderOrder } from './renderOrder';
 import { firstUnclippedHit } from './sectionPick';
+import { hoverTargetOf } from './hoverMode';
 import { handleDragValue } from '../quick/handleDrag';
 import { outwardNormal } from '../quick/geometry';
 import type { SelectionHit } from './selectionPick';
@@ -350,9 +351,15 @@ export class SceneController {
     duration: number;
   } | null = null;
   /** Bodies and sketch opened by the current selection, used for detail picking. */
-  private selectionDetail: { bodyIds: Set<string>; sketchId: string | null } = {
+  private selectionDetail: {
+    bodyIds: Set<string>;
+    sketchId: string | null;
+    /** A face or edge is selected, so every body is hovered as its geometry. */
+    geometrySelected: boolean;
+  } = {
     bodyIds: new Set(),
     sketchId: null,
+    geometrySelected: false,
   };
   private readonly handleGroup = new THREE.Group();
   private handleData: SceneHandle[] = [];
@@ -373,6 +380,10 @@ export class SceneController {
   private edgeHighlightEntries: Array<{ line: Line2; material: LineMaterial }> = [];
   /** Edge under the pointer while edges are being picked. */
   private hoveredEdgeKey: string | null = null;
+  /** Curve of the opened sketch under the pointer. */
+  private hoveredSketchEdge: { sketchId: string; entityId: string } | null = null;
+  /** Sketch object under the pointer while no sketch is opened. */
+  private hoveredSketchId: string | null = null;
   private edgeHoverEntries: Array<{ line: Line2; material: LineMaterial }> = [];
   private handleDrag: {
     id: string;
@@ -394,7 +405,12 @@ export class SceneController {
     private readonly canvas: HTMLCanvasElement,
     private readonly container: HTMLElement,
     private readonly onPick?: (pick: ScenePick | null, additive: boolean) => void,
-    private readonly onBodyContextMenu?: (bodyId: string | null, x: number, y: number) => void,
+    /** Object under the right click: a body, a mesh or a sketch. */
+    private readonly onObjectContextMenu?: (
+      object: { kind: 'body' | 'mesh' | 'sketch'; id: string } | null,
+      x: number,
+      y: number,
+    ) => void,
     private readonly onCameraChange?: (azimuth: number, polar: number, distance: number) => void,
     /** A double click on a face asks for the operation that produced it. */
     private readonly onDoublePick?: (pick: ScenePick) => void,
@@ -527,10 +543,12 @@ export class SceneController {
   setSelectionDetail(detail: {
     bodyIds: readonly string[];
     sketchId?: string | null;
+    geometrySelected?: boolean;
   }): void {
     this.selectionDetail = {
       bodyIds: new Set(detail.bodyIds),
       sketchId: detail.sketchId ?? null,
+      geometrySelected: Boolean(detail.geometrySelected),
     };
   }
 
@@ -1394,12 +1412,10 @@ export class SceneController {
       transparent: true,
       opacity: 0.4,
       depthWrite: false,
-      // A ghost touches the body at coincident faces. A small depth bias makes
-      // the shared triangles win consistently instead of shimmering, while the
-      // ghost is still hidden by material actually in front of it.
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
+      // The delta is feedback for the operation, not part of the model: it stays
+      // visible through the body it changes. Sketch lines draw in a later render
+      // order, so they stay on top of it.
+      depthTest: false,
       side: THREE.DoubleSide,
     });
     const fade = ghost.fade ?? [];
@@ -1768,6 +1784,9 @@ export class SceneController {
 
   setSketches(sketches: SceneSketch[]): void {
     this.sketchData = sketches;
+    // The groups are rebuilt below, so the hover has to be found again.
+    this.hoveredSketchEdge = null;
+    this.hoveredSketchId = null;
     this.disposeSketchEntries();
     const editingSketch = sketches.some((sketch) => sketch.active);
     // The sketch draws its own plane-aligned grid; the world grid would only
@@ -1841,6 +1860,7 @@ export class SceneController {
           hoveredPoints.get(entity.id) ?? new Set<number>(),
           editingSketch && !sketch.active,
           sketch.active ? null : tint,
+          sketch.onTop,
         );
       }
       this.addSketchFacePickers(group, sketch);
@@ -2252,6 +2272,7 @@ export class SceneController {
     hoveredPoints: ReadonlySet<number>,
     background: boolean,
     tint: number | null,
+    onTop: boolean,
   ): void {
     const color = selected
       ? this.sketchSelectedColor()
@@ -2279,9 +2300,12 @@ export class SceneController {
         width,
         dimmed ? 0.2 : 1,
         entity.construction,
+        !onTop,
       );
       if (line) {
         line.userData.entityId = entity.id;
+        line.userData.baseColor = color;
+        line.userData.baseWidth = width;
         group.add(line);
       }
     }
@@ -2290,30 +2314,32 @@ export class SceneController {
       const pointHighlighted = highlighted || highlightedPoints.has(index);
       const pointHovered = hovered || hoveredPoints.has(index);
       const selectedPoint = selected || selectedPoints.has(index);
+      const pointColor = selectedPoint
+        ? this.sketchSelectedColor()
+        : pointHovered
+          ? this.sketchHoverColor()
+          : pointHighlighted
+            ? this.sketchHighlightColor()
+            : lost
+              ? this.sketchLostProjectionColor()
+              : projected
+                ? this.sketchProjectionColor()
+                : frozen
+                  ? this.sketchFrozenPointColor()
+                  : this.sketchPointColor();
+      const pointSize = selectedPoint ? 6 : pointHovered ? 5 : pointHighlighted ? 6 : 4;
       const geometry = new THREE.BufferGeometry().setFromPoints([this.sketchWorld(frame, point)]);
       const points = new THREE.Points(
         geometry,
         new THREE.PointsMaterial({
-          color: selectedPoint
-            ? this.sketchSelectedColor()
-            : pointHovered
-              ? this.sketchHoverColor()
-              : pointHighlighted
-                ? this.sketchHighlightColor()
-                : lost
-                  ? this.sketchLostProjectionColor()
-                  : projected
-                    ? this.sketchProjectionColor()
-                    : frozen
-                      ? this.sketchFrozenPointColor()
-                      : this.sketchPointColor(),
+          color: pointColor,
           map: this.pointTexture,
           alphaTest: 0.5,
           transparent: true,
           opacity: dimmed ? 0.25 : 1,
-          size: selectedPoint ? 6 : pointHovered ? 5 : pointHighlighted ? 6 : 4,
+          size: pointSize,
           sizeAttenuation: false,
-          depthTest: false,
+          depthTest: !onTop,
           depthWrite: false,
         }),
       );
@@ -2323,6 +2349,8 @@ export class SceneController {
           : RenderOrder.sketchPoint;
       points.userData.entityId = entity.id;
       points.userData.pointIndex = index;
+      points.userData.baseColor = pointColor;
+      points.userData.baseSize = pointSize;
       group.add(points);
     });
   }
@@ -2338,6 +2366,7 @@ export class SceneController {
     width: number,
     opacity: number,
     dashed = false,
+    depthTest = false,
   ): Line2 | null {
     if (entity.type === 'point') return null;
     const curve = tessellateEntity(entity, 96);
@@ -2358,8 +2387,13 @@ export class SceneController {
       linewidth: width,
       transparent: true,
       opacity,
-      depthTest: false,
+      depthTest,
       depthWrite: false,
+      // A depth-tested sketch often lies on the face it was drawn on; the bias
+      // keeps its lines above that face without letting them out of the body.
+      polygonOffset: depthTest,
+      polygonOffsetFactor: depthTest ? -1 : 0,
+      polygonOffsetUnits: depthTest ? -1 : 0,
       resolution: new THREE.Vector2(this.width, this.height),
       dashed,
       dashSize: 8,
@@ -3166,6 +3200,148 @@ export class SceneController {
   }
 
   /**
+   * Hover over the regions and curves of the sketch the user has opened. Returns
+   * whether the pointer is on that sketch, so the caller can fall back to the
+   * body under it.
+   */
+  private updateSketchDetailHover(clientX: number, clientY: number): boolean {
+    const sketchId = this.selectionDetail.sketchId;
+    if (!sketchId) return false;
+    const raycaster = this.pointerToRay(clientX, clientY);
+    const bodyMeshes = [...this.bodies.values()]
+      .filter((entry) => entry.group.visible && entry.interactive)
+      .map((entry) => entry.hitMesh);
+    const bodyHit = firstUnclippedHit(
+      raycaster.intersectObjects(bodyMeshes, false),
+      this.sectionClipPlanes,
+    );
+    const curve = this.pickSketchCurveAt(raycaster, this.localPoint(clientX, clientY), sketchId);
+    const visibleCurve =
+      curve && (!bodyHit || curve.depth <= bodyHit.distance + 0.5) ? curve : null;
+    let faceKey: string | null = null;
+    if (!visibleCurve) {
+      const pickers = this.facePickMeshes.filter((mesh) => {
+        const data = mesh.userData.sketchFace as { sketchId: string } | undefined;
+        return data?.sketchId === sketchId;
+      });
+      const hit = raycaster.intersectObjects(pickers, false)[0];
+      const face = hit?.object.userData.sketchFace as
+        { sketchId: string; faceId: string } | undefined;
+      if (face && (!bodyHit || hit!.distance <= bodyHit.distance + 0.5)) {
+        faceKey = `s:${sketchId}#${face.faceId}`;
+      }
+    }
+    const edge = visibleCurve ? { sketchId, entityId: visibleCurve.entityId } : null;
+    const hit = Boolean(edge || faceKey);
+    if (
+      edge?.entityId === this.hoveredSketchEdge?.entityId &&
+      faceKey === this.hoveredFaceKey &&
+      this.hoveredBodyId === null &&
+      this.hoveredSketchId === null
+    ) {
+      return hit;
+    }
+    this.hoveredBodyId = null;
+    this.hoveredFaceKey = faceKey;
+    this.setHoveredSketch(null);
+    this.setHoveredSketchEdge(edge);
+    this.canvas.style.cursor = hit ? 'pointer' : '';
+    this.applyBodyMaterials();
+    this.applyFaceHighlights();
+    this.invalidate();
+    return hit;
+  }
+
+  /** Highlights the face or region a face-picking tool would take. */
+  private hoverFacePick(key: string): void {
+    if (
+      key === this.hoveredFaceKey &&
+      this.hoveredBodyId === null &&
+      this.hoveredSketchId === null
+    ) {
+      return;
+    }
+    if (this.hoveredEdgeKey !== null) this.setHoveredEdge(null);
+    if (this.hoveredSketchEdge !== null) this.setHoveredSketchEdge(null);
+    this.hoveredBodyId = null;
+    this.hoveredFaceKey = key;
+    this.setHoveredSketch(null);
+    this.canvas.style.cursor = 'pointer';
+    this.applyBodyMaterials();
+    this.applyFaceHighlights();
+    this.invalidate();
+  }
+
+  /** Highlights a sketch object: all of its curves thicken, like a hovered face. */
+  private hoverSketchObject(sketchId: string): void {
+    if (this.hoveredEdgeKey !== null) this.setHoveredEdge(null);
+    if (this.hoveredSketchEdge !== null) this.setHoveredSketchEdge(null);
+    if (
+      sketchId === this.hoveredSketchId &&
+      this.hoveredBodyId === null &&
+      this.hoveredFaceKey === null
+    ) {
+      return;
+    }
+    this.hoveredBodyId = null;
+    this.hoveredFaceKey = null;
+    this.setHoveredSketch(sketchId);
+    this.canvas.style.cursor = 'pointer';
+    this.applyBodyMaterials();
+    this.applyFaceHighlights();
+    this.invalidate();
+  }
+
+  /** Thickens every curve of the sketch object under the pointer. */
+  private setHoveredSketch(next: string | null): void {
+    if (next === this.hoveredSketchId) return;
+    if (this.hoveredSketchId) this.paintSketchHover(this.hoveredSketchId, false);
+    this.hoveredSketchId = next;
+    if (next) this.paintSketchHover(next, true);
+  }
+
+  /** Colours the curves of one hovered sketch entity until the pointer leaves. */
+  private setHoveredSketchEdge(next: { sketchId: string; entityId: string } | null): void {
+    const current = this.hoveredSketchEdge;
+    if (current?.sketchId === next?.sketchId && current?.entityId === next?.entityId) return;
+    if (current) this.paintSketchEntityHover(current, false);
+    this.hoveredSketchEdge = next;
+    if (next) this.paintSketchEntityHover(next, true);
+  }
+
+  private paintSketchEntityHover(
+    edge: { sketchId: string; entityId: string },
+    hovered: boolean,
+  ): void {
+    this.paintSketchHover(edge.sketchId, hovered, edge.entityId);
+  }
+
+  /** Thickens the whole sketch under the pointer, or one entity of it. */
+  private paintSketchHover(sketchId: string, hovered: boolean, entityId?: string): void {
+    const entry = this.sketchEntries.find((candidate) => candidate.id === sketchId);
+    if (!entry) return;
+    entry.group.traverse((object) => {
+      if (entityId !== undefined && object.userData.entityId !== entityId) return;
+      const material = (object as THREE.Mesh).material as
+        LineMaterial | THREE.PointsMaterial | undefined;
+      if (!material || !('color' in material)) return;
+      const baseColor = object.userData.baseColor as number | undefined;
+      if (baseColor === undefined) return;
+      if (material instanceof THREE.PointsMaterial) {
+        material.color.setHex(hovered ? this.sketchHoverColor() : baseColor);
+        material.size = hovered
+          ? 5
+          : ((object.userData.baseSize as number | undefined) ?? material.size);
+      } else {
+        material.color.setHex(hovered ? this.sketchHoverColor() : baseColor);
+        material.linewidth = hovered
+          ? 3
+          : ((object.userData.baseWidth as number | undefined) ?? material.linewidth);
+      }
+    });
+  }
+
+  /**
    * Normal selection pick. Unlike tool picking it resolves the detail the user
    * has already opened: the regions of the selected sketch, then a face or edge
    * of a body that is in the selection. Everything else stays object-level.
@@ -3186,6 +3362,16 @@ export class SceneController {
     // A sketch the user has selected shows its regions; they win over the body
     // the sketch lies on, because the click is meant for the sketch.
     if (this.selectionDetail.sketchId) {
+      // An edge is a thin target inside a region, so it wins like a body edge
+      // wins over its face.
+      const curve = this.pickSketchCurveAt(
+        raycaster,
+        this.localPoint(clientX, clientY),
+        this.selectionDetail.sketchId,
+      );
+      if (curve && (!bodyHit || curve.depth <= bodyHit.distance + 0.5)) {
+        return { sketchEdge: { sketchId: curve.id, entityId: curve.entityId } };
+      }
       const pickers = this.facePickMeshes.filter((mesh) => {
         const data = mesh.userData.sketchFace as { sketchId: string } | undefined;
         return data?.sketchId === this.selectionDetail.sketchId;
@@ -3198,9 +3384,16 @@ export class SceneController {
       }
     }
 
-    // A body that is already selected is open: the click drills into its face
-    // or edge instead of selecting the object again.
-    if (bodyId && entry && bodyHit && this.selectionDetail.bodyIds.has(bodyId) && entry.kind === 'solid') {
+    // A body that is already selected is open, and so is every body while a
+    // face or an edge is selected: the click drills into the face or edge under
+    // the pointer instead of selecting the object.
+    if (
+      bodyId &&
+      entry &&
+      bodyHit &&
+      entry.kind === 'solid' &&
+      (this.selectionDetail.bodyIds.has(bodyId) || this.selectionDetail.geometrySelected)
+    ) {
       const faceId = entry.hitRef.faceIds[bodyHit.faceIndex ?? -1];
       const edgeId = this.pickEdgeAt(entry, clientX, clientY);
       return {
@@ -3347,11 +3540,13 @@ export class SceneController {
   private pickSketchCurveAt(
     raycaster: THREE.Raycaster,
     local: { x: number; y: number },
+    sketchId?: string,
   ): { id: string; entityId: string; depth: number } | null {
     let best: { id: string; entityId: string; distance: number; depth: number } | null = null;
     const byId = new Map(this.sketchData.map((sketch) => [sketch.id, sketch]));
     for (const entry of this.sketchEntries) {
       if (!entry.group.visible || entry.active) continue;
+      if (sketchId && entry.id !== sketchId) continue;
       const sketch = byId.get(entry.id);
       if (!sketch) continue;
       for (const entity of sketch.entities) {
@@ -3386,27 +3581,23 @@ export class SceneController {
     return pick?.kind === 'body' ? pick.id : null;
   }
 
-  private pickObjectIdAt(clientX: number, clientY: number): string | null {
-    const pick = this.pickSceneAt(clientX, clientY);
-    return pick?.kind === 'body' || pick?.kind === 'mesh' ? pick.id : null;
+  /** Object under the pointer: a sketch line in front, otherwise a body. */
+  private pickObjectAt(
+    clientX: number,
+    clientY: number,
+  ): { kind: 'body' | 'mesh' | 'sketch'; id: string } | null {
+    const pick = this.pickSceneAt(clientX, clientY, false, false, true, true);
+    if (pick?.kind === 'sketch-edge') return { kind: 'sketch', id: pick.sketchId };
+    if (pick?.kind === 'body' || pick?.kind === 'mesh') return { kind: pick.kind, id: pick.id };
+    return null;
   }
 
   /**
-   * What the pointer is over matters while a tool is picking it, and while a
-   * selection shows its handles: the same highlight then says what a click
-   * would add.
+   * The pointer always says what a click would take, except while a sketch is
+   * being edited: the sketch tools draw their own preview there.
    */
   private get hoverEnabled(): boolean {
-    return (
-      this.faceHighlights.picking ||
-      this.faceHighlights.bodyPicking ||
-      this.handleData.length > 0 ||
-      // A selected face or edge opens its body for detail picking. That body
-      // offers no handle when the face is curved, so the open detail has to
-      // keep the hover alive on its own.
-      this.selectionDetail.bodyIds.size > 0 ||
-      this.selectionDetail.sketchId !== null
-    );
+    return !this.sketchData.some((sketch) => sketch.active);
   }
 
   private scheduleHover(clientX: number, clientY: number): void {
@@ -3419,70 +3610,123 @@ export class SceneController {
     });
   }
 
-  private updateHover(clientX: number, clientY: number): void {
-    // The edge picker also takes faces, so an edge wins only while the pointer
-    // is near a visible part of its line and the face under it highlights
-    // otherwise. A selected face or edge opens the same detail hover.
+  /**
+   * Highlights the face or the edge under the pointer of whichever body it hits.
+   * The edge picker also takes faces, so an edge wins only while the pointer is
+   * near a visible part of its line and the face under it highlights otherwise.
+   */
+  private hoverBodyDetail(clientX: number, clientY: number): void {
+    const pick = this.pickSceneAt(
+      clientX,
+      clientY,
+      true,
+      this.faceHighlights.bodyFacesOnly,
+      false,
+      true,
+    );
+    const edgeKey = pick?.kind === 'body-edge' ? `${pick.bodyId}#${pick.edgeId}` : null;
+    const faceKey =
+      !edgeKey && pick?.kind === 'body-face' ? `b:${pick.bodyId}#${pick.faceId}` : null;
     if (
-      this.faceHighlights.edgePicking ||
-      this.handleData.length > 0 ||
-      this.selectionDetail.bodyIds.size > 0
+      edgeKey === this.hoveredEdgeKey &&
+      faceKey === this.hoveredFaceKey &&
+      this.hoveredBodyId === null
     ) {
-      const pick = this.pickSceneAt(
+      return;
+    }
+    this.hoveredBodyId = null;
+    this.hoveredFaceKey = faceKey;
+    this.setHoveredSketch(null);
+    this.canvas.style.cursor = edgeKey || faceKey ? 'pointer' : '';
+    this.setHoveredEdge(edgeKey);
+    this.applyBodyMaterials();
+    this.applyFaceHighlights();
+    this.invalidate();
+  }
+
+  /** Highlights a whole object, the way a click on it would select it. */
+  private hoverObject(objectId: string | null): void {
+    if (this.hoveredEdgeKey !== null) this.setHoveredEdge(null);
+    if (objectId === this.hoveredBodyId && this.hoveredFaceKey === null && this.hoveredSketchId === null) {
+      return;
+    }
+    this.hoveredBodyId = objectId;
+    this.hoveredFaceKey = null;
+    this.setHoveredSketch(null);
+    this.canvas.style.cursor = objectId ? 'pointer' : '';
+    this.applyBodyMaterials();
+    this.applyFaceHighlights();
+    this.invalidate();
+  }
+
+  private updateHover(clientX: number, clientY: number): void {
+    // Geometry is shown only where a click would take geometry: a tool that
+    // picks edges, or a selected face or edge. Handles alone do not open a body:
+    // a selected sketch or operation still clicks bodies as objects.
+    const hover = {
+      geometryMode: this.faceHighlights.edgePicking || this.selectionDetail.geometrySelected,
+      openedBodyIds: this.selectionDetail.bodyIds,
+    };
+    if (this.hoveredEdgeKey !== null) this.setHoveredEdge(null);
+    // A selected sketch answers first: its curves and regions are what the next
+    // click takes, even while its operation offers handles over the model.
+    if (this.selectionDetail.sketchId && this.updateSketchDetailHover(clientX, clientY)) return;
+    if (hover.geometryMode) {
+      this.hoverBodyDetail(clientX, clientY);
+      return;
+    }
+    if (this.hoveredSketchEdge !== null) this.setHoveredSketchEdge(null);
+    if (this.faceHighlights.bodyPicking) {
+      const pick = this.pickSceneAt(clientX, clientY, false);
+      this.hoverObject(pick?.kind === 'body' ? pick.id : null);
+      return;
+    }
+
+    let pick = this.pickSceneAt(
+      clientX,
+      clientY,
+      true,
+      this.faceHighlights.bodyFacesOnly,
+      false,
+      true,
+    );
+    // A face-picking tool shows the face or region under the pointer itself.
+    if (this.faceHighlights.picking) {
+      if (pick?.kind === 'face') {
+        this.hoverFacePick(`s:${pick.sketchId}#${pick.faceId}`);
+        return;
+      }
+      if (pick?.kind === 'body-face') {
+        this.hoverFacePick(`b:${pick.bodyId}#${pick.faceId}`);
+        return;
+      }
+    }
+    if (pick?.kind === 'face') {
+      // An invisible sketch region can sit in front of the body under it.
+      pick = this.pickSceneAt(
         clientX,
         clientY,
         true,
         this.faceHighlights.bodyFacesOnly,
-        false,
+        true,
         true,
       );
-      const edgeKey = pick?.kind === 'body-edge' ? `${pick.bodyId}#${pick.edgeId}` : null;
-      const faceKey =
-        !edgeKey && pick?.kind === 'body-face' ? `b:${pick.bodyId}#${pick.faceId}` : null;
-      if (
-        edgeKey === this.hoveredEdgeKey &&
-        faceKey === this.hoveredFaceKey &&
-        this.hoveredBodyId === null
-      ) {
-        return;
-      }
-      this.hoveredBodyId = null;
-      this.hoveredFaceKey = faceKey;
-      this.canvas.style.cursor = edgeKey || faceKey ? 'pointer' : '';
-      this.setHoveredEdge(edgeKey);
-      this.applyBodyMaterials();
-      this.applyFaceHighlights();
-      this.invalidate();
+    }
+    if (pick?.kind === 'sketch-edge') {
+      this.hoverSketchObject(pick.sketchId);
       return;
     }
-    if (this.hoveredEdgeKey !== null) this.setHoveredEdge(null);
-    if (this.faceHighlights.bodyPicking) {
-      const pick = this.pickSceneAt(clientX, clientY, false);
-      const bodyId = pick?.kind === 'body' ? pick.id : null;
-      if (bodyId === this.hoveredBodyId) return;
-      this.hoveredBodyId = bodyId;
-      this.hoveredFaceKey = null;
-      this.canvas.style.cursor = bodyId ? 'pointer' : '';
-      this.applyBodyMaterials();
-      this.applyFaceHighlights();
-      this.invalidate();
-      return;
-    }
-
-    const pick = this.pickSceneAt(clientX, clientY, true, this.faceHighlights.bodyFacesOnly);
-    const key =
-      pick?.kind === 'face'
-        ? `s:${pick.sketchId}#${pick.faceId}`
-        : pick?.kind === 'body-face'
-          ? `b:${pick.bodyId}#${pick.faceId}`
+    const bodyId =
+      pick?.kind === 'body-face' || pick?.kind === 'body-edge'
+        ? pick.bodyId
+        : pick?.kind === 'body' || pick?.kind === 'mesh'
+          ? pick.id
           : null;
-    if (key === this.hoveredFaceKey && this.hoveredBodyId === null) return;
-    this.hoveredBodyId = null;
-    this.hoveredFaceKey = key;
-    this.canvas.style.cursor = key ? 'pointer' : '';
-    this.applyBodyMaterials();
-    this.applyFaceHighlights();
-    this.invalidate();
+    if (bodyId !== null && hoverTargetOf(hover, bodyId) === 'geometry') {
+      this.hoverBodyDetail(clientX, clientY);
+      return;
+    }
+    this.hoverObject(bodyId);
   }
 
   // Sketch faces are invisible picking surfaces: they let the 3D view select a
@@ -3547,8 +3791,8 @@ export class SceneController {
 
   private onContextMenu = (event: MouseEvent): void => {
     event.preventDefault();
-    const bodyId = this.pickObjectIdAt(event.clientX, event.clientY);
-    this.onBodyContextMenu?.(bodyId, event.clientX, event.clientY);
+    const object = this.pickObjectAt(event.clientX, event.clientY);
+    this.onObjectContextMenu?.(object, event.clientX, event.clientY);
   };
 
   private onPointerLeave = (): void => {
@@ -3560,9 +3804,18 @@ export class SceneController {
       this.invalidate();
     }
     this.hoverPoint = null;
-    if (this.hoveredFaceKey === null && this.hoveredBodyId === null) return;
+    if (
+      this.hoveredFaceKey === null &&
+      this.hoveredBodyId === null &&
+      this.hoveredSketchEdge === null &&
+      this.hoveredSketchId === null
+    ) {
+      return;
+    }
     this.hoveredFaceKey = null;
     this.hoveredBodyId = null;
+    this.setHoveredSketchEdge(null);
+    this.setHoveredSketch(null);
     this.canvas.style.cursor = '';
     this.applyBodyMaterials();
     this.applyFaceHighlights();

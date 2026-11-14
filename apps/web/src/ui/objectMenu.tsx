@@ -66,6 +66,22 @@ export function objectTargets(
   return targets;
 }
 
+/**
+ * Objects a viewport context menu acts on: the clicked object, or the whole
+ * selection when it includes that object. Opening a menu never changes what is
+ * selected.
+ */
+export function objectMenuTargets(
+  project: Project,
+  selection: readonly SelectionItem[],
+  clicked: { kind: 'body' | 'mesh' | 'sketch'; id: string },
+): MenuTarget[] {
+  const inSelection = selection.some(
+    (item) => item.kind === clicked.kind && item.id === clicked.id,
+  );
+  return objectTargets(project, inSelection ? selection : [clicked]);
+}
+
 /** Colour of every target, chosen from the shared palette. */
 export function colorMenuItem(targets: MenuTarget[], label: string): ContextMenuItem | null {
   const first = targets[0];

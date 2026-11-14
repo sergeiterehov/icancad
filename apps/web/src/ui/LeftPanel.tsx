@@ -1,13 +1,11 @@
 import {
   activeFeatureIds,
   bodiesInHistory,
-  createId,
   objectColor,
   objectVisible,
   SKETCH_COLOR,
   sketchObjectId,
   type BodyObject,
-  type MeshFormat,
   type SketchFeature,
 } from '@icancad/model';
 import clsx from 'clsx';
@@ -16,18 +14,14 @@ import {
   Box,
   Eye,
   EyeOff,
-  FileUp,
   PawPrint,
   Pencil,
-  PencilRuler,
-  Plus,
   SquareMinus,
   SquarePen,
   SquarePlus,
 } from 'lucide-react';
-import { useRef, useState, type ChangeEvent, type MouseEvent, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { saveAsset } from '../persistence/db';
 import { canEditSketch, sketchPlaneReady } from '../sketch/sectionPlane';
 import {
   useDocumentStore,
@@ -44,24 +38,9 @@ import {
   objectTargets,
   visibilityMenuItem,
 } from './objectMenu';
-import { showContextMenu, useContextMenuStore, type ContextMenuItem } from './ContextMenu';
+import { showContextMenu, type ContextMenuItem } from './ContextMenu';
+import { SketchIcon } from './featureIcons';
 import { Tooltip } from './Tooltip';
-
-const MESH_ACCEPT = '.stl,.obj,.ply,.glb';
-
-const MESH_FORMATS: Record<string, MeshFormat> = {
-  stl: 'stl',
-  obj: 'obj',
-  ply: 'ply',
-  glb: 'glb',
-};
-
-const MESH_MIME: Record<MeshFormat, string> = {
-  stl: 'model/stl',
-  obj: 'text/plain',
-  ply: 'application/octet-stream',
-  glb: 'model/gltf-binary',
-};
 
 // The tree renames in place; committing happens on Enter or on blur.
 function RenameInput({
@@ -112,15 +91,10 @@ export function LeftPanel() {
   const select = useDocumentStore((state) => state.select);
   const toggleBodyVisibility = useDocumentStore((state) => state.toggleBodyVisibility);
   const toggleSketchVisibility = useDocumentStore((state) => state.toggleSketchVisibility);
-  const addBox = useDocumentStore((state) => state.addPrimitiveBox);
   const featureErrors = useKernelStore((state) => state.featureErrors);
   const projectionLost = useKernelStore((state) => state.projectionLost);
   const preview = useKernelStore((state) => state.preview);
-  const kernelReady = useKernelStore((state) => state.status === 'ready');
-  const openMenu = useContextMenuStore((state) => state.open);
-  const showToast = useUiStore((state) => state.showToast);
   const setActiveSketch = useUiStore((state) => state.setActiveSketch);
-  const meshInput = useRef<HTMLInputElement>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
 
   // Renaming happens in the tree: double click on an object row, or the context
@@ -199,44 +173,6 @@ export function LeftPanel() {
       : kind === 'modified'
         ? t('tree.previewModified')
         : t('tree.previewRemoved');
-
-  const openAddMenu = (event: MouseEvent<HTMLButtonElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    openMenu(rect.left, rect.bottom + 6, [
-      {
-        id: 'import',
-        label: t('tree.import'),
-        icon: <FileUp size={14} />,
-        onSelect: () => meshInput.current?.click(),
-      },
-      {
-        id: 'box',
-        label: t('features.box'),
-        icon: <Box size={14} />,
-        disabled: !kernelReady,
-        onSelect: () => addBox(t('features.box')),
-      },
-    ]);
-  };
-
-  const handleImportMesh = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) return;
-    try {
-      const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
-      const format = MESH_FORMATS[extension];
-      if (!format) throw new Error('UNSUPPORTED_FORMAT');
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      const featureId = createId('feat');
-      await saveAsset(featureId, new Blob([new Uint8Array(bytes)], { type: MESH_MIME[format] }));
-      const name = file.name.replace(/\.[^.]+$/, '') || file.name;
-      useDocumentStore.getState().addImportedMesh(name, featureId, format);
-      showToast('toast.meshImported');
-    } catch {
-      showToast('toast.importFailed', 'error');
-    }
-  };
 
   const renderBody = (body: BodyObject): ReactNode => {
     const kind = body.kind === 'mesh' ? 'mesh' : 'body';
@@ -323,7 +259,7 @@ export function LeftPanel() {
               className="tree-icon"
               style={{ color: objectColor(project, sketchObjectId(feature.id), SKETCH_COLOR) }}
             >
-              <PencilRuler size={14} />
+              <SketchIcon size={14} />
             </span>
             <span className="tree-name">{feature.name}</span>
           </span>
@@ -353,7 +289,7 @@ export function LeftPanel() {
             {
               id: 'edit',
               label: t('sketch.edit'),
-              icon: <PencilRuler size={14} />,
+              icon: <SketchIcon size={14} />,
               onSelect: () => setActiveSketch(feature.id),
               disabled: !canEditSketch(feature, featureErrors),
             },
@@ -367,7 +303,7 @@ export function LeftPanel() {
               className="tree-icon"
               style={{ color: objectColor(project, objectId, SKETCH_COLOR) }}
             >
-              <PencilRuler size={14} />
+              <SketchIcon size={14} />
             </span>
             <RenameInput
               label={t('context.rename')}
@@ -397,7 +333,7 @@ export function LeftPanel() {
               className="tree-icon"
               style={{ color: objectColor(project, objectId, SKETCH_COLOR) }}
             >
-              <PencilRuler size={14} />
+              <SketchIcon size={14} />
             </span>
             <span className="tree-name">{feature.name}</span>
           </button>
@@ -473,13 +409,6 @@ export function LeftPanel() {
 
   return (
     <div className="panel">
-      <header className="panel-header">
-        <span>{t('panels.model')}</span>
-        <IconButton label={t('tree.addObject')} onClick={openAddMenu}>
-          <Plus size={15} />
-        </IconButton>
-      </header>
-
       <div className="panel-body">
         {isEmpty ? (
           <p className="empty-row">{t('tree.emptyObjects')}</p>
@@ -487,15 +416,6 @@ export function LeftPanel() {
           <div className="tree-list">{rows}</div>
         )}
       </div>
-
-      <input
-        ref={meshInput}
-        type="file"
-        accept={MESH_ACCEPT}
-        className="hidden-input"
-        data-testid="import-mesh"
-        onChange={(event) => void handleImportMesh(event)}
-      />
     </div>
   );
 }

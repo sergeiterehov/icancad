@@ -39,11 +39,38 @@ describe('drill-down selection', () => {
     ).toEqual({ item: item('edge', 'b#2'), additive: false });
   });
 
-  it('opens another body at object level', () => {
+  it('keeps another body at object level while only an object is selected', () => {
+    expect(
+      resolveSelectionHit(
+        { body: { id: 'other', kind: 'solid', faceId: '1' } },
+        [item('body', 'b')],
+      ),
+    ).toEqual({ item: item('body', 'other'), additive: false });
+  });
+
+  it('takes the geometry of another body once a face is selected', () => {
     expect(
       resolveSelectionHit(
         { body: { id: 'other', kind: 'solid', faceId: '1' } },
         [item('body-face', 'b#3')],
+      ),
+    ).toEqual({ item: item('body-face', 'other#1'), additive: false });
+  });
+
+  it('takes the edge of another body once an edge is selected', () => {
+    expect(
+      resolveSelectionHit(
+        { body: { id: 'other', kind: 'solid', faceId: '1', edgeId: '7' } },
+        [item('edge', 'b#2')],
+      ),
+    ).toEqual({ item: item('edge', 'other#7'), additive: false });
+  });
+
+  it('keeps bodies at object level while a sketch is selected', () => {
+    expect(
+      resolveSelectionHit(
+        { body: { id: 'other', kind: 'solid', faceId: '1' } },
+        [item('sketch', 's')],
       ),
     ).toEqual({ item: item('body', 'other'), additive: false });
   });

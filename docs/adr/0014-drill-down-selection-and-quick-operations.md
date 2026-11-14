@@ -17,8 +17,11 @@ show that decision in 3D before the user commits to a gesture.
 
 | Area | Decision |
 | --- | --- |
-| Selection depth | The first click selects the object, the next click inside that object selects the face or edge under the cursor. A click on another object starts at object level again. The rule is derived from the current selection; there is no separate drill mode. |
-| Detail elements | `body-face` and `edge` are first-class selection kinds next to bodies, meshes, sketches, sketch faces and operations. Their ids are `bodyId#faceId` and `bodyId#edgeId`. |
+| Selection depth | The first click selects the object, the next click inside that object selects the face or edge under the cursor. A click on another object starts at object level again — until a face or an edge is selected: the pointer then shows geometry on every body, so a click takes geometry there too. Highlight and click follow one rule, derived from the current selection; there is no separate drill mode. |
+| Detail hover | The pointer shows what a click would take, with or without a selection. An object the selection has opened shows its own face or edge; any other object stays whole, because a click on it selects the object. Once a face or edge is selected, the pointer is in geometry picking, so every object offers its geometry. A tool that picks faces and an operation's handles read the same way. A selected sketch answers first, so its curves and regions win over the body it lies on; a sketch that is not selected thickens all of its curves as one object. |
+| Object menu in 3D | A right click resolves the object under the pointer — a body, a mesh or a sketch — and opens the same menu the tree offers for that object. The menu never changes the selection: it acts on the clicked object, or on the whole selection when that object is part of it. |
+| Detail elements | `body-face` and `edge` are first-class selection kinds next to bodies, meshes, sketches, sketch faces, sketch edges and operations. Body detail ids are `bodyId#faceId` and `bodyId#edgeId`; sketch regions use `face` and sketch curves use `sketch-edge`, both with `sketchId#elementId`. |
+| Sketch detail | A selected sketch opens its regions and its curves. Hovering highlights the element a click would take, a curve wins over the region it bounds like a body edge wins over its face, and clicking selects it. Both keep the sketch panel open; curves are listed and selectable in the sketch inspector as well. |
 | Edges | Edges are B-rep edges collected during tessellation (`BodyEdge`): a polyline, the two adjacent face indices and a deterministic id. Seams inside a single face are filtered out. The viewport draws exactly these polylines instead of creases guessed from the triangles, so a tessellated radius never grows lines of its own; edges whose faces meet more smoothly than 20° are drawn faintly instead of as hard creases, so a fillet still shows where it blends into the flat it touches. |
 | Handles | A handle is a 3D affordance offered by an operation, not a viewport mode. The operation returns `OperationHandle` descriptors (kind, origin, direction, value, enabled, tooltip, `beginDrag`). The viewport only draws, hit-tests and reports drag values. An extrude offers an arrow; an edge treatment offers a radial track (ADR 0015). |
 | Prospective operations | A selected face or sketch offers the operation that could be created from it. Dragging its handle creates the operation and focuses it as soon as the drag starts: the operation is selected, its panel opens and the rest of the gesture drives the operation's own handle. |
@@ -42,7 +45,7 @@ selection:
 - A body that is already in the selection is open: an edge within 6 px wins over
   its face, and the face wins over the object.
 - A body that is not in the selection is selected as an object, even if another
-  body is open.
+  body is open — unless a face or an edge is selected, which opens every body.
 - A visible sketch line selects the sketch object; a hidden sketch cannot be
   picked because the hit is compared with the front-most body.
 - Empty space clears the selection.

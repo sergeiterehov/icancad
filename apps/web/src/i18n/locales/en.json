@@ -25,7 +25,8 @@
     "saving": "Saving…",
     "saved": "Saved",
     "saveError": "Save failed",
-    "fit": "Fit view"
+    "fit": "Fit view",
+    "import": "Import"
   },
   "panels": {
     "model": "Model",
@@ -55,8 +56,6 @@
     "delete": "Delete feature",
     "show": "Show",
     "hide": "Hide",
-    "addObject": "Add object",
-    "import": "Import",
     "emptyObjects": "No objects yet",
     "previewAdded": "Added by the operation being edited",
     "previewModified": "Changed by the operation being edited",
@@ -320,7 +319,8 @@
     "toolProject": "Projection",
     "detachProjection": "Detach from source",
     "projectionLost": "The source is gone — the last known position is shown",
-    "projectionPickHint": "Click a point, an edge or a face in 3D"
+    "projectionPickHint": "Click a point, an edge or a face in 3D",
+    "invert": "Flip sketch direction"
   },
   "constraint": {
     "fix": "Fix",

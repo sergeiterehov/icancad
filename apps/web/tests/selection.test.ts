@@ -6,6 +6,7 @@ import {
   menuFeatureIds,
   selectedBodyIds,
   selectedFeatureIds,
+  selectedSketchDetailId,
 } from '../src/stores/selection';
 
 const project = {
@@ -30,6 +31,16 @@ const project = {
 } as unknown as Project;
 
 describe('selection helpers', () => {
+  it('links a picked sketch edge to its sketch and operation', () => {
+    const selection = [{ kind: 'sketch-edge' as const, id: 'feat-sketch#ent-1' }];
+    expect(selectedFeatureIds(selection, project)).toEqual(['feat-sketch']);
+    expect(selectedSketchDetailId(selection)).toBe('feat-sketch');
+    expect(selectedSketchDetailId([{ kind: 'face' as const, id: 'feat-sketch#face-1' }])).toBe(
+      'feat-sketch',
+    );
+    expect(selectedSketchDetailId([{ kind: 'body' as const, id: 'body-1' }])).toBeNull();
+  });
+
   it('links a selected body to its operation', () => {
     const selection = [{ kind: 'body' as const, id: 'body-2' }];
     expect(selectedFeatureIds(selection, project)).toEqual(['feat-2']);

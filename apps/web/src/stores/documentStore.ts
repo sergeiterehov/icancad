@@ -45,6 +45,7 @@ export type SelectionKind =
   | 'feature'
   | 'sketch'
   | 'face'
+  | 'sketch-edge'
   | 'body-face'
   | 'edge';
 
@@ -256,6 +257,20 @@ function exists(project: Project, item: SelectionItem, editingFeatureId: string 
             feature.type === 'sketch' &&
             isFeatureInHistory(project, sketchId),
         ),
+      );
+    }
+    case 'sketch-edge': {
+      // The curve is only valid while its entity is still in the sketch.
+      const separator = item.id.lastIndexOf('#');
+      if (separator <= 0) return false;
+      const sketchId = item.id.slice(0, separator);
+      const entityId = item.id.slice(separator + 1);
+      return project.features.some(
+        (feature) =>
+          feature.id === sketchId &&
+          feature.type === 'sketch' &&
+          isFeatureInHistory(project, sketchId) &&
+          feature.entities.some((entity) => entity.id === entityId),
       );
     }
     case 'body-face':

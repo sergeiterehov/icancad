@@ -29,7 +29,14 @@ import {
 import { useDocumentStore, useViewProject } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
 import { isModelRebuilding, useKernelStore } from '../stores/kernelStore';
-import { directBodyIds, drilledBodyIds, linkedBodyIds, parseBodyFaceId } from '../stores/selection';
+import {
+  directBodyIds,
+  drilledBodyIds,
+  linkedBodyIds,
+  parseBodyFaceId,
+  selectedSketchDetailId,
+  selectedSketchEdges,
+} from '../stores/selection';
 import { useThemeStore } from '../stores/themeStore';
 import { Button } from '../ui/Controls';
 import {
@@ -40,7 +47,7 @@ import {
 import {
   colorMenuItem,
   deleteMenuItem,
-  objectTargets,
+  objectMenuTargets,
   visibilityMenuItem,
 } from '../ui/objectMenu';
 import { SkeletonStage } from '../ui/Skeleton';
@@ -170,9 +177,7 @@ export function Viewport() {
   const selectedSketchId =
     selection.length === 1 && selection[0]?.kind === 'sketch'
       ? selection[0].id
-      : selection.length > 0 && selection.every((item) => item.kind === 'face')
-        ? selection[0]!.id.split('#')[0]
-        : undefined;
+      : (selectedSketchDetailId(selection) ?? undefined);
   const meshes = useKernelStore((state) => state.meshes);
   const preview = useKernelStore((state) => state.preview);
   const sketchFrames = useKernelStore((state) => state.sketchFrames);
@@ -579,22 +584,19 @@ export function Viewport() {
           store.select({ kind: 'face', id: `${pick.sketchId}#${pick.faceId}` }, { additive });
         }
       },
-      (bodyId, x, y) => {
-        if (!bodyId || useUiStore.getState().activeSketchId) return;
+      (object, x, y) => {
+        if (!object || useUiStore.getState().activeSketchId) return;
         const store = useDocumentStore.getState();
-        const ref = store.project.bodies.find((candidate) => candidate.id === bodyId);
-        if (!ref) return;
-        // The menu acts on the selection when the body is part of it, and on the
-        // clicked body otherwise.
-        const selected = store.selection.some(
-          (item) => (item.kind === 'body' || item.kind === 'mesh') && item.id === bodyId,
-        );
-        if (!selected)
-          store.select({
-            kind: resolveBody(store.project, ref).kind === 'mesh' ? 'mesh' : 'body',
-            id: bodyId,
-          });
-        const targets = objectTargets(store.project, useDocumentStore.getState().selection);
+        const exists =
+          object.kind === 'sketch'
+            ? store.project.features.some(
+                (feature) => feature.id === object.id && feature.type === 'sketch',
+              )
+            : store.project.bodies.some((candidate) => candidate.id === object.id);
+        if (!exists) return;
+        // Opening a menu never changes the selection: the menu acts on the
+        // clicked object, or on the whole selection when it includes that object.
+        const targets = objectMenuTargets(store.project, store.selection, object);
         const labels = translationRef.current;
         const items: ContextMenuItem[] = [];
         const color = colorMenuItem(targets, labels('context.color'));
@@ -876,6 +878,7 @@ export function Viewport() {
     controllerRef.current?.setSelectionDetail({
       bodyIds: drilledBodyIds(selection),
       sketchId: selectedSketchId ?? null,
+      geometrySelected: selection.some((item) => item.kind === 'body-face' || item.kind === 'edge'),
     });
   }, [selection, selectedSketchId]);
 
@@ -1081,6 +1084,13 @@ export function Viewport() {
             .filter((entity) => !related.has(entity.id))
             .map((entity) => entity.id);
         })();
+        const selectedEdgeKeys = selectedSketchEdges(selection)
+          .filter((edge) => edge.sketchId === feature.id)
+          .map((edge) => edge.entityId);
+        const facesPicking = Boolean(pickingExtrude) || feature.id === selectedSketchId;
+        const operationSelected = selection.some(
+          (item) => item.kind === 'feature' && item.id === feature.id,
+        );
         return {
           id: feature.id,
           color: objectColor(project, sketchObjectId(feature.id), SKETCH_COLOR),
@@ -1090,10 +1100,10 @@ export function Viewport() {
             outline: face.outline,
             holes: face.holeOutlines,
           })),
-          facesPicking: Boolean(pickingExtrude) || feature.id === selectedSketchId,
+          facesPicking,
           frame,
           entities: resolved.entities,
-          selectionKeys: feature.id === activeSketchId ? sketchSelectionIds : [],
+          selectionKeys: feature.id === activeSketchId ? sketchSelectionIds : selectedEdgeKeys,
           dimmedEntityIds: dimmed,
           frozenEntityIds: feature.id === activeSketchId ? sketchFrozenEntityIds : [],
           projectedEntityIds: [...projectionEntityIds(feature)],
@@ -1107,6 +1117,11 @@ export function Viewport() {
           ],
           hoverIds: feature.id === activeSketchId ? sketchHoverIds : [],
           active: feature.id === activeSketchId,
+          onTop:
+            feature.id === activeSketchId ||
+            feature.id === selectedSketchId ||
+            operationSelected ||
+            facesPicking,
         };
       });
     getViewport()?.setSketches(sketches);
@@ -1124,6 +1139,7 @@ export function Viewport() {
     activeSketchReady,
     meshes,
     preview,
+    selection,
     selectedSketchId,
     revolveAxisSelection,
   ]);

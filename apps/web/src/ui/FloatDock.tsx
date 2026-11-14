@@ -1,6 +1,7 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { useUiStore } from '../stores/uiStore';
+import { useContextMenuStore } from './ContextMenu';
 
 /** How long the pointer has to stay away before a panel slides off screen. */
 const HIDE_DELAY = 1000;
@@ -33,9 +34,14 @@ export function FloatDock({
   const setOpen = useUiStore((state) =>
     side === 'left' ? state.setLeftDockOpen : state.setRightDockOpen,
   );
+  const menuOpen = useContextMenuStore((state) => state.menu !== null);
   const timer = useRef<number | null>(null);
   const hovered = useRef(false);
   const wasPinned = useRef(pinned);
+  // A context menu of the panel is drawn outside it, so the pointer leaves; the
+  // panel has to wait for the menu instead of closing under it.
+  const menuInside = useRef(false);
+  const menuHolds = useRef(false);
 
   const cancel = useCallback(() => {
     if (timer.current === null) return;
@@ -50,7 +56,7 @@ export function FloatDock({
 
   const scheduleHide = useCallback(() => {
     cancel();
-    if (pinned || !autoHideEnabled()) return;
+    if (pinned || menuHolds.current || !autoHideEnabled()) return;
     timer.current = window.setTimeout(() => {
       timer.current = null;
       setOpen(false);
@@ -68,6 +74,25 @@ export function FloatDock({
   }, [scheduleHide]);
 
   useEffect(() => cancel, [cancel]);
+
+  // A panel starts open, but it is only shown until the pointer is missed: left
+  // alone, it slides away after the usual delay like any other panel.
+  useEffect(() => {
+    if (!hovered.current) scheduleHide();
+  }, [scheduleHide]);
+
+  useEffect(() => {
+    if (menuOpen) {
+      if (!menuInside.current) return;
+      menuInside.current = false;
+      menuHolds.current = true;
+      show();
+      return;
+    }
+    if (!menuHolds.current) return;
+    menuHolds.current = false;
+    if (!hovered.current) scheduleHide();
+  }, [menuOpen, show, scheduleHide]);
 
   // A pinned panel opens at once and stays open; once the selection goes away it
   // falls back to the usual auto-hide unless the pointer is still on it.
@@ -96,6 +121,9 @@ export function FloatDock({
         aria-label={label}
         data-testid={testId}
         inert={!open}
+        onContextMenuCapture={() => {
+          menuInside.current = true;
+        }}
         onPointerEnter={enter}
         onPointerLeave={leave}
         onFocusCapture={show}

@@ -34,7 +34,6 @@ import {
   LayerArrowUp,
   MoveVertical,
   PawPrint,
-  PencilRuler,
   Pencil,
   Spline,
   SquareArrowRightExit,
@@ -50,7 +49,12 @@ import {
   useViewProject,
 } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
-import { selectedBodyFaces, selectedDetailBodyId, selectedEdges } from '../stores/selection';
+import {
+  selectedBodyFaces,
+  selectedDetailBodyId,
+  selectedEdges,
+  selectedSketchDetailId,
+} from '../stores/selection';
 import { findBoundExtrude, quickTargetFromSelection } from '../quick/target';
 import { isPlanarFace } from '../viewport/planarFace';
 import { useUiStore } from '../stores/uiStore';
@@ -70,7 +74,13 @@ import {
 import { formatNumber } from './format';
 import { useContextMenuStore } from './ContextMenu';
 import { ChamferIcon, FilletIcon } from './edgeIcons';
-import { ExtrudeOpIcon, PointIcon, ShellIcon, SketchEntityIcon } from './featureIcons';
+import {
+  ExtrudeOpIcon,
+  PointIcon,
+  ShellIcon,
+  SketchEntityIcon,
+  SketchIcon,
+} from './featureIcons';
 import { SectionPanel } from './SectionPanel';
 import {
   constraintsGeometryIds,
@@ -606,9 +616,7 @@ export function Inspector() {
   const selectedSketchId =
     selection.length === 1 && selection[0]?.kind === 'sketch'
       ? selection[0].id
-      : selection.length > 0 && selection.every((item) => item.kind === 'face')
-        ? selection[0]!.id.split('#')[0]
-        : undefined;
+      : (selectedSketchDetailId(selection) ?? undefined);
   const sketchObject = selectedSketchId
     ? project.features.find(
         (candidate): candidate is SketchFeature =>
@@ -951,7 +959,7 @@ export function Inspector() {
     const error = objectErrors[entry.key] ?? entry.error;
     return {
       key: entry.key,
-      icon: entry.kind === 'sketch' ? <PencilRuler size={14} /> : <Hexagon size={14} />,
+      icon: entry.kind === 'sketch' ? <SketchIcon size={14} /> : <Hexagon size={14} />,
       name: entry.name,
       meta: entry.meta,
       ...(error ? { error: translate(t, `errors.${error}`, error) } : {}),
@@ -1227,12 +1235,31 @@ export function Inspector() {
                 <p className="hint">{t('sketch.noGeometry')}</p>
               ) : (
                 <div className="selection-list">
-                  {sketchGeometry.edges.map((edge, index) => (
-                    <div key={edge.id} className="selection-item">
-                      <span className="tree-name">{t('sketch.edge', { index: index + 1 })}</span>
-                      <span className="tree-meta">{formatNumber(edge.length, locale, 1)} mm</span>
-                    </div>
-                  ))}
+                  {sketchGeometry.edges.map((edge, index) => {
+                    const edgeKey = `${sketchObject.id}#${edge.id}`;
+                    const active = selection.some(
+                      (item) => item.kind === 'sketch-edge' && item.id === edgeKey,
+                    );
+                    return (
+                      <button
+                        key={edge.id}
+                        type="button"
+                        className="selection-item"
+                        data-active={active ? 'true' : undefined}
+                        onClick={(event) =>
+                          select(
+                            { kind: 'sketch-edge', id: edgeKey },
+                            { additive: event.metaKey || event.ctrlKey || event.shiftKey },
+                          )
+                        }
+                      >
+                        <span className="tree-name">{t('sketch.edge', { index: index + 1 })}</span>
+                        <span className="tree-meta">
+                          {formatNumber(edge.length, locale, 1)} mm
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </PanelSection>
@@ -1328,18 +1355,29 @@ export function Inspector() {
                           type: 'feature/replace',
                           feature: {
                             ...feature,
-                            plane:
-                              feature.plane.type === 'datum'
-                                ? {
-                                    type: 'datum',
-                                    plane: feature.plane.plane,
-                                    offset,
-                                  }
-                                : { ...feature.plane, offset },
+                            plane: { ...feature.plane, offset },
                           },
                         })
                       }
                     />
+                    <IconButton
+                      label={t('sketch.invert')}
+                      active={feature.plane.inverted === true}
+                      onClick={() =>
+                        apply({
+                          type: 'feature/replace',
+                          feature: {
+                            ...feature,
+                            plane: {
+                              ...feature.plane,
+                              inverted: !feature.plane.inverted,
+                            },
+                          },
+                        })
+                      }
+                    >
+                      <ArrowLeftRight size={14} />
+                    </IconButton>
                   </div>
                   {feature.plane.type === 'face' && (
                     <ObjectPickerField

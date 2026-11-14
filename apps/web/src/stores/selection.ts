@@ -113,6 +113,40 @@ export function selectedFaceIds(selection: readonly SelectionItem[]): string[] {
   return selection.filter((item) => item.kind === 'face').map((item) => item.id);
 }
 
+/** Curves of a sketch picked through its object, mirroring its regions. */
+export function selectedSketchEdges(
+  selection: readonly SelectionItem[],
+): Array<{ sketchId: string; entityId: string }> {
+  const edges: Array<{ sketchId: string; entityId: string }> = [];
+  for (const item of selection) {
+    if (item.kind !== 'sketch-edge') continue;
+    const separator = item.id.lastIndexOf('#');
+    if (separator <= 0) continue;
+    edges.push({
+      sketchId: item.id.slice(0, separator),
+      entityId: item.id.slice(separator + 1),
+    });
+  }
+  return edges;
+}
+
+/**
+ * Sketch whose region or edge is selected. Its panel stays open while the user
+ * drills into the sketch.
+ */
+export function selectedSketchDetailId(selection: readonly SelectionItem[]): string | null {
+  const first = selection[0];
+  if (!first) return null;
+  const sketchId = first.id.split('#')[0] ?? null;
+  if (!sketchId) return null;
+  const detail = selection.every(
+    (item) =>
+      (item.kind === 'face' || item.kind === 'sketch-edge') &&
+      item.id.split('#')[0] === sketchId,
+  );
+  return detail ? sketchId : null;
+}
+
 export function selectedBodyFaces(
   selection: readonly SelectionItem[],
 ): Array<{ bodyId: string; faceId: string }> {
@@ -142,7 +176,7 @@ export function selectedFeatureIds(selection: SelectionItem[], project: Project)
   for (const item of selection) {
     if (item.kind === 'feature' || item.kind === 'sketch') {
       ids.add(item.id);
-    } else if (item.kind === 'face') {
+    } else if (item.kind === 'face' || item.kind === 'sketch-edge') {
       ids.add(item.id.split('#')[0] ?? item.id);
     } else if (item.kind === 'body' || item.kind === 'mesh' || item.kind === 'body-face' || item.kind === 'edge') {
       const bodyId =

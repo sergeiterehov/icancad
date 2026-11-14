@@ -1,6 +1,7 @@
-import { HISTORY_START, type Feature } from '@icancad/model';
+import { HISTORY_START, objectVisible, sketchObjectId, type Feature } from '@icancad/model';
 import clsx from 'clsx';
-import { CornerUpLeft, SquareChevronsRight, Trash2 } from 'lucide-react';
+import { CornerUpLeft, Eye, EyeOff, SquareChevronsRight, Trash2 } from 'lucide-react';
+import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
@@ -62,6 +63,7 @@ export function Timeline() {
   const select = useDocumentStore((state) => state.select);
   const setHistoryEnd = useDocumentStore((state) => state.setHistoryEnd);
   const removeFeatures = useDocumentStore((state) => state.removeFeatures);
+  const setObjectsVisible = useDocumentStore((state) => state.setObjectsVisible);
   const featureErrors = useKernelStore((state) => state.featureErrors);
   const projectionLost = useKernelStore((state) => state.projectionLost);
   const rebuildCursor = useKernelStore((state) => state.rebuildCursor);
@@ -78,6 +80,23 @@ export function Timeline() {
       : project.historyEnd === HISTORY_START
         ? 0
         : project.features.findIndex((feature) => feature.id === project.historyEnd) + 1;
+
+  // Adding an operation moves the cursor to its end; the strip follows once the
+  // operation is committed, so the cursor stays in the middle of the panel
+  // instead of running out of it.
+  const track = useRef<HTMLDivElement>(null);
+  const count = project.features.length;
+  const previousCount = useRef(count);
+  const follow = useRef(false);
+  useEffect(() => {
+    if (count > previousCount.current) follow.current = true;
+    previousCount.current = count;
+    if (!follow.current || locked) return;
+    follow.current = false;
+    track.current
+      ?.querySelector('.timeline-caret.active')
+      ?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+  }, [count, position, locked]);
 
   const hasObjectSelection = selection.some((item) => item.kind !== 'feature');
   const hasFeatureSelection = selection.some((item) => item.kind === 'feature');
@@ -128,7 +147,7 @@ export function Timeline() {
         {project.features.length === 0 ? (
           <p className="empty-row">{t('timeline.empty')}</p>
         ) : (
-          <div className="timeline-track">
+          <div className="timeline-track" ref={track}>
             {project.features.map((feature, index) => {
               const direct = isDirectlySelected(selection, 'feature', feature.id);
               const related = highlightedFeatureIds.includes(feature.id);
@@ -160,6 +179,11 @@ export function Timeline() {
                         // Right-clicking a chip keeps the operation selection it
                         // belongs to, like every other menu in the app.
                         const targets = menuFeatureIds(selection, feature.id);
+                        const sketchObject =
+                          feature.type === 'sketch' ? sketchObjectId(feature.id) : null;
+                        const sketchVisible = sketchObject
+                          ? objectVisible(project, sketchObject)
+                          : true;
                         showContextMenu(event, [
                           {
                             id: 'rollback',
@@ -175,6 +199,25 @@ export function Timeline() {
                             icon: <SquareChevronsRight size={14} />,
                             onSelect: () => rebuildFrom(feature.id),
                           },
+                          // A sketch is an object of the model too, so its
+                          // operation hides and shows the same lines.
+                          ...(sketchObject
+                            ? [
+                                {
+                                  id: 'visibility',
+                                  label: sketchVisible ? t('tree.hide') : t('tree.show'),
+                                  icon: sketchVisible ? (
+                                    <EyeOff size={14} />
+                                  ) : (
+                                    <Eye size={14} />
+                                  ),
+                                  onSelect: () =>
+                                    setObjectsVisible([
+                                      { objectId: sketchObject, visible: !sketchVisible },
+                                    ]),
+                                },
+                              ]
+                            : []),
                           {
                             id: 'delete',
                             label:

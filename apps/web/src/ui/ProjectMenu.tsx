@@ -1,10 +1,12 @@
 import { exportStlBinary } from '@icancad/io';
-import { bodiesInHistory, type Project } from '@icancad/model';
+import { bodiesInHistory, createId, type MeshFormat, type Project } from '@icancad/model';
 import {
+  Boxes,
   Download,
   FileArchive,
   FileBox,
   FilePlus2,
+  FileUp,
   FolderOpen,
   HardDrive,
   Languages,
@@ -46,20 +48,41 @@ const LOCALES: { value: Locale; label: string }[] = [
   { value: 'ru', label: 'Русский' },
 ];
 
+const MESH_ACCEPT = '.stl,.obj,.ply,.glb';
+
+const MESH_FORMATS: Record<string, MeshFormat> = {
+  stl: 'stl',
+  obj: 'obj',
+  ply: 'ply',
+  glb: 'glb',
+};
+
+const MESH_MIME: Record<MeshFormat, string> = {
+  stl: 'model/stl',
+  obj: 'text/plain',
+  ply: 'application/octet-stream',
+  glb: 'model/gltf-binary',
+};
+
 /**
  * The logo is the project switcher: it stays in the corner while the model
  * panel slides away, and it carries the autosave indicator.
  */
 export function ProjectMenu() {
   const { t, i18n } = useTranslation();
-  const locale: Locale = (i18n.resolvedLanguage ?? 'en').startsWith('ru') ? 'ru' : 'en';
   const saveState = useDocumentStore((state) => state.saveState);
   const theme = useThemeStore((state) => state.theme);
   const setTheme = useThemeStore((state) => state.setTheme);
   const openMenu = useContextMenuStore((state) => state.open);
+  const updateItems = useContextMenuStore((state) => state.updateItems);
+  // Only the logo menu may be rebuilt in place; object and operation menus have
+  // their own items.
+  const projectMenuOpen = useContextMenuStore((state) => state.menu?.owner === 'project');
   const showToast = useUiStore((state) => state.showToast);
   const requestProjectDelete = useUiStore((state) => state.requestProjectDelete);
   const fileInput = useRef<HTMLInputElement>(null);
+  const meshInput = useRef<HTMLInputElement>(null);
+  const projectsRef = useRef<Project[]>([]);
 
   const saveLabel =
     saveState === 'saving'
@@ -142,6 +165,8 @@ export function ProjectMenu() {
 
   const menuItems = (projects: Project[]): ContextMenuItem[] => {
     const state = useDocumentStore.getState();
+    const currentTheme = useThemeStore.getState().theme;
+    const currentLocale: Locale = (i18n.resolvedLanguage ?? 'en').startsWith('ru') ? 'ru' : 'en';
     const selectedBodyCount = directBodyIds(state.selection).length;
     const meshes = useKernelStore.getState().meshes;
     const visibleBodies = bodiesInHistory(state.project).filter((body) => body.visible);
@@ -168,6 +193,12 @@ export function ProjectMenu() {
         submenu: projectItems(projects),
       },
       { id: 'separator-2', separator: true },
+      {
+        id: 'import',
+        label: t('project.import'),
+        icon: <FileUp size={14} />,
+        onSelect: () => meshInput.current?.click(),
+      },
       {
         id: 'export',
         label: t('project.export'),
@@ -218,14 +249,16 @@ export function ProjectMenu() {
             id: 'theme-dark',
             label: t('project.themeDark'),
             icon: <Moon size={14} />,
-            checked: theme === 'dark',
+            checked: currentTheme === 'dark',
+            keepOpen: true,
             onSelect: () => setTheme('dark'),
           },
           {
             id: 'theme-light',
             label: t('project.themeLight'),
             icon: <Sun size={14} />,
-            checked: theme === 'light',
+            checked: currentTheme === 'light',
+            keepOpen: true,
             onSelect: () => setTheme('light'),
           },
         ],
@@ -237,12 +270,39 @@ export function ProjectMenu() {
         submenu: LOCALES.map((item) => ({
           id: `locale-${item.value}`,
           label: item.label,
-          checked: item.value === locale,
+          checked: item.value === currentLocale,
+          keepOpen: true,
           onSelect: () => void setLocale(item.value),
         })),
       },
     ];
   };
+
+  const handleImportMesh = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try {
+      const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+      const format = MESH_FORMATS[extension];
+      if (!format) throw new Error('UNSUPPORTED_FORMAT');
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const featureId = createId('feat');
+      await saveAsset(featureId, new Blob([new Uint8Array(bytes)], { type: MESH_MIME[format] }));
+      const name = file.name.replace(/\.[^.]+$/, '') || file.name;
+      useDocumentStore.getState().addImportedMesh(name, featureId, format);
+      showToast('toast.meshImported');
+    } catch {
+      showToast('toast.importFailed', 'error');
+    }
+  };
+
+  // Theme and language change while the menu is open; its labels and checks are
+  // rebuilt in place so the submenu stays where it is.
+  useEffect(() => {
+    if (!projectMenuOpen) return;
+    updateItems(menuItems(projectsRef.current));
+  }, [projectMenuOpen, theme, i18n.resolvedLanguage]);
 
   const openProjectMenu = async (event: MouseEvent<HTMLButtonElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -255,7 +315,8 @@ export function ProjectMenu() {
     } catch {
       projects = [];
     }
-    openMenu(rect.left, rect.bottom + 8, menuItems(projects));
+    projectsRef.current = projects;
+    openMenu(rect.left, rect.bottom + 8, menuItems(projects), 'project');
   };
 
   const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -300,6 +361,14 @@ export function ProjectMenu() {
         data-testid="import-project"
         onChange={(event) => void handleImport(event)}
       />
+      <input
+        ref={meshInput}
+        type="file"
+        accept={MESH_ACCEPT}
+        className="hidden-input"
+        data-testid="import-mesh"
+        onChange={(event) => void handleImportMesh(event)}
+      />
     </>
   );
 }
@@ -320,19 +389,22 @@ export function ProjectName() {
   };
 
   return (
-    <input
-      className="project-name"
-      value={draft}
-      aria-label={t('project.name')}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={commit}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter') event.currentTarget.blur();
-        if (event.key === 'Escape') {
-          setDraft(projectName);
-          event.currentTarget.blur();
-        }
-      }}
-    />
+    <>
+      <Boxes className="project-strip-icon" size={15} aria-hidden="true" />
+      <input
+        className="project-name"
+        value={draft}
+        aria-label={t('project.name')}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') event.currentTarget.blur();
+          if (event.key === 'Escape') {
+            setDraft(projectName);
+            event.currentTarget.blur();
+          }
+        }}
+      />
+    </>
   );
 }

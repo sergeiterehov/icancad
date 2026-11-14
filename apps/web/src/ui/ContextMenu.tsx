@@ -22,6 +22,8 @@ export type ContextMenuItem =
       danger?: boolean;
       disabled?: boolean;
       checked?: boolean;
+      /** Keeps the menu open, so a checked item can be switched again at once. */
+      keepOpen?: boolean;
       /** A trailing icon action on the row, such as deleting a list entry. */
       action?: { label: string; icon: ReactNode; onSelect: () => void };
       onSelect: () => void;
@@ -53,17 +55,29 @@ interface OpenMenu {
   x: number;
   y: number;
   items: ContextMenuItem[];
+  /** Who opened the menu; only that owner may replace its items in place. */
+  owner?: string;
 }
 
 interface ContextMenuState {
   menu: OpenMenu | null;
-  open: (x: number, y: number, items: ContextMenuItem[]) => void;
+  /** Bumped when a new menu opens, not when its items are replaced. */
+  menuKey: number;
+  open: (x: number, y: number, items: ContextMenuItem[], owner?: string) => void;
+  /** Replaces the items of the open menu, keeping its position and submenu. */
+  updateItems: (items: ContextMenuItem[]) => void;
   close: () => void;
 }
 
 export const useContextMenuStore = create<ContextMenuState>((set) => ({
   menu: null,
-  open: (x, y, items) => set({ menu: { x, y, items } }),
+  menuKey: 0,
+  open: (x, y, items, owner) =>
+    set((state) => ({
+      menu: { x, y, items, ...(owner ? { owner } : {}) },
+      menuKey: state.menuKey + 1,
+    })),
+  updateItems: (items) => set((state) => (state.menu ? { menu: { ...state.menu, items } } : state)),
   close: () => set({ menu: null }),
 }));
 
@@ -91,7 +105,8 @@ function MenuButton({ item, onSelect }: { item: MenuActionItem; onSelect: () => 
       disabled={item.disabled}
       className={clsx('context-menu-item', item.danger && 'danger')}
       onClick={() => {
-        close();
+        // A checked item is switched over and over, so its menu stays open.
+        if (!item.keepOpen) close();
         onSelect();
       }}
     >
@@ -141,6 +156,7 @@ function MenuButton({ item, onSelect }: { item: MenuActionItem; onSelect: () => 
 
 export function ContextMenuHost() {
   const menu = useContextMenuStore((state) => state.menu);
+  const menuKey = useContextMenuStore((state) => state.menuKey);
   const close = useContextMenuStore((state) => state.close);
   const ref = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
@@ -148,7 +164,7 @@ export function ContextMenuHost() {
 
   useEffect(() => {
     setOpenSubmenu(null);
-  }, [menu]);
+  }, [menuKey]);
 
   useLayoutEffect(() => {
     if (!menu) {

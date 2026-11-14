@@ -72,6 +72,20 @@ function withSketchOffset(frame: SketchFrame, offset: number): SketchFrame {
   };
 }
 
+/**
+ * A flipped sketch keeps its plane where it is and looks at the back of it: the
+ * normal and one axis turn around, so the sketch and its extrusions start on the
+ * other side without moving.
+ */
+function withDirection(frame: SketchFrame, inverted: boolean | undefined): SketchFrame {
+  if (!inverted) return frame;
+  return {
+    ...frame,
+    yAxis: flipNormal(frame.yAxis),
+    normal: flipNormal(frame.normal),
+  };
+}
+
 // Computed once while the sketch operation is being evaluated, then stored as
 // the sketch object's frozen frame for the rest of that rebuild.
 export function computeSketchFrame(
@@ -79,12 +93,18 @@ export function computeSketchFrame(
   faceMesh?: TessellationResult,
 ): SketchFrame {
   if (feature.plane.type === 'datum') {
-    return datumFrame(feature.plane.plane, feature.plane.offset);
+    return withDirection(
+      datumFrame(feature.plane.plane, feature.plane.offset),
+      feature.plane.inverted,
+    );
   }
   const faceId = Number(feature.plane.topoId);
   const dynamic = faceFrameFromMesh(faceMesh, faceId);
   const base = dynamic ?? feature.plane.frame ?? datumFrame('XY', 0);
-  return withSketchOffset(base, feature.plane.offset ?? 0);
+  return withDirection(
+    withSketchOffset(base, feature.plane.offset ?? 0),
+    feature.plane.inverted,
+  );
 }
 
 // The frozen frame wins; without one (before the first rebuild) fall back to
@@ -95,9 +115,15 @@ export function sketchFrameOf(
 ): SketchFrame {
   if (frozenFrame) return frozenFrame;
   if (feature.plane.type === 'datum') {
-    return datumFrame(feature.plane.plane, feature.plane.offset);
+    return withDirection(
+      datumFrame(feature.plane.plane, feature.plane.offset),
+      feature.plane.inverted,
+    );
   }
-  return withSketchOffset(feature.plane.frame ?? datumFrame('XY', 0), feature.plane.offset ?? 0);
+  return withDirection(
+    withSketchOffset(feature.plane.frame ?? datumFrame('XY', 0), feature.plane.offset ?? 0),
+    feature.plane.inverted,
+  );
 }
 
 // A face plane is usable only while it still has a picked face and a frame.

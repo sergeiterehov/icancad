@@ -1,9 +1,9 @@
 import { useTranslation } from 'react-i18next';
 
 /** Ghost rows that stand in for a panel whose content is not there yet. */
-function SkeletonPane({ rows }: { rows: number }) {
+function SkeletonDock({ side, rows }: { side: 'left' | 'right'; rows: number }) {
   return (
-    <div className="skeleton-pane">
+    <div className={`skeleton-dock skeleton-dock-${side}`}>
       <span className="skeleton-line head" />
       {Array.from({ length: rows }, (_, index) => (
         <span key={index} className="skeleton-line" />
@@ -28,16 +28,20 @@ export function AppSkeleton() {
   const { t } = useTranslation();
   return (
     <div className="skeleton-body" data-testid="app-skeleton" aria-busy="true">
-      <SkeletonPane rows={6} />
-      <div className="skeleton-center">
-        <SkeletonStage action={t('status.openingProject')} />
-        <div className="skeleton-timeline">
-          <span className="skeleton-pill" />
-          <span className="skeleton-pill" />
-          <span className="skeleton-pill" />
-        </div>
+      <SkeletonStage action={t('status.openingProject')} />
+      <span className="skeleton-logo" aria-hidden="true" />
+      <SkeletonDock side="left" rows={6} />
+      <SkeletonDock side="right" rows={4} />
+      <div className="skeleton-tool-pill" aria-hidden="true">
+        {Array.from({ length: 4 }, (_, index) => (
+          <span key={index} className="skeleton-icon" />
+        ))}
       </div>
-      <SkeletonPane rows={4} />
+      <div className="skeleton-operations" aria-hidden="true">
+        <span className="skeleton-pill" />
+        <span className="skeleton-pill" />
+        <span className="skeleton-pill" />
+      </div>
     </div>
   );
 }

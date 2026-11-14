@@ -17,8 +17,8 @@ lucide's `Icon` wrapper. Both packages are dependencies of the web app.
 
 | Location | Action | Icon |
 |---|---|---|
-| Main tools | Sketch | `PencilRuler` |
-| Main tools | Extrude | `LayersArrowUp` |
+| Main tools | Sketch | `DraftingCompass` |
+| Main tools | Extrude | `Box` |
 | Main tools | Section | `SquareCenterlineDashedVertical` |
 | Main tools | Edge treatment («Кромка») | Custom `lucide` icon node: a corner with `stroke-linejoin="miter"` |
 | Edge treatment type, inspector and history | Chamfer | The same corner with `stroke-linejoin="bevel"` |
@@ -42,9 +42,9 @@ lucide's `Icon` wrapper. Both packages are dependencies of the web app.
 | Sketch object sections | Faces | `Hexagon` |
 | Sketch object sections | Edges | `Spline` |
 | Sketch object sections | Points | `CrosshairPlusDot` (Lucide Lab) |
-| Extrude faces list | Whole sketch | `PencilRuler` |
+| Extrude faces list | Whole sketch | `DraftingCompass` |
 | Extrude faces list | Picked sketch or body face | `Hexagon` |
-| History | Sketch feature | `PencilRuler` |
+| History | Sketch feature | `DraftingCompass` |
 | History | Extrude feature | The icon of its operation (`Box`, `SquaresUnite`, `SquaresSubtract`, `SquaresIntersect`) |
 | History | Primitive, boolean, import, delete | `Box`, `Scissors`, `FileUp`, `Trash2` |
 | Tool rail / history | Shell | `PackageOpen` (ADR 0023) |
@@ -92,5 +92,5 @@ visually together in the list.
 - The point marker is experimental in Lucide Lab. If it changes or disappears,
   replace it with the closest Lab marker without touching the rest of the set.
 - Upgrading `lucide-react` is now part of the UI work: the chosen names (for
-  example `LayersArrowUp` and `SquaresUnite`) do not exist in the old 0.70
+  example `DraftingCompass` and `SquaresUnite`) do not exist in the old 0.70
   version.
