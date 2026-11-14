@@ -40,12 +40,20 @@ import type {
 } from './handle';
 import { hoverColor, selectionColor } from './interactionColors';
 import { isPlanarFace } from './planarFace';
+import { OUTLINE_CREASE_RADIANS, outlineSegments } from './bodyOutline';
 import { bodyElements } from '../sketch/projection';
 import { RenderOrder } from './renderOrder';
 import { firstUnclippedHit } from './sectionPick';
 import { handleDragValue } from '../quick/handleDrag';
 import { outwardNormal } from '../quick/geometry';
 import type { SelectionHit } from './selectionPick';
+
+function lineGeometry(positions: Float32Array): THREE.BufferGeometry | null {
+  if (positions.length === 0) return null;
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  return geometry;
+}
 
 /** Where the grip of an angle handle sits, in world space. */
 function arcGripPoint(arc: SceneArcHandle, angle: number): THREE.Vector3 {
@@ -74,6 +82,8 @@ const FACE_OVERLAY_LIFT = 0.01;
  */
 const EDGE_HOVER_LIFT_PX = 12;
 const SKETCH_FACE_LIFT = 0.02;
+/** Tessellations above this size are not scanned for outlines. */
+const OUTLINE_TRIANGLE_LIMIT = 250_000;
 // Faces that lie exactly on a section plane are rejected per fragment on
 // floating-point noise, which draws them as stripes. The extra thousandth of a
 // millimetre keeps such faces whole.
@@ -106,6 +116,9 @@ interface BodyEntry {
   material: THREE.MeshStandardMaterial;
   edges: THREE.LineSegments | null;
   edgeGeometry: THREE.BufferGeometry | null;
+  /** Tangency lines where a fillet blends into a face. */
+  tangentEdges: THREE.LineSegments | null;
+  tangentGeometry: THREE.BufferGeometry | null;
   meshRef: TessellationResult;
   /** Mesh and tessellation used for picking (the input model during a preview). */
   hitMesh: THREE.Mesh;
@@ -1225,6 +1238,7 @@ export class SceneController {
         removed ? 0xef4444 : this.edgeColor,
       );
     }
+    if (entry.tangentEdges) entry.tangentEdges.visible = false;
   }
 
   private applySolidMaterial(entry: BodyEntry): void {
@@ -1244,6 +1258,14 @@ export class SceneController {
       entry.edges.renderOrder = RenderOrder.bodyEdge;
       (entry.edges.material as THREE.LineBasicMaterial).depthTest = true;
       (entry.edges.material as THREE.LineBasicMaterial).color.setHex(this.edgeColor);
+    }
+    if (entry.tangentEdges) {
+      entry.tangentEdges.visible = true;
+      entry.tangentEdges.renderOrder = RenderOrder.bodyEdge;
+      (entry.tangentEdges.material as THREE.LineBasicMaterial).depthTest = true;
+      (entry.tangentEdges.material as THREE.LineBasicMaterial).color.setHex(
+        this.tangentEdgeColor(entry.color),
+      );
     }
     const isError = this.bodyStyles.errored.has(id);
     const isSelected = !isError && this.bodyStyles.selected.has(id);
@@ -1464,8 +1486,14 @@ export class SceneController {
     this.edgeColor = theme === 'dark' ? 0x0d1015 : 0x5f6876;
 
     for (const entry of this.bodies.values()) {
-      if (entry.edges && entry.ghost !== 'removed') {
+      if (entry.ghost === 'removed') continue;
+      if (entry.edges) {
         (entry.edges.material as THREE.LineBasicMaterial).color.setHex(this.edgeColor);
+      }
+      if (entry.tangentEdges) {
+        (entry.tangentEdges.material as THREE.LineBasicMaterial).color.setHex(
+          this.tangentEdgeColor(entry.color),
+        );
       }
     }
 
@@ -2440,9 +2468,11 @@ export class SceneController {
     for (const entry of this.bodies.values()) {
       entry.material.clippingPlanes = planes;
       entry.material.needsUpdate = true;
-      if (entry.edges) {
-        (entry.edges.material as THREE.LineBasicMaterial).clippingPlanes = planes;
-        (entry.edges.material as THREE.LineBasicMaterial).needsUpdate = true;
+      for (const lines of [entry.edges, entry.tangentEdges]) {
+        const material = lines?.material as THREE.LineBasicMaterial | undefined;
+        if (!material) continue;
+        material.clippingPlanes = planes;
+        material.needsUpdate = true;
       }
     }
   }
@@ -2627,6 +2657,14 @@ export class SceneController {
     return grid;
   }
 
+  /**
+   * A tangent edge marks where a fillet blends into a face. Mixing it towards
+   * the body keeps the blend readable without the hard line of a real corner.
+   */
+  private tangentEdgeColor(bodyColor: string): number {
+    return new THREE.Color(this.edgeColor).lerp(new THREE.Color(bodyColor), 0.25).getHex();
+  }
+
   private createEntry(body: SceneBody): BodyEntry {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(body.mesh.positions, 3));
@@ -2647,13 +2685,30 @@ export class SceneController {
 
     let edges: THREE.LineSegments | null = null;
     let edgeGeometry: THREE.BufferGeometry | null = null;
-    if (body.mesh.triangleCount <= 250_000) {
-      edgeGeometry = new THREE.EdgesGeometry(geometry, 20);
+    let tangentEdges: THREE.LineSegments | null = null;
+    let tangentGeometry: THREE.BufferGeometry | null = null;
+    const bodyEdges = body.kind === 'mesh' ? undefined : body.mesh.edges;
+    if (bodyEdges && bodyEdges.length > 0) {
+      const outline = outlineSegments(bodyEdges);
+      edgeGeometry = lineGeometry(outline.sharp);
+      tangentGeometry = lineGeometry(outline.tangent);
+    } else if (body.mesh.triangleCount <= OUTLINE_TRIANGLE_LIMIT) {
+      // Imported meshes have no B-rep to read edges from.
+      edgeGeometry = new THREE.EdgesGeometry(geometry, (OUTLINE_CREASE_RADIANS * 180) / Math.PI);
+    }
+    if (edgeGeometry) {
       edges = new THREE.LineSegments(
         edgeGeometry,
         new THREE.LineBasicMaterial({ color: this.edgeColor }),
       );
       group.add(edges);
+    }
+    if (tangentGeometry) {
+      tangentEdges = new THREE.LineSegments(
+        tangentGeometry,
+        new THREE.LineBasicMaterial({ color: this.tangentEdgeColor(body.color) }),
+      );
+      group.add(tangentEdges);
     }
 
     const entry: BodyEntry = {
@@ -2664,6 +2719,8 @@ export class SceneController {
       material,
       edges,
       edgeGeometry,
+      tangentEdges,
+      tangentGeometry,
       meshRef: body.mesh,
       hitMesh: mesh,
       hitGeometry: null,
@@ -2716,6 +2773,8 @@ export class SceneController {
     entry.material.dispose();
     entry.edgeGeometry?.dispose();
     if (entry.edges) (entry.edges.material as THREE.Material).dispose();
+    entry.tangentGeometry?.dispose();
+    if (entry.tangentEdges) (entry.tangentEdges.material as THREE.Material).dispose();
     if (entry.hitMesh !== entry.mesh) {
       this.scene.remove(entry.hitMesh);
       entry.hitGeometry?.dispose();

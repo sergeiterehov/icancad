@@ -6,8 +6,11 @@ export interface TessellationQuality {
 }
 
 export const DEFAULT_TESSELLATION_QUALITY: TessellationQuality = {
-  linearDeflection: 0.1,
-  angularDeflection: 0.5,
+  // Fine enough that a fillet keeps a round silhouette and the shading across
+  // a tangent edge has no visible crease, coarse enough to keep picking and
+  // the rebuild previews cheap.
+  linearDeflection: 0.05,
+  angularDeflection: 0.2,
 };
 
 /**
