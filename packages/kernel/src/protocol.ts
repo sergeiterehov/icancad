@@ -267,6 +267,16 @@ export interface ShellResult {
   applied: number;
 }
 
+/**
+ * Copies a shape at a placement. The matrix is a row-major 3x4 affine,
+ * `a11 a12 a13 a14 a21 … a34`, which is the layout `gp_Trsf.SetValues` takes.
+ */
+export interface TransformShapeParams {
+  shapeId: string;
+  sourceShapeId: string;
+  matrix: number[];
+}
+
 export type KernelStatusPhase = 'loading-occt' | 'ready' | 'error';
 
 export interface KernelStatusEvent {
@@ -300,6 +310,7 @@ export type KernelRequestPayload =
   | { type: 'split-solids'; params: SplitSolidsParams }
   | { type: 'edge-treatment'; params: EdgeTreatmentParams }
   | { type: 'shell'; params: ShellParams }
+  | { type: 'transform-shape'; params: TransformShapeParams }
   | { type: 'tessellate'; shapeId: string; quality?: TessellationQuality }
   | { type: 'topology'; shapeId: string }
   | { type: 'dispose'; shapeId: string };

@@ -5,6 +5,7 @@ import {
   Cone,
   Cylinder,
   Torus,
+  LayoutArrowDown,
   Hexagon,
   Pill,
   Pyramid,
@@ -13,6 +14,7 @@ import {
 } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
+import { arrayInputFromSelection } from '../quick/array';
 import { edgeTreatmentTargetFromSelection } from '../quick/edgeTreatment';
 import { shellInputFromSelection } from '../quick/shell';
 import { sketchPlaneFromSelection } from '../sketch/facePlane';
@@ -55,6 +57,7 @@ export function ToolRail() {
   const addExtrude = useDocumentStore((state) => state.addExtrude);
   const addEdgeTreatment = useDocumentStore((state) => state.addEdgeTreatment);
   const addShell = useDocumentStore((state) => state.addShell);
+  const addArray = useDocumentStore((state) => state.addArray);
   const addPrimitive = useDocumentStore((state) => state.addPrimitive);
   const project = useDocumentStore((state) => state.project);
   const selection = useDocumentStore((state) => state.selection);
@@ -234,6 +237,19 @@ export function ToolRail() {
         }}
       >
         <EdgeToolIcon size={17} />
+      </IconButton>
+
+      <IconButton
+        label={t('tools.array')}
+        tooltip={t('tools.array')}
+        onClick={() => {
+          const store = useDocumentStore.getState();
+          const input = arrayInputFromSelection(activeModel(store.project), store.selection);
+          const id = addArray(t('features.array'), input ?? undefined);
+          if (id && !input) useUiStore.getState().setPickingArrayBodies(id);
+        }}
+      >
+        <LayoutArrowDown size={17} />
       </IconButton>
 
       <IconButton

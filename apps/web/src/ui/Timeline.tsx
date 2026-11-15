@@ -72,9 +72,13 @@ export function Timeline() {
   const activeSketchId = useUiStore((state) => state.activeSketchId);
   const setActiveSketch = useUiStore((state) => state.setActiveSketch);
   const editingFeatureId = useDocumentStore((state) => state.editingFeatureId);
+  const pickingArrayOperations = useUiStore((state) => state.pickingArrayOperations);
   // While an operation is being edited the model is evaluated at its position,
-  // so the cursor stays put until the operation is dismissed.
-  const locked = activeSketchId !== null || editingFeatureId !== null;
+  // so the cursor stays put until the operation is dismissed. Picking operations
+  // for an array is the one case that needs the strip to stay live: the chips
+  // are exactly what it takes.
+  const locked =
+    activeSketchId !== null || (editingFeatureId !== null && !pickingArrayOperations);
 
   // The strip is a list of operations in build order, so Shift takes the range
   // between two chips just like it does between two rows of the tree. A finger

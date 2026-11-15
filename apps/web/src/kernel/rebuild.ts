@@ -8,16 +8,20 @@ import type {
   TessellationResult,
 } from '@icancad/kernel';
 import type { Vec3 } from '@icancad/model';
-import { sketchProfiles, type ProfileRegion } from '@icancad/sketch';
+import { sketchPointToWorld, sketchProfiles, tessellateEntity, type ProfileRegion } from '@icancad/sketch';
 import {
   activeModel,
   HISTORY_START,
   BODY_COLORS,
   defaultRevolve,
   extrudeBodyId,
+  arrayBodyId,
   featureBodyId,
   isMeshObject,
   shellBodyId,
+  type ArrayDirection,
+  type ArrayFeature,
+  type ArrayPath,
   type BodyFaceRef,
   type EdgeTreatmentFeature,
   type ExtrudeFeature,
@@ -54,6 +58,15 @@ import { resolveFaceRef } from './faceLookup';
 import { kernelTaskQueue } from './scheduler';
 import { splitAssignment, splitBodyId } from './splitBodies';
 import { RebuildCache, type RebuildCheckpoint } from './checkpoints';
+import {
+  arrayCombinations,
+  arrayPositionCount,
+  IDENTITY_MATRIX,
+  multiplyMatrices,
+  rotationMatrix,
+  translationMatrix,
+  type Matrix3x4,
+} from './array';
 
 let rebuildEpoch = 0;
 const importedMeshCache = new Map<string, Promise<ParsedMesh>>();
@@ -170,6 +183,8 @@ interface RebuildState {
   /** Sketch id -> frame frozen when that operation was evaluated. */
   sketchFrames: Record<string, SketchFrame>;
   sketches: Map<string, SketchFeature>;
+  /** Tools a modifying extrude applied, keyed by operation id, for arrays. */
+  featureTools: Map<string, ArrayToolSource>;
   /** Sketch entity ids whose projection source is gone, per sketch. */
   projectionLost: Record<string, string[]>;
   featureErrors: Record<string, string>;
@@ -181,6 +196,18 @@ interface RebuildState {
   featureFaceMarks: Record<string, PreviewFaceMark[]>;
   /** The first failed operation: nothing after it is built. */
   blockedFeatureId: string | null;
+}
+
+/**
+ * What an extrude applied to the model, kept so an array can repeat the
+ * operation itself (ADR 0029): its tool solids, the bodies it changed and how.
+ */
+interface ArrayToolSource {
+  parts: string[];
+  op: 'add' | 'subtract' | 'intersect';
+  targets: string[];
+  /** An add may skip a part that would become a separate solid. */
+  disjointCheck: boolean;
 }
 
 /** The shape a cut subtracts, shown as a translucent ghost while editing. */
@@ -241,6 +268,7 @@ function emptyState(): RebuildState {
     createdBodies: new Map(),
     sketchFrames: {},
     sketches: new Map(),
+    featureTools: new Map(),
     projectionLost: {},
     featureErrors: {},
     featureBodyErrors: {},
@@ -281,6 +309,12 @@ function cloneState(state: RebuildState): RebuildState {
     ),
     sketchFrames: { ...state.sketchFrames },
     sketches: new Map(state.sketches),
+    featureTools: new Map(
+      [...state.featureTools].map(([featureId, tool]) => [
+        featureId,
+        { ...tool, parts: [...tool.parts], targets: [...tool.targets] },
+      ]),
+    ),
     projectionLost: cloneLists(state.projectionLost),
     featureErrors: { ...state.featureErrors },
     featureBodyErrors: cloneErrors(state.featureBodyErrors),
@@ -592,6 +626,11 @@ function disposeUnusedShapes(client: ReturnType<typeof getKernelClient>): void {
   for (const cache of rebuildCaches.values()) {
     for (const checkpoint of cache.all()) {
       for (const shapeId of checkpoint.state.bodyShapes.values()) keep.add(shapeId);
+      // An array re-applies the tools of an earlier extrude, so they have to
+      // outlive the body snapshots that no longer name them.
+      for (const tool of checkpoint.state.featureTools.values()) {
+        for (const part of tool.parts) keep.add(part);
+      }
     }
   }
   for (const shapeId of [...liveShapes]) {
@@ -671,6 +710,9 @@ async function evaluateFeature(
       state.bodyStats[bodyId] = result.stats;
       state.meshes[bodyId] = mesh;
       ownAllFaces(state.faceOwners, bodyId, result.stats.faces, feature.id);
+      // An array can repeat what an operation made, and a primitive makes its
+      // body through the rebuild just like an extrude does.
+      state.createdBodies.set(feature.id, [bodyId]);
     } catch (error) {
       state.featureErrors[feature.id] = kernelErrorCode(error);
       state.blockedFeatureId = feature.id;
@@ -720,6 +762,19 @@ async function evaluateFeature(
     state.createdBodies.set(feature.id, []);
     try {
       await applyShell(feature, state, context);
+    } catch (error) {
+      state.featureErrors[feature.id] = kernelErrorCode(error);
+      state.blockedFeatureId = feature.id;
+      return;
+    }
+    if (state.featureErrors[feature.id]) state.blockedFeatureId = feature.id;
+    return;
+  }
+
+  if (feature.type === 'array') {
+    state.createdBodies.set(feature.id, []);
+    try {
+      await applyArray(feature, state, context);
     } catch (error) {
       state.featureErrors[feature.id] = kernelErrorCode(error);
       state.blockedFeatureId = feature.id;
@@ -1075,6 +1130,15 @@ async function applyExtrude(
     ? [...new Set(feature.bodyIds.map((bodyId) => refBodyRemap.get(bodyId) ?? bodyId))]
     : [...bodyShapes.keys()].filter((bodyId) => bodyOwner.get(bodyId) !== feature.id);
   if (targets.length === 0) throw new Error('NO_TARGET_BODY');
+
+  // An array of this operation repeats these tools at its own placements. The
+  // source already built them, so it only has to say what it applied and where.
+  state.featureTools.set(feature.id, {
+    parts: feature.op === 'add' && explicitTargets ? toolParts.map((part) => part.shapeId) : [toolShapeId],
+    op: feature.op,
+    targets: [...targets],
+    disjointCheck: feature.op === 'add' && explicitTargets,
+  });
 
   // The volume a cut removes is shown in the preview even though the resulting
   // body no longer contains it.
@@ -1514,6 +1578,322 @@ async function applyEdgeTreatment(
  * (`outward`). Faces left open are resolved like any other stored face ref, so
  * a body renumbered by an earlier operation still finds them.
  */
+/**
+ * The most copies one array may make, seed included. Every copy is a kernel
+ * shape and a tessellation, so a runaway count would freeze the rebuild.
+ */
+const MAX_ARRAY_POSITIONS = 200;
+
+/** Curves of a sketch the copies can follow, as world-space polylines. */
+function arrayPathPolyline(
+  path: ArrayPath,
+  state: RebuildState,
+): { points: Vec3[]; closed: boolean } {
+  const sketch = state.sketches.get(path.sketchId);
+  const frame = state.sketchFrames[path.sketchId];
+  if (!sketch || !frame) throw new Error('ARRAY_PATH_MISSING');
+  const entity = sketch.entities.find((candidate) => candidate.id === path.entityId);
+  if (!entity) throw new Error('ARRAY_PATH_MISSING');
+  const closed =
+    entity.type === 'circle' ||
+    entity.type === 'ellipse' ||
+    (entity.type === 'bezier' &&
+      Math.hypot(
+        entity.points[0]![0] - entity.points[entity.points.length - 1]![0],
+        entity.points[0]![1] - entity.points[entity.points.length - 1]![1],
+      ) < 1e-6);
+  let points = tessellateEntity(entity, 96);
+  if (closed && points.length > 0) points = [...points, points[0]!];
+  return { points: points.map((point) => sketchPointToWorld(frame, point)), closed };
+}
+
+function polylineDistances(points: readonly Vec3[]): number[] {
+  const cumulative = [0];
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1]!;
+    const point = points[index]!;
+    cumulative.push(
+      cumulative[index - 1]! +
+        Math.hypot(point[0] - previous[0], point[1] - previous[1], point[2] - previous[2]),
+    );
+  }
+  return cumulative;
+}
+
+function pointAtDistance(
+  points: readonly Vec3[],
+  cumulative: readonly number[],
+  distance: number,
+): Vec3 {
+  const total = cumulative[cumulative.length - 1] ?? 0;
+  const target = Math.min(Math.max(distance, 0), total);
+  let index = 1;
+  while (index < cumulative.length - 1 && cumulative[index]! < target) index += 1;
+  const previous = points[index - 1]!;
+  const point = points[index]!;
+  const span = cumulative[index]! - cumulative[index - 1]!;
+  const t = span > 1e-12 ? (target - cumulative[index - 1]!) / span : 0;
+  return [
+    previous[0] + (point[0] - previous[0]) * t,
+    previous[1] + (point[1] - previous[1]) * t,
+    previous[2] + (point[2] - previous[2]) * t,
+  ];
+}
+
+/**
+ * The placements of one direction, the seed (`0`) first. A direction that
+ * cannot be resolved is an error of the whole operation: silently repeating
+ * the seed would look like the array did nothing.
+ */
+function arrayDirectionMatrices(direction: ArrayDirection, state: RebuildState): Matrix3x4[] {
+  const count = Math.max(1, Math.min(100, Math.floor(direction.count)));
+  if (direction.kind === 'linear') {
+    const length = Math.hypot(
+      direction.direction[0],
+      direction.direction[1],
+      direction.direction[2],
+    );
+    if (length < 1e-9) throw new Error('ARRAY_DIRECTION_MISSING');
+    const unit: Vec3 = [
+      direction.direction[0] / length,
+      direction.direction[1] / length,
+      direction.direction[2] / length,
+    ];
+    return Array.from({ length: count }, (_, index) =>
+      translationMatrix([
+        unit[0] * direction.spacing * index,
+        unit[1] * direction.spacing * index,
+        unit[2] * direction.spacing * index,
+      ]),
+    );
+  }
+  if (direction.kind === 'rotation') {
+    const axis = resolveRevolveAxis(direction.axis, {
+      meshes: state.meshes,
+      sketches: [...state.sketches.values()],
+      frames: state.sketchFrames,
+    });
+    if (!axis) throw new Error('ARRAY_AXIS_MISSING');
+    const step = (direction.angle * Math.PI) / 180;
+    return Array.from({ length: count }, (_, index) =>
+      rotationMatrix(axis.origin, axis.direction, step * index),
+    );
+  }
+  if (!direction.path) throw new Error('ARRAY_PATH_MISSING');
+  const path = arrayPathPolyline(direction.path, state);
+  if (path.points.length < 2) throw new Error('ARRAY_PATH_MISSING');
+  const cumulative = polylineDistances(path.points);
+  const total = cumulative[cumulative.length - 1] ?? 0;
+  if (total < 1e-6) throw new Error('ARRAY_PATH_EMPTY');
+  const start = path.points[0]!;
+  return Array.from({ length: count }, (_, index) => {
+    // A closed path puts the last copy before the start, so the ring has no
+    // doubled body where it closes.
+    const t = count === 1 ? 0 : index / (path.closed ? count : count - 1);
+    const point = pointAtDistance(path.points, cumulative, total * t);
+    return translationMatrix([point[0] - start[0], point[1] - start[1], point[2] - start[2]]);
+  });
+}
+
+/**
+ * Repeats the picked bodies, or the bodies the picked operations made. Every
+ * copy is a body of its own; the seed stays where it is. Directions nest: the
+ * second one repeats the whole result of the first, which is what turns a row
+ * into a grid or bends it around an axis (ADR 0029).
+ */
+async function applyArray(
+  feature: ArrayFeature,
+  state: RebuildState,
+  context: EvalContext,
+): Promise<void> {
+  const { client, epoch } = context;
+  const { bodyShapes, bodyOwner, bodySource, faceOwners, meshes, bodyStats, createdBodies } = state;
+
+  const seeds: string[] = [];
+  const toolSources: ArrayToolSource[] = [];
+  const addSeed = (bodyId: string) => {
+    if (!seeds.includes(bodyId)) seeds.push(bodyId);
+  };
+  if (feature.target === 'operations') {
+    for (const featureId of feature.featureIds) {
+      const made = createdBodies.get(featureId) ?? [];
+      if (made.length > 0) {
+        for (const bodyId of made) addSeed(bodyId);
+        continue;
+      }
+      // An extrude that adds to or cuts a body made no body of its own; what it
+      // repeated is its tool, applied to the bodies it changed.
+      const tool = state.featureTools.get(featureId);
+      if (tool) toolSources.push(tool);
+    }
+    if (seeds.length === 0 && toolSources.length === 0) {
+      state.featureErrors[feature.id] = 'NO_TARGET_BODY';
+      return;
+    }
+  } else {
+    for (const bodyId of feature.bodyIds) addSeed(bodyId);
+  }
+  // An operation without inputs is being configured, not failing.
+  if ((seeds.length === 0 && toolSources.length === 0) || feature.directions.length === 0) return;
+
+  const counts = feature.directions.map((direction) =>
+    Math.max(1, Math.min(100, Math.floor(direction.count))),
+  );
+  if (arrayPositionCount(counts) > MAX_ARRAY_POSITIONS) {
+    throw new Error('ARRAY_TOO_LARGE');
+  }
+  const perDirection = feature.directions.map((direction) =>
+    arrayDirectionMatrices(direction, state),
+  );
+  // The seed is the combination where every direction sits at its first copy.
+  const placements = arrayCombinations(counts)
+    .filter((combination) => combination.indices.some((index) => index !== 0))
+    .map((combination) => {
+      let matrix = IDENTITY_MATRIX;
+      for (let step = 0; step < perDirection.length; step += 1) {
+        matrix = multiplyMatrices(perDirection[step]![combination.indices[step]!]!, matrix);
+      }
+      return { key: combination.key, matrix };
+    });
+
+  // The list is attached before the copies are built, so a failure halfway
+  // still reports the copies that did appear instead of leaving them unnamed.
+  const newBodies: string[] = [];
+  createdBodies.set(feature.id, newBodies);
+  const markBodyError = (bodyId: string, code: string) => {
+    const errors = state.featureBodyErrors[feature.id] ?? {};
+    errors[bodyId] = code;
+    state.featureBodyErrors[feature.id] = errors;
+  };
+
+  for (const bodyId of seeds) {
+    const sourceShapeId = bodyShapes.get(bodyId);
+    if (!sourceShapeId) {
+      markBodyError(bodyId, meshes[bodyId] ? 'BODY_NOT_SOLID' : 'UNKNOWN_BODY');
+      continue;
+    }
+    for (const placement of placements) {
+      const shapeId = trackShape(`${bodyId}:${feature.id}:${placement.key}`);
+      let stats: ShapeStats;
+      let mesh: TessellationResult;
+      try {
+        const result = await client.request<MakeBoxResult>({
+          type: 'transform-shape',
+          params: { shapeId, sourceShapeId, matrix: placement.matrix },
+        });
+        if (epoch !== rebuildEpoch) return;
+        stats = result.stats;
+        mesh = await client.request<TessellationResult>({ type: 'tessellate', shapeId });
+        if (epoch !== rebuildEpoch) return;
+      } catch (error) {
+        markBodyError(bodyId, kernelErrorCode(error));
+        break;
+      }
+      const copyId = arrayBodyId(feature.id, bodyId, placement.key);
+      bodyShapes.set(copyId, shapeId);
+      bodyOwner.set(copyId, feature.id);
+      bodySource.set(copyId, feature.id);
+      bodyStats[copyId] = stats;
+      meshes[copyId] = mesh;
+      ownAllFaces(faceOwners, copyId, stats.faces, feature.id);
+      newBodies.push(copyId);
+    }
+  }
+
+  // Repeat a modifying extrude by re-applying its tool at every placement.
+  // The body stays the same object: a pattern of cuts is still one body with
+  // several cuts, exactly like the operation it repeats.
+  for (const [sourceIndex, source] of toolSources.entries()) {
+    for (const placement of placements) {
+      for (const bodyId of source.targets) {
+        const startShapeId = bodyShapes.get(bodyId);
+        if (!startShapeId) {
+          markBodyError(bodyId, meshes[bodyId] ? 'BODY_NOT_SOLID' : 'UNKNOWN_BODY');
+          continue;
+        }
+        const startStats = source.disjointCheck
+          ? await client.request<ShapeStats>({ type: 'topology', shapeId: startShapeId })
+          : null;
+        if (epoch !== rebuildEpoch) return;
+        let solidCount = startStats?.solids ?? 0;
+        let current = startShapeId;
+        let touched = false;
+        let failed = false;
+        for (const [partIndex, partShapeId] of source.parts.entries()) {
+          const toolId = trackShape(
+            `tool:${feature.id}:${sourceIndex}:${placement.key}:${partIndex}`,
+          );
+          try {
+            await client.request({
+              type: 'transform-shape',
+              params: { shapeId: toolId, sourceShapeId: partShapeId, matrix: placement.matrix },
+            });
+            if (epoch !== rebuildEpoch) return;
+            const resultShapeId = trackShape(
+              `${bodyId}:${feature.id}:${sourceIndex}:${placement.key}:${partIndex}`,
+            );
+            const booleanOp =
+              source.op === 'add' ? 'fuse' : source.op === 'subtract' ? 'cut' : 'common';
+            const result = await client.request<MakeBoxResult>({
+              type: 'boolean',
+              params: {
+                shapeId: resultShapeId,
+                baseShapeId: current,
+                toolShapeId: toolId,
+                op: booleanOp,
+                trackFaces: true,
+              },
+            });
+            if (epoch !== rebuildEpoch) return;
+            // A copy of an add that misses the body would become a loose solid;
+            // the source operation skips such parts, and so does the array.
+            if (source.disjointCheck && result.stats.solids > solidCount) {
+              liveShapes.delete(resultShapeId);
+              void client
+                .request({ type: 'dispose', shapeId: resultShapeId })
+                .catch(() => undefined);
+              continue;
+            }
+            solidCount = result.stats.solids;
+            if (result.facesFromBase) {
+              const previousOwners = faceOwners.get(bodyId) ?? [];
+              faceOwners.set(
+                bodyId,
+                result.facesFromBase.map((from) =>
+                  from >= 0 ? (previousOwners[from] ?? feature.id) : feature.id,
+                ),
+              );
+            }
+            current = resultShapeId;
+            touched = true;
+          } catch (error) {
+            markBodyError(bodyId, kernelErrorCode(error));
+            failed = true;
+            break;
+          }
+        }
+        if (failed || !touched) continue;
+        bodyShapes.set(bodyId, current);
+        bodySource.set(bodyId, feature.id);
+        const mesh = await client.request<TessellationResult>({
+          type: 'tessellate',
+          shapeId: current,
+        });
+        if (epoch !== rebuildEpoch) return;
+        meshes[bodyId] = mesh;
+        bodyStats[bodyId] = await client.request<ShapeStats>({
+          type: 'topology',
+          shapeId: current,
+        });
+        if (epoch !== rebuildEpoch) return;
+      }
+    }
+  }
+
+  const bodyErrors = Object.values(state.featureBodyErrors[feature.id] ?? {});
+  if (bodyErrors.length > 0) state.featureErrors[feature.id] = bodyErrors[0]!;
+}
+
 async function applyShell(
   feature: ShellFeature,
   state: RebuildState,

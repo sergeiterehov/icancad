@@ -385,6 +385,41 @@ const edgeTreatmentFeature = z.object({
   size: z.number().positive(),
 });
 
+const arrayPath = z.object({
+  kind: z.literal('sketch-edge'),
+  sketchId: z.string().min(1),
+  entityId: z.string().min(1),
+});
+
+const arrayDirection = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('linear'),
+    direction: vec3,
+    spacing: z.number(),
+    count: z.number().int().min(1).max(100),
+  }),
+  z.object({
+    kind: z.literal('rotation'),
+    axis: revolveAxis,
+    angle: z.number(),
+    count: z.number().int().min(1).max(100),
+  }),
+  z.object({
+    kind: z.literal('path'),
+    path: arrayPath.nullable(),
+    count: z.number().int().min(1).max(100),
+  }),
+]);
+
+const arrayFeature = z.object({
+  ...featureBase,
+  type: z.literal('array'),
+  target: z.enum(['bodies', 'operations']),
+  bodyIds: z.array(z.string().min(1)).default([]),
+  featureIds: z.array(z.string().min(1)).default([]),
+  directions: z.array(arrayDirection).default([]),
+});
+
 const booleanFeature = z.object({
   ...featureBase,
   type: z.literal('boolean'),
@@ -418,6 +453,7 @@ export const featureSchema = z.union([
     holeFeature,
     ribFeature,
     edgeTreatmentFeature,
+    arrayFeature,
     booleanFeature,
     deleteBodyFeature,
     transformFeature,

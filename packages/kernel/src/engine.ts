@@ -20,6 +20,7 @@ import type {
   ShellParams,
   ShellResult,
   SplitSolid,
+  TransformShapeParams,
   SplitSolidsParams,
   SplitSolidsResult,
   TessellationQuality,
@@ -1061,6 +1062,42 @@ export class KernelEngine {
       stats: this.countTopology(built.shape),
       applied: built.applied,
     };
+  }
+
+  /**
+   * Copies a shape at an affine placement. A copy keeps the source untouched,
+   * so an array can repeat one body without rebuilding it from its history.
+   */
+  transformShape(params: TransformShapeParams): MakeBoxResult {
+    const oc = this.requireOc();
+    if (!params.shapeId) throw new KernelOpError('INVALID_PARAMS', 'shapeId is required');
+    if (params.matrix.length !== 12 || params.matrix.some((value) => !Number.isFinite(value))) {
+      throw new KernelOpError('INVALID_PARAMS', 'A transform needs 12 finite matrix values');
+    }
+    const source = this.getShape(params.sourceShapeId);
+    const [a11, a12, a13, a14, a21, a22, a23, a24, a31, a32, a33, a34] = params.matrix as [
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+    ];
+    const trsf = new oc.gp_Trsf_1();
+    trsf.SetValues(a11, a12, a13, a14, a21, a22, a23, a24, a31, a32, a33, a34);
+    const maker = new oc.BRepBuilderAPI_Transform_2(source, trsf, true);
+    if (!maker.IsDone()) {
+      throw new KernelOpError('OP_FAILED', 'The shape could not be transformed');
+    }
+    const shape = maker.Shape();
+    this.shapes.set(params.shapeId, shape);
+    return { shapeId: params.shapeId, stats: this.countTopology(shape) };
   }
 
   /** Requested thickness first, then the largest one the geometry still takes. */

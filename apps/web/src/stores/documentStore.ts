@@ -37,6 +37,9 @@ import {
   type RevolveAxis,
   type DeleteBodyFeature,
   type ShellFeature,
+  type ArrayDirection,
+  type ArrayFeature,
+  type ArrayPath,
 } from '@icancad/model';
 import { sketchTopology } from '@icancad/sketch';
 import { useMemo } from 'react';
@@ -117,6 +120,23 @@ interface DocumentState {
   addExtrude: (name: string, input?: ExtrudeInput) => string | null;
   addEdgeTreatment: (name: string, input?: EdgeTreatmentInput) => string | null;
   addShell: (name: string, input?: ShellInput) => string | null;
+  addArray: (name: string, input?: ArrayInput) => string | null;
+  setArrayTarget: (featureId: string, target: ArrayFeature['target']) => void;
+  toggleArrayBody: (featureId: string, bodyId: string) => void;
+  toggleArrayOperation: (featureId: string, operationId: string) => void;
+  addArrayDirection: (featureId: string) => void;
+  removeArrayDirection: (featureId: string, index: number) => void;
+  setArrayDirectionKind: (
+    featureId: string,
+    index: number,
+    kind: ArrayDirection['kind'],
+  ) => void;
+  setArrayCount: (featureId: string, index: number, count: number) => void;
+  setArraySpacing: (featureId: string, index: number, spacing: number) => void;
+  setArrayAngle: (featureId: string, index: number, angle: number) => void;
+  setArrayAxis: (featureId: string, index: number, axis: 'x' | 'y' | 'z') => void;
+  invertArrayDirection: (featureId: string, index: number) => void;
+  setArrayPath: (featureId: string, index: number, path: ArrayPath | null) => void;
   setShellDirection: (featureId: string, direction: ShellFeature['direction']) => void;
   setShellThickness: (featureId: string, thickness: number) => void;
   setShellOffset: (featureId: string, offset: number) => void;
@@ -194,6 +214,12 @@ export interface ShellInput {
   faceRefs?: BodyFaceRef[];
 }
 
+/** What an array starts with: picked bodies, or operations that made bodies. */
+export interface ArrayInput {
+  bodyIds?: string[];
+  featureIds?: string[];
+}
+
 /** Picked objects are keyed so sketch faces and body faces share one order. */
 export function sketchFaceKey(sketchId: string, faceId: string): string {
   return `s:${sketchId}#${faceId}`;
@@ -247,6 +273,57 @@ export function nextBodyNumber(model: Model): number {
     if (typeof metadata.bodyIndex === 'number') highest = Math.max(highest, metadata.bodyIndex);
   }
   return highest + 1;
+}
+
+function findArrayFeature(model: Model, featureId: string): ArrayFeature | undefined {
+  return model.features.find(
+    (candidate): candidate is ArrayFeature =>
+      candidate.id === featureId && candidate.type === 'array',
+  );
+}
+
+/** A new direction starts at the step a user is most likely to want. */
+function defaultArrayDirection(
+  kind: ArrayDirection['kind'],
+  count = 3,
+): ArrayDirection {
+  switch (kind) {
+    case 'linear':
+      return { kind, direction: [1, 0, 0], spacing: 10, count };
+    case 'rotation':
+      return { kind, axis: { kind: 'world', axis: 'z' }, angle: 90, count };
+    case 'path':
+      return { kind, path: null, count };
+  }
+}
+
+/** Directions an array may have; each one multiplies the number of copies. */
+const MAX_ARRAY_DIRECTIONS = 3;
+/** Copies one array may make; matches the rebuild's own ceiling. */
+const MAX_ARRAY_POSITIONS = 200;
+
+function withArrayDirection(
+  feature: ArrayFeature,
+  index: number,
+  direction: ArrayDirection | null,
+): ArrayFeature | null {
+  if (!feature.directions[index]) return null;
+  const directions = [...feature.directions];
+  if (direction) directions[index] = direction;
+  else directions.splice(index, 1);
+  return { ...feature, directions };
+}
+
+function replaceArrayFeature(
+  featureId: string,
+  update: (feature: ArrayFeature) => ArrayFeature | null,
+  get: () => DocumentState,
+): void {
+  const feature = findArrayFeature(activeModel(get().project), featureId);
+  if (!feature) return;
+  const next = update(feature);
+  if (!next) return;
+  get().apply({ type: 'feature/replace', feature: next });
 }
 
 function exists(model: Model, item: SelectionItem, editingFeatureId: string | null): boolean {
@@ -329,6 +406,12 @@ function withVisibleSketches(model: Model, editingFeatureId: string): Model {
   const sketchIds = new Set<string>();
   if (feature.type === 'sketch') sketchIds.add(feature.id);
   if (feature.type === 'extrude' && feature.sketchId) sketchIds.add(feature.sketchId);
+  if (feature.type === 'array') {
+    // A path lives in a sketch, so the sketch is shown while the array is open.
+    for (const direction of feature.directions) {
+      if (direction.kind === 'path' && direction.path) sketchIds.add(direction.path.sketchId);
+    }
+  }
   let metadata = model.metadata;
   for (const sketchId of sketchIds) {
     const objectId = sketchObjectId(sketchId);
@@ -483,8 +566,24 @@ function openPicker(ui: ReturnType<typeof useUiStore.getState>): boolean {
       ui.pickingShellBodies ??
       ui.pickingShellFaces ??
       ui.pickingSketchPlane ??
-      ui.pickingSectionFace,
+      ui.pickingSectionFace ??
+      ui.pickingArrayBodies ??
+      ui.pickingArrayOperations,
   );
+}
+
+/**
+ * The array whose settings are open, if any. While one is being configured the
+ * timeline belongs to it: a chip feeds its operation list instead of leaving it.
+ * The visible pencil only says whether the picker is armed, not whether the
+ * chips mean something.
+ */
+function editingArray(state: DocumentState): ArrayFeature | undefined {
+  if (!state.editingFeatureId) return undefined;
+  const feature = activeModel(state.project).features.find(
+    (candidate) => candidate.id === state.editingFeatureId,
+  );
+  return feature?.type === 'array' ? feature : undefined;
 }
 
 export const useDocumentStore = create<DocumentState>((set, get) => ({
@@ -715,6 +814,29 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       }
       return;
     }
+    if (ui.pickingArrayBodies) {
+      // The array takes both kinds of input: a chip clicked while bodies are
+      // being picked switches the target to operations instead of being
+      // swallowed by the body picker.
+      if (item?.kind === 'body') get().toggleArrayBody(ui.pickingArrayBodies, item.id);
+      else if (item?.kind === 'feature') {
+        get().toggleArrayOperation(ui.pickingArrayBodies, item.id);
+      }
+      return;
+    }
+    if (ui.pickingArrayOperations) {
+      if (item?.kind === 'feature') {
+        get().toggleArrayOperation(ui.pickingArrayOperations, item.id);
+      } else if (item?.kind === 'body') {
+        get().toggleArrayBody(ui.pickingArrayOperations, item.id);
+      }
+      return;
+    }
+    const editedArray = editingArray(get());
+    if (editedArray && item?.kind === 'feature' && item.id !== editedArray.id) {
+      get().toggleArrayOperation(editedArray.id, item.id);
+      return;
+    }
     // Open faces and treatment edges are picked in the 3D view, so a click
     // elsewhere must not replace the operation being configured.
     if (ui.pickingEdges || ui.pickingShellFaces) return;
@@ -744,6 +866,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       return;
     }
     const state = get();
+    // This path skips `select`, so the array's ownership of the timeline has to
+    // be honoured here too: a range or a plain chip click adds the clicked
+    // operation to the array being configured.
+    const editedArray = editingArray(state);
+    if (editedArray && clicked.kind === 'feature' && clicked.id !== editedArray.id) {
+      get().toggleArrayOperation(editedArray.id, clicked.id);
+      return;
+    }
     set({ selection: items, ...editModeFor(state, state.project, items) });
   },
 
@@ -1086,6 +1216,202 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
           : [...feature.removeFaces, ref],
       },
     });
+  },
+
+  // The array starts from the current selection: picked bodies, or picked
+  // operations whose created bodies are repeated.
+  addArray: (name, input) => {
+    get().endFeatureEdit();
+    const featureId = createId('feat');
+    const featureIds = [...new Set(input?.featureIds ?? [])];
+    const bodyIds = [...new Set(input?.bodyIds ?? [])];
+    const feature: ArrayFeature = {
+      id: featureId,
+      name,
+      suppressed: false,
+      type: 'array',
+      target: featureIds.length > 0 ? 'operations' : 'bodies',
+      bodyIds,
+      featureIds,
+      directions: [defaultArrayDirection('linear')],
+    };
+    if (!get().apply(...addFeatureCommands(activeModel(get().project), feature))) return null;
+    selectFeatureForEditing(featureId, set);
+    return featureId;
+  },
+
+  setArrayTarget: (featureId, target) => {
+    replaceArrayFeature(
+      featureId,
+      (feature) => (feature.target === target ? null : { ...feature, target }),
+      get,
+    );
+  },
+
+  toggleArrayBody: (featureId, bodyId) => {
+    replaceArrayFeature(
+      featureId,
+      (feature) => {
+        const exists = feature.bodyIds.includes(bodyId);
+        return {
+          ...feature,
+          target: 'bodies',
+          bodyIds: exists
+            ? feature.bodyIds.filter((candidate) => candidate !== bodyId)
+            : [...feature.bodyIds, bodyId],
+        };
+      },
+      get,
+    );
+  },
+
+  toggleArrayOperation: (featureId, operationId) => {
+    // An operation that made its own bodies is repeated body by body. An
+    // extrude that adds to or cuts a body made none, but its tool can still be
+    // applied at every placement, which is what makes rows of ribs or slots.
+    // A fillet or a boolean has no such tool, so it is not offered.
+    const model = activeModel(get().project);
+    const operation = model.features.find((candidate) => candidate.id === operationId);
+    const madeBodies = model.bodies.some((body) => body.createdBy === operationId);
+    if (!madeBodies && operation?.type !== 'extrude') return;
+    replaceArrayFeature(
+      featureId,
+      (feature) => {
+        const exists = feature.featureIds.includes(operationId);
+        return {
+          ...feature,
+          target: 'operations',
+          featureIds: exists
+            ? feature.featureIds.filter((candidate) => candidate !== operationId)
+            : [...feature.featureIds, operationId],
+        };
+      },
+      get,
+    );
+  },
+
+  addArrayDirection: (featureId) => {
+    replaceArrayFeature(
+      featureId,
+      (feature) =>
+        feature.directions.length >= MAX_ARRAY_DIRECTIONS
+          ? null
+          : { ...feature, directions: [...feature.directions, defaultArrayDirection('linear')] },
+      get,
+    );
+  },
+
+  removeArrayDirection: (featureId, index) => {
+    replaceArrayFeature(featureId, (feature) => withArrayDirection(feature, index, null), get);
+  },
+
+  setArrayDirectionKind: (featureId, index, kind) => {
+    replaceArrayFeature(
+      featureId,
+      (feature) => {
+        const current = feature.directions[index];
+        if (!current || current.kind === kind) return null;
+        // Switching the kind keeps the count the user already picked.
+        return withArrayDirection(feature, index, defaultArrayDirection(kind, current.count));
+      },
+      get,
+    );
+  },
+
+  setArrayCount: (featureId, index, count) => {
+    replaceArrayFeature(
+      featureId,
+      (feature) => {
+        const current = feature.directions[index];
+        if (!current || !Number.isFinite(count)) return null;
+        // Keep the product of all directions inside the rebuild's ceiling.
+        const others = feature.directions
+          .filter((_, position) => position !== index)
+          .reduce((total, direction) => total * Math.max(1, direction.count), 1);
+        const ceiling = Math.max(1, Math.min(100, Math.floor(MAX_ARRAY_POSITIONS / others)));
+        const next = Math.max(1, Math.min(ceiling, Math.floor(count)));
+        if (next === current.count) return null;
+        return withArrayDirection(feature, index, { ...current, count: next });
+      },
+      get,
+    );
+  },
+
+  setArraySpacing: (featureId, index, spacing) => {
+    replaceArrayFeature(
+      featureId,
+      (feature) => {
+        const current = feature.directions[index];
+        if (!current || current.kind !== 'linear') return null;
+        if (!Number.isFinite(spacing) || spacing === current.spacing) return null;
+        return withArrayDirection(feature, index, { ...current, spacing });
+      },
+      get,
+    );
+  },
+
+  setArrayAngle: (featureId, index, angle) => {
+    replaceArrayFeature(
+      featureId,
+      (feature) => {
+        const current = feature.directions[index];
+        if (!current || current.kind !== 'rotation') return null;
+        if (!Number.isFinite(angle) || angle === current.angle) return null;
+        return withArrayDirection(feature, index, { ...current, angle });
+      },
+      get,
+    );
+  },
+
+  setArrayAxis: (featureId, index, axis) => {
+    replaceArrayFeature(
+      featureId,
+      (feature) => {
+        const current = feature.directions[index];
+        if (!current) return null;
+        if (current.kind === 'linear') {
+          const direction: [number, number, number] =
+            axis === 'x' ? [1, 0, 0] : axis === 'y' ? [0, 1, 0] : [0, 0, 1];
+          return withArrayDirection(feature, index, { ...current, direction });
+        }
+        if (current.kind === 'rotation') {
+          return withArrayDirection(feature, index, {
+            ...current,
+            axis: { kind: 'world', axis },
+          });
+        }
+        return null;
+      },
+      get,
+    );
+  },
+
+  invertArrayDirection: (featureId, index) => {
+    replaceArrayFeature(
+      featureId,
+      (feature) => {
+        const current = feature.directions[index];
+        if (!current || current.kind === 'path') return null;
+        if (current.kind === 'linear') {
+          const [x, y, z] = current.direction;
+          return withArrayDirection(feature, index, { ...current, direction: [-x, -y, -z] });
+        }
+        return withArrayDirection(feature, index, { ...current, angle: -current.angle });
+      },
+      get,
+    );
+  },
+
+  setArrayPath: (featureId, index, path) => {
+    replaceArrayFeature(
+      featureId,
+      (feature) => {
+        const current = feature.directions[index];
+        if (!current || current.kind !== 'path') return null;
+        return withArrayDirection(feature, index, { ...current, path });
+      },
+      get,
+    );
   },
 
   setExtrudeInput: (featureId, input) => {

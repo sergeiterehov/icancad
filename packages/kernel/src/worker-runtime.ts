@@ -81,6 +81,11 @@ export function startKernelWorker(options: KernelWorkerOptions = {}): void {
           postSuccess(scope, request.id, engine.shell(request.params));
           break;
         }
+        case 'transform-shape': {
+          await engine.init();
+          postSuccess(scope, request.id, engine.transformShape(request.params));
+          break;
+        }
         case 'tessellate': {
           await engine.init();
           const result = engine.tessellate(request.shapeId, request.quality);

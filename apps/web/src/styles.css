@@ -2206,6 +2206,30 @@ button.selection-item[data-active='true'][data-error='true'] {
   gap: 4px;
 }
 
+/* One direction of an array: its kind, its step and its axis. */
+.array-direction {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.array-direction-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.array-axis-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .dimension-row {
   display: flex;
   gap: 6px;

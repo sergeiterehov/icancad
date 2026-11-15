@@ -6,6 +6,7 @@ import {
   useState,
   type ButtonHTMLAttributes,
   type KeyboardEvent,
+  type MouseEvent,
   type ReactNode,
   type RefObject,
 } from 'react';
@@ -228,7 +229,7 @@ export function ObjectPickerField({
   icon: ReactNode;
   active?: boolean;
   invalid?: boolean;
-  onClick: () => void;
+  onClick: (event: MouseEvent<HTMLButtonElement>) => void;
   testId?: string;
   /** Sits in a row of controls instead of a labelled form field. */
   compact?: boolean;

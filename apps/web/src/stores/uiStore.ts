@@ -84,6 +84,10 @@ interface UiState {
   pickingSectionFace: string | null;
   /** Extrude revolve waiting for the edge it turns around. */
   pickingRevolveAxis: string | null;
+  /** Array waiting for the bodies it should repeat. */
+  pickingArrayBodies: string | null;
+  /** Array waiting for the operations whose bodies it should repeat. */
+  pickingArrayOperations: string | null;
   /** Face pick started from the sketch tool: open the editor after a pick. */
   sketchPlanePickThenEdit: string | null;
   sectionEnabled: boolean;
@@ -111,6 +115,8 @@ interface UiState {
   setPickingSketchPlane: (featureId: string | null) => void;
   setPickingSectionFace: (planeId: string | null) => void;
   setPickingRevolveAxis: (featureId: string | null) => void;
+  setPickingArrayBodies: (featureId: string | null) => void;
+  setPickingArrayOperations: (featureId: string | null) => void;
   /** Leaves whichever picker is open; every operation shares one. */
   endPicking: () => void;
   startSketchPlanePicking: (featureId: string, enterEdit: boolean) => void;
@@ -259,6 +265,8 @@ export const useUiStore = create<UiState>((set) => ({
   pickingSketchPlane: null,
   pickingSectionFace: null,
   pickingRevolveAxis: null,
+  pickingArrayBodies: null,
+  pickingArrayOperations: null,
   sketchPlanePickThenEdit: null,
   sectionEnabled: loadSectionEnabled(),
   sketchSectionEnabled: true,
@@ -291,6 +299,8 @@ export const useUiStore = create<UiState>((set) => ({
             pickingSketchPlane: null,
             pickingSectionFace: null,
             pickingRevolveAxis: null,
+            pickingArrayBodies: null,
+            pickingArrayOperations: null,
           }
         : { pickingExtrude },
     ),
@@ -306,6 +316,8 @@ export const useUiStore = create<UiState>((set) => ({
             pickingSketchPlane: null,
             pickingSectionFace: null,
             pickingRevolveAxis: null,
+            pickingArrayBodies: null,
+            pickingArrayOperations: null,
           }
         : { pickingEdges },
     ),
@@ -321,6 +333,8 @@ export const useUiStore = create<UiState>((set) => ({
             pickingSketchPlane: null,
             pickingSectionFace: null,
             pickingRevolveAxis: null,
+            pickingArrayBodies: null,
+            pickingArrayOperations: null,
             sketchPlanePickThenEdit: null,
           }
         : { pickingShellBodies },
@@ -337,6 +351,8 @@ export const useUiStore = create<UiState>((set) => ({
             pickingSketchPlane: null,
             pickingSectionFace: null,
             pickingRevolveAxis: null,
+            pickingArrayBodies: null,
+            pickingArrayOperations: null,
             sketchPlanePickThenEdit: null,
           }
         : { pickingShellFaces },
@@ -353,6 +369,8 @@ export const useUiStore = create<UiState>((set) => ({
             pickingSketchPlane: null,
             pickingSectionFace: null,
             pickingRevolveAxis: null,
+            pickingArrayBodies: null,
+            pickingArrayOperations: null,
           }
         : { pickingExtrudeBodies },
     ),
@@ -369,6 +387,8 @@ export const useUiStore = create<UiState>((set) => ({
             pickingShellFaces: null,
             pickingSectionFace: null,
             pickingRevolveAxis: null,
+            pickingArrayBodies: null,
+            pickingArrayOperations: null,
           }
         : { pickingSketchPlane, sketchPlanePickThenEdit: null },
     ),
@@ -384,6 +404,8 @@ export const useUiStore = create<UiState>((set) => ({
             pickingShellFaces: null,
             pickingSketchPlane: null,
             pickingRevolveAxis: null,
+            pickingArrayBodies: null,
+            pickingArrayOperations: null,
             sketchPlanePickThenEdit: null,
           }
         : { pickingSectionFace },
@@ -400,9 +422,47 @@ export const useUiStore = create<UiState>((set) => ({
             pickingShellFaces: null,
             pickingSketchPlane: null,
             pickingSectionFace: null,
+            pickingArrayBodies: null,
+            pickingArrayOperations: null,
             sketchPlanePickThenEdit: null,
           }
         : { pickingRevolveAxis },
+    ),
+  setPickingArrayBodies: (pickingArrayBodies) =>
+    set(
+      pickingArrayBodies
+        ? {
+            pickingArrayBodies,
+            pickingArrayOperations: null,
+            pickingExtrude: null,
+            pickingExtrudeBodies: null,
+            pickingEdges: null,
+            pickingShellBodies: null,
+            pickingShellFaces: null,
+            pickingSketchPlane: null,
+            pickingSectionFace: null,
+            pickingRevolveAxis: null,
+            sketchPlanePickThenEdit: null,
+          }
+        : { pickingArrayBodies },
+    ),
+  setPickingArrayOperations: (pickingArrayOperations) =>
+    set(
+      pickingArrayOperations
+        ? {
+            pickingArrayOperations,
+            pickingArrayBodies: null,
+            pickingExtrude: null,
+            pickingExtrudeBodies: null,
+            pickingEdges: null,
+            pickingShellBodies: null,
+            pickingShellFaces: null,
+            pickingSketchPlane: null,
+            pickingSectionFace: null,
+            pickingRevolveAxis: null,
+            sketchPlanePickThenEdit: null,
+          }
+        : { pickingArrayOperations },
     ),
   startSketchPlanePicking: (sketchPlanePickThenEdit, enterEdit) =>
     set({
@@ -415,6 +475,8 @@ export const useUiStore = create<UiState>((set) => ({
       pickingShellFaces: null,
       pickingSectionFace: null,
       pickingRevolveAxis: null,
+      pickingArrayBodies: null,
+      pickingArrayOperations: null,
     }),
   endPicking: () =>
     set({
@@ -426,6 +488,8 @@ export const useUiStore = create<UiState>((set) => ({
       pickingSketchPlane: null,
       pickingSectionFace: null,
       pickingRevolveAxis: null,
+      pickingArrayBodies: null,
+      pickingArrayOperations: null,
       sketchPlanePickThenEdit: null,
     }),
   cancelDelete: () => set({ deleteRequest: null }),

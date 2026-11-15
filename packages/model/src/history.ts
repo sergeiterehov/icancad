@@ -106,6 +106,8 @@ function referencedBodyIds(feature: Feature): string[] {
       return [feature.bodyId];
     case 'edge-treatment':
       return [...feature.faceRefs, ...feature.edgeRefs].map((ref) => ref.bodyId);
+    case 'array':
+      return feature.target === 'bodies' ? feature.bodyIds : [];
     case 'rib':
       return [feature.bodyId];
     case 'boolean':
@@ -122,6 +124,17 @@ export function getFeatureDependencies(feature: Feature, project: Model): string
   }
   if (feature.type === 'rib') {
     dependencies.add(feature.sketchId);
+  }
+  if (feature.type === 'array') {
+    // Repeating the bodies an operation made depends on that operation.
+    if (feature.target === 'operations') {
+      for (const featureId of feature.featureIds) dependencies.add(featureId);
+    }
+    for (const direction of feature.directions) {
+      if (direction.kind === 'path' && direction.path) {
+        dependencies.add(direction.path.sketchId);
+      }
+    }
   }
   if (feature.type === 'delete-body') {
     const body = project.bodies.find((candidate) => candidate.id === feature.bodyId);

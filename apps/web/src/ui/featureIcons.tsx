@@ -11,6 +11,7 @@ import {
   Ellipse,
   FileUp,
   Icon,
+  LayoutArrowDown,
   Layers,
   LineSquiggle,
   LoaderCircle,
@@ -124,6 +125,8 @@ export function FeatureIcon({ feature, size = 16 }: { feature: Feature; size?: n
       return feature.kind === 'chamfer' ? <ChamferIcon size={size} /> : <FilletIcon size={size} />;
     case 'shell':
       return <ShellIcon size={size} />;
+    case 'array':
+      return <LayoutArrowDown size={size} />;
     default:
       return <Layers size={size} />;
   }

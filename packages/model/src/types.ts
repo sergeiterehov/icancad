@@ -20,6 +20,7 @@ export type FeatureType =
   | 'hole'
   | 'rib'
   | 'edge-treatment'
+  | 'array'
   | 'boolean'
   | 'delete-body'
   | 'transform';
@@ -424,6 +425,41 @@ export interface TransformFeature extends FeatureBase {
   transform: Transform;
 }
 
+/** What an array repeats: picked bodies, or the bodies picked operations made. */
+export type ArrayTarget = 'bodies' | 'operations';
+
+/** A curve the copies follow; it lives in a sketch plane. */
+export interface ArrayPath {
+  kind: 'sketch-edge';
+  sketchId: string;
+  entityId: string;
+}
+
+/**
+ * One step of an array. `count` includes the seed, so 1 leaves only the
+ * original. Directions are applied one after another: the second one repeats
+ * the whole result of the first (ADR 0029).
+ */
+export type ArrayDirection =
+  | { kind: 'linear'; direction: Vec3; spacing: number; count: number }
+  | { kind: 'rotation'; axis: RevolveAxis; angle: number; count: number }
+  /** `path` is null while the direction waits for a curve to be picked. */
+  | { kind: 'path'; path: ArrayPath | null; count: number };
+
+/**
+ * Repeats bodies along one or more directions. The copies are new bodies of
+ * their own; the seeds stay where they are.
+ */
+export interface ArrayFeature extends FeatureBase {
+  type: 'array';
+  target: ArrayTarget;
+  /** Bodies directly picked when `target` is `bodies`. */
+  bodyIds: string[];
+  /** Operations whose created bodies are repeated when `target` is `operations`. */
+  featureIds: string[];
+  directions: ArrayDirection[];
+}
+
 export type Feature =
   | PrimitiveFeature
   | ImportMeshFeature
@@ -434,6 +470,7 @@ export type Feature =
   | HoleFeature
   | RibFeature
   | EdgeTreatmentFeature
+  | ArrayFeature
   | BooleanFeature
   | DeleteBodyFeature
   | TransformFeature;

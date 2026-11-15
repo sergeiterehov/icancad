@@ -48,7 +48,8 @@
     "extrudeNeedsSketch": "Select a sketch to extrude",
     "edgeTreatment": "Edge treatment",
     "shell": "Shell",
-    "primitives": "Primitives"
+    "primitives": "Primitives",
+    "array": "Array"
   },
   "tree": {
     "bodies": "Bodies",
@@ -216,7 +217,12 @@
     "REVOLVE_EDGE_NOT_STRAIGHT": "Only a straight edge can be a revolve axis",
     "REVOLVE_NO_ANGLE": "A revolve needs a non-zero angle between its ends",
     "UNKNOWN_MODEL": "Model not found",
-    "LAST_MODEL": "A project must keep at least one model"
+    "LAST_MODEL": "A project must keep at least one model",
+    "ARRAY_TOO_LARGE": "Too many copies; shorten a direction.",
+    "ARRAY_DIRECTION_MISSING": "A straight direction needs a vector.",
+    "ARRAY_AXIS_MISSING": "The rotation axis cannot be found.",
+    "ARRAY_PATH_MISSING": "Pick a sketch curve for the path.",
+    "ARRAY_PATH_EMPTY": "The path has no length."
   },
   "features": {
     "box": "Box",
@@ -231,7 +237,8 @@
     "extrude": "Extrude",
     "importMesh": "Imported mesh",
     "edgeTreatment": "Edge treatment",
-    "shell": "Shell"
+    "shell": "Shell",
+    "array": "Array"
   },
   "primitive": {
     "coneHint": "A top radius of 0 makes a sharp cone.",
@@ -555,5 +562,36 @@
     "delete": "Delete model",
     "deleteTitle": "Delete model?",
     "deleteText": "Model “{{name}}” and everything in it will be removed. You can undo this."
+  },
+  "array": {
+    "type": "Type",
+    "bodies": "Bodies",
+    "operations": "Operations",
+    "targets": "Objects",
+    "directions": "Directions",
+    "direction": "Direction {{index}}",
+    "linear": "Straight",
+    "rotation": "Rotation",
+    "path": "Path",
+    "count": "Quantity",
+    "spacing": "Step",
+    "angle": "Angle",
+    "axis": "Axis",
+    "reverse": "Reverse",
+    "addDirection": "Add direction",
+    "removeDirection": "Remove direction",
+    "pickBodies": "Pick bodies",
+    "pickOperations": "Pick operations",
+    "emptyBodies": "Pick bodies to repeat.",
+    "emptyOperations": "Pick operations whose bodies are repeated.",
+    "pickBodiesHint": "Click bodies in the 3D view.",
+    "pickOperationsHint": "Click operations in the timeline.",
+    "emptyDirections": "Add a direction to repeat the objects.",
+    "pickPath": "Pick a curve",
+    "noPath": "Pick a sketch curve",
+    "pathMenu": "Path",
+    "multiHint": "Each direction repeats the result of the previous one.",
+    "copies": "× {{count}}",
+    "modifies": "edits a body"
   }
 }

@@ -124,6 +124,14 @@ export function shellBodyId(featureId: string, sourceBodyId: string): string {
   return `${featureId}:shell-${sourceBodyId}`;
 }
 
+/**
+ * An array copy is named after its seed and the position combination it sits
+ * at, so changing a later direction keeps the copies of the earlier ones.
+ */
+export function arrayBodyId(featureId: string, sourceBodyId: string, key: string): string {
+  return `${featureId}:array-${sourceBodyId}-${key}`;
+}
+
 export function touch(project: Project): Project {
   return { ...project, updatedAt: new Date().toISOString() };
 }

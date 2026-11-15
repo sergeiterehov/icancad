@@ -113,6 +113,23 @@ describe('OCCT kernel engine', () => {
     expect(mesh.bbox.max[2]).toBeCloseTo(34, 5);
   });
 
+  it('copies a shape at a placement and keeps the source', () => {
+    engine.makeBox({ shapeId: 'array-source', dx: 2, dy: 3, dz: 4 });
+    const result = engine.transformShape({
+      shapeId: 'array-copy',
+      sourceShapeId: 'array-source',
+      matrix: [1, 0, 0, 10, 0, 1, 0, -5, 0, 0, 1, 2],
+    });
+    expect(result.stats).toEqual({ faces: 6, edges: 12, solids: 1 });
+    const copy = engine.tessellate('array-copy');
+    expect(copy.bbox.min[0]).toBeCloseTo(10, 5);
+    expect(copy.bbox.min[1]).toBeCloseTo(-5, 5);
+    expect(copy.bbox.min[2]).toBeCloseTo(2, 5);
+    // The array repeats the input instead of moving it.
+    const source = engine.tessellate('array-source');
+    expect(source.bbox.min[0]).toBeCloseTo(0, 5);
+  });
+
   it('creates every primitive kind', () => {
     expect(
       engine.makePrimitive({ kind: 'sphere', shapeId: 'sphere-1', radius: 10, at: [0, 20, 0] })

@@ -18,6 +18,21 @@ export interface OcctTransformation {
 export interface OcctTransformation3 {
   SetRotation_1(axis: unknown, angle: number): void;
   SetTranslation_1(vector: unknown): void;
+  /** Row-major 3x4 affine: a11 a12 a13 a14 a21 a22 a23 a24 a31 a32 a33 a34. */
+  SetValues(
+    a11: number,
+    a12: number,
+    a13: number,
+    a14: number,
+    a21: number,
+    a22: number,
+    a23: number,
+    a24: number,
+    a31: number,
+    a32: number,
+    a33: number,
+    a34: number,
+  ): void;
 }
 
 export interface OcctTriangle {
