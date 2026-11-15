@@ -1,15 +1,11 @@
 import clsx from 'clsx';
 import { Check, ChevronRight } from 'lucide-react';
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { create } from 'zustand';
+import { isTouchPointer } from '../viewport/inputProfile';
+import { installLongPressMenu } from './longPress';
+import { menuPosition, submenuPosition } from './menuPlacement';
 import { Tooltip } from './Tooltip';
 
 export type ContextMenuItem =
@@ -102,49 +98,50 @@ type MenuActionItem = Extract<ContextMenuItem, { onSelect: () => void }>;
 /** Time a submenu survives after the pointer leaves it, so it can be crossed. */
 const SUBMENU_CLOSE_DELAY = 260;
 
-/** Room a menu keeps between itself and the edge of the window. */
-const EDGE_MARGIN = 8;
-
 /**
- * A nested menu. It opens beside its row, and turns to the other side of the row
- * when the window has no room there: the row can sit anywhere, including the
- * right edge, where the nav cube opens its menu. It also steps up when its list
- * would reach below the window.
+ * A nested menu. It opens beside its row and stays inside the window, turning to
+ * the roomier side when the row has no room on its own. It is fixed rather than
+ * absolute, so the menu it belongs to can scroll without clipping it, and it
+ * follows its row when that menu scrolls.
  */
-function SubmenuPanel({ label, children }: { label: string; children: ReactNode }) {
+function SubmenuPanel({
+  label,
+  row,
+  children,
+}: {
+  label: string;
+  row: HTMLElement | null;
+  children: ReactNode;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const [placement, setPlacement] = useState<{ left: number; top: number } | null>(null);
 
-  // Measured before the first paint, so the menu never shows on the wrong side.
-  useLayoutEffect(() => {
+  const place = useCallback(() => {
     const panel = ref.current;
-    const row = panel?.parentElement;
     if (!panel || !row) return;
-    const rowBox = row.getBoundingClientRect();
-    const width = panel.offsetWidth;
-    const height = panel.offsetHeight;
-    // Beside the row while there is room, on the roomier side when there is not,
-    // and inside the window either way: the row can sit anywhere.
-    const roomRight = window.innerWidth - rowBox.right - EDGE_MARGIN;
-    const roomLeft = rowBox.left - EDGE_MARGIN;
-    const beside =
-      width > roomRight && roomLeft > roomRight ? rowBox.left - 4 - width : rowBox.right + 4;
-    const left = Math.max(
-      EDGE_MARGIN,
-      Math.min(beside, window.innerWidth - EDGE_MARGIN - width),
+    const box = row.getBoundingClientRect();
+    const next = submenuPosition(
+      { left: box.left, right: box.right, top: box.top },
+      { width: panel.offsetWidth, height: panel.offsetHeight },
+      { width: window.innerWidth, height: window.innerHeight },
     );
-    const top = Math.max(
-      EDGE_MARGIN,
-      Math.min(rowBox.top - 5, window.innerHeight - EDGE_MARGIN - height),
-    );
-    const next = {
-      left: Math.round(left - rowBox.left),
-      top: Math.round(top - rowBox.top),
-    };
     setPlacement((current) =>
       current && current.left === next.left && current.top === next.top ? current : next,
     );
-  });
+  }, [row]);
+
+  // Measured before the first paint, so the menu never shows on the wrong side.
+  useLayoutEffect(place);
+
+  // The menu this row belongs to can scroll, and then the row moves away.
+  useEffect(() => {
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => {
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+    };
+  }, [place]);
 
   return (
     <div
@@ -152,7 +149,7 @@ function SubmenuPanel({ label, children }: { label: string; children: ReactNode 
       role="menu"
       aria-label={label}
       className="context-menu context-submenu"
-      style={placement ?? undefined}
+      style={placement ?? { left: -9999, top: -9999 }}
     >
       {children}
     </div>
@@ -228,6 +225,9 @@ export function ContextMenuHost() {
   const ref = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
+  // The row a nested menu hangs from; a nested menu is fixed, so it cannot read
+  // its own parent from the DOM the way an absolute one could.
+  const submenuRow = useRef<HTMLElement | null>(null);
   const submenuTimer = useRef<number | null>(null);
 
   const cancelSubmenuClose = useCallback(() => {
@@ -237,12 +237,25 @@ export function ContextMenuHost() {
   }, []);
 
   const openSub = useCallback(
-    (id: string) => {
+    (id: string, row: HTMLElement | null) => {
       cancelSubmenuClose();
+      if (row) submenuRow.current = row;
       setOpenSubmenu(id);
     },
     [cancelSubmenuClose],
   );
+
+  // A finger cannot hover: it opens the submenu with the tap, and the click that
+  // follows must not read an already open menu and close it again.
+  const hoverOpensSub = useCallback(
+    (event: React.PointerEvent<HTMLElement>, id: string) => {
+      if (isTouchPointer(event.pointerType)) return;
+      openSub(id, event.currentTarget);
+    },
+    [openSub],
+  );
+
+  useEffect(() => cancelSubmenuClose, [cancelSubmenuClose]);
 
   // The pointer leaves a submenu every time it crosses to the next one, so a
   // submenu goes away on its own instead of staying behind.
@@ -254,30 +267,51 @@ export function ContextMenuHost() {
     }, SUBMENU_CLOSE_DELAY);
   }, [cancelSubmenuClose]);
 
-  useEffect(() => cancelSubmenuClose, [cancelSubmenuClose]);
+  const hoverLeavesRow = useCallback(
+    (event: React.PointerEvent<HTMLElement>) => {
+      if (isTouchPointer(event.pointerType)) return;
+      scheduleSubmenuClose();
+    },
+    [scheduleSubmenuClose],
+  );
+
+  // The host that draws a menu also makes a resting finger ask for one: the
+  // gesture lives with the menus, so no control can forget to support it.
+  useEffect(() => installLongPressMenu(), []);
 
   useEffect(() => {
     cancelSubmenuClose();
     setOpenSubmenu(null);
   }, [menuKey, cancelSubmenuClose]);
 
-  useLayoutEffect(() => {
+  const place = useCallback(() => {
     if (!menu) {
       setPosition(null);
       return;
     }
     const rect = ref.current?.getBoundingClientRect();
     if (!rect) return;
-    const margin = 8;
-    const left = Math.max(margin, Math.min(menu.x, window.innerWidth - rect.width - margin));
-    const top = Math.max(margin, Math.min(menu.y, window.innerHeight - rect.height - margin));
-    setPosition({ left, top });
+    setPosition(
+      menuPosition(
+        { left: menu.x, top: menu.y },
+        { width: rect.width, height: rect.height },
+        { width: window.innerWidth, height: window.innerHeight },
+      ),
+    );
   }, [menu]);
+
+  // Measured before the first paint, and again when the window turns or the
+  // on-screen keyboard appears: a menu that fits before must fit after.
+  useLayoutEffect(place, [place]);
 
   useEffect(() => {
     if (!menu) return;
     const handlePointerDown = (event: PointerEvent) => {
-      if (!ref.current?.contains(event.target as Node)) close();
+      // A nested menu is a menu too, wherever it is drawn: a press inside one
+      // must not take the whole thing away before its row is pressed.
+      const target = event.target as Element | null;
+      if (target?.closest?.('[role="menu"]')) return;
+      close();
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -298,14 +332,14 @@ export function ContextMenuHost() {
     window.addEventListener('pointerdown', handlePointerDown, true);
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('blur', handleDismiss);
-    window.addEventListener('resize', handleDismiss);
+    window.addEventListener('resize', place);
     return () => {
       window.removeEventListener('pointerdown', handlePointerDown, true);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('blur', handleDismiss);
-      window.removeEventListener('resize', handleDismiss);
+      window.removeEventListener('resize', place);
     };
-  }, [menu, close]);
+  }, [menu, close, place]);
 
   useEffect(() => {
     if (menu) ref.current?.querySelector('button')?.focus();
@@ -337,8 +371,8 @@ export function ContextMenuHost() {
             <div
               key={item.id}
               className="context-menu-sub"
-              onPointerEnter={() => openSub(item.id)}
-              onPointerLeave={scheduleSubmenuClose}
+              onPointerEnter={(event) => hoverOpensSub(event, item.id)}
+              onPointerLeave={hoverLeavesRow}
             >
               <button
                 type="button"
@@ -347,7 +381,10 @@ export function ContextMenuHost() {
                 aria-expanded={openSubmenu === item.id}
                 disabled={item.disabled}
                 className="context-menu-item"
-                onClick={() => setOpenSubmenu(openSubmenu === item.id ? null : item.id)}
+                onClick={(event) => {
+                  submenuRow.current = event.currentTarget.parentElement;
+                  setOpenSubmenu(openSubmenu === item.id ? null : item.id);
+                }}
               >
                 {item.icon && <span className="context-menu-icon">{item.icon}</span>}
                 <span className="context-menu-label">{item.label}</span>
@@ -356,7 +393,7 @@ export function ContextMenuHost() {
                 </span>
               </button>
               {openSubmenu === item.id && (
-                <SubmenuPanel label={item.label}>
+                <SubmenuPanel label={item.label} row={submenuRow.current}>
                   <div className="context-palette">
                     {palette.map((color) => (
                       <button
@@ -385,8 +422,8 @@ export function ContextMenuHost() {
             <div
               key={item.id}
               className="context-menu-sub"
-              onPointerEnter={() => openSub(item.id)}
-              onPointerLeave={scheduleSubmenuClose}
+              onPointerEnter={(event) => hoverOpensSub(event, item.id)}
+              onPointerLeave={hoverLeavesRow}
             >
               <button
                 type="button"
@@ -395,7 +432,10 @@ export function ContextMenuHost() {
                 aria-expanded={openSubmenu === item.id}
                 disabled={item.disabled}
                 className="context-menu-item"
-                onClick={() => setOpenSubmenu(openSubmenu === item.id ? null : item.id)}
+                onClick={(event) => {
+                  submenuRow.current = event.currentTarget.parentElement;
+                  setOpenSubmenu(openSubmenu === item.id ? null : item.id);
+                }}
               >
                 {item.icon && <span className="context-menu-icon">{item.icon}</span>}
                 <span className="context-menu-label">{item.label}</span>
@@ -404,7 +444,7 @@ export function ContextMenuHost() {
                 </span>
               </button>
               {openSubmenu === item.id && (
-                <SubmenuPanel label={item.label}>
+                <SubmenuPanel label={item.label} row={submenuRow.current}>
                   {item.submenu.map((child) =>
                     'separator' in child && child.separator ? (
                       <div key={child.id} className="context-menu-separator" />
