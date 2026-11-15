@@ -1,7 +1,9 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useUiStore } from '../stores/uiStore';
-import { isTouchPointer } from '../viewport/inputProfile';
+import { lastPointerType, primaryInputProfile } from '../viewport/inputProfile';
+import { useContextMenuStore } from './ContextMenu';
+import { closesOnLeave, dockHand, opensOnHover, showsTab, type DockHand } from './dockGesture';
 
 /** How long a panel shows itself at start before it tucks away. */
 export const STARTUP_TUCK_MS = 1000;
@@ -9,18 +11,24 @@ export const STARTUP_TUCK_MS = 1000;
 /**
  * A side panel that floats above the 3D view and slides out to an edge tab.
  *
- * A panel has two states. Its own is what the user left it in: opened on the
- * edge it lives behind or on its tab, and closed only by that tab, so nothing
- * under the hand can take it away. The other is the state its subject asks for:
- * while something on screen needs the panel — the inspector and the parameters
- * of the operation being edited — that state rules, and it starts unfolded. The
- * panel's own state is not touched meanwhile, so it is exactly as the user left
- * it once the subject is gone.
+ * The panel is worked in one of two ways, because the hands are two. A cursor
+ * opens it by coming to its edge or its tongue and gives it back by leaving, so
+ * an open panel carries no way out. A finger cannot hover and cannot leave, so
+ * for it the tongue is the control: it opens the panel and it is the only thing
+ * that closes it, which keeps a panel from vanishing under the hand that works
+ * in it.
+ *
+ * A panel has two states besides that. Its own is what the user left it in. The
+ * other is the state its subject asks for: while something on screen needs the
+ * panel — the inspector and the parameters of the operation being edited — that
+ * state rules, and it starts unfolded. The panel's own state is not touched
+ * meanwhile, so it is exactly as the user left it once the subject is gone. A
+ * subject also keeps the panel under a cursor, because a form is read, not
+ * passed by.
  *
  * The one planned move is at the very start: a panel is open so the workspace
  * shows what it has, and it tucks itself away a moment later on every device, so
- * the model keeps the screen. Anything the user does with the panel cancels
- * that, and afterwards nothing closes it but the tab.
+ * the model keeps the screen.
  */
 export function FloatDock({
   side,
@@ -49,6 +57,12 @@ export function FloatDock({
   // The subject's own state, unfolded by default. It does not outlive the
   // subject: the next one arrives unfolded as well.
   const [subjectOpen, setSubjectOpen] = useState(true);
+  // What is working the panel right now. The platform's own pointer decides
+  // before anything touches the dock, so a tablet never starts out believing it
+  // has a mouse; from then on the last pointer over the dock says.
+  const [hand, setHand] = useState<DockHand>(() =>
+    primaryInputProfile() === 'touch' ? 'touch' : dockHand(lastPointerType()),
+  );
   useEffect(() => {
     if (pinned) setSubjectOpen(true);
   }, [pinned]);
@@ -62,6 +76,11 @@ export function FloatDock({
     else setOpen(true);
   }, [held, setOpen]);
 
+  const hide = useCallback(() => {
+    if (held) setSubjectOpen(false);
+    else setOpen(false);
+  }, [held, setOpen]);
+
   const toggle = useCallback(() => {
     touched.current = true;
     if (held) setSubjectOpen((current) => !current);
@@ -70,8 +89,7 @@ export function FloatDock({
 
   // The panel shows itself at start and tucks away once, a moment later: an
   // open panel at launch is an invitation, not a state the user chose. A hand on
-  // the panel cancels the timer, and the tab is the only thing that closes a
-  // panel afterwards.
+  // the panel cancels the timer, on every device.
   //
   // The clock starts only after the open panel has been painted: on a slow
   // device the kernel and the shaders keep the main thread busy for seconds, and
@@ -96,23 +114,29 @@ export function FloatDock({
   }, [setOpen]);
 
   return (
-    <div className={`dock dock-${side}`} data-open={shown ? 'true' : 'false'}>
-      <div
-        className="dock-trigger"
-        aria-hidden="true"
-        onPointerEnter={(event) => {
-          if (!isTouchPointer(event.pointerType)) show();
-        }}
-        onClick={show}
-      />
+    <div
+      className={`dock dock-${side}`}
+      data-open={shown ? 'true' : 'false'}
+      data-tab={showsTab(hand, shown) ? 'true' : 'false'}
+      // Enter and leave are read on the dock as a whole, so moving between the
+      // edge, the tongue and the panel itself is not a departure.
+      onPointerEnter={(event) => {
+        const next = dockHand(event.pointerType);
+        if (next !== hand) setHand(next);
+        if (opensOnHover(next)) show();
+      }}
+      onPointerLeave={() => {
+        // A menu opened from the panel is drawn over the scene, so it counts as
+        // still being at the panel rather than having left it.
+        if (closesOnLeave(hand, held, useContextMenuStore.getState().menu !== null)) hide();
+      }}
+    >
+      <div className="dock-trigger" aria-hidden="true" onClick={show} />
       <aside
         className="dock-surface"
         aria-label={label}
         data-testid={testId}
         inert={!shown}
-        onPointerEnter={(event) => {
-          if (!isTouchPointer(event.pointerType)) show();
-        }}
         onFocusCapture={show}
       >
         {children}

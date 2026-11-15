@@ -368,6 +368,14 @@ button:disabled {
   transform: rotate(180deg);
 }
 
+/* The tongue is a finger's control. A cursor opens the panel by coming to it and
+   gives it back by leaving, so an open panel shows it no way out at all; the
+   tongue is then only the handle that brings a folded panel back. */
+.dock[data-tab='false'] .dock-tab {
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* The tab stays narrow on a desktop pointer, but a fingertip needs more room
    than it shows: a panel that is away gives the tab a wider edge to catch. */
 .dock[data-open='false'] .dock-tab::after {
