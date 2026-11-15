@@ -31,7 +31,7 @@ import {
 } from './cameraFit';
 import { cameraDragMode, cameraScheme } from './cameraControls';
 import {
-  inputProfile,
+  isTouchPointer,
   noteWheelKind,
   resolvedPointerKind,
   wheelPointerKind,
@@ -504,12 +504,14 @@ export class SceneController {
         move?: [number, number, number];
       }) => void;
       /** Handle under the pointer, or null when it leaves the handle. */
-      onHandleHover?: (event: {
-        id: string;
-        x: number;
-        y: number;
-        text: string;
-      } | null) => void;
+      onHandleHover?: (
+        event: {
+          id: string;
+          x: number;
+          y: number;
+          text: string;
+        } | null,
+      ) => void;
     } = {},
   ) {
     this.renderer = new THREE.WebGLRenderer({
@@ -644,7 +646,6 @@ export class SceneController {
     this.updateHandles();
     this.invalidate();
   }
-
 
   getGhosts(): SceneGhostInfo[] {
     return this.ghostSources.map((ghost) => ({
@@ -886,7 +887,8 @@ export class SceneController {
         });
     const anchorRadius = Math.max(0.001, 3.4 * thickness * worldPerPixel);
     const anchor =
-      anchorMaterial && new THREE.Mesh(new THREE.SphereGeometry(anchorRadius, 14, 10), anchorMaterial);
+      anchorMaterial &&
+      new THREE.Mesh(new THREE.SphereGeometry(anchorRadius, 14, 10), anchorMaterial);
     if (anchor) {
       anchor.position.copy(origin);
       anchor.renderOrder = RenderOrder.handle;
@@ -3452,9 +3454,41 @@ export class SceneController {
   private onPointerDown = (event: PointerEvent): void => {
     this.transition = null;
     if (this.touchDown(event)) return;
-    // A handle is grabbed before orbit, pan or selection, but not while a
-    // picking tool owns the pointer. Shift is the second edge treatment kind,
-    // so it must not turn a grab into a pan.
+    if (event.button === 0) {
+      this.pointerDown = { x: event.clientX, y: event.clientY };
+      this.pointerMoved = false;
+    }
+
+    // The camera is asked first: a gesture it names always wins, even when the
+    // press lands on a handle of a quick operation. Turning the view is the
+    // harder gesture to reach any other way, and a handle sits on the model
+    // where the user aims at it by accident.
+    const scheme = cameraScheme(useUiStore.getState().cameraScheme);
+    const mode = cameraDragMode(scheme, {
+      button: event.button,
+      shift: event.shiftKey,
+      alt: event.altKey,
+      ctrl: event.ctrlKey || event.metaKey,
+    });
+    if (mode) {
+      this.dragMode = mode;
+      // Only a turn picks a pivot, and only when the scheme takes it from the
+      // pointer: the nav cube and the schemes that keep the middle of the model
+      // turn around the target the camera already has.
+      this.orbitPivot =
+        mode === 'orbit' && scheme.pivot === 'cursor'
+          ? this.orbitPivotAt(event.clientX, event.clientY)
+          : null;
+      event.preventDefault();
+      this.lastX = event.clientX;
+      this.lastY = event.clientY;
+      this.canvas.setPointerCapture(event.pointerId);
+      return;
+    }
+
+    // What is left is selection and the handles: a handle is grabbed before
+    // selection, but not while a picking tool owns the pointer. Shift is the
+    // second edge treatment kind, so it must not turn a grab into a pan.
     if (
       event.button === 0 &&
       !event.altKey &&
@@ -3465,35 +3499,8 @@ export class SceneController {
       if (hit) {
         event.preventDefault();
         this.startHandleDrag(hit, event);
-        return;
       }
     }
-    if (event.button === 0) {
-      this.pointerDown = { x: event.clientX, y: event.clientY };
-      this.pointerMoved = false;
-    }
-
-    const scheme = cameraScheme(useUiStore.getState().cameraScheme);
-    const mode = cameraDragMode(scheme, {
-      button: event.button,
-      shift: event.shiftKey,
-      alt: event.altKey,
-      ctrl: event.ctrlKey || event.metaKey,
-    });
-    if (!mode) return;
-    this.dragMode = mode;
-    // Only a turn picks a pivot, and only when the scheme takes it from the
-    // pointer: the nav cube and the schemes that keep the middle of the model
-    // turn around the target the camera already has.
-    this.orbitPivot =
-      mode === 'orbit' && scheme.pivot === 'cursor'
-        ? this.orbitPivotAt(event.clientX, event.clientY)
-        : null;
-
-    event.preventDefault();
-    this.lastX = event.clientX;
-    this.lastY = event.clientY;
-    this.canvas.setPointerCapture(event.pointerId);
   };
 
   private onPointerMove = (event: PointerEvent): void => {
@@ -3654,21 +3661,40 @@ export class SceneController {
   /**
    * A finger on the view turns it: one finger orbits the point it holds, two
    * fingers pan and pinch. A tap still selects, because the release goes through
-   * the same press tracking as a click.
+   * the same press tracking as a click, and a finger that comes down on a handle
+   * of a quick operation pulls it: a tablet has no second button to offer. The
+   * event says what the pointer is, so no media query has to agree first.
    */
   private touchDown(event: PointerEvent): boolean {
-    if (!this.touchGestures(event)) return false;
+    if (!isTouchPointer(event.pointerType)) return false;
     this.fingers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    event.preventDefault();
     if (this.fingers.size >= 2) {
-      // The second finger takes the gesture over: the turn the first one started
-      // is dropped, and the release must not select anything.
+      // The second finger takes the gesture over: a handle the first one grabbed
+      // is let go of, the turn it started is dropped, and the release must not
+      // select anything. Two fingers are the camera's even over a sketch,
+      // because one is not enough to zoom.
+      if (this.handleDrag) this.finishHandleDrag(false, this.handleDrag.pointerId);
+      event.preventDefault();
       this.multiTouch = true;
       this.dragMode = null;
       this.pointerMoved = true;
       this.pinch = this.pinchState();
       return true;
     }
+    // Inside a sketch one finger draws and drags geometry; it belongs to the
+    // sketch editor, which listens on the same canvas and needs its click.
+    if (useUiStore.getState().activeSketchId) return false;
+    // A handle under the finger wins over the turn: it is the only way a tablet
+    // can reach a quick operation, and the arrow is what the finger aims at.
+    if (!this.faceHighlights.picking && !this.faceHighlights.bodyPicking) {
+      const hit = this.handleAt(event.clientX, event.clientY);
+      if (hit) {
+        event.preventDefault();
+        this.startHandleDrag(hit, event);
+        return true;
+      }
+    }
+    event.preventDefault();
     this.pointerDown = { x: event.clientX, y: event.clientY };
     this.pointerMoved = false;
     this.dragMode = 'orbit';
@@ -3679,7 +3705,7 @@ export class SceneController {
   }
 
   private touchMove(event: PointerEvent): boolean {
-    if (!this.touchGestures(event)) return false;
+    if (!isTouchPointer(event.pointerType)) return false;
     if (!this.fingers.has(event.pointerId)) return false;
     this.fingers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (this.multiTouch) {
@@ -3691,7 +3717,10 @@ export class SceneController {
       this.pinch = next;
       return true;
     }
-    if (this.dragMode !== 'orbit') return true;
+    if (this.dragMode !== 'orbit') {
+      // A handle a finger pulls is moved by the rest of the pointer handler.
+      return this.dragMode !== 'handle';
+    }
     const dx = event.clientX - this.lastX;
     const dy = event.clientY - this.lastY;
     this.lastX = event.clientX;
@@ -3703,23 +3732,15 @@ export class SceneController {
 
   /** Lifts a finger. The press tracking of the click path finishes the gesture. */
   private touchUp(event: PointerEvent): void {
-    if (!this.touchGestures(event)) return;
+    if (!isTouchPointer(event.pointerType)) return;
     if (!this.fingers.delete(event.pointerId)) return;
     this.pinch = this.fingers.size >= 2 ? this.pinchState() : null;
     if (this.fingers.size === 0) {
       this.multiTouch = false;
-      this.dragMode = null;
+      // A handle the finger pulled ends on the release below, which reads the
+      // mode to know what it is finishing.
+      if (this.dragMode !== 'handle') this.dragMode = null;
     }
-  }
-
-  /**
-   * True for a finger when the camera follows touch. The sketch editor owns
-   * touches while it is open: there they draw and drag geometry.
-   */
-  private touchGestures(event: PointerEvent): boolean {
-    if (event.pointerType !== 'touch') return false;
-    if (useUiStore.getState().activeSketchId) return false;
-    return inputProfile(useUiStore.getState().inputPreference) === 'touch';
   }
 
   /** Centre and spread of the two fingers on the view, or null for one. */
@@ -3750,7 +3771,10 @@ export class SceneController {
     const distance = clamp(this.distance * ratio, 0.05, 10_000_000);
     const raycaster = this.pointerToRay(clientX, clientY);
     const anchor = pointOnRayAtTarget(raycaster.ray.origin, raycaster.ray.direction, this.target);
-    this.target.sub(anchor).multiplyScalar(distance / this.distance).add(anchor);
+    this.target
+      .sub(anchor)
+      .multiplyScalar(distance / this.distance)
+      .add(anchor);
     this.distance = distance;
     this.updateCamera();
   }
@@ -3792,10 +3816,7 @@ export class SceneController {
     // The cut itself is not a face of the B-rep, so it stands for the body as
     // a whole and wins over anything the ray reaches behind it.
     const section = this.pickSectionAt(raycaster, bodyHit);
-    const visibleDistance = Math.min(
-      bodyHit?.distance ?? Infinity,
-      section?.distance ?? Infinity,
-    );
+    const visibleDistance = Math.min(bodyHit?.distance ?? Infinity, section?.distance ?? Infinity);
     // While faces are being picked they win over the solids they produced, so a
     // face stays clickable after it has been extruded.
     if (faces && faceHit && !preferBody) {
@@ -4024,10 +4045,7 @@ export class SceneController {
     const section = this.pickSectionAt(raycaster, bodyHit);
     const bodyId = section?.bodyId ?? (bodyHit?.object.userData.bodyId as string | undefined);
     const entry = bodyId ? this.bodies.get(bodyId) : undefined;
-    const visibleDistance = Math.min(
-      bodyHit?.distance ?? Infinity,
-      section?.distance ?? Infinity,
-    );
+    const visibleDistance = Math.min(bodyHit?.distance ?? Infinity, section?.distance ?? Infinity);
     // A sketch the user has selected shows its regions; they win over the body
     // the sketch lies on, because the click is meant for the sketch.
     if (this.selectionDetail.sketchId) {
@@ -4057,8 +4075,7 @@ export class SceneController {
     // detail picking there is no face here to take, so the click takes nothing.
     if (section) {
       const open =
-        this.selectionDetail.bodyIds.has(section.bodyId) ||
-        this.selectionDetail.geometrySelected;
+        this.selectionDetail.bodyIds.has(section.bodyId) || this.selectionDetail.geometrySelected;
       if (open) return null;
       return { body: { id: section.bodyId, kind: entry?.kind ?? 'solid' } };
     }
@@ -4537,9 +4554,7 @@ export class SceneController {
       }
       return;
     }
-    const ratio = Math.exp(
-      event.deltaY * (kind === 'mouse' ? WHEEL_ZOOM_RATE : SCROLL_ZOOM_RATE),
-    );
+    const ratio = Math.exp(event.deltaY * (kind === 'mouse' ? WHEEL_ZOOM_RATE : SCROLL_ZOOM_RATE));
     if (scheme.zoomToCursor) {
       this.zoomAt(event.clientX, event.clientY, ratio);
       return;
