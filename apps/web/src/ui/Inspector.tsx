@@ -91,7 +91,7 @@ import {
 import { isProjectedEntity } from '../sketch/projection';
 import { referenceMenuItems } from '../sketch/referenceMenu';
 import { measureInfo, measuresForEntity } from '../sketch/measure';
-import { sketchPlaneReady } from '../sketch/sectionPlane';
+import { sketchPlaneReady, canEditSketch } from '../sketch/sectionPlane';
 import { resolveRevolveAxis } from '../sketch/revolveAxis';
 import { SketchConstraints } from './SketchConstraints';
 import { Tooltip } from './Tooltip';
@@ -581,6 +581,7 @@ export function Inspector() {
   const preview = useKernelStore((state) => state.preview);
   const sketchFrames = useKernelStore((state) => state.sketchFrames);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
+  const setActiveSketch = useUiStore((state) => state.setActiveSketch);
 
   const feature =
     selection.length === 1 && selection[0]?.kind === 'feature'
@@ -1298,10 +1299,29 @@ export function Inspector() {
     : body
       ? { visible: body.visible, toggle: () => toggleBodyVisibility(body.id) }
       : undefined;
+  // A sketch is edited in its own editor, so the panel of a selected sketch
+  // carries the way in: the row of the tree, the operation in the strip and this
+  // header all offer the same door. The panel is about the sketch whether the
+  // tree selected the object or the strip selected the operation.
+  const panelSketch = sketchObject ?? (feature?.type === 'sketch' ? feature : undefined);
+  const sketchToEdit =
+    panelSketch && activeSketchId !== panelSketch.id && canEditSketch(panelSketch, featureErrors)
+      ? panelSketch
+      : undefined;
   return (
     <div className="panel" data-testid="inspector">
       <header className="panel-header">
         <span>{headerTitle}</span>
+        {sketchToEdit && (
+          <IconButton
+            label={t('sketch.edit')}
+            tooltip={t('sketch.edit')}
+            className="tiny"
+            onClick={() => setActiveSketch(sketchToEdit.id)}
+          >
+            <Pencil size={13} />
+          </IconButton>
+        )}
         {visibility && (
           <IconButton
             label={visibility.visible ? t('tree.hide') : t('tree.show')}
@@ -1616,7 +1636,8 @@ export function Inspector() {
                                 key={axis}
                                 label={axis.toUpperCase()}
                                 active={
-                                  revolveSpec.axis.kind === 'world' && revolveSpec.axis.axis === axis
+                                  revolveSpec.axis.kind === 'world' &&
+                                  revolveSpec.axis.axis === axis
                                 }
                                 onClick={() => {
                                   setPickingRevolveAxis(null);
@@ -1678,7 +1699,9 @@ export function Inspector() {
                                 tooltip={t('extrude.invertRevolve')}
                                 active={revolveSpec.inverted}
                                 className="dimension-toggle-button"
-                                onClick={() => setRevolveInverted(feature.id, !revolveSpec.inverted)}
+                                onClick={() =>
+                                  setRevolveInverted(feature.id, !revolveSpec.inverted)
+                                }
                               >
                                 <ArrowLeftRight size={15} />
                               </IconButton>

@@ -1,6 +1,6 @@
 import { HISTORY_START, objectVisible, sketchObjectId, type Feature } from '@icancad/model';
 import clsx from 'clsx';
-import { CornerUpLeft, Eye, EyeOff, SquareChevronsRight, Trash2 } from 'lucide-react';
+import { CornerUpLeft, Eye, EyeOff, Pencil, SquareChevronsRight, Trash2 } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDocumentStore, useViewModel } from '../stores/documentStore';
@@ -15,6 +15,7 @@ import { KernelStatus } from './KernelStatus';
 import { Tooltip } from './Tooltip';
 import { translate } from './translate';
 import { timelineCaretMark, type TimelineCaretMark } from './timelineCaret';
+import { chipOpensSketch, chipSelects } from './operationStrip';
 import { useListSelection } from './useListSelection';
 
 function RollbackCaret({
@@ -76,10 +77,13 @@ export function Timeline() {
   const locked = activeSketchId !== null || editingFeatureId !== null;
 
   // The strip is a list of operations in build order, so Shift takes the range
-  // between two chips just like it does between two rows of the tree.
+  // between two chips just like it does between two rows of the tree. A finger
+  // gets no such range and nothing to add a row to: an operation is the one
+  // thing being edited, so a tap takes it on its own.
   const clickFeature = useListSelection({
     ids: project.features.map((feature) => feature.id),
     selected: selection.filter((item) => item.kind === 'feature').map((item) => item.id),
+    finger: 'replace',
     onSelect: (ids, { id }) =>
       selectMany(
         ids.map((featureId) => ({ kind: 'feature' as const, id: featureId })),
@@ -171,6 +175,8 @@ export function Timeline() {
               const direct = isDirectlySelected(selection, 'feature', feature.id);
               const related = highlightedFeatureIds.includes(feature.id);
               const dimmed = dimmingEnabled && !related;
+              const sketchEditable =
+                feature.type === 'sketch' && canEditSketch(feature, featureErrors);
               // The operation being edited sits behind the cursor, but the user
               // is working on it: it must stay as bright as the rest.
               const rolledBack = index >= position && feature.id !== editingFeatureId;
@@ -206,6 +212,22 @@ export function Timeline() {
                           ? objectVisible(project, sketchObject)
                           : true;
                         showContextMenu(event, [
+                          // A sketch is the one operation with a mode of its own:
+                          // its menu offers that mode, and that is what tells it
+                          // apart from a plain click on the chip, which only
+                          // selects. Every other operation is edited where its
+                          // parameters are, so it has nothing to add here.
+                          ...(feature.type === 'sketch'
+                            ? [
+                                {
+                                  id: 'edit',
+                                  label: t('sketch.edit'),
+                                  icon: <Pencil size={14} />,
+                                  onSelect: () => setActiveSketch(feature.id),
+                                  ...(sketchEditable ? {} : { disabled: true }),
+                                },
+                              ]
+                            : []),
                           {
                             id: 'rollback',
                             label: t('timeline.rollback'),
@@ -247,9 +269,16 @@ export function Timeline() {
                           },
                         ]);
                       }}
-                      onClick={(event) => clickFeature(event, feature.id)}
+                      onClick={(event) => {
+                        // The sketch editor owns the workspace, so the strip
+                        // does not select an operation under it.
+                        if (!chipSelects(activeSketchId)) return;
+                        clickFeature(event, feature.id);
+                      }}
                       onDoubleClick={() => {
-                        if (feature.type === 'sketch' && canEditSketch(feature, featureErrors)) {
+                        // The one move the strip keeps in the editor: a second
+                        // press hands it over to another sketch.
+                        if (chipOpensSketch(feature, activeSketchId, sketchEditable)) {
                           setActiveSketch(feature.id);
                         }
                       }}
