@@ -6,10 +6,19 @@
  * everything from the anchor to the clicked row. Shift wins over Cmd and Ctrl,
  * so a range never depends on which key the user happened to press first.
  *
+ * A finger has no keyboard to hold a key with, so its click is the additive one
+ * by default: it toggles the row it lands on. This is the same rule the 3D view
+ * and the sketch canvas follow for a tap. Clearing the selection is left to a
+ * tap on empty space, which no list row can stand for. A list whose rows are the
+ * one thing being edited — the strip of operations — takes the row on its own
+ * instead, because there is nothing to add it to.
+ *
  * The rules are a pure function of the rows the list shows, the rows selected
  * right now and the anchor the list remembers, so the object tree, the timeline,
  * the operation panels and the sketch panels all behave the same way.
  */
+
+import { isKeylessPointer, lastPointerType } from '../viewport/inputProfile';
 
 /** How a click combines with what is already selected. */
 export type ListClickMode = 'replace' | 'toggle' | 'range';
@@ -19,12 +28,30 @@ export interface ClickModifiers {
   shiftKey: boolean;
   metaKey: boolean;
   ctrlKey: boolean;
+  /** What asked, when the caller knows it; otherwise the last press decides. */
+  pointerType?: string;
+}
+
+/**
+ * How a list reads a finger. Most lists let a finger add to the selection, since
+ * a finger has no key to hold; a list whose rows stand for the one thing being
+ * edited takes the row on its own instead.
+ */
+export type FingerSelection = 'additive' | 'replace';
+
+/** True when the click belongs to a pointer that has no keyboard to hold. */
+export function isFingerClick(event: ClickModifiers): boolean {
+  return isKeylessPointer(event.pointerType ?? lastPointerType());
 }
 
 /** The mode a click asks for, from the modifiers it carries. */
-export function listClickMode(event: ClickModifiers): ListClickMode {
+export function listClickMode(
+  event: ClickModifiers,
+  finger: FingerSelection = 'additive',
+): ListClickMode {
   if (event.shiftKey) return 'range';
   if (event.metaKey || event.ctrlKey) return 'toggle';
+  if (finger === 'additive' && isFingerClick(event)) return 'toggle';
   return 'replace';
 }
 
@@ -33,7 +60,8 @@ export function listClickMode(event: ClickModifiers): ListClickMode {
  * order to take a range from, so every modifier adds the one element picked.
  */
 export function isAdditiveClick(event: ClickModifiers): boolean {
-  return event.shiftKey || event.metaKey || event.ctrlKey;
+  if (event.shiftKey || event.metaKey || event.ctrlKey) return true;
+  return isFingerClick(event);
 }
 
 export interface ListClick {

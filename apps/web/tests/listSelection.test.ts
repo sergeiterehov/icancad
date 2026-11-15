@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   isAdditiveClick,
+  isFingerClick,
   listClickMode,
   nextListSelection,
   type ClickModifiers,
 } from '../src/ui/listSelection';
+import { lastPointerType, notePointerType } from '../src/viewport/inputProfile';
 
 const plain: ClickModifiers = { shiftKey: false, metaKey: false, ctrlKey: false };
 const cmd: ClickModifiers = { shiftKey: false, metaKey: true, ctrlKey: false };
@@ -30,6 +32,52 @@ describe('list click rules', () => {
     expect(isAdditiveClick(shift)).toBe(true);
   });
 
+  it('makes a pen or a finger additive, because neither has a key to hold', () => {
+    expect(listClickMode({ ...plain, pointerType: 'touch' })).toBe('toggle');
+    expect(isAdditiveClick({ ...plain, pointerType: 'touch' })).toBe(true);
+    expect(isFingerClick({ ...plain, pointerType: 'touch' })).toBe(true);
+    expect(isFingerClick({ ...plain, pointerType: 'pen' })).toBe(true);
+    expect(listClickMode({ ...plain, pointerType: 'pen' })).toBe('toggle');
+    expect(listClickMode({ ...plain, pointerType: 'mouse' })).toBe('replace');
+  });
+
+  it('follows the press when the click itself does not say what made it', () => {
+    expect(lastPointerType()).toBe('mouse');
+    notePointerType('touch');
+    try {
+      expect(isFingerClick(plain)).toBe(true);
+      expect(listClickMode(plain)).toBe('toggle');
+      // A handed type still wins over the remembered one.
+      expect(listClickMode({ ...plain, pointerType: 'mouse' })).toBe('replace');
+    } finally {
+      notePointerType('mouse');
+    }
+  });
+
+  it('keeps a finger range from a key it does not have', () => {
+    // Shift is unreachable with a finger, so a range needs the keyboard; the tap
+    // toggles instead of replacing.
+    expect(
+      nextListSelection({
+        ids: rows,
+        selected: ['a'],
+        anchor: 'a',
+        id: 'c',
+        mode: listClickMode({ ...plain, pointerType: 'touch' }),
+      }).selected,
+    ).toEqual(['a', 'c']);
+  });
+
+  it('lets a list take a finger as a plain click instead', () => {
+    // The strip of operations holds the one thing being edited, so a tap there
+    // takes the operation on its own.
+    expect(listClickMode({ ...plain, pointerType: 'touch' }, 'replace')).toBe('replace');
+    expect(listClickMode({ ...plain, pointerType: 'mouse' }, 'replace')).toBe('replace');
+    // The keys keep working where there is a keyboard.
+    expect(listClickMode(shift, 'replace')).toBe('range');
+    expect(listClickMode(cmd, 'replace')).toBe('toggle');
+  });
+
   it('replaces the selection with the clicked row', () => {
     expect(
       nextListSelection({
@@ -52,7 +100,13 @@ describe('list click rules', () => {
     });
     expect(added).toEqual({ selected: ['a', 'c'], anchor: 'c' });
     expect(
-      nextListSelection({ ids: rows, selected: added.selected, anchor: added.anchor, id: 'a', mode: 'toggle' }),
+      nextListSelection({
+        ids: rows,
+        selected: added.selected,
+        anchor: added.anchor,
+        id: 'a',
+        mode: 'toggle',
+      }),
     ).toEqual({ selected: ['c'], anchor: 'a' });
   });
 
@@ -101,7 +155,13 @@ describe('list click rules', () => {
     });
     expect(off).toEqual({ selected: ['a', 'e'], anchor: 'c' });
     expect(
-      nextListSelection({ ids: rows, selected: off.selected, anchor: off.anchor, id: 'e', mode: 'range' }),
+      nextListSelection({
+        ids: rows,
+        selected: off.selected,
+        anchor: off.anchor,
+        id: 'e',
+        mode: 'range',
+      }),
     ).toEqual({ selected: ['c', 'd', 'e'], anchor: 'c' });
   });
 

@@ -1,6 +1,7 @@
 import clsx from 'clsx';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { isTouchPointer } from '../viewport/inputProfile';
 
 interface TooltipProps {
   content: ReactNode;
@@ -57,6 +58,12 @@ export function Tooltip({ content, delay = 1500, className, children }: TooltipP
 
   useEffect(() => hide, [hide]);
 
+  // A tooltip is for a pointer that can rest on a control. A finger cannot, and
+  // the browser reports a tap as a hover followed by a focus, which used to pop
+  // a bubble over every button the user touched. Touch focus is not the same as
+  // keyboard focus either: only a visible focus ring earns a tooltip.
+  const hover = (type: string) => !isTouchPointer(type);
+
   useLayoutEffect(() => {
     if (!open) return;
     const anchorRect = anchor.current?.getBoundingClientRect();
@@ -83,9 +90,16 @@ export function Tooltip({ content, delay = 1500, className, children }: TooltipP
       <span
         ref={anchor}
         className={clsx('tooltip-anchor', className)}
-        onMouseEnter={show}
-        onMouseLeave={hide}
-        onFocusCapture={show}
+        onPointerEnter={(event) => {
+          if (hover(event.pointerType)) show();
+        }}
+        onPointerLeave={(event) => {
+          if (hover(event.pointerType)) hide();
+        }}
+        onFocusCapture={(event) => {
+          const target = event.target as HTMLElement | null;
+          if (target?.matches?.(':focus-visible')) show();
+        }}
         onBlurCapture={hide}
         onPointerDown={hide}
       >

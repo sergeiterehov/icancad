@@ -3,6 +3,7 @@ import {
   listClickMode,
   nextListSelection,
   type ClickModifiers,
+  type FingerSelection,
   type ListClickMode,
 } from './listSelection';
 
@@ -21,6 +22,7 @@ export function useListSelection({
   ids,
   selected,
   repeatClears,
+  finger,
   onSelect,
 }: {
   /** Rows in the order the list shows them. */
@@ -28,11 +30,13 @@ export function useListSelection({
   /** Rows selected now. */
   selected: readonly string[];
   repeatClears?: boolean;
+  /** How a finger reads the list; most lists let it add to the selection. */
+  finger?: FingerSelection;
   onSelect: (ids: string[], info: ListSelectionInfo) => void;
 }): (event: ClickModifiers, id: string) => void {
   const anchor = useRef<string | null>(null);
   return (event, id) => {
-    const mode = listClickMode(event);
+    const mode = listClickMode(event, finger);
     const result = nextListSelection({
       ids,
       selected,

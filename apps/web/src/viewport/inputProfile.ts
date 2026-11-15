@@ -18,6 +18,23 @@ export type InputProfile = 'pointer' | 'touch';
 export type PointerKind = 'mouse' | 'trackpad';
 export type InputPreference = 'auto' | PointerKind | InputProfile;
 
+/**
+ * True only for a finger. A mouse hovers and has buttons; a pen hovers too, so
+ * it keeps the pointer behaviours. A finger is the one that cannot hover, which
+ * is what every finger rule about hovering is really about.
+ */
+export function isTouchPointer(pointerType: string): boolean {
+  return pointerType === 'touch';
+}
+
+/**
+ * True for a pointer with no keyboard to hold a key with: a finger and a pen.
+ * Both select additively, because neither can press Shift.
+ */
+export function isKeylessPointer(pointerType: string): boolean {
+  return pointerType === 'touch' || pointerType === 'pen';
+}
+
 export const INPUT_PREFERENCES: readonly InputPreference[] = ['auto', 'mouse', 'trackpad', 'touch'];
 
 export const DEFAULT_INPUT_PREFERENCE: InputPreference = 'auto';
@@ -61,6 +78,34 @@ export function likelyPointerKind(platform: string): PointerKind {
 export function detectInputProfile(): InputProfile {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return 'pointer';
   return window.matchMedia('(pointer: coarse)').matches ? 'touch' : 'pointer';
+}
+
+/**
+ * The pointer that last pressed in the page, in pointer-type terms. A `click`
+ * carries no pointer type — the browser sends it as a mouse event whatever
+ * produced it — so the press that came before it is what says whether a finger
+ * or a mouse asked. Everything that reads a click for a modifier reads this too.
+ */
+let lastPointer = 'mouse';
+
+/** Notes the pointer a press came from. */
+export function notePointerType(pointerType: string): void {
+  lastPointer = pointerType;
+}
+
+/** The pointer type of the last press, `mouse` before anything was pressed. */
+export function lastPointerType(): string {
+  return lastPointer;
+}
+
+/** Keeps {@link lastPointerType} current; returns the function that stops it. */
+export function installPointerWatch(target: Document = document): () => void {
+  const watch = (event: Event) => {
+    const pointerType = (event as PointerEvent).pointerType;
+    if (pointerType) notePointerType(pointerType);
+  };
+  target.addEventListener('pointerdown', watch, true);
+  return () => target.removeEventListener('pointerdown', watch, true);
 }
 
 let detected: InputProfile | null = null;
