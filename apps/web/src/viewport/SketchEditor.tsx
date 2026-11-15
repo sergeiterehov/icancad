@@ -29,6 +29,13 @@ import {
   removeSketchEntities,
 } from '../sketch/constraintModel';
 import { sketchToolFromShortcut } from '../sketch/tool';
+import {
+  dragAnchors,
+  dragCreates,
+  dragEndsChain,
+  isTap,
+  TAP_SLOP_PX,
+} from '../sketch/createGesture';
 import { useApplyConstraintAction } from '../sketch/useConstraintActions';
 import { resolveConstraintShortcut } from '../ui/constraintCatalog';
 import { isAdditiveClick } from '../ui/listSelection';
@@ -48,6 +55,7 @@ import { useDocumentStore } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { useUiStore } from '../stores/uiStore';
 import { useContextMenuStore } from '../ui/ContextMenu';
+import { isKeylessPointer } from './inputProfile';
 import { getViewport, type ViewportCamera } from './handle';
 
 function distance(a: Point2, b: Point2): number {
@@ -211,6 +219,16 @@ export function SketchEditor() {
   const [hover, setHover] = useState<Point2 | null>(null);
   const [hoverSnap, setHoverSnap] = useState<SketchSnap | null>(null);
   const pointerDown = useRef<{ x: number; y: number } | null>(null);
+  // A press that may become a stretch, and the tap it must not also send.
+  const createPress = useRef<{
+    tool: SketchTool;
+    pointerId: number;
+    x: number;
+    y: number;
+    point: DraftPoint;
+    active: boolean;
+  } | null>(null);
+  const skipClick = useRef(false);
   const drag = useRef<DragState | null>(null);
   const highlightKey = useRef('');
   const commitQueue = useRef<Promise<void>>(Promise.resolve());
@@ -643,11 +661,59 @@ export function SketchEditor() {
     const hovering = useUiStore.getState().sketchHoverIds.length > 0;
     canvas.style.cursor = tool === 'select' ? (hovering ? 'pointer' : 'default') : 'crosshair';
 
+    /**
+     * The point a click or a finger gives the current tool: the neighbour the
+     * magnet found, or the nearest half millimetre. One place decides it, so a
+     * tap and the end of a stretch cannot land on different points.
+     */
+    const createPointAt = (
+      clientX: number,
+      clientY: number,
+      forTool: SketchTool,
+    ): DraftPoint | null => {
+      const draftLength = draftToolRef.current === forTool ? draftRef.current.length : 0;
+      const mode = snapModeFor(forTool, draftLength);
+      const snap = getViewport()?.snapSketch(
+        clientX,
+        clientY,
+        10,
+        currentSketchEntities(activeSketchId),
+      );
+      if (!snap) return null;
+      const target = magnetEnabled ? snapTargetPoint(snap, mode) : null;
+      return {
+        point: target ?? gridPoint(snap.point),
+        input: {
+          snap: magnetEnabled && target ? snap : null,
+          mode: magnetEnabled && target ? mode : 'none',
+        },
+      };
+    };
+
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
+      skipClick.current = false;
       pointerDown.current = { x: event.clientX, y: event.clientY };
       const activeTool = useUiStore.getState().sketchTool;
-      if (activeTool !== 'select' || !sketch) return;
+      if (activeTool !== 'select') {
+        // A finger that travels stretches the next primitive from where it came
+        // down, so the press point has to be kept before the first move.
+        createPress.current = null;
+        // A second finger pans and zooms the view; it must not also place a point.
+        if (activeTool === 'project' || !sketch || !event.isPrimary) return;
+        const press = createPointAt(event.clientX, event.clientY, activeTool);
+        if (!press) return;
+        createPress.current = {
+          tool: activeTool,
+          pointerId: event.pointerId,
+          x: event.clientX,
+          y: event.clientY,
+          point: press,
+          active: false,
+        };
+        return;
+      }
+      if (!sketch) return;
       const additive = isAdditiveClick(event);
       const pick = getViewport()?.pickSketch(
         event.clientX,
@@ -663,6 +729,18 @@ export function SketchEditor() {
       const pointIndex = pick.pointIndex ?? (entity.type === 'point' ? 0 : null);
       const key = pointIndex === null ? entity.id : `${entity.id}#${pointIndex}`;
       if (!additive) setSketchSelection([key]);
+      else if (isKeylessPointer(event.pointerType)) {
+        // A finger or a pen has no key to hold and no hover to read: its tap is
+        // taken here, on the press, and the click the browser sends after the
+        // release must not read the same tap a second time. This is what makes
+        // a selection grow press by press on a tablet.
+        skipClick.current = true;
+        setSketchSelection(
+          selectionIds.includes(key)
+            ? selectionIds.filter((candidate) => candidate !== key)
+            : [...selectionIds, key],
+        );
+      }
       // Projected geometry is derived: it can be selected and detached, but the
       // next rebuild would overwrite whatever a drag does to it.
       if (isProjectedEntity(sketch, entity.id)) return;
@@ -744,8 +822,11 @@ export function SketchEditor() {
           return;
         }
         if (!activeDrag.active) {
+          // A tap never drags: a finger or a pen lands where it aims, and it
+          // wanders further than a mouse does before it means to move anything.
+          const slop = isKeylessPointer(event.pointerType) ? TAP_SLOP_PX : 3;
           if (
-            Math.hypot(event.clientX - activeDrag.startX, event.clientY - activeDrag.startY) <= 3
+            Math.hypot(event.clientX - activeDrag.startX, event.clientY - activeDrag.startY) <= slop
           ) {
             return;
           }
@@ -774,6 +855,18 @@ export function SketchEditor() {
         return;
       }
       const draftLength = draftToolRef.current === activeTool ? draftRef.current.length : 0;
+      // A press that travels becomes a stretch: the press point becomes the
+      // first point of the primitive and everything below previews from it.
+      const press = createPress.current;
+      if (press && press.pointerId === event.pointerId && press.tool === activeTool) {
+        if (
+          !press.active &&
+          dragCreates(event.pointerType, event.clientX - press.x, event.clientY - press.y)
+        ) {
+          press.active = true;
+          if (dragAnchors(activeTool, draftLength)) updateDraft([press.point]);
+        }
+      }
       const mode = snapModeFor(activeTool, draftLength);
       const snap = getViewport()?.snapSketch(
         event.clientX,
@@ -789,6 +882,30 @@ export function SketchEditor() {
       const target = magnetEnabled ? snapTargetPoint(snap, mode) : null;
       setHover(target ?? gridPoint(snap.point));
       setHoverSnap(magnetEnabled && target ? snap : null);
+    };
+    /**
+     * A stretch ends where the finger lifts. That point is the one the next click
+     * would have given, so the tools keep their own idea of what the points mean
+     * and only the number of gestures changes.
+     */
+    const finishCreate = (event: PointerEvent) => {
+      const press = createPress.current;
+      if (!press) return;
+      createPress.current = null;
+      if (!press.active) return;
+      // The tap the browser sends after the stretch must not add the point twice.
+      skipClick.current = true;
+      const release = createPointAt(event.clientX, event.clientY, press.tool);
+      if (!release) return;
+      addPoint(release.point, release.input);
+      // A line and a curve name both ends with the gesture, so they end here
+      // instead of waiting for the next click to continue the chain.
+      if (dragEndsChain(press.tool)) {
+        if (press.tool === 'line') finishLine();
+        else finishBezier();
+      }
+      setHover(null);
+      setHoverSnap(null);
     };
     const finishDrag = () => {
       const activeDrag = drag.current;
@@ -837,7 +954,13 @@ export function SketchEditor() {
     const onClick = (event: MouseEvent) => {
       const down = pointerDown.current;
       pointerDown.current = null;
-      if (down && Math.hypot(event.clientX - down.x, event.clientY - down.y) > 4) return;
+      // A stretch already placed this point; the tap is its echo, not a second
+      // point in the same place.
+      if (skipClick.current) {
+        skipClick.current = false;
+        return;
+      }
+      if (down && !isTap(event.clientX - down.x, event.clientY - down.y)) return;
       const activeTool = useUiStore.getState().sketchTool;
       if (activeTool === 'project') return;
       if (activeTool === 'select') {
@@ -846,14 +969,20 @@ export function SketchEditor() {
           event.clientY,
           currentSketchEntities(activeSketchId),
         );
-        if (!pick) return;
+        if (!pick) {
+          // Empty space is the way to let go of everything, whatever the pointer.
+          setSketchSelection([]);
+          return;
+        }
         const pickEntity = pick.entityId
           ? sketchEntityIndex(sketch.entities).get(pick.entityId)
           : undefined;
         const key = sketchPickKey(pick, pickEntity);
         const additive = isAdditiveClick(event);
         if (!key) {
-          if (!additive) setSketchSelection([]);
+          // A pick that names nothing, such as a construction marker, is no more
+          // a row to toggle than empty space is.
+          setSketchSelection([]);
         } else if (!additive) {
           setSketchSelection([key]);
         } else {
@@ -865,20 +994,9 @@ export function SketchEditor() {
         }
         return;
       }
-      const draftLength = draftToolRef.current === activeTool ? draftRef.current.length : 0;
-      const mode = snapModeFor(activeTool, draftLength);
-      const snap = getViewport()?.snapSketch(
-        event.clientX,
-        event.clientY,
-        10,
-        currentSketchEntities(activeSketchId),
-      );
-      if (!snap) return;
-      const target = magnetEnabled ? snapTargetPoint(snap, mode) : null;
-      addPoint(target ?? gridPoint(snap.point), {
-        snap: magnetEnabled && target ? snap : null,
-        mode: magnetEnabled && target ? mode : 'none',
-      });
+      const point = createPointAt(event.clientX, event.clientY, activeTool);
+      if (!point) return;
+      addPoint(point.point, point.input);
     };
     const onDoubleClick = () => {
       const activeTool = useUiStore.getState().sketchTool;
@@ -927,13 +1045,22 @@ export function SketchEditor() {
       if (useUiStore.getState().sketchTool === 'select') canvas.style.cursor = 'default';
     };
 
+    // A gesture the browser takes away, such as a call from outside the page,
+    // leaves nothing behind: the stretch is dropped, not committed at its last
+    // known place.
+    const onPointerCancel = () => {
+      createPress.current = null;
+    };
+
     canvas.addEventListener('pointerdown', onPointerDown);
     canvas.addEventListener('pointermove', onPointerMove);
     canvas.addEventListener('pointerleave', onPointerLeave);
     canvas.addEventListener('click', onClick);
     canvas.addEventListener('dblclick', onDoubleClick);
     canvas.addEventListener('contextmenu', onContextMenu);
+    canvas.addEventListener('pointercancel', onPointerCancel);
     window.addEventListener('pointerup', finishDrag);
+    window.addEventListener('pointerup', finishCreate);
     return () => {
       canvas.style.cursor = '';
       canvas.removeEventListener('pointerdown', onPointerDown);
@@ -942,7 +1069,9 @@ export function SketchEditor() {
       canvas.removeEventListener('click', onClick);
       canvas.removeEventListener('dblclick', onDoubleClick);
       canvas.removeEventListener('contextmenu', onContextMenu);
+      canvas.removeEventListener('pointercancel', onPointerCancel);
       window.removeEventListener('pointerup', finishDrag);
+      window.removeEventListener('pointerup', finishCreate);
     };
   }, [
     activeSketchId,
@@ -961,6 +1090,11 @@ export function SketchEditor() {
 
   const previewEntity = (): SketchEntity | null => {
     if (!hover) return null;
+    if (tool === 'point') {
+      // A point is the primitive that follows a finger: it is drawn where the
+      // finger is and is placed where the finger lifts.
+      return { id: 'preview', type: 'point', construction: false, x: hover[0], y: hover[1] };
+    }
     if (tool === 'line' && draft[0]) {
       const start = draft[0].point;
       return {
