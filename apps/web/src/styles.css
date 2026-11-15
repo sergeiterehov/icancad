@@ -118,6 +118,8 @@ button:disabled {
   --dock-gap: 12px;
   --dock-left: 0px;
   --dock-right: 0px;
+  /* The model dock hangs below the logo, and its edge follows it there. */
+  --dock-top: 58px;
 }
 
 .workspace[data-left-dock='open'] {
@@ -214,7 +216,7 @@ button:disabled {
 }
 
 .dock-left {
-  top: 58px;
+  top: var(--dock-top);
   left: 0;
 }
 
@@ -295,6 +297,9 @@ button:disabled {
 
 .dock-left .dock-trigger {
   left: 0;
+  /* The edge starts where the panel does: the top of the column belongs to the
+     logo, and reaching past it for the logo should not open the panel. */
+  top: var(--dock-top);
 }
 
 .dock-right .dock-trigger {
@@ -2141,8 +2146,10 @@ button.selection-item[data-active='true'][data-error='true'] {
 /* The nav cube keeps clear of the operations panel and the right dock. */
 .viewport-nav {
   position: absolute;
-  right: calc(var(--dock-right, 0px) + 14px);
-  /* Lifted by the script when the operations panel reaches the cube. */
+  /* Both offsets come from the script: an inspector that reaches the corner
+     pushes the cube left, one that stops above it does not, and the operations
+     panel lifts the cube only where it would cover it. */
+  right: calc(var(--nav-right, var(--dock-right, 0px)) + 14px);
   bottom: calc(24px + var(--nav-lift, 0px));
   z-index: 3;
   transition:

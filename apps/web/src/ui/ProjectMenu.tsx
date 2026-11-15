@@ -19,6 +19,7 @@ import {
   LayoutPanelLeft,
   Moon,
   Palette,
+  PanelLeft,
   PanelLeftOpen,
   Redo2,
   Sun,
@@ -257,6 +258,43 @@ export function ProjectMenu() {
       },
       { id: 'separator-4', separator: true },
       {
+        id: 'language',
+        label: t('project.language'),
+        icon: <Languages size={14} />,
+        submenu: LOCALES.map((item) => ({
+          id: `locale-${item.value}`,
+          label: item.label,
+          checked: item.value === currentLocale,
+          keepOpen: true,
+          onSelect: () => void setLocale(item.value),
+        })),
+      },
+      {
+        id: 'panels',
+        label: t('project.panels'),
+        icon: <PanelLeft size={14} />,
+        submenu: [
+          {
+            id: 'compact-panels',
+            label: t('project.compactPanels'),
+            icon: <LayoutPanelLeft size={14} />,
+            checked: useUiStore.getState().compactPanels,
+            keepOpen: true,
+            onSelect: () =>
+              useUiStore.getState().setCompactPanels(!useUiStore.getState().compactPanels),
+          },
+          {
+            id: 'pin-docks',
+            label: t('project.pinPanels'),
+            icon: <PanelLeftOpen size={14} />,
+            checked: useUiStore.getState().docksPinned,
+            keepOpen: true,
+            onSelect: () =>
+              useUiStore.getState().setDocksPinned(!useUiStore.getState().docksPinned),
+          },
+        ],
+      },
+      {
         id: 'theme',
         label: t('project.theme'),
         icon: <Palette size={14} />,
@@ -278,35 +316,6 @@ export function ProjectMenu() {
             onSelect: () => setTheme('light'),
           },
         ],
-      },
-      {
-        id: 'language',
-        label: t('project.language'),
-        icon: <Languages size={14} />,
-        submenu: LOCALES.map((item) => ({
-          id: `locale-${item.value}`,
-          label: item.label,
-          checked: item.value === currentLocale,
-          keepOpen: true,
-          onSelect: () => void setLocale(item.value),
-        })),
-      },
-      {
-        id: 'pin-docks',
-        label: t('project.pinPanels'),
-        icon: <PanelLeftOpen size={14} />,
-        checked: useUiStore.getState().docksPinned,
-        keepOpen: true,
-        onSelect: () => useUiStore.getState().setDocksPinned(!useUiStore.getState().docksPinned),
-      },
-      {
-        id: 'compact-panels',
-        label: t('project.compactPanels'),
-        icon: <LayoutPanelLeft size={14} />,
-        checked: useUiStore.getState().compactPanels,
-        keepOpen: true,
-        onSelect: () =>
-          useUiStore.getState().setCompactPanels(!useUiStore.getState().compactPanels),
       },
       { id: 'separator-5', separator: true },
       {

@@ -14,9 +14,11 @@ function pixels(style: CSSStyleDeclaration, name: string): number {
 }
 
 /**
- * The orientation cube rests in the bottom-right corner. The operations panel
- * grows towards it as operations are added, so a cube the panel would cover
- * steps above the panel instead of disappearing under it.
+ * The orientation cube rests in the bottom-right corner. Two things can reach
+ * it: the operations panel, which grows towards it as operations are added, and
+ * the inspector, which owns that corner. Both only move the cube where they
+ * would actually cover it — a compact inspector that ends above the cube leaves
+ * it at the screen edge, and a panel that misses the cube's row changes nothing.
  */
 export function useNavCubeLift(nav: RefObject<HTMLDivElement | null>): void {
   // Opening the inspector moves the cube left, which changes what it meets.
@@ -27,6 +29,7 @@ export function useNavCubeLift(nav: RefObject<HTMLDivElement | null>): void {
     const workspace = element?.closest('.workspace');
     const dock = workspace?.querySelector('.operations-dock');
     const panel = dock?.querySelector('.timeline-panel');
+    const inspector = workspace?.querySelector('.dock-right .dock-surface');
     if (!element || !(workspace instanceof HTMLElement)) return;
     if (!(dock instanceof HTMLElement) || !(panel instanceof HTMLElement)) return;
 
@@ -37,9 +40,20 @@ export function useNavCubeLift(nav: RefObject<HTMLDivElement | null>): void {
       // both animate, and a half-way measurement would stick.
       const style = getComputedStyle(workspace);
       const gap = pixels(style, '--dock-gap');
-      const inspector = rightDock ? pixels(style, '--dock-right-width') + gap + INSET : 0;
-      const navRight = width - inspector - RIGHT;
-      const navLeft = navRight - element.offsetWidth;
+      const inspectorWidth = pixels(style, '--dock-right-width') + gap + INSET;
+      const size = element.offsetWidth;
+      const cubeTop = height - BOTTOM - element.offsetHeight;
+
+      // The inspector takes the corner only where it is: a panel that stops above
+      // the cube leaves it in place.
+      const sidebar =
+        inspector instanceof HTMLElement ? inspector.getBoundingClientRect().bottom : 0;
+      const dockReaches = rightDock && sidebar + GAP > cubeTop;
+      const inset = dockReaches ? inspectorWidth : 0;
+      workspace.style.setProperty('--nav-right', `${Math.round(inset)}px`);
+
+      const navRight = width - inset - RIGHT;
+      const navLeft = navRight - size;
 
       const shift = Number.parseFloat(dock.style.getPropertyValue('--bar-shift')) || 0;
       const panelWidth = panel.offsetWidth;
@@ -65,6 +79,9 @@ export function useNavCubeLift(nav: RefObject<HTMLDivElement | null>): void {
     const resize = new ResizeObserver(schedule);
     resize.observe(element);
     resize.observe(panel);
+    // A compact inspector changes height with its content, and that decides
+    // whether it stands in the cube's way.
+    if (inspector) resize.observe(inspector);
     const style = new MutationObserver(schedule);
     style.observe(dock, { attributes: true, attributeFilter: ['style'] });
     update();
