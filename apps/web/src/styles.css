@@ -66,6 +66,8 @@ body {
   -webkit-font-smoothing: antialiased;
   user-select: none;
   -webkit-user-select: none;
+  /* A resting finger asks for a menu; the browser's own callout would cover it. */
+  -webkit-touch-callout: none;
 }
 
 input,
@@ -144,6 +146,15 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* The corner gives way to a bar that needs the row, in the order the bar can
+   live without it: the project name and the rule before it first, then the
+   product name, and last the mark, which never gives way. */
+.project-anchor[data-squeeze] .project-separator,
+.project-anchor[data-squeeze] .project-name,
+.project-anchor[data-squeeze='2'] .brand-name {
+  display: none;
 }
 
 .project-separator {
@@ -285,13 +296,15 @@ button:disabled {
   transform: translateX(calc(100% + var(--dock-gap) + 2px));
 }
 
-/* The whole screen edge brings a panel back, as if the tongue were full height. */
+/* The whole screen edge brings a panel back, as if the tongue were full height.
+   The tab sits on top of it: the edge strip covers the same pixels, and a press
+   on the tab has to reach the tab, not the edge behind it. */
 .dock-trigger {
   position: fixed;
   top: 0;
   bottom: 0;
   width: 16px;
-  z-index: 24;
+  z-index: 1;
   pointer-events: auto;
 }
 
@@ -312,6 +325,7 @@ button:disabled {
 /* The tongue left at the screen edge when a panel is away. */
 .dock-tab {
   position: absolute;
+  z-index: 2;
   top: 50%;
   width: 16px;
   height: 64px;
@@ -343,9 +357,23 @@ button:disabled {
   border-radius: 8px 0 0 8px;
 }
 
+/* A panel stays where the user put it, so the tab is the way out of it: it stays
+   on screen while the panel is open, and its arrow turns inwards. */
 .dock[data-open='true'] .dock-tab {
-  opacity: 0;
-  pointer-events: none;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.dock[data-open='true'] .dock-tab svg {
+  transform: rotate(180deg);
+}
+
+/* The tab stays narrow on a desktop pointer, but a fingertip needs more room
+   than it shows: a panel that is away gives the tab a wider edge to catch. */
+.dock[data-open='false'] .dock-tab::after {
+  content: '';
+  position: absolute;
+  inset: -6px -5px;
 }
 
 .dock-tab:hover {
@@ -819,16 +847,9 @@ button:disabled {
   opacity: 0.5;
 }
 
-/* The eye belongs to the row under the pointer, and stays when it is the reason
-   the object is not in the scene. */
+/* The eye belongs to its row and is always on screen: a finger has no hover to
+   reveal it with, and hiding the object is how the row is used. */
 .tree-row .tree-eye {
-  opacity: 0;
-  transition: opacity 0.12s ease;
-}
-
-.tree-row:hover .tree-eye,
-.tree-row:focus-within .tree-eye,
-.tree-row .tree-eye[data-hidden='true'] {
   opacity: 1;
 }
 
@@ -1980,15 +2001,11 @@ button.selection-item[data-active='true'][data-error='true'] {
   flex: 0 0 auto;
 }
 
-/* The remove action only shows on hover so rows stay calm. */
+/* The remove action is part of its row, not a reward for hovering: a finger has
+   no hover to reveal it with. */
 .selection-item .icon-btn {
   width: 20px;
   height: 20px;
-  opacity: 0;
-}
-
-.selection-item:hover .icon-btn,
-.selection-item .icon-btn:focus-visible {
   opacity: 1;
 }
 
@@ -2022,6 +2039,11 @@ button.selection-item[data-active='true'][data-error='true'] {
   position: fixed;
   z-index: 1100;
   min-width: 184px;
+  /* A menu that does not fit the window scrolls instead of running off it: the
+     host keeps it inside the edges, and this keeps it inside the height. */
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -2629,6 +2651,10 @@ button.selection-item[data-active='true'][data-error='true'] {
   transform: translateX(-50%);
 }
 
+/* The plane tabs keep their labels. Safari shrinks a nested flex row far
+   earlier than Chrome does and ellipsises every tab while the number field
+   keeps its full width, which reads as a broken row on a tablet. So no tab may
+   fall below the width of its own label, and the number gives way instead. */
 .sketch-plane-row {
   display: flex;
   align-items: center;
@@ -2638,7 +2664,20 @@ button.selection-item[data-active='true'][data-error='true'] {
 
 .sketch-plane-row .segmented {
   flex: 1 1 auto;
-  min-width: 0;
+  min-width: max-content;
+}
+
+.sketch-plane-row .segmented-tab {
+  min-width: max-content;
+}
+
+.sketch-plane-row .sketch-offset-field {
+  flex: 0 1 94px;
+  min-width: 56px;
+}
+
+.sketch-plane-row .icon-btn {
+  flex: none;
 }
 
 .icon-row .icon-btn {
@@ -2975,12 +3014,15 @@ button.selection-item[data-active='true'][data-error='true'] {
   flex-direction: column;
 }
 
-/* A nested menu sits next to its parent item, not at the pointer. */
+/* A nested menu sits next to its parent item, not at the pointer. It is fixed so
+   that the menu it belongs to, which can scroll, cannot clip it; the host places
+   it beside the row and keeps it inside the window. */
 .context-submenu {
-  position: absolute;
-  left: calc(100% + 4px);
-  top: -5px;
+  position: fixed;
   min-width: 0;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 6px;
 }
 

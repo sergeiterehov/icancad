@@ -24,7 +24,7 @@
     "language": "Язык",
     "panels": "Панели",
     "compactPanels": "Компактные",
-    "pinPanels": "Закрепить",
+
     "saving": "Сохранение…",
     "saved": "Сохранено",
     "saveError": "Ошибка сохранения",
@@ -258,6 +258,7 @@
     "no": "Нет"
   },
   "context": {
+    "edit": "Редактировать",
     "deleteOperation": "Удалить операцию",
     "deleteObject": "Удалить объект",
     "rebuildFromHere": "Перестроить отсюда",

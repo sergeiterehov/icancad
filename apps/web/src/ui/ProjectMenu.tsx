@@ -20,7 +20,6 @@ import {
   Moon,
   Palette,
   PanelLeft,
-  PanelLeftOpen,
   Redo2,
   Sun,
   Trash2,
@@ -77,14 +76,13 @@ const MESH_MIME: Record<MeshFormat, string> = {
 
 /**
  * The logo is the project switcher: it stays in the corner while the model
- * panel slides away, and it carries the autosave indicator.
+ * panel is closed, and it carries the autosave indicator.
  */
 export function ProjectMenu() {
   const { t, i18n } = useTranslation();
   const saveState = useDocumentStore((state) => state.saveState);
   const theme = useThemeStore((state) => state.theme);
   const setTheme = useThemeStore((state) => state.setTheme);
-  const docksPinned = useUiStore((state) => state.docksPinned);
   const compactPanels = useUiStore((state) => state.compactPanels);
   const openMenu = useContextMenuStore((state) => state.open);
   const updateItems = useContextMenuStore((state) => state.updateItems);
@@ -283,15 +281,6 @@ export function ProjectMenu() {
             onSelect: () =>
               useUiStore.getState().setCompactPanels(!useUiStore.getState().compactPanels),
           },
-          {
-            id: 'pin-docks',
-            label: t('project.pinPanels'),
-            icon: <PanelLeftOpen size={14} />,
-            checked: useUiStore.getState().docksPinned,
-            keepOpen: true,
-            onSelect: () =>
-              useUiStore.getState().setDocksPinned(!useUiStore.getState().docksPinned),
-          },
         ],
       },
       {
@@ -351,7 +340,7 @@ export function ProjectMenu() {
   useEffect(() => {
     if (!projectMenuOpen) return;
     updateItems(menuItems(projectsRef.current));
-  }, [projectMenuOpen, theme, i18n.resolvedLanguage, docksPinned, compactPanels]);
+  }, [projectMenuOpen, theme, i18n.resolvedLanguage, compactPanels]);
 
   const openProjectMenu = async (event: MouseEvent<HTMLButtonElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();

@@ -1,162 +1,119 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useUiStore } from '../stores/uiStore';
-import { useContextMenuStore } from './ContextMenu';
+import { isTouchPointer } from '../viewport/inputProfile';
 
-/** How long the pointer has to stay away before a panel slides off screen. */
-const HIDE_DELAY = 1000;
-
-// Automated UI tests move the pointer between panels, so auto-hide would take
-// the target away between clicks.
-function autoHideEnabled(): boolean {
-  return typeof navigator === 'undefined' || !navigator.webdriver;
-}
+/** How long a panel shows itself at start before it tucks away. */
+export const STARTUP_TUCK_MS = 1000;
 
 /**
- * A side panel that floats above the 3D view and slides out to an edge tab. The
- * panel comes back on hovering any part of the screen edge, on the tab itself or
- * on click; `pinned` keeps it open while its subject is selected.
+ * A side panel that floats above the 3D view and slides out to an edge tab.
+ *
+ * A panel has two states. Its own is what the user left it in: opened on the
+ * edge it lives behind or on its tab, and closed only by that tab, so nothing
+ * under the hand can take it away. The other is the state its subject asks for:
+ * while something on screen needs the panel — the inspector and the parameters
+ * of the operation being edited — that state rules, and it starts unfolded. The
+ * panel's own state is not touched meanwhile, so it is exactly as the user left
+ * it once the subject is gone.
+ *
+ * The one planned move is at the very start: a panel is open so the workspace
+ * shows what it has, and it tucks itself away a moment later on every device, so
+ * the model keeps the screen. Anything the user does with the panel cancels
+ * that, and afterwards nothing closes it but the tab.
  */
 export function FloatDock({
   side,
   label,
   testId,
-  pinned = false,
+  pinned = null,
   children,
 }: {
   side: 'left' | 'right';
   label: string;
   testId?: string;
-  pinned?: boolean;
+  /**
+   * What on screen needs this panel, if anything. It unfolds the panel and rules
+   * over its own state; a different subject unfolds it again.
+   */
+  pinned?: string | null;
   children: ReactNode;
 }) {
   const open = useUiStore((state) => (side === 'left' ? state.leftDockOpen : state.rightDockOpen));
   const setOpen = useUiStore((state) =>
     side === 'left' ? state.setLeftDockOpen : state.setRightDockOpen,
   );
-  const docksPinned = useUiStore((state) => state.docksPinned);
-  const menuOpen = useContextMenuStore((state) => state.menu !== null);
-  const timer = useRef<number | null>(null);
-  const hovered = useRef(false);
-  const held = pinned || docksPinned;
-  const wasHeld = useRef(held);
-  const surface = useRef<HTMLElement>(null);
-  // A context menu of the panel is drawn outside it, so the pointer leaves; the
-  // panel has to wait for the menu instead of closing under it.
-  const menuInside = useRef(false);
-  const menuHolds = useRef(false);
+  // Set the moment the user works the panel, so the start-up tuck below leaves it
+  // alone from then on.
+  const touched = useRef(false);
+  // The subject's own state, unfolded by default. It does not outlive the
+  // subject: the next one arrives unfolded as well.
+  const [subjectOpen, setSubjectOpen] = useState(true);
+  useEffect(() => {
+    if (pinned) setSubjectOpen(true);
+  }, [pinned]);
 
-  const cancel = useCallback(() => {
-    if (timer.current === null) return;
-    window.clearTimeout(timer.current);
-    timer.current = null;
-  }, []);
+  const held = pinned !== null;
+  const shown = held ? subjectOpen : open;
 
   const show = useCallback(() => {
-    cancel();
-    setOpen(true);
-  }, [cancel, setOpen]);
+    touched.current = true;
+    if (held) setSubjectOpen(true);
+    else setOpen(true);
+  }, [held, setOpen]);
 
-  const scheduleHide = useCallback(() => {
-    cancel();
-    if (held || menuHolds.current || !autoHideEnabled()) return;
-    timer.current = window.setTimeout(() => {
-      timer.current = null;
-      setOpen(false);
-    }, HIDE_DELAY);
-  }, [cancel, held, setOpen]);
+  const toggle = useCallback(() => {
+    touched.current = true;
+    if (held) setSubjectOpen((current) => !current);
+    else setOpen(!open);
+  }, [held, open, setOpen]);
 
-  const enter = useCallback(() => {
-    hovered.current = true;
-    show();
-  }, [show]);
-
-  const leave = useCallback(() => {
-    hovered.current = false;
-    scheduleHide();
-  }, [scheduleHide]);
-
-  useEffect(() => cancel, [cancel]);
-
-  // A panel starts open, but it is only shown until the pointer is missed: left
-  // alone, it slides away after the usual delay like any other panel.
+  // The panel shows itself at start and tucks away once, a moment later: an
+  // open panel at launch is an invitation, not a state the user chose. A hand on
+  // the panel cancels the timer, and the tab is the only thing that closes a
+  // panel afterwards.
+  //
+  // The clock starts only after the open panel has been painted: on a slow
+  // device the kernel and the shaders keep the main thread busy for seconds, and
+  // a collapse set before the first frame of the panel would have nothing to
+  // animate from — it would simply not be there.
   useEffect(() => {
-    if (!hovered.current) scheduleHide();
-  }, [scheduleHide]);
-
-  useEffect(() => {
-    if (menuOpen) {
-      if (!menuInside.current) return;
-      menuInside.current = false;
-      menuHolds.current = true;
-      show();
-      return;
-    }
-    if (!menuHolds.current) return;
-    menuHolds.current = false;
-    if (!hovered.current) scheduleHide();
-  }, [menuOpen, show, scheduleHide]);
-
-  // A pinned panel opens at once and stays open; once the selection goes away it
-  // falls back to the usual auto-hide unless the pointer is still on it.
-  useEffect(() => {
-    const previous = wasHeld.current;
-    wasHeld.current = held;
-    if (held) {
-      cancel();
-      setOpen(true);
-      return;
-    }
-    if (previous && !hovered.current) scheduleHide();
-  }, [held, cancel, setOpen, scheduleHide]);
-
-  // A short panel still holds on to the whole column it would cover at full
-  // height: the pointer below it is over the scene, so nothing is in the way —
-  // the column is only measured, never covered by an overlay.
-  useEffect(() => {
-    if (!open) return;
-    const onMove = (event: PointerEvent) => {
-      const box = surface.current?.getBoundingClientRect();
-      if (!box) return;
-      const inside = side === 'left' ? event.clientX <= box.right : event.clientX >= box.left;
-      if (inside) {
-        hovered.current = true;
-        cancel();
-        return;
-      }
-      if (!hovered.current) return;
-      hovered.current = false;
-      scheduleHide();
+    let timer: number | null = null;
+    let inner = 0;
+    const outer = window.requestAnimationFrame(() => {
+      inner = window.requestAnimationFrame(() => {
+        timer = window.setTimeout(() => {
+          timer = null;
+          if (!touched.current) setOpen(false);
+        }, STARTUP_TUCK_MS);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(outer);
+      window.cancelAnimationFrame(inner);
+      if (timer !== null) window.clearTimeout(timer);
     };
-    window.addEventListener('pointermove', onMove);
-    return () => window.removeEventListener('pointermove', onMove);
-  }, [open, side, cancel, scheduleHide]);
+  }, [setOpen]);
 
   return (
-    <div className={`dock dock-${side}`} data-open={open ? 'true' : 'false'}>
+    <div className={`dock dock-${side}`} data-open={shown ? 'true' : 'false'}>
       <div
         className="dock-trigger"
         aria-hidden="true"
-        onPointerEnter={enter}
-        onPointerLeave={leave}
-        onClick={() => setOpen(true)}
+        onPointerEnter={(event) => {
+          if (!isTouchPointer(event.pointerType)) show();
+        }}
+        onClick={show}
       />
       <aside
-        ref={surface}
         className="dock-surface"
         aria-label={label}
         data-testid={testId}
-        inert={!open}
-        onContextMenuCapture={() => {
-          menuInside.current = true;
+        inert={!shown}
+        onPointerEnter={(event) => {
+          if (!isTouchPointer(event.pointerType)) show();
         }}
-        onPointerEnter={enter}
-        onPointerLeave={leave}
         onFocusCapture={show}
-        onBlurCapture={(event) => {
-          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-          scheduleHide();
-        }}
       >
         {children}
       </aside>
@@ -164,12 +121,9 @@ export function FloatDock({
         type="button"
         className="dock-tab"
         aria-label={label}
-        aria-expanded={open}
-        tabIndex={open ? -1 : 0}
+        aria-expanded={shown}
         title={label}
-        onPointerEnter={enter}
-        onPointerLeave={leave}
-        onClick={() => setOpen(!open)}
+        onClick={toggle}
       >
         {side === 'left' ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
       </button>

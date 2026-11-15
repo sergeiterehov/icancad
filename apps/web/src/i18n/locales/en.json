@@ -24,7 +24,6 @@
     "language": "Language",
     "panels": "Panels",
     "compactPanels": "Compact",
-    "pinPanels": "Pin",
     "saving": "Saving…",
     "saved": "Saved",
     "saveError": "Save failed",
@@ -258,6 +257,7 @@
     "no": "No"
   },
   "context": {
+    "edit": "Edit",
     "deleteOperation": "Delete operation",
     "deleteObject": "Delete object",
     "rebuildFromHere": "Rebuild from here",

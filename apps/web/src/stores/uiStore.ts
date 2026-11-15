@@ -44,11 +44,9 @@ interface UiState {
   deleteRequest: DeleteRequest | null;
   projectDeleteRequest: ProjectDeleteRequest | null;
   modelDeleteRequest: ModelDeleteRequest | null;
-  /** Floating side panels slide off screen when the pointer leaves them. */
+  /** Panels a side of the workspace shows; an open one stays until it is closed. */
   leftDockOpen: boolean;
   rightDockOpen: boolean;
-  /** Both panels stay open until the pin is cleared. */
-  docksPinned: boolean;
   /** Panels stop at their content instead of running the full height. */
   compactPanels: boolean;
   /** Pointer and wheel bindings the camera follows. */
@@ -64,7 +62,6 @@ interface UiState {
   modelListExpanded: boolean;
   setLeftDockOpen: (open: boolean) => void;
   setRightDockOpen: (open: boolean) => void;
-  setDocksPinned: (pinned: boolean) => void;
   setCompactPanels: (compact: boolean) => void;
   setModelListExpanded: (expanded: boolean) => void;
   requestProjectDelete: (request: ProjectDeleteRequest) => void;
@@ -139,7 +136,6 @@ let toastSequence = 0;
 
 const SECTION_ENABLED_KEY = 'icancad.sectionEnabled';
 const SKETCH_MAGNET_KEY = 'icancad.sketchMagnet';
-const DOCKS_PINNED_KEY = 'icancad.docksPinned';
 const COMPACT_PANELS_KEY = 'icancad.compactPanels';
 const CAMERA_SCHEME_KEY = 'icancad.cameraScheme';
 const INPUT_PREFERENCE_KEY = 'icancad.input';
@@ -158,15 +154,6 @@ function loadSketchMagnet(): boolean {
 function loadCompactPanels(): boolean {
   try {
     return localStorage.getItem(COMPACT_PANELS_KEY) === 'true';
-  } catch {
-    // localStorage can be unavailable in private mode.
-  }
-  return false;
-}
-
-function loadDocksPinned(): boolean {
-  try {
-    return localStorage.getItem(DOCKS_PINNED_KEY) === 'true';
   } catch {
     // localStorage can be unavailable in private mode.
   }
@@ -220,7 +207,6 @@ export const useUiStore = create<UiState>((set) => ({
   modelDeleteRequest: null,
   leftDockOpen: true,
   rightDockOpen: true,
-  docksPinned: loadDocksPinned(),
   compactPanels: loadCompactPanels(),
   cameraScheme: loadCameraScheme(),
   setCameraScheme: (cameraScheme) => {
@@ -252,14 +238,6 @@ export const useUiStore = create<UiState>((set) => ({
   modelListExpanded: false,
   setLeftDockOpen: (leftDockOpen) => set({ leftDockOpen }),
   setRightDockOpen: (rightDockOpen) => set({ rightDockOpen }),
-  setDocksPinned: (docksPinned) => {
-    try {
-      localStorage.setItem(DOCKS_PINNED_KEY, String(docksPinned));
-    } catch {
-      // A preference that cannot be stored still applies to this session.
-    }
-    set({ docksPinned });
-  },
   setCompactPanels: (compactPanels) => {
     try {
       localStorage.setItem(COMPACT_PANELS_KEY, String(compactPanels));
