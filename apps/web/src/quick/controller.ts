@@ -1,5 +1,5 @@
 import type { TessellationResult } from '@icancad/kernel';
-import { defaultRevolve } from '@icancad/model';
+import { activeModel, defaultRevolve } from '@icancad/model';
 import type {
   EdgeTreatmentFeature,
   EdgeTreatmentKind,
@@ -17,11 +17,7 @@ import {
 } from './edgeTreatment';
 import { predictBodyFaceOp, predictSketchOp } from './predict';
 import { buildQuickExtrude, findBoundExtrude } from './target';
-import type {
-  ExtrudePrediction,
-  PredictedExtrudeOp,
-  QuickTargetGeometry,
-} from './types';
+import type { ExtrudePrediction, PredictedExtrudeOp, QuickTargetGeometry } from './types';
 
 /** Below this the operation is treated as a click, not a drag. */
 const MIN_DISTANCE = 0.05;
@@ -88,11 +84,11 @@ export class QuickExtrudeDrag {
     this.created = false;
     this.changed = false;
     const bound = this.featureIdHint
-      ? project.features.find(
+      ? activeModel(project).features.find(
           (feature): feature is ExtrudeFeature =>
             feature.id === this.featureIdHint && feature.type === 'extrude',
         )
-      : findBoundExtrude(project, this.geometry.target);
+      : findBoundExtrude(activeModel(project), this.geometry.target);
     if (bound) {
       this.featureId = bound.id;
       this.originalFeature = bound;
@@ -141,7 +137,7 @@ export class QuickExtrudeDrag {
     }
 
     const state = useDocumentStore.getState();
-    const feature = state.project.features.find(
+    const feature = activeModel(state.project).features.find(
       (candidate): candidate is ExtrudeFeature =>
         candidate.id === this.featureId && candidate.type === 'extrude',
     );
@@ -175,7 +171,7 @@ export class QuickExtrudeDrag {
       return;
     }
     const state = useDocumentStore.getState();
-    const feature = state.project.features.find(
+    const feature = activeModel(state.project).features.find(
       (candidate): candidate is ExtrudeFeature =>
         candidate.id === this.featureId && candidate.type === 'extrude',
     );
@@ -230,9 +226,7 @@ export class QuickExtrudeDrag {
       samples: this.geometry.samples,
       direction,
       sign,
-      ...(this.geometry.preferredBodyId
-        ? { preferredBodyId: this.geometry.preferredBodyId }
-        : {}),
+      ...(this.geometry.preferredBodyId ? { preferredBodyId: this.geometry.preferredBodyId } : {}),
     });
   }
 
@@ -245,8 +239,11 @@ export class QuickExtrudeDrag {
     } else if (this.originalFeature) {
       state.preview({ type: 'feature/replace', feature: this.originalFeature });
     }
-    if (this.before && state.project.historyEnd !== this.before.historyEnd) {
-      state.preview({ type: 'history/set-end', featureId: this.before.historyEnd });
+    if (
+      this.before &&
+      activeModel(state.project).historyEnd !== activeModel(this.before).historyEnd
+    ) {
+      state.preview({ type: 'history/set-end', featureId: activeModel(this.before).historyEnd });
     }
     this.created = false;
     this.changed = false;
@@ -308,7 +305,7 @@ export class RevolveAngleDrag {
   update(value: number): void {
     if (!this.before) return;
     const state = useDocumentStore.getState();
-    const feature = state.project.features.find(
+    const feature = activeModel(state.project).features.find(
       (candidate): candidate is ExtrudeFeature =>
         candidate.id === this.featureId && candidate.type === 'extrude',
     );
@@ -332,8 +329,8 @@ export class RevolveAngleDrag {
 
   cancel(): void {
     const state = useDocumentStore.getState();
-    if (this.before && state.project.features.some((f) => f.id === this.featureId)) {
-      const feature = this.before.features.find(
+    if (this.before && activeModel(state.project).features.some((f) => f.id === this.featureId)) {
+      const feature = activeModel(this.before).features.find(
         (candidate): candidate is ExtrudeFeature =>
           candidate.id === this.featureId && candidate.type === 'extrude',
       );
@@ -394,7 +391,7 @@ export class QuickEdgeTreatmentDrag {
     // Only the handle of an open operation edits it; a track on a selection
     // always starts a new one.
     const bound = this.featureIdHint
-      ? project.features.find(
+      ? activeModel(project).features.find(
           (feature): feature is EdgeTreatmentFeature =>
             feature.id === this.featureIdHint && feature.type === 'edge-treatment',
         )
@@ -448,7 +445,7 @@ export class QuickEdgeTreatmentDrag {
     }
 
     const state = useDocumentStore.getState();
-    const feature = state.project.features.find(
+    const feature = activeModel(state.project).features.find(
       (candidate): candidate is EdgeTreatmentFeature =>
         candidate.id === this.featureId && candidate.type === 'edge-treatment',
     );
@@ -494,8 +491,11 @@ export class QuickEdgeTreatmentDrag {
     } else if (this.originalFeature) {
       state.preview({ type: 'feature/replace', feature: this.originalFeature });
     }
-    if (this.before && state.project.historyEnd !== this.before.historyEnd) {
-      state.preview({ type: 'history/set-end', featureId: this.before.historyEnd });
+    if (
+      this.before &&
+      activeModel(state.project).historyEnd !== activeModel(this.before).historyEnd
+    ) {
+      state.preview({ type: 'history/set-end', featureId: activeModel(this.before).historyEnd });
     }
     this.created = false;
     this.changed = false;

@@ -1,5 +1,6 @@
 import { Layers } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { activeModel } from '@icancad/model';
 import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
 import { Button } from './Controls';
@@ -11,7 +12,7 @@ export function ConfirmDialog() {
   const cancel = useUiStore((state) => state.cancelDelete);
   const confirm = useDocumentStore((state) => state.confirmRemoveFeature);
   const removeOnly = useDocumentStore((state) => state.removeFeaturesOnly);
-  const features = useDocumentStore((state) => state.project.features);
+  const features = useDocumentStore((state) => activeModel(state.project).features);
 
   if (!request) return null;
 

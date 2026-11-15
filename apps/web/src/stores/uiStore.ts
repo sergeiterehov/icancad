@@ -21,17 +21,34 @@ export interface ProjectDeleteRequest {
   name: string;
 }
 
+export interface ModelDeleteRequest {
+  id: string;
+  name: string;
+}
+
 interface UiState {
   toast: ToastMessage | null;
   deleteRequest: DeleteRequest | null;
   projectDeleteRequest: ProjectDeleteRequest | null;
+  modelDeleteRequest: ModelDeleteRequest | null;
   /** Floating side panels slide off screen when the pointer leaves them. */
   leftDockOpen: boolean;
   rightDockOpen: boolean;
+  /** Both panels stay open until the pin is cleared. */
+  docksPinned: boolean;
+  /** Panels stop at their content instead of running the full height. */
+  compactPanels: boolean;
+  /** The project structure is open; the model dock stays while it is. */
+  modelListExpanded: boolean;
   setLeftDockOpen: (open: boolean) => void;
   setRightDockOpen: (open: boolean) => void;
+  setDocksPinned: (pinned: boolean) => void;
+  setCompactPanels: (compact: boolean) => void;
+  setModelListExpanded: (expanded: boolean) => void;
   requestProjectDelete: (request: ProjectDeleteRequest) => void;
   cancelProjectDelete: () => void;
+  requestModelDelete: (request: ModelDeleteRequest) => void;
+  cancelModelDelete: () => void;
   /** Operation waiting for faces to be picked in the 3D view. */
   pickingExtrude: string | null;
   /** Operation waiting for target bodies to be picked in the 3D view. */
@@ -100,6 +117,8 @@ let toastSequence = 0;
 
 const SECTION_ENABLED_KEY = 'icancad.sectionEnabled';
 const SKETCH_MAGNET_KEY = 'icancad.sketchMagnet';
+const DOCKS_PINNED_KEY = 'icancad.docksPinned';
+const COMPACT_PANELS_KEY = 'icancad.compactPanels';
 
 function loadSketchMagnet(): boolean {
   try {
@@ -109,6 +128,24 @@ function loadSketchMagnet(): boolean {
     // localStorage can be unavailable in private mode.
   }
   return true;
+}
+
+function loadCompactPanels(): boolean {
+  try {
+    return localStorage.getItem(COMPACT_PANELS_KEY) === 'true';
+  } catch {
+    // localStorage can be unavailable in private mode.
+  }
+  return false;
+}
+
+function loadDocksPinned(): boolean {
+  try {
+    return localStorage.getItem(DOCKS_PINNED_KEY) === 'true';
+  } catch {
+    // localStorage can be unavailable in private mode.
+  }
+  return false;
 }
 
 function loadSectionEnabled(): boolean {
@@ -125,12 +162,35 @@ export const useUiStore = create<UiState>((set) => ({
   toast: null,
   deleteRequest: null,
   projectDeleteRequest: null,
+  modelDeleteRequest: null,
   leftDockOpen: true,
   rightDockOpen: true,
+  docksPinned: loadDocksPinned(),
+  compactPanels: loadCompactPanels(),
+  modelListExpanded: false,
   setLeftDockOpen: (leftDockOpen) => set({ leftDockOpen }),
   setRightDockOpen: (rightDockOpen) => set({ rightDockOpen }),
+  setDocksPinned: (docksPinned) => {
+    try {
+      localStorage.setItem(DOCKS_PINNED_KEY, String(docksPinned));
+    } catch {
+      // A preference that cannot be stored still applies to this session.
+    }
+    set({ docksPinned });
+  },
+  setCompactPanels: (compactPanels) => {
+    try {
+      localStorage.setItem(COMPACT_PANELS_KEY, String(compactPanels));
+    } catch {
+      // A preference that cannot be stored still applies to this session.
+    }
+    set({ compactPanels });
+  },
+  setModelListExpanded: (modelListExpanded) => set({ modelListExpanded }),
   requestProjectDelete: (projectDeleteRequest) => set({ projectDeleteRequest }),
   cancelProjectDelete: () => set({ projectDeleteRequest: null }),
+  requestModelDelete: (modelDeleteRequest) => set({ modelDeleteRequest }),
+  cancelModelDelete: () => set({ modelDeleteRequest: null }),
   pickingExtrude: null,
   pickingExtrudeBodies: null,
   pickingEdges: null,

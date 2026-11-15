@@ -3,7 +3,7 @@ import clsx from 'clsx';
 import { CornerUpLeft, Eye, EyeOff, SquareChevronsRight, Trash2 } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useDocumentStore } from '../stores/documentStore';
+import { useDocumentStore, useViewModel } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { isDirectlySelected, menuFeatureIds, selectedFeatureIds } from '../stores/selection';
@@ -58,7 +58,7 @@ function RollbackCaret({
 
 export function Timeline() {
   const { t } = useTranslation();
-  const project = useDocumentStore((state) => state.project);
+  const project = useViewModel();
   const selection = useDocumentStore((state) => state.selection);
   const select = useDocumentStore((state) => state.select);
   const setHistoryEnd = useDocumentStore((state) => state.setHistoryEnd);
@@ -93,9 +93,18 @@ export function Timeline() {
     previousCount.current = count;
     if (!follow.current || locked) return;
     follow.current = false;
-    track.current
-      ?.querySelector('.timeline-caret.active')
-      ?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+    const strip = track.current;
+    const caret = strip?.querySelector<HTMLElement>('.timeline-caret.active');
+    if (!strip || !caret) return;
+    // Scroll the strip itself: scrollIntoView also walks the document, which
+    // shifts the whole workspace when a model switch changes the caret.
+    const stripBox = strip.getBoundingClientRect();
+    const caretBox = caret.getBoundingClientRect();
+    strip.scrollTo({
+      left:
+        strip.scrollLeft + caretBox.left - stripBox.left - (strip.clientWidth - caretBox.width) / 2,
+      behavior: 'smooth',
+    });
   }, [count, position, locked]);
 
   const hasObjectSelection = selection.some((item) => item.kind !== 'feature');
@@ -116,17 +125,14 @@ export function Timeline() {
     else setHistoryEnd(project.features[index - 1]?.id ?? null);
   };
 
-  const projectionWarning = (feature: Feature) =>
-    (projectionLost[feature.id]?.length ?? 0) > 0;
+  const projectionWarning = (feature: Feature) => (projectionLost[feature.id]?.length ?? 0) > 0;
 
   const timelineTooltip = (feature: Feature, error: string | undefined) =>
     error ? (
       <span className="timeline-tooltip">
         <span className="timeline-tooltip-name">{feature.name}</span>
         <span>{t('timeline.errorHint')}</span>
-        <span className="timeline-tooltip-error">
-          {translate(t, `errors.${error}`, error)}
-        </span>
+        <span className="timeline-tooltip-error">{translate(t, `errors.${error}`, error)}</span>
       </span>
     ) : projectionWarning(feature) ? (
       <span className="timeline-tooltip">
@@ -152,7 +158,9 @@ export function Timeline() {
               const direct = isDirectlySelected(selection, 'feature', feature.id);
               const related = highlightedFeatureIds.includes(feature.id);
               const dimmed = dimmingEnabled && !related;
-              const rolledBack = index >= position;
+              // The operation being edited sits behind the cursor, but the user
+              // is working on it: it must stay as bright as the rest.
+              const rolledBack = index >= position && feature.id !== editingFeatureId;
               return (
                 <div key={feature.id} className="timeline-step">
                   <RollbackCaret
@@ -206,11 +214,7 @@ export function Timeline() {
                                 {
                                   id: 'visibility',
                                   label: sketchVisible ? t('tree.hide') : t('tree.show'),
-                                  icon: sketchVisible ? (
-                                    <EyeOff size={14} />
-                                  ) : (
-                                    <Eye size={14} />
-                                  ),
+                                  icon: sketchVisible ? <EyeOff size={14} /> : <Eye size={14} />,
                                   onSelect: () =>
                                     setObjectsVisible([
                                       { objectId: sketchObject, visible: !sketchVisible },

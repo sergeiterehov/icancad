@@ -15,7 +15,7 @@ import {
   type DimensionAnnotation,
   type ReferenceAnnotation,
 } from '../sketch/dimensions';
-import { useDocumentStore } from '../stores/documentStore';
+import { useDocumentStore, useViewModel } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { useUiStore } from '../stores/uiStore';
 import { CONSTRAINT_CATALOG } from '../ui/constraintCatalog';
@@ -57,7 +57,7 @@ export function SketchAnnotations() {
   const setSketchSelection = useUiStore((state) => state.setSketchSelection);
   const openMenu = useContextMenuStore((state) => state.open);
   const showToast = useUiStore((state) => state.showToast);
-  const project = useDocumentStore((state) => state.project);
+  const project = useViewModel();
   const apply = useDocumentStore((state) => state.apply);
   const beginWheelGesture = useDocumentStore((state) => state.beginWheelGesture);
   const endApplyGesture = useDocumentStore((state) => state.endApplyGesture);

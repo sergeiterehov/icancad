@@ -1,5 +1,6 @@
 import {
   activeFeatureIds,
+  activeModel,
   bodiesInHistory,
   featureBodyId,
   objectColor,
@@ -24,7 +25,7 @@ import {
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { canEditSketch, sketchPlaneReady } from '../sketch/sectionPlane';
-import { useDocumentStore, useViewProject, type SelectionKind } from '../stores/documentStore';
+import { useDocumentStore, useViewModel, type SelectionKind } from '../stores/documentStore';
 import { useKernelStore, type PreviewMarkKind } from '../stores/kernelStore';
 import { isDirectlySelected, linkedBodyIds } from '../stores/selection';
 import { useUiStore } from '../stores/uiStore';
@@ -32,51 +33,13 @@ import { IconButton } from './Controls';
 import { colorMenuItem, deleteMenuItem, objectTargets, visibilityMenuItem } from './objectMenu';
 import { showContextMenu, type ContextMenuItem } from './ContextMenu';
 import { FeatureIcon, SketchIcon } from './featureIcons';
+import { ModelSwitcher } from './ModelSwitcher';
+import { RenameInput } from './RenameInput';
 import { Tooltip } from './Tooltip';
-
-// The tree renames in place; committing happens on Enter or on blur.
-function RenameInput({
-  label,
-  value,
-  onCommit,
-  onCancel,
-}: {
-  label: string;
-  value: string;
-  onCommit: (name: string) => void;
-  onCancel: () => void;
-}) {
-  const [draft, setDraft] = useState(value);
-  const commit = () => {
-    const next = draft.trim();
-    if (next && next !== value) onCommit(next);
-    else onCancel();
-  };
-  return (
-    <input
-      className="tree-rename"
-      aria-label={label}
-      value={draft}
-      autoFocus
-      onFocus={(event) => event.currentTarget.select()}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={commit}
-      onClick={(event) => event.stopPropagation()}
-      onDoubleClick={(event) => event.stopPropagation()}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter') event.currentTarget.blur();
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          onCancel();
-        }
-      }}
-    />
-  );
-}
 
 export function LeftPanel() {
   const { t } = useTranslation();
-  const project = useViewProject();
+  const project = useViewModel();
   const bodies = bodiesInHistory(project);
   const activeIds = activeFeatureIds(project);
   const selection = useDocumentStore((state) => state.selection);
@@ -108,7 +71,7 @@ export function LeftPanel() {
 
   const objectMenu = (renameTargetId?: string): ContextMenuItem[] => {
     const state = useDocumentStore.getState();
-    const targets = objectTargets(state.project, state.selection);
+    const targets = objectTargets(activeModel(state.project), state.selection);
     const single = targets.length === 1;
     const items: ContextMenuItem[] = [];
     if (single && renameTargetId) {
@@ -229,7 +192,8 @@ export function LeftPanel() {
         )}
         <IconButton
           label={body.visible ? t('tree.hide') : t('tree.show')}
-          className="tiny"
+          className="tiny tree-eye"
+          data-hidden={String(!body.visible)}
           onClick={() => toggleBodyVisibility(body.id)}
         >
           {body.visible ? <Eye size={13} /> : <EyeOff size={13} />}
@@ -335,7 +299,8 @@ export function LeftPanel() {
         )}
         <IconButton
           label={visible ? t('tree.hide') : t('tree.show')}
-          className="tiny"
+          className="tiny tree-eye"
+          data-hidden={String(!visible)}
           onClick={() => toggleSketchVisibility(feature.id)}
         >
           {visible ? <Eye size={13} /> : <EyeOff size={13} />}
@@ -402,6 +367,7 @@ export function LeftPanel() {
 
   return (
     <div className="panel">
+      <ModelSwitcher />
       <div className="panel-body">
         {isEmpty ? (
           <div className="panel-empty">

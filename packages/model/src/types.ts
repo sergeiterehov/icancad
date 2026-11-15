@@ -492,16 +492,32 @@ export interface ViewState {
   sectionPlanes: SectionPlane[];
 }
 
-export interface Project {
-  schemaVersion: 2;
+/**
+ * Everything that is edited in 3D and listed in the object tree: one model of
+ * the project. A future assembly is another super-object kind, so the project
+ * stores a discriminated list rather than a flat feature history.
+ */
+export interface Model {
+  type: 'model';
   id: string;
   name: string;
-  units: 'mm';
   features: Feature[];
   bodies: BodyRef[];
   metadata: Record<string, ObjectMetadata>;
   view: ViewState;
   historyEnd: string | null;
+}
+
+/** The project's top level: models now, assemblies later. */
+export type SuperObject = Model;
+
+export interface Project {
+  schemaVersion: 3;
+  id: string;
+  name: string;
+  units: 'mm';
+  superObjects: SuperObject[];
+  activeSuperObjectId: string;
   createdAt: string;
   updatedAt: string;
 }

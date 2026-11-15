@@ -1,4 +1,4 @@
-import type { PrimitiveKind, SketchFeature } from '@icancad/model';
+import { activeModel, type PrimitiveKind, type SketchFeature } from '@icancad/model';
 import {
   Box,
   Circle,
@@ -79,7 +79,7 @@ export function ToolRail() {
           const sketchId = addSketchOnFace(t('features.sketch'));
           if (!sketchId) return;
           const store = useDocumentStore.getState();
-          const sketch = store.project.features.find(
+          const sketch = activeModel(store.project).features.find(
             (feature): feature is SketchFeature =>
               feature.type === 'sketch' && feature.id === sketchId,
           );
@@ -208,7 +208,7 @@ export function ToolRail() {
         onClick={() => {
           const store = useDocumentStore.getState();
           const input = shellInputFromSelection(
-            store.project,
+            activeModel(store.project),
             store.selection,
             useKernelStore.getState().meshes,
           );
@@ -225,7 +225,7 @@ export function ToolRail() {
         onClick={() => {
           const store = useDocumentStore.getState();
           const input = edgeTreatmentTargetFromSelection(
-            store.project,
+            activeModel(store.project),
             store.selection,
             useKernelStore.getState().meshes,
           );

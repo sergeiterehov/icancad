@@ -1,6 +1,7 @@
-import { createProject, parseProject } from '@icancad/model';
+import { activeModel, createProject, parseProject } from '@icancad/model';
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { i18n } from '../i18n';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { rebuildScene } from '../kernel/rebuild';
@@ -14,11 +15,15 @@ async function hydrateProject(): Promise<void> {
   try {
     const lastProjectId = await getSetting('lastProjectId');
     const stored = lastProjectId ? await loadProject(lastProjectId) : null;
-    const project = stored ? parseProject(stored) : createProject();
+    const project = stored
+      ? parseProject(stored, { modelName: i18n.t('model.defaultName') })
+      : createProject(i18n.t('project.untitled'), i18n.t('model.defaultName'));
     await setSetting('lastProjectId', project.id);
     useDocumentStore.getState().hydrate(project);
   } catch {
-    useDocumentStore.getState().hydrate(createProject());
+    useDocumentStore
+      .getState()
+      .hydrate(createProject(i18n.t('project.untitled'), i18n.t('model.defaultName')));
   }
 }
 
@@ -62,9 +67,10 @@ export function useAutosave(): void {
 
 export function useRebuildScene(): void {
   const { t } = useTranslation();
-  const features = useDocumentStore((state) => state.project.features);
-  const bodies = useDocumentStore((state) => state.project.bodies);
-  const historyEnd = useDocumentStore((state) => state.project.historyEnd);
+  const activeModelId = useDocumentStore((state) => state.project.activeSuperObjectId);
+  const features = useDocumentStore((state) => activeModel(state.project).features);
+  const bodies = useDocumentStore((state) => activeModel(state.project).bodies);
+  const historyEnd = useDocumentStore((state) => activeModel(state.project).historyEnd);
   // Selecting an operation previews it on top of the rolled-back state, so the
   // rebuild also has to follow the operation being edited.
   const editingFeatureId = useDocumentStore((state) => state.editingFeatureId);
@@ -74,10 +80,11 @@ export function useRebuildScene(): void {
   useEffect(() => {
     if (!hydrated || kernelStatus !== 'ready') return;
     const timer = setTimeout(() => {
-      void rebuildScene(useDocumentStore.getState().project, t('status.rebuild')).catch(
-        () => undefined,
-      );
+      void rebuildScene(
+        activeModel(useDocumentStore.getState().project),
+        t('status.rebuild'),
+      ).catch(() => undefined);
     }, 50);
     return () => clearTimeout(timer);
-  }, [features, bodies, historyEnd, editingFeatureId, hydrated, kernelStatus, t]);
+  }, [activeModelId, features, bodies, historyEnd, editingFeatureId, hydrated, kernelStatus, t]);
 }

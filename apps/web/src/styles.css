@@ -139,6 +139,16 @@ button:disabled {
   top: 10px;
   left: 10px;
   z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.project-separator {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 18px;
+  background: var(--border);
 }
 
 .project-button {
@@ -231,6 +241,19 @@ button:disabled {
     opacity 0.18s ease;
 }
 
+/* Compact panels stop where their content does; the full-height default keeps
+   the panel as a column of the shell. Either way the panel never leaves the
+   screen, and a compact one that runs out of room scrolls inside. */
+.workspace[data-compact-panels='true'] .dock-surface {
+  bottom: auto;
+  height: max-content;
+  max-height: 100%;
+}
+
+.workspace[data-compact-panels='true'] .dock-surface .panel-body {
+  padding-bottom: 8px;
+}
+
 .dock-surface > .panel {
   flex: 1 1 auto;
   height: auto;
@@ -280,7 +303,6 @@ button:disabled {
      would push the cube out from under the pointer. */
   bottom: calc(144px + var(--nav-lift, 0px));
 }
-
 
 /* The tongue left at the screen edge when a panel is away. */
 .dock-tab {
@@ -342,7 +364,7 @@ button:disabled {
 
 .tool-dock > .tool-rail {
   pointer-events: auto;
-  max-width: max(0px, calc(100% - var(--dock-left) - var(--dock-right)));
+  max-width: var(--bar-max, max(0px, calc(100% - var(--dock-left) - var(--dock-right))));
   overflow-x: auto;
   padding: 4px 6px;
   border: 1px solid var(--border);
@@ -374,7 +396,7 @@ button:disabled {
 .operations-dock > .timeline-panel {
   pointer-events: auto;
   width: max-content;
-  max-width: max(0px, calc(100% - var(--dock-left) - var(--dock-right)));
+  max-width: var(--bar-max, max(0px, calc(100% - var(--dock-left) - var(--dock-right))));
   position: relative;
   left: var(--bar-shift, 0px);
   transition:
@@ -429,26 +451,6 @@ button:disabled {
   color: var(--danger);
 }
 
-.project-strip {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  height: 40px;
-  padding: 0 8px 0 10px;
-  border-bottom: 1px solid var(--border);
-}
-
-.project-strip-icon {
-  flex: 0 0 auto;
-  color: var(--text-faint);
-}
-
-.project-strip .project-name {
-  flex: 1 1 auto;
-  width: auto;
-  min-width: 0;
-}
-
 .brand-mark {
   width: 28px;
   height: 28px;
@@ -468,13 +470,14 @@ button:disabled {
   width: 190px;
   min-width: 70px;
   flex: 0 1 190px;
-  height: 28px;
+  height: 30px;
   padding: 0 8px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
   color: var(--text);
-  font-size: 12.5px;
+  font-size: 13px;
+  font-weight: 400;
 }
 
 .project-name:hover {
@@ -567,19 +570,23 @@ button:disabled {
   background: var(--panel);
 }
 
+/* One heading style for panels and for disclosure sections. */
+.panel-header,
+.disclosure-toggle {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
 .panel-header {
   flex: 0 0 34px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 0 8px 0 10px;
-  border-bottom: 1px solid var(--border);
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text);
+  padding: 0 8px;
 }
 
 .panel-body {
@@ -590,17 +597,11 @@ button:disabled {
 }
 
 .panel-section {
-  padding: 10px 8px 12px;
-  border-bottom: 1px solid var(--border);
+  padding: 6px 8px 3px;
 }
 
 .inspector-field {
-  padding: 10px 8px 2px;
-}
-
-.panel-properties {
-  padding: 8px;
-  border-bottom: 1px solid var(--border);
+  padding: 8px 8px 3px;
 }
 
 .inspector-actions {
@@ -614,15 +615,22 @@ button:disabled {
   margin: 0;
 }
 
-.panel-section:last-child {
-  border-bottom: none;
+/* A rule opens a list block; groups of plain controls flow together. */
+.panel-section-divided {
+  border-top: 1px solid var(--border);
 }
 
-/* A section whose switch is off has no body: keep its vertical padding even. */
-.panel-section:has(> .panel-section-header:only-child) {
-  padding-bottom: 10px;
+.panel-section-divided:first-child {
+  border-top: none;
 }
 
+/* Keep the rule clear of the content right above it. */
+.panel-section:has(+ .panel-section-divided),
+.inspector-field:has(+ .panel-section-divided) {
+  padding-bottom: 12px;
+}
+
+/* A section whose switch is off has no body: the header is the whole content. */
 .panel-section:has(> .panel-section-header:only-child) > .panel-section-header {
   margin-bottom: 0;
 }
@@ -631,18 +639,18 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .panel-section-title {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: 0;
+  font-size: 9.5px;
+  font-weight: 400;
+  letter-spacing: 0.06em;
   text-transform: none;
-  color: var(--text);
+  color: var(--text-faint);
 }
 
 .panel-section-icon {
@@ -657,6 +665,84 @@ button:disabled {
   background: var(--panel-3);
   color: var(--text-dim);
   letter-spacing: 0;
+}
+
+.model-switcher {
+  flex: 0 0 auto;
+}
+
+.disclosure-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 34px;
+  padding: 0 8px;
+}
+
+.disclosure-toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+}
+
+.disclosure-chevron {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+.disclosure-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.section-panel {
+  flex: 0 0 auto;
+}
+
+.section-panel-body {
+  padding-bottom: 12px;
+}
+
+.section-panel + .panel > .panel-header {
+  border-top: 1px solid var(--border);
+}
+
+.model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 0;
+}
+
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 7px;
+  color: var(--text-dim);
+  user-select: none;
+}
+
+.model-row:hover,
+.model-row.active {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.model-switcher-divider {
+  border-top: 1px solid var(--border);
 }
 
 .tree-list {
@@ -726,6 +812,19 @@ button:disabled {
 
 .tree-row.muted {
   opacity: 0.5;
+}
+
+/* The eye belongs to the row under the pointer, and stays when it is the reason
+   the object is not in the scene. */
+.tree-row .tree-eye {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.tree-row:hover .tree-eye,
+.tree-row:focus-within .tree-eye,
+.tree-row .tree-eye[data-hidden='true'] {
+  opacity: 1;
 }
 
 .tree-icon {
@@ -800,8 +899,9 @@ button:disabled {
 
 .field-label {
   font-size: 9.5px;
-  text-transform: uppercase;
+  font-weight: 400;
   letter-spacing: 0.06em;
+  text-transform: none;
   color: var(--text-faint);
 }
 
@@ -1395,7 +1495,6 @@ button:disabled {
   width: 62%;
 }
 
-
 .skeleton-pill {
   width: 62px;
   height: 14px;
@@ -1592,29 +1691,17 @@ button:disabled {
    when active, red at the error barrier, muted when the caret would be hidden. */
 .timeline-caret.calculating::before {
   height: 16px;
-  background: repeating-linear-gradient(
-    to top,
-    var(--text-faint) 0 3px,
-    transparent 3px 6px
-  );
+  background: repeating-linear-gradient(to top, var(--text-faint) 0 3px, transparent 3px 6px);
   animation: timeline-caret-flow 0.6s linear infinite;
 }
 
 .timeline-caret.calculating.active::before {
   height: 24px;
-  background: repeating-linear-gradient(
-    to top,
-    var(--accent) 0 3px,
-    transparent 3px 6px
-  );
+  background: repeating-linear-gradient(to top, var(--accent) 0 3px, transparent 3px 6px);
 }
 
 .timeline-caret.calculating.error::before {
-  background: repeating-linear-gradient(
-    to top,
-    var(--danger) 0 3px,
-    transparent 3px 6px
-  );
+  background: repeating-linear-gradient(to top, var(--danger) 0 3px, transparent 3px 6px);
 }
 
 @keyframes timeline-caret-flow {
@@ -2076,6 +2163,12 @@ button.selection-item[data-active='true'][data-error='true'] {
   gap: 8px;
 }
 
+.control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .dimension-row {
   display: flex;
   gap: 6px;
@@ -2393,6 +2486,10 @@ button.selection-item[data-active='true'][data-error='true'] {
   color: var(--text-faint);
 }
 
+.section-plane .section-invert:hover:not(:disabled) {
+  background: var(--panel-3);
+}
+
 .sketch-overlay {
   position: absolute;
   inset: 0;
@@ -2690,7 +2787,6 @@ button.selection-item[data-active='true'][data-error='true'] {
   border: none;
   border-radius: 999px;
   background: var(--panel-3);
-  box-shadow: inset 0 0 0 1px var(--border-strong);
   cursor: pointer;
   transition: background 0.12s ease;
 }
@@ -2710,12 +2806,11 @@ button.selection-item[data-active='true'][data-error='true'] {
 }
 
 .switch:hover {
-  box-shadow: inset 0 0 0 1px var(--text-faint);
+  background: color-mix(in srgb, var(--text) 8%, var(--panel-3));
 }
 
 .switch[data-active='true'] {
   background: var(--accent);
-  box-shadow: none;
 }
 
 .switch[data-active='true']::after {
@@ -2733,20 +2828,6 @@ button.selection-item[data-active='true'][data-error='true'] {
   display: inline-flex;
   align-items: center;
   margin-left: auto;
-}
-
-.dimension-toggle-button {
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-}
-
-.dimension-toggle-button:hover:not(:disabled) {
-  border-color: var(--border-strong);
-  background: var(--panel-2);
-}
-
-.dimension-toggle-button[data-active='true'] {
-  border-color: transparent;
 }
 
 .panel-hint {
@@ -2955,4 +3036,41 @@ button.selection-item[data-active='true'][data-error='true'] {
   line-height: 1.35;
   pointer-events: none;
   box-shadow: 0 6px 18px rgb(0 0 0 / 25%);
+}
+
+/* One control height across the inspector: fields, pickers, buttons and the
+   segmented rows line up instead of stepping by a pixel or two. */
+.dock-right .panel .input,
+.dock-right .panel .picker-field,
+.dock-right .panel .btn,
+.dock-right .panel .select {
+  height: 30px;
+}
+
+/* Right-panel controls are filled surfaces rather than outlined boxes: the
+   border is visual noise, so the field and button keep only their background. */
+.dock-right .input,
+.dock-right .picker-field,
+.dock-right .btn,
+.dock-right .select,
+.dock-right .dimension-field {
+  border-color: transparent;
+}
+
+.dock-right .input:focus,
+.dock-right .dimension-field:focus-within,
+.dock-right .sketch-offset-field:focus-within {
+  border-color: transparent;
+  background: var(--panel-3);
+}
+
+.dock-right .dimension-field:hover,
+.dock-right .sketch-offset-field:hover {
+  border-color: transparent;
+}
+
+.dock-right .picker-field:focus-visible,
+.dock-right .btn:focus-visible,
+.dock-right .select:focus-visible {
+  border-color: transparent;
 }

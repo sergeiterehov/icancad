@@ -15,8 +15,10 @@ import { ContextMenuHost } from './ui/ContextMenu';
 import { FloatDock } from './ui/FloatDock';
 import { Inspector } from './ui/Inspector';
 import { LeftPanel } from './ui/LeftPanel';
+import { ModelDeleteDialog } from './ui/ModelDeleteDialog';
 import { ProjectDeleteDialog } from './ui/ProjectDeleteDialog';
-import { ProjectMenu, ProjectName } from './ui/ProjectMenu';
+import { ProjectMenu } from './ui/ProjectMenu';
+import { SectionPanel } from './ui/SectionPanel';
 import { AppSkeleton } from './ui/Skeleton';
 import { SketchToolRail } from './ui/SketchToolRail';
 import { Timeline } from './ui/Timeline';
@@ -38,20 +40,20 @@ export default function App() {
   const activeSketchId = useUiStore((state) => state.activeSketchId);
   const leftDockOpen = useUiStore((state) => state.leftDockOpen);
   const rightDockOpen = useUiStore((state) => state.rightDockOpen);
+  const compactPanels = useUiStore((state) => state.compactPanels);
   // The inspector carries the parameters of the selected operation, so it stays
   // in place while one is selected or being edited. The sketch editor owns the
   // workspace instead and lets the panel auto-hide again.
   const operationSelected = useDocumentStore(
     (state) =>
-      state.editingFeatureId !== null ||
-      state.selection.some((item) => item.kind === 'feature'),
+      state.editingFeatureId !== null || state.selection.some((item) => item.kind === 'feature'),
   );
   const inspectorPinned = activeSketchId === null && operationSelected;
   // Both floating bars stay centred until a dock reaches them.
   const toolDock = useRef<HTMLDivElement>(null);
   const operationsDock = useRef<HTMLDivElement>(null);
-  useFloatingBarShift(toolDock);
-  useFloatingBarShift(operationsDock);
+  useFloatingBarShift(toolDock, hydrated);
+  useFloatingBarShift(operationsDock, hydrated);
 
   return (
     <div className="app-shell">
@@ -59,6 +61,7 @@ export default function App() {
         className="workspace"
         data-left-dock={leftDockOpen ? 'open' : 'closed'}
         data-right-dock={rightDockOpen ? 'open' : 'closed'}
+        data-compact-panels={compactPanels ? 'true' : 'false'}
       >
         {hydrated ? (
           <>
@@ -66,9 +69,6 @@ export default function App() {
             <ProjectMenu />
 
             <FloatDock side="left" label={t('panels.model')} testId="left">
-              <div className="project-strip">
-                <ProjectName />
-              </div>
               <LeftPanel />
             </FloatDock>
 
@@ -78,6 +78,7 @@ export default function App() {
               testId="right"
               pinned={inspectorPinned}
             >
+              <SectionPanel />
               <Inspector />
             </FloatDock>
 
@@ -98,6 +99,7 @@ export default function App() {
       <Toast />
       <ConfirmDialog />
       <ProjectDeleteDialog />
+      <ModelDeleteDialog />
     </div>
   );
 }

@@ -5,6 +5,7 @@ import {
   projectFileName,
   serializeProjectFile,
 } from '../src/persistence/projectFile';
+import { modelOf } from './modelFixture';
 
 function sampleProject() {
   return applyCommands(createProject('Printable bracket'), [
@@ -44,8 +45,8 @@ describe('project file', () => {
 
     expect(parsed.project.id).toBe(project.id);
     expect(parsed.project.name).toBe('Printable bracket');
-    expect(parsed.project.features).toHaveLength(1);
-    expect(parsed.project.bodies).toHaveLength(1);
+    expect(modelOf(parsed.project).features).toHaveLength(1);
+    expect(modelOf(parsed.project).bodies).toHaveLength(1);
     expect(parsed.assets.get('asset_1')).toEqual(new Uint8Array([1, 2, 3, 4]));
   });
 
@@ -86,7 +87,7 @@ it('keeps projected geometry links through the archive', async () => {
   ]);
   const blob = serializeProjectFile(project, new Map());
   const parsed = parseProjectFile(new Uint8Array(await blob.arrayBuffer()));
-  const sketch = parsed.project.features.find((feature) => feature.id === 'feat_sketch');
+  const sketch = modelOf(parsed.project).features.find((feature) => feature.id === 'feat_sketch');
   expect(sketch?.type).toBe('sketch');
   if (sketch?.type !== 'sketch') return;
   expect(sketch.projections).toEqual([
@@ -116,7 +117,9 @@ it('reads a sketch without projections as an empty list', async () => {
     },
   ]);
   const blob = serializeProjectFile(project, new Map());
-  const sketch = parseProjectFile(new Uint8Array(await blob.arrayBuffer())).project.features.at(-1);
+  const sketch = modelOf(
+    parseProjectFile(new Uint8Array(await blob.arrayBuffer())).project,
+  ).features.at(-1);
   expect(sketch?.type).toBe('sketch');
   if (sketch?.type !== 'sketch') return;
   expect(sketch.projections).toEqual([]);

@@ -5,30 +5,21 @@ import {
   objectVisible,
   sketchObjectId,
   type ExtrudeFeature,
-  type Project,
+  type Model,
   type SketchFeature,
   type SketchFrame,
   type Vec3,
 } from '@icancad/model';
 import { sketchPointToWorld, sketchTopology, type Point2 } from '@icancad/sketch';
 import { sketchFrameOf } from '../sketch/sectionPlane';
-import {
-  selectedBodyFaces,
-  selectedFaceIds,
-  selectedSketchIds,
-} from '../stores/selection';
+import { selectedBodyFaces, selectedFaceIds, selectedSketchIds } from '../stores/selection';
 import type { SelectionItem } from '../stores/documentStore';
 import { isPlanarFace } from '../viewport/planarFace';
 import { outwardNormal } from './geometry';
-import type {
-  ExtrudePrediction,
-  QuickFace,
-  QuickTarget,
-  QuickTargetGeometry,
-} from './types';
+import type { ExtrudePrediction, QuickFace, QuickTarget, QuickTargetGeometry } from './types';
 
 export interface QuickTargetSource {
-  project: Project;
+  project: Model;
   selection: readonly SelectionItem[];
   meshes: Record<string, TessellationResult>;
   sketchFrames: Record<string, SketchFrame>;
@@ -36,7 +27,7 @@ export interface QuickTargetSource {
 
 /** The element the selection refers to, without resolving its geometry. */
 export function quickTargetFromSelection(
-  project: Project,
+  project: Model,
   selection: readonly SelectionItem[],
 ): QuickTarget | null {
   if (selection.length === 0) return null;
@@ -65,8 +56,7 @@ export function quickTargetFromSelection(
   if (sketchIds.some((id) => id !== sketchId)) return null;
   if (selection.some((item) => item.kind === 'body-face')) return null;
   const sketch = project.features.find(
-    (feature): feature is SketchFeature =>
-      feature.id === sketchId && feature.type === 'sketch',
+    (feature): feature is SketchFeature => feature.id === sketchId && feature.type === 'sketch',
   );
   if (!sketch || !isFeatureInHistory(project, sketch.id)) return null;
   // A hidden sketch has nothing to aim a handle at, so the quick operation is
@@ -164,10 +154,7 @@ export function resolveQuickTarget(source: QuickTargetSource): QuickTargetGeomet
 }
 
 /** The active extrude whose inputs are exactly this target, if one exists. */
-export function findBoundExtrude(
-  project: Project,
-  target: QuickTarget,
-): ExtrudeFeature | undefined {
+export function findBoundExtrude(project: Model, target: QuickTarget): ExtrudeFeature | undefined {
   for (let index = project.features.length - 1; index >= 0; index -= 1) {
     const feature = project.features[index];
     if (!feature || feature.type !== 'extrude' || feature.suppressed) continue;
@@ -284,7 +271,10 @@ function polygonCentroid(points: readonly Point2[]): Point2 {
     cy += (a[1] + b[1]) * cross;
   }
   if (Math.abs(twiceArea) < 1e-9) {
-    const average = points.reduce<Point2>((sum, point) => [sum[0] + point[0], sum[1] + point[1]], [0, 0]);
+    const average = points.reduce<Point2>(
+      (sum, point) => [sum[0] + point[0], sum[1] + point[1]],
+      [0, 0],
+    );
     return [average[0] / Math.max(1, points.length), average[1] / Math.max(1, points.length)];
   }
   return [cx / (3 * twiceArea), cy / (3 * twiceArea)];

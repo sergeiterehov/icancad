@@ -130,6 +130,7 @@ export function PanelSection({
   count,
   icon,
   action,
+  divided,
   className,
   children,
 }: {
@@ -137,11 +138,12 @@ export function PanelSection({
   count?: number;
   icon?: ReactNode;
   action?: ReactNode;
+  divided?: boolean;
   className?: string;
   children: ReactNode;
 }) {
   return (
-    <section className={clsx('panel-section', className)}>
+    <section className={clsx('panel-section', divided && 'panel-section-divided', className)}>
       <header className="panel-section-header">
         <span className="panel-section-title">
           {icon && <span className="panel-section-icon">{icon}</span>}

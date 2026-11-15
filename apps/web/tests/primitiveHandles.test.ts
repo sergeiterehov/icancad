@@ -7,6 +7,7 @@ import {
 } from '../src/primitive/params';
 import { operationHandles } from '../src/quick/operationHandles';
 import { useDocumentStore } from '../src/stores/documentStore';
+import { modelOf, modelProject } from './modelFixture';
 
 const labels = {
   extrude: 'Extrude',
@@ -39,12 +40,12 @@ const labels = {
 };
 
 function projectWith(feature: PrimitiveFeature): Project {
-  return { ...createProject(), features: [feature], bodies: [] };
+  return modelProject({ features: [feature], bodies: [] });
 }
 
 function handlesFor(feature: PrimitiveFeature) {
   return operationHandles({
-    project: projectWith(feature),
+    project: modelOf(projectWith(feature)),
     selection: [{ kind: 'feature', id: feature.id }],
     meshes: {},
     baseMeshes: {},
@@ -233,7 +234,7 @@ describe('primitive drags', () => {
     useDocumentStore.getState().hydrate(projectWith(box));
     useDocumentStore.getState().select({ kind: 'feature', id: box.id });
     const handle = operationHandles({
-      project: useDocumentStore.getState().project,
+      project: modelOf(useDocumentStore.getState().project),
       selection: useDocumentStore.getState().selection,
       meshes: {},
       baseMeshes: {},
@@ -244,9 +245,9 @@ describe('primitive drags', () => {
     expect(handle).toBeDefined();
     const drag = handle!.beginDrag();
     drag.update(30);
-    const edited = useDocumentStore
-      .getState()
-      .project.features.find((feature) => feature.id === box.id) as PrimitiveFeature;
+    const edited = modelOf(useDocumentStore.getState().project).features.find(
+      (feature) => feature.id === box.id,
+    ) as PrimitiveFeature;
     expect(edited.params).toMatchObject({ dx: 30 });
     expect(edited.transform.translation).toEqual([0, 0, 0]);
     drag.end();
@@ -259,7 +260,7 @@ describe('primitive drags', () => {
     useDocumentStore.getState().hydrate(projectWith(pyramid));
     useDocumentStore.getState().select({ kind: 'feature', id: pyramid.id });
     const handle = operationHandles({
-      project: useDocumentStore.getState().project,
+      project: modelOf(useDocumentStore.getState().project),
       selection: useDocumentStore.getState().selection,
       meshes: {},
       baseMeshes: {},
@@ -270,9 +271,9 @@ describe('primitive drags', () => {
     expect(handle).toBeDefined();
     const drag = handle!.beginDrag();
     drag.update(30);
-    const edited = useDocumentStore
-      .getState()
-      .project.features.find((feature) => feature.id === pyramid.id) as PrimitiveFeature;
+    const edited = modelOf(useDocumentStore.getState().project).features.find(
+      (feature) => feature.id === pyramid.id,
+    ) as PrimitiveFeature;
     expect(edited.params).toMatchObject({ sides: 6 });
     expect(drag.value).toBe(6);
     expect(drag.unit).toBe('count');
@@ -284,7 +285,7 @@ describe('primitive drags', () => {
     useDocumentStore.getState().hydrate(projectWith(box));
     useDocumentStore.getState().select({ kind: 'feature', id: box.id });
     const handle = operationHandles({
-      project: useDocumentStore.getState().project,
+      project: modelOf(useDocumentStore.getState().project),
       selection: useDocumentStore.getState().selection,
       meshes: {},
       baseMeshes: {},
@@ -296,9 +297,9 @@ describe('primitive drags', () => {
     const drag = handle!.beginDrag();
     drag.update(0, false, [5, 0, -2]);
     drag.end();
-    const moved = useDocumentStore
-      .getState()
-      .project.features.find((feature) => feature.id === box.id) as PrimitiveFeature;
+    const moved = modelOf(useDocumentStore.getState().project).features.find(
+      (feature) => feature.id === box.id,
+    ) as PrimitiveFeature;
     expect(moved.transform.translation).toEqual([5, 0, -2]);
   });
 });

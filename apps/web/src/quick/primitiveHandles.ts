@@ -1,4 +1,4 @@
-import type { PrimitiveFeature, Project, Vec3 } from '@icancad/model';
+import { activeModel, type PrimitiveFeature, type Project, type Vec3 } from '@icancad/model';
 import { useDocumentStore } from '../stores/documentStore';
 import {
   PYRAMID_MAX_SIDES,
@@ -362,7 +362,7 @@ class PrimitiveDrag implements OperationHandleDrag {
   start(): void {
     const state = useDocumentStore.getState();
     this.before = state.project;
-    const feature = state.project.features.find(
+    const feature = activeModel(state.project).features.find(
       (candidate): candidate is PrimitiveFeature =>
         candidate.id === this.featureId && candidate.type === 'primitive',
     );
@@ -379,7 +379,7 @@ class PrimitiveDrag implements OperationHandleDrag {
   update(value: number, _shift?: boolean, move?: Vec3): void {
     if (!this.before || !this.original) return;
     const state = useDocumentStore.getState();
-    const feature = state.project.features.find(
+    const feature = activeModel(state.project).features.find(
       (candidate): candidate is PrimitiveFeature =>
         candidate.id === this.featureId && candidate.type === 'primitive',
     );

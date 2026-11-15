@@ -1,4 +1,5 @@
-import { createProject, parseProject, type Project } from '@icancad/model';
+import { createProject, parseProject, type Feature, type Project } from '@icancad/model';
+import { i18n } from '../i18n';
 import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
 import { deleteAsset, listProjects, loadProject, setSetting } from './db';
@@ -11,9 +12,13 @@ export async function listLocalProjects(): Promise<Project[]> {
 }
 
 function importedAssetIds(project: Project): string[] {
-  return project.features.flatMap((feature) =>
-    feature.type === 'import-mesh' ? [feature.assetId] : [],
-  );
+  // Stored projects may still be version 2 and carry a flat feature list.
+  const models = project.superObjects ?? [];
+  const features =
+    models.length > 0
+      ? models.flatMap((superObject) => superObject.features)
+      : ((project as unknown as { features?: Feature[] }).features ?? []);
+  return features.flatMap((feature) => (feature.type === 'import-mesh' ? [feature.assetId] : []));
 }
 
 function applyProject(project: Project): void {
@@ -42,14 +47,14 @@ export async function switchToProject(project: Project): Promise<void> {
 }
 
 export async function createAndOpenProject(name: string): Promise<void> {
-  await switchToProject(createProject(name));
+  await switchToProject(createProject(name, i18n.t('model.defaultName')));
 }
 
 export async function openProjectById(id: string): Promise<boolean> {
   try {
     const stored = await loadProject(id);
     if (!stored) return false;
-    await switchToProject(parseProject(stored));
+    await switchToProject(parseProject(stored, { modelName: i18n.t('model.defaultName') }));
     return true;
   } catch {
     return false;
@@ -69,7 +74,15 @@ export async function deleteLocalProject(id: string, fallbackName: string): Prom
   const orphaned = importedAssetIds(target).filter((assetId) => !referenced.has(assetId));
 
   if (useDocumentStore.getState().project.id === id) {
-    const next = remaining[0] ?? createProject(fallbackName);
+    const stored = remaining[0];
+    let next: Project;
+    try {
+      next = stored
+        ? parseProject(stored, { modelName: i18n.t('model.defaultName') })
+        : createProject(fallbackName, i18n.t('model.defaultName'));
+    } catch {
+      next = createProject(fallbackName, i18n.t('model.defaultName'));
+    }
     // Hydrating first cancels the pending autosave of the project being deleted.
     applyProject(next);
     await queueProjectDelete(id);

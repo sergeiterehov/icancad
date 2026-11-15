@@ -1,9 +1,17 @@
 import { historyErrors, type HistoryIssue } from './history';
-import { touch } from './project';
-import { HISTORY_START, type BodyRef, type Feature, type ObjectMetadata, type Project } from './types';
+import { activeModel, touch, updateActiveModel } from './project';
+import {
+  HISTORY_START,
+  type BodyRef,
+  type Feature,
+  type Model,
+  type ObjectMetadata,
+  type Project,
+  type SuperObject,
+} from './types';
 
-export type Command =
-  | { type: 'project/rename'; name: string }
+/** Commands that edit the feature history of the active model. */
+export type ModelCommand =
   | { type: 'feature/add'; feature: Feature; index?: number }
   | { type: 'feature/replace'; feature: Feature }
   | {
@@ -19,13 +27,25 @@ export type Command =
   | { type: 'body/remove'; bodyId: string }
   | { type: 'history/set-end'; featureId: string | null };
 
+/** Commands that edit the project itself, including its super-objects. */
+export type ProjectCommand =
+  | { type: 'project/rename'; name: string }
+  | { type: 'model/add'; model: SuperObject }
+  | { type: 'model/activate'; modelId: string }
+  | { type: 'model/rename'; modelId: string; name: string }
+  | { type: 'model/remove'; modelId: string };
+
+export type Command = ModelCommand | ProjectCommand;
+
 export type CommandErrorCode =
   | 'UNKNOWN_FEATURE'
   | 'UNKNOWN_BODY'
+  | 'UNKNOWN_MODEL'
   | 'DUPLICATE_ID'
   | 'INVALID_INDEX'
   | 'INVALID_VALUE'
-  | 'INVALID_HISTORY';
+  | 'INVALID_HISTORY'
+  | 'LAST_MODEL';
 
 export class CommandError extends Error {
   readonly code: CommandErrorCode;
@@ -37,13 +57,30 @@ export class CommandError extends Error {
   }
 }
 
+function isModelCommand(command: Command): command is ModelCommand {
+  switch (command.type) {
+    case 'feature/add':
+    case 'feature/replace':
+    case 'feature/remove':
+    case 'feature/reorder':
+    case 'feature/toggle-suppressed':
+    case 'body/add':
+    case 'metadata/patch':
+    case 'body/remove':
+    case 'history/set-end':
+      return true;
+    default:
+      return false;
+  }
+}
+
 function replaceFeature(
-  project: Project,
+  model: Model,
   featureId: string,
   update: (feature: Feature) => Feature,
-): Project {
+): Model {
   let found = false;
-  const features = project.features.map((feature) => {
+  const features = model.features.map((feature) => {
     if (feature.id !== featureId) return feature;
     found = true;
     return update(feature);
@@ -51,35 +88,28 @@ function replaceFeature(
   if (!found) {
     throw new CommandError('UNKNOWN_FEATURE', `Unknown feature: ${featureId}`);
   }
-  return { ...project, features };
+  return { ...model, features };
 }
 
-function applyOne(project: Project, command: Command): Project {
+function applyModelCommand(model: Model, command: ModelCommand): Model {
   switch (command.type) {
-    case 'project/rename': {
-      const name = command.name.trim();
-      if (!name) throw new CommandError('INVALID_VALUE', 'Project name cannot be empty');
-      return { ...project, name };
-    }
     case 'feature/add': {
-      if (project.features.some((feature) => feature.id === command.feature.id)) {
+      if (model.features.some((feature) => feature.id === command.feature.id)) {
         throw new CommandError('DUPLICATE_ID', `Duplicate feature id: ${command.feature.id}`);
       }
-      const features = [...project.features];
+      const features = [...model.features];
       const index = command.index ?? features.length;
       if (index < 0 || index > features.length) {
         throw new CommandError('INVALID_INDEX', `Invalid feature index: ${index}`);
       }
       features.splice(index, 0, command.feature);
-      return { ...project, features };
+      return { ...model, features };
     }
     case 'feature/replace': {
-      return replaceFeature(project, command.feature.id, () => command.feature);
+      return replaceFeature(model, command.feature.id, () => command.feature);
     }
     case 'feature/remove': {
-      const index = project.features.findIndex(
-        (candidate) => candidate.id === command.featureId,
-      );
+      const index = model.features.findIndex((candidate) => candidate.id === command.featureId);
       if (index < 0) {
         throw new CommandError('UNKNOWN_FEATURE', `Unknown feature: ${command.featureId}`);
       }
@@ -87,70 +117,146 @@ function applyOne(project: Project, command: Command): Project {
       // operation it follows moves it onto the previous one: the numbered
       // position stays where the user left it instead of jumping to the end.
       const historyEnd =
-        project.historyEnd === command.featureId
+        model.historyEnd === command.featureId
           ? index > 0
-            ? (project.features[index - 1]?.id ?? HISTORY_START)
+            ? (model.features[index - 1]?.id ?? HISTORY_START)
             : HISTORY_START
-          : project.historyEnd;
+          : model.historyEnd;
       return {
-        ...project,
-        features: project.features.filter((candidate) => candidate.id !== command.featureId),
-        bodies: project.bodies.filter((body) => body.createdBy !== command.featureId),
+        ...model,
+        features: model.features.filter((candidate) => candidate.id !== command.featureId),
+        bodies: model.bodies.filter((body) => body.createdBy !== command.featureId),
         historyEnd,
       };
     }
     case 'feature/reorder': {
-      const index = project.features.findIndex((feature) => feature.id === command.featureId);
+      const index = model.features.findIndex((feature) => feature.id === command.featureId);
       if (index < 0) {
         throw new CommandError('UNKNOWN_FEATURE', `Unknown feature: ${command.featureId}`);
       }
-      if (command.toIndex < 0 || command.toIndex >= project.features.length) {
+      if (command.toIndex < 0 || command.toIndex >= model.features.length) {
         throw new CommandError('INVALID_INDEX', `Invalid feature index: ${command.toIndex}`);
       }
-      const features = [...project.features];
+      const features = [...model.features];
       const [feature] = features.splice(index, 1);
       if (!feature) {
         throw new CommandError('UNKNOWN_FEATURE', `Unknown feature: ${command.featureId}`);
       }
       features.splice(command.toIndex, 0, feature);
-      return { ...project, features };
+      return { ...model, features };
     }
     case 'feature/toggle-suppressed': {
-      return replaceFeature(project, command.featureId, (feature) => ({
+      return replaceFeature(model, command.featureId, (feature) => ({
         ...feature,
         suppressed: !feature.suppressed,
       }));
     }
     case 'body/add': {
-      if (project.bodies.some((body) => body.id === command.body.id)) {
+      if (model.bodies.some((body) => body.id === command.body.id)) {
         throw new CommandError('DUPLICATE_ID', `Duplicate body id: ${command.body.id}`);
       }
-      return { ...project, bodies: [...project.bodies, command.body] };
+      return { ...model, bodies: [...model.bodies, command.body] };
     }
     case 'metadata/patch': {
-      const current = project.metadata[command.objectId] ?? {};
+      const current = model.metadata[command.objectId] ?? {};
       return {
-        ...project,
-        metadata: { ...project.metadata, [command.objectId]: { ...current, ...command.patch } },
+        ...model,
+        metadata: { ...model.metadata, [command.objectId]: { ...current, ...command.patch } },
       };
     }
     case 'body/remove': {
-      if (!project.bodies.some((body) => body.id === command.bodyId)) {
+      if (!model.bodies.some((body) => body.id === command.bodyId)) {
         throw new CommandError('UNKNOWN_BODY', `Unknown body: ${command.bodyId}`);
       }
-      return { ...project, bodies: project.bodies.filter((body) => body.id !== command.bodyId) };
+      return { ...model, bodies: model.bodies.filter((body) => body.id !== command.bodyId) };
     }
     case 'history/set-end': {
       if (
         command.featureId !== null &&
         command.featureId !== HISTORY_START &&
-        !project.features.some((feature) => feature.id === command.featureId)
+        !model.features.some((feature) => feature.id === command.featureId)
       ) {
         throw new CommandError('UNKNOWN_FEATURE', `Unknown feature: ${command.featureId}`);
       }
-      return { ...project, historyEnd: command.featureId };
+      return { ...model, historyEnd: command.featureId };
     }
   }
+}
+
+function findSuperObject(project: Project, modelId: string): SuperObject {
+  const found = project.superObjects.find((superObject) => superObject.id === modelId);
+  if (!found) throw new CommandError('UNKNOWN_MODEL', `Unknown model: ${modelId}`);
+  return found;
+}
+
+function checkModelName(project: Project, name: string, modelId?: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) throw new CommandError('INVALID_VALUE', 'Model name cannot be empty');
+  const duplicate = project.superObjects.some(
+    (superObject) => superObject.id !== modelId && superObject.name === trimmed,
+  );
+  if (duplicate) throw new CommandError('INVALID_VALUE', `Duplicate model name: ${trimmed}`);
+  return trimmed;
+}
+
+function applyProjectCommand(project: Project, command: ProjectCommand): Project {
+  switch (command.type) {
+    case 'project/rename': {
+      const name = command.name.trim();
+      if (!name) throw new CommandError('INVALID_VALUE', 'Project name cannot be empty');
+      return { ...project, name };
+    }
+    case 'model/add': {
+      if (project.superObjects.some((superObject) => superObject.id === command.model.id)) {
+        throw new CommandError('DUPLICATE_ID', `Duplicate model id: ${command.model.id}`);
+      }
+      const name = checkModelName(project, command.model.name);
+      return {
+        ...project,
+        superObjects: [...project.superObjects, { ...command.model, name }],
+      };
+    }
+    case 'model/activate': {
+      findSuperObject(project, command.modelId);
+      return { ...project, activeSuperObjectId: command.modelId };
+    }
+    case 'model/rename': {
+      findSuperObject(project, command.modelId);
+      const name = checkModelName(project, command.name, command.modelId);
+      return {
+        ...project,
+        superObjects: project.superObjects.map((superObject) =>
+          superObject.id === command.modelId ? { ...superObject, name } : superObject,
+        ),
+      };
+    }
+    case 'model/remove': {
+      const index = project.superObjects.findIndex(
+        (superObject) => superObject.id === command.modelId,
+      );
+      if (index < 0) {
+        throw new CommandError('UNKNOWN_MODEL', `Unknown model: ${command.modelId}`);
+      }
+      if (project.superObjects.length === 1) {
+        throw new CommandError('LAST_MODEL', 'A project needs at least one model');
+      }
+      const superObjects = project.superObjects.filter(
+        (superObject) => superObject.id !== command.modelId,
+      );
+      const activeSuperObjectId =
+        project.activeSuperObjectId === command.modelId
+          ? (superObjects[Math.min(index, superObjects.length - 1)]?.id ?? superObjects[0]!.id)
+          : project.activeSuperObjectId;
+      return { ...project, superObjects, activeSuperObjectId };
+    }
+  }
+}
+
+function applyOne(project: Project, command: Command): Project {
+  if (isModelCommand(command)) {
+    return updateActiveModel(project, (model) => applyModelCommand(model, command));
+  }
+  return applyProjectCommand(project, command);
 }
 
 export function applyCommands(project: Project, commands: readonly Command[]): Project {
@@ -166,8 +272,10 @@ export function applyCommands(project: Project, commands: readonly Command[]): P
     (command) => command.type === 'feature/remove' && command.keepDependents,
   );
   if (!orphans) {
-    const known = new Set(historyErrors(project).map(issueKey));
-    const introduced = historyErrors(next).filter((issue) => !known.has(issueKey(issue)));
+    const before = historyErrors(activeModel(project));
+    const after = historyErrors(activeModel(next));
+    const known = new Set(before.map(issueKey));
+    const introduced = after.filter((issue) => !known.has(issueKey(issue)));
     if (introduced.length > 0) {
       throw new CommandError(
         'INVALID_HISTORY',

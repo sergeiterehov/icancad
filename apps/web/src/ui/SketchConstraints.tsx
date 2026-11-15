@@ -89,6 +89,7 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
     <PanelSection
       title={t('sketch.constraints')}
       count={feature.constraints.length}
+      divided
       action={
         hasProblems ? (
           <Tooltip content={t('constraint.problemsHint')}>

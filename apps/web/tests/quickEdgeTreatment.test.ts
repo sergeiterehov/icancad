@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createProject, type EdgeTreatmentFeature, type Project } from '@icancad/model';
+import type { EdgeTreatmentFeature, Project } from '@icancad/model';
 import { edgeMatchDistance, resolveEdgeRef } from '../src/kernel/edgeLookup';
 import { edgePose } from '../src/kernel/edgeTreatment';
 import {
@@ -10,12 +10,12 @@ import {
 import { QuickEdgeTreatmentDrag } from '../src/quick/controller';
 import { useDocumentStore } from '../src/stores/documentStore';
 import { edgedCube } from './edgedCube';
+import { modelOf, modelProject } from './modelFixture';
 
 const BODY = 'body-1';
 
 function project(): Project {
-  return {
-    ...createProject(),
+  return modelProject({
     features: [
       {
         id: 'box',
@@ -28,7 +28,7 @@ function project(): Project {
       },
     ],
     bodies: [{ id: BODY, createdBy: 'box' }],
-  };
+  });
 }
 
 function edgeTarget(mesh: ReturnType<typeof edgedCube>, ids: string[]) {
@@ -58,11 +58,9 @@ describe('quick edge treatment drag', () => {
   });
 
   const treatments = (): EdgeTreatmentFeature[] =>
-    useDocumentStore
-      .getState()
-      .project.features.filter(
-        (feature): feature is EdgeTreatmentFeature => feature.type === 'edge-treatment',
-      );
+    modelOf(useDocumentStore.getState().project).features.filter(
+      (feature): feature is EdgeTreatmentFeature => feature.type === 'edge-treatment',
+    );
 
   it('chamfers with a plain drag', () => {
     const drag = new QuickEdgeTreatmentDrag(edgeTarget(edgedCube(), ['0']), 'Edge');
@@ -73,9 +71,7 @@ describe('quick edge treatment drag', () => {
     expect(feature).toMatchObject({ kind: 'chamfer', size: 5 });
     expect(drag.kind).toBe('chamfer');
     // The grab only starts the operation; the rest belongs to it.
-    expect(useDocumentStore.getState().selection).toEqual([
-      { kind: 'feature', id: feature!.id },
-    ]);
+    expect(useDocumentStore.getState().selection).toEqual([{ kind: 'feature', id: feature!.id }]);
     drag.end();
     expect(treatments()).toHaveLength(1);
   });
@@ -284,7 +280,10 @@ describe('edge ref lookup by pose', () => {
     expect(edgeMatchDistance(reversed, ref)).not.toBeNull();
     expect(
       resolveEdgeRef(
-        { bodyShapes: new Map([[BODY, 'shape-1']]), meshes: { [BODY]: { ...mesh, edges: [reversed] } } },
+        {
+          bodyShapes: new Map([[BODY, 'shape-1']]),
+          meshes: { [BODY]: { ...mesh, edges: [reversed] } },
+        },
         ref,
       ),
     ).toEqual({ bodyId: BODY, edgeId: edge.id });

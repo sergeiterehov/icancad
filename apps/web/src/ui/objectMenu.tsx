@@ -5,7 +5,7 @@ import {
   resolveBody,
   SKETCH_COLOR,
   sketchObjectId,
-  type Project,
+  type Model,
 } from '@icancad/model';
 import { Eye, EyeOff, Trash2 } from 'lucide-react';
 import type { SelectionItem } from '../stores/documentStore';
@@ -28,10 +28,7 @@ export interface MenuTarget {
  * Objects of a selection, in selection order. Faces and operations are not
  * objects of the tree, so they are skipped.
  */
-export function objectTargets(
-  project: Project,
-  selection: readonly SelectionItem[],
-): MenuTarget[] {
+export function objectTargets(project: Model, selection: readonly SelectionItem[]): MenuTarget[] {
   const targets: MenuTarget[] = [];
   for (const item of selection) {
     if (item.kind === 'body' || item.kind === 'mesh') {
@@ -72,7 +69,7 @@ export function objectTargets(
  * selected.
  */
 export function objectMenuTargets(
-  project: Project,
+  project: Model,
   selection: readonly SelectionItem[],
   clicked: { kind: 'body' | 'mesh' | 'sketch'; id: string },
 ): MenuTarget[] {

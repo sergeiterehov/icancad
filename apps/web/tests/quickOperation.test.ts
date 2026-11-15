@@ -1,21 +1,21 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   createProject,
+  updateActiveModel,
   type ExtrudeFeature,
+  type Feature,
+  type Model,
   type PrimitiveFeature,
   type Project,
   type SketchFeature,
 } from '@icancad/model';
 import { QuickExtrudeDrag, RevolveAngleDrag } from '../src/quick/controller';
 import { operationHandles } from '../src/quick/operationHandles';
-import {
-  buildQuickExtrude,
-  findBoundExtrude,
-  quickTargetFromSelection,
-} from '../src/quick/target';
+import { buildQuickExtrude, findBoundExtrude, quickTargetFromSelection } from '../src/quick/target';
 import type { QuickTargetGeometry } from '../src/quick/types';
 import { useDocumentStore } from '../src/stores/documentStore';
 import { cubeMesh } from './cubeMesh';
+import { modelOf, modelProject } from './modelFixture';
 
 const box: PrimitiveFeature = {
   id: 'box',
@@ -27,12 +27,21 @@ const box: PrimitiveFeature = {
   transform: { translation: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
 };
 
-function baseProject(): Project {
-  return {
-    ...createProject(),
-    features: [box],
-    bodies: [{ id: 'body-1', createdBy: 'box' }],
-  };
+function baseProject(): Model {
+  return modelOf(
+    modelProject({
+      features: [box],
+      bodies: [{ id: 'body-1', createdBy: 'box' }],
+    }),
+  );
+}
+
+function projectFrom(model: Model): Project {
+  return updateActiveModel(createProject(), () => model);
+}
+
+function withFeatures(model: Model, features: Feature[]): Model {
+  return { ...model, features };
 }
 
 const profile: SketchFeature = {
@@ -73,12 +82,8 @@ function revolveFeature(): ExtrudeFeature {
   };
 }
 
-function revolveProject(): Project {
-  return {
-    ...createProject(),
-    features: [profile, revolveFeature()],
-    bodies: [],
-  };
+function revolveProject(): Model {
+  return modelOf(modelProject({ features: [profile, revolveFeature()], bodies: [] }));
 }
 
 function geometry(): QuickTargetGeometry {
@@ -122,7 +127,7 @@ const labels = {
 };
 
 function handles(context: {
-  project: Project;
+  project: Model;
   selection: Parameters<typeof operationHandles>[0]['selection'];
   meshes?: Record<string, ReturnType<typeof cubeMesh>>;
 }) {
@@ -140,31 +145,32 @@ function handles(context: {
 describe('quick operation targets and handles', () => {
   it('turns a body face selection into a target', () => {
     const project = baseProject();
-    expect(
-      quickTargetFromSelection(project, [{ kind: 'body-face', id: 'body-1#1' }]),
-    ).toEqual({ kind: 'body-face', bodyId: 'body-1', faceIds: ['1'] });
+    expect(quickTargetFromSelection(project, [{ kind: 'body-face', id: 'body-1#1' }])).toEqual({
+      kind: 'body-face',
+      bodyId: 'body-1',
+      faceIds: ['1'],
+    });
   });
 
   it('turns sketch faces and the whole sketch into targets', () => {
-    const project: Project = {
-      ...baseProject(),
-      features: [
-        box,
-        {
-          id: 'sketch',
-          name: 'Sketch',
-          suppressed: false,
-          type: 'sketch',
-          plane: { type: 'datum', plane: 'XY', offset: 0 },
-          entities: [],
-          constraints: [],
-          references: [],
-        },
-      ],
-    };
-    expect(
-      quickTargetFromSelection(project, [{ kind: 'face', id: 'sketch#f1' }]),
-    ).toEqual({ kind: 'sketch', sketchId: 'sketch', regions: ['f1'] });
+    const project = withFeatures(baseProject(), [
+      box,
+      {
+        id: 'sketch',
+        name: 'Sketch',
+        suppressed: false,
+        type: 'sketch',
+        plane: { type: 'datum', plane: 'XY', offset: 0 },
+        entities: [],
+        constraints: [],
+        references: [],
+      },
+    ]);
+    expect(quickTargetFromSelection(project, [{ kind: 'face', id: 'sketch#f1' }])).toEqual({
+      kind: 'sketch',
+      sketchId: 'sketch',
+      regions: ['f1'],
+    });
     expect(quickTargetFromSelection(project, [{ kind: 'sketch', id: 'sketch' }])).toEqual({
       kind: 'sketch',
       sketchId: 'sketch',
@@ -173,12 +179,7 @@ describe('quick operation targets and handles', () => {
   });
 
   it('builds an extrude with the picked inputs', () => {
-    const feature = buildQuickExtrude(
-      geometry(),
-      { op: 'add', bodyIds: ['body-1'] },
-      5,
-      'Extrude',
-    );
+    const feature = buildQuickExtrude(geometry(), { op: 'add', bodyIds: ['body-1'] }, 5, 'Extrude');
     expect(feature).toMatchObject({
       type: 'extrude',
       op: 'add',
@@ -187,20 +188,13 @@ describe('quick operation targets and handles', () => {
       scope: 'all',
       bodyIds: ['body-1'],
       objectOrder: ['b:body-1#1'],
-      faceRefs: [
-        { bodyId: 'body-1', faceId: '1', normal: [1, 0, 0], origin: [20, 10, 10] },
-      ],
+      faceRefs: [{ bodyId: 'body-1', faceId: '1', normal: [1, 0, 0], origin: [20, 10, 10] }],
     });
   });
 
   it('finds the operation an input belongs to', () => {
-    const feature = buildQuickExtrude(
-      geometry(),
-      { op: 'add', bodyIds: ['body-1'] },
-      5,
-      'Extrude',
-    );
-    const project: Project = { ...baseProject(), features: [box, feature] };
+    const feature = buildQuickExtrude(geometry(), { op: 'add', bodyIds: ['body-1'] }, 5, 'Extrude');
+    const project = withFeatures(baseProject(), [box, feature]);
     expect(findBoundExtrude(project, geometry().target)?.id).toBe(feature.id);
   });
 
@@ -219,13 +213,8 @@ describe('quick operation targets and handles', () => {
   });
 
   it('offers the operation handle when the feature is focused', () => {
-    const feature = buildQuickExtrude(
-      geometry(),
-      { op: 'add', bodyIds: ['body-1'] },
-      5,
-      'Extrude',
-    );
-    const project: Project = { ...baseProject(), features: [box, feature] };
+    const feature = buildQuickExtrude(geometry(), { op: 'add', bodyIds: ['body-1'] }, 5, 'Extrude');
+    const project = withFeatures(baseProject(), [box, feature]);
     const [handle] = handles({
       project,
       selection: [{ kind: 'feature', id: feature.id }],
@@ -242,7 +231,7 @@ describe('quick operation targets and handles', () => {
       ...buildQuickExtrude(geometry(), { op: 'add', bodyIds: ['body-1'] }, 5, 'Extrude'),
       secondDirection: { end: 'blind', distance: 3 },
     };
-    const project: Project = { ...baseProject(), features: [box, feature] };
+    const project = withFeatures(baseProject(), [box, feature]);
     const list = handles({
       project,
       selection: [{ kind: 'feature', id: feature.id }],
@@ -260,19 +249,14 @@ describe('quick operation targets and handles', () => {
       ...buildQuickExtrude(geometry(), { op: 'add', bodyIds: ['body-1'] }, 5, 'Extrude'),
       end: 'through-all',
     };
-    const project: Project = { ...baseProject(), features: [box, throughAll] };
-    expect(
-      handles({ project, selection: [{ kind: 'feature', id: throughAll.id }] }),
-    ).toEqual([]);
+    const project = withFeatures(baseProject(), [box, throughAll]);
+    expect(handles({ project, selection: [{ kind: 'feature', id: throughAll.id }] })).toEqual([]);
 
     const withSecond: ExtrudeFeature = {
       ...throughAll,
       secondDirection: { end: 'blind', distance: 2 },
     };
-    const withSecondProject: Project = {
-      ...baseProject(),
-      features: [box, withSecond],
-    };
+    const withSecondProject = withFeatures(baseProject(), [box, withSecond]);
     expect(
       handles({
         project: withSecondProject,
@@ -285,10 +269,7 @@ describe('quick operation targets and handles', () => {
       end: 'blind',
       secondDirection: { end: 'through-all', distance: 2 },
     };
-    const secondThroughAllProject: Project = {
-      ...baseProject(),
-      features: [box, secondThroughAll],
-    };
+    const secondThroughAllProject = withFeatures(baseProject(), [box, secondThroughAll]);
     expect(
       handles({
         project: secondThroughAllProject,
@@ -323,7 +304,7 @@ describe('quick revolve handles', () => {
   it('draws the angles the operation sweeps, mirrored when inverted', () => {
     const project = revolveProject();
     const feature = project.features[1] as ExtrudeFeature;
-    const inverted: Project = {
+    const inverted: Model = {
       ...project,
       features: [
         profile,
@@ -342,7 +323,7 @@ describe('quick revolve handles', () => {
   it('offers no handles while the axis cannot be found', () => {
     const project = revolveProject();
     const feature = project.features[1] as ExtrudeFeature;
-    const broken: Project = {
+    const broken: Model = {
       ...project,
       features: [
         profile,
@@ -361,42 +342,42 @@ describe('quick revolve handles', () => {
   });
 
   it('turns the end angle with the pointer and commits one step', () => {
-    useDocumentStore.getState().hydrate(revolveProject());
+    useDocumentStore.getState().hydrate(projectFrom(revolveProject()));
     const drag = new RevolveAngleDrag('revolve', 'end', false, 360);
     drag.start();
     drag.update(90);
-    const during = useDocumentStore
-      .getState()
-      .project.features.find((feature): feature is ExtrudeFeature => feature.id === 'revolve');
+    const during = modelOf(useDocumentStore.getState().project).features.find(
+      (feature): feature is ExtrudeFeature => feature.id === 'revolve',
+    );
     expect(during!.revolve).toMatchObject({ start: 0, end: 90 });
     drag.end();
     const state = useDocumentStore.getState();
     expect(state.past).toHaveLength(1);
-    const committed = state.project.features.find(
+    const committed = modelOf(state.project).features.find(
       (feature): feature is ExtrudeFeature => feature.id === 'revolve',
     );
     expect(committed!.revolve).toMatchObject({ end: 90 });
   });
 
   it('stores the opposite angle when the sweep is inverted', () => {
-    useDocumentStore.getState().hydrate({
-      ...revolveProject(),
-      features: [
-        profile,
-        {
-          ...revolveFeature(),
-          revolve: { axis: { kind: 'world', axis: 'y' }, start: 0, end: 360, inverted: true },
-        },
-      ],
-    });
+    useDocumentStore.getState().hydrate(
+      projectFrom({
+        ...revolveProject(),
+        features: [
+          profile,
+          {
+            ...revolveFeature(),
+            revolve: { axis: { kind: 'world', axis: 'y' }, start: 0, end: 360, inverted: true },
+          },
+        ],
+      }),
+    );
     const drag = new RevolveAngleDrag('revolve', 'start', true, 0);
     drag.start();
     drag.update(-45);
-    const feature = useDocumentStore
-      .getState()
-      .project.features.find(
-        (candidate): candidate is ExtrudeFeature => candidate.id === 'revolve',
-      );
+    const feature = modelOf(useDocumentStore.getState().project).features.find(
+      (candidate): candidate is ExtrudeFeature => candidate.id === 'revolve',
+    );
     // The chip shows the effective angle; the document keeps the stored one.
     expect(drag.value).toBe(-45);
     expect(feature!.revolve).toMatchObject({ start: 45, inverted: true });
@@ -406,15 +387,13 @@ describe('quick revolve handles', () => {
 
 describe('quick operation drag', () => {
   beforeEach(() => {
-    useDocumentStore.getState().hydrate(baseProject());
+    useDocumentStore.getState().hydrate(projectFrom(baseProject()));
   });
 
   const extrudes = (): ExtrudeFeature[] =>
-    useDocumentStore
-      .getState()
-      .project.features.filter(
-        (feature): feature is ExtrudeFeature => feature.type === 'extrude',
-      );
+    modelOf(useDocumentStore.getState().project).features.filter(
+      (feature): feature is ExtrudeFeature => feature.type === 'extrude',
+    );
 
   it('creates the operation and focuses it', () => {
     const drag = new QuickExtrudeDrag(geometry(), [], 'Extrude');
@@ -423,9 +402,7 @@ describe('quick operation drag', () => {
     const [feature] = extrudes();
     expect(feature).toMatchObject({ op: 'add', distance: 5, reversed: false });
     // The grab only starts the operation; the rest of the gesture belongs to it.
-    expect(useDocumentStore.getState().selection).toEqual([
-      { kind: 'feature', id: feature!.id },
-    ]);
+    expect(useDocumentStore.getState().selection).toEqual([{ kind: 'feature', id: feature!.id }]);
     drag.end();
     expect(extrudes()).toHaveLength(1);
   });

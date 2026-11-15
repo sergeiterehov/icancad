@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  activeModel,
   applyCommand,
   applyCommands,
   CommandError,
@@ -10,16 +11,20 @@ import {
   historyInsertIndex,
   HISTORY_START,
   isMeshObject,
+  nextModelName,
   parseProject,
   ProjectFileError,
   solidBodiesInHistory,
   validateHistory,
   type BodyRef,
   type ExtrudeFeature,
+  type Feature,
   type PrimitiveFeature,
+  type Model,
   type Project,
   type ShellFeature,
   type SketchFeature,
+  updateActiveModel,
 } from '../src/index';
 
 const transform = {
@@ -81,6 +86,32 @@ function extrudeFeature(id = 'feat_extrude', sketchId = 'feat_sketch'): ExtrudeF
   };
 }
 
+function modelOf(project: Project): Model {
+  return activeModel(project);
+}
+
+function withModel(patch: Partial<Model>, name = 'Test'): Project {
+  return updateActiveModel(createProject(name), (model) => ({ ...model, ...patch }));
+}
+
+function legacyFile(features: Feature[] = []): Record<string, unknown> {
+  const project = createProject('Old project');
+  const model = activeModel(project);
+  return {
+    schemaVersion: 2,
+    id: project.id,
+    name: project.name,
+    units: project.units,
+    features,
+    bodies: [],
+    metadata: {},
+    view: model.view,
+    historyEnd: null,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
+  };
+}
+
 function withBox(): Project {
   return applyCommands(createProject('Test'), [
     { type: 'feature/add', feature: boxFeature() },
@@ -93,18 +124,104 @@ describe('project model', () => {
     const project = createProject('My part');
     expect(project.name).toBe('My part');
     expect(project.units).toBe('mm');
-    expect(project.features).toEqual([]);
-    expect(project.bodies).toEqual([]);
-    expect(project.view.sectionPlanes).toEqual([]);
-    expect(project.historyEnd).toBeNull();
+    expect(project.superObjects).toHaveLength(1);
+    expect(activeModel(project)).toMatchObject({ type: 'model', name: 'Model' });
+    expect(project.activeSuperObjectId).toBe(project.superObjects[0]?.id);
+    expect(modelOf(project).features).toEqual([]);
+    expect(modelOf(project).bodies).toEqual([]);
+    expect(modelOf(project).view.sectionPlanes).toEqual([]);
+    expect(modelOf(project).historyEnd).toBeNull();
     expect(project.createdAt).toBe(project.updatedAt);
+  });
+
+  it('adds, renames and activates models', () => {
+    const project = applyCommands(createProject('Assembly'), [
+      {
+        type: 'model/add',
+        model: { ...activeModel(createProject()), id: 'model-2', name: 'Part' },
+      },
+      { type: 'model/activate', modelId: 'model-2' },
+    ]);
+    expect(project.superObjects).toHaveLength(2);
+    expect(project.activeSuperObjectId).toBe('model-2');
+
+    const renamed = applyCommand(project, {
+      type: 'model/rename',
+      modelId: 'model-2',
+      name: 'Bracket',
+    });
+    expect(activeModel(renamed).name).toBe('Bracket');
+    expect(() =>
+      applyCommand(renamed, { type: 'model/rename', modelId: 'model-2', name: 'Model' }),
+    ).toThrow(CommandError);
+  });
+
+  it('keeps the history of every model apart', () => {
+    const project = applyCommands(createProject('Assembly'), [
+      { type: 'feature/add', feature: boxFeature() },
+      { type: 'body/add', body: bodyFor('feat_box') },
+      {
+        type: 'model/add',
+        model: { ...activeModel(createProject()), id: 'model-2', name: 'Part' },
+      },
+      { type: 'model/activate', modelId: 'model-2' },
+      { type: 'feature/add', feature: boxFeature('feat_second') },
+    ]);
+    const second = project.superObjects.find((superObject) => superObject.id === 'model-2');
+    expect(second?.features.map((feature) => feature.id)).toEqual(['feat_second']);
+    expect(activeModel(project).features.map((feature) => feature.id)).toEqual(['feat_second']);
+    const first = project.superObjects.find((superObject) => superObject.id !== 'model-2');
+    expect(first?.features.map((feature) => feature.id)).toEqual(['feat_box']);
+    expect(first?.bodies).toHaveLength(1);
+  });
+
+  it('removes a model and refuses to remove the last one', () => {
+    const project = applyCommands(createProject('Assembly'), [
+      {
+        type: 'model/add',
+        model: { ...activeModel(createProject()), id: 'model-2', name: 'Part' },
+      },
+    ]);
+    const removed = applyCommand(project, { type: 'model/remove', modelId: 'model-2' });
+    expect(removed.superObjects).toHaveLength(1);
+    expect(removed.activeSuperObjectId).toBe(removed.superObjects[0]?.id);
+    expect(() =>
+      applyCommand(removed, { type: 'model/remove', modelId: removed.superObjects[0]!.id }),
+    ).toThrow(CommandError);
+  });
+
+  it('numbers new model names after the existing ones', () => {
+    const project = applyCommands(createProject('Assembly'), [
+      {
+        type: 'model/add',
+        model: { ...activeModel(createProject()), id: 'model-2', name: 'Model 2' },
+      },
+    ]);
+    expect(nextModelName(project, 'Model')).toBe('Model 3');
+    expect(nextModelName(project, 'Part')).toBe('Part');
+  });
+
+  it('migrates a flat version 2 project into one model', () => {
+    const project = parseProject(legacyFile([boxFeature()]));
+    expect(project.schemaVersion).toBe(3);
+    expect(project.superObjects).toHaveLength(1);
+    expect(activeModel(project).name).toBe('Model');
+    expect(activeModel(project).features.map((feature) => feature.id)).toEqual(['feat_box']);
+    // The migrated project is a normal version 3 document that accepts edits.
+    const edited = applyCommand(project, { type: 'body/add', body: bodyFor('feat_box') });
+    expect(activeModel(edited).bodies).toHaveLength(1);
+  });
+
+  it('names the migrated model with the locale default', () => {
+    const project = parseProject(legacyFile(), { modelName: 'Модель' });
+    expect(activeModel(project).name).toBe('Модель');
   });
 
   it('adds feature and body in a single command batch', () => {
     const project = withBox();
-    expect(project.features).toHaveLength(1);
-    expect(project.bodies).toHaveLength(1);
-    expect(project.bodies[0]?.createdBy).toBe('feat_box');
+    expect(modelOf(project).features).toHaveLength(1);
+    expect(modelOf(project).bodies).toHaveLength(1);
+    expect(modelOf(project).bodies[0]?.createdBy).toBe('feat_box');
   });
 
   it('fills new extrude fields when opening an older project', () => {
@@ -113,11 +230,8 @@ describe('project model', () => {
     delete legacy.objectOrder;
     delete legacy.reversed;
     delete legacy.method;
-    const project = parseProject({
-      ...createProject('Old project'),
-      features: [legacy],
-    });
-    const parsed = project.features[0] as ExtrudeFeature;
+    const project = parseProject(legacyFile([legacy as unknown as Feature]));
+    const parsed = modelOf(project).features[0] as ExtrudeFeature;
     expect(parsed.faceRefs).toEqual([]);
     expect(parsed.objectOrder).toEqual([]);
     expect(parsed.reversed).toBe(false);
@@ -143,11 +257,8 @@ describe('project model', () => {
         inverted: true,
       },
     };
-    const project = parseProject({
-      ...createProject('Revolve'),
-      features: [feature],
-    });
-    expect((project.features[0] as ExtrudeFeature).revolve).toEqual(feature.revolve);
+    const project = parseProject(legacyFile([feature]));
+    expect((modelOf(project).features[0] as ExtrudeFeature).revolve).toEqual(feature.revolve);
   });
 
   it('keeps shell targets, openings and its offset through a project file', () => {
@@ -169,11 +280,8 @@ describe('project model', () => {
       offset: 3,
       direction: 'outward',
     };
-    const project = parseProject({
-      ...createProject('Shell'),
-      features: [feature],
-    });
-    expect(project.features[0]).toEqual(feature);
+    const project = parseProject(legacyFile([feature]));
+    expect(modelOf(project).features[0]).toEqual(feature);
   });
 
   it('rejects duplicate ids', () => {
@@ -185,8 +293,8 @@ describe('project model', () => {
 
   it('removes bodies created by a removed feature', () => {
     const project = applyCommand(withBox(), { type: 'feature/remove', featureId: 'feat_box' });
-    expect(project.features).toHaveLength(0);
-    expect(project.bodies).toHaveLength(0);
+    expect(modelOf(project).features).toHaveLength(0);
+    expect(modelOf(project).bodies).toHaveLength(0);
   });
 
   it('renames the project and rejects empty names', () => {
@@ -200,14 +308,14 @@ describe('project model', () => {
   it('tracks history end', () => {
     const project = withBox();
     const rolled = applyCommand(project, { type: 'history/set-end', featureId: 'feat_box' });
-    expect(rolled.historyEnd).toBe('feat_box');
+    expect(modelOf(rolled).historyEnd).toBe('feat_box');
     expect(() => applyCommand(rolled, { type: 'history/set-end', featureId: 'missing' })).toThrow(
       CommandError,
     );
 
     const atStart = applyCommand(project, { type: 'history/set-end', featureId: HISTORY_START });
-    expect(atStart.historyEnd).toBe(HISTORY_START);
-    expect(validateHistory(atStart)).toEqual([]);
+    expect(modelOf(atStart).historyEnd).toBe(HISTORY_START);
+    expect(validateHistory(modelOf(atStart))).toEqual([]);
   });
 
   it('inserts new features at the history cursor', () => {
@@ -215,13 +323,13 @@ describe('project model', () => {
       { type: 'feature/add', feature: boxFeature() },
       { type: 'feature/add', feature: boxFeature('feat_box2') },
     ]);
-    expect(historyInsertIndex(project)).toBe(2);
+    expect(historyInsertIndex(modelOf(project))).toBe(2);
 
     const rolled = applyCommand(project, { type: 'history/set-end', featureId: 'feat_box' });
-    expect(historyInsertIndex(rolled)).toBe(1);
+    expect(historyInsertIndex(modelOf(rolled))).toBe(1);
 
     const atStart = applyCommand(rolled, { type: 'history/set-end', featureId: HISTORY_START });
-    expect(historyInsertIndex(atStart)).toBe(0);
+    expect(historyInsertIndex(modelOf(atStart))).toBe(0);
   });
 
   it('keeps the cursor at its position when the operation after it is removed', () => {
@@ -235,8 +343,11 @@ describe('project model', () => {
     // The cursor followed the second operation, so it lands after the first
     // one instead of jumping to the end of the history.
     const removed = applyCommand(project, { type: 'feature/remove', featureId: 'feat_box2' });
-    expect(removed.features.map((feature) => feature.id)).toEqual(['feat_box', 'feat_box3']);
-    expect(removed.historyEnd).toBe('feat_box');
+    expect(modelOf(removed).features.map((feature) => feature.id)).toEqual([
+      'feat_box',
+      'feat_box3',
+    ]);
+    expect(modelOf(removed).historyEnd).toBe('feat_box');
 
     // Removing the first operation puts the cursor at the start of the history.
     const atFirst = applyCommand(project, { type: 'history/set-end', featureId: 'feat_box' });
@@ -244,7 +355,7 @@ describe('project model', () => {
       type: 'feature/remove',
       featureId: 'feat_box',
     });
-    expect(firstRemoved.historyEnd).toBe(HISTORY_START);
+    expect(modelOf(firstRemoved).historyEnd).toBe(HISTORY_START);
   });
 });
 
@@ -255,9 +366,12 @@ describe('object metadata', () => {
       { type: 'body/add', body: bodyFor('feat_box') },
       { type: 'metadata/patch', objectId: featureBodyId('feat_box'), patch: { name: 'Cube' } },
     ]);
-    expect(project.bodies[0]).toEqual({ id: featureBodyId('feat_box'), createdBy: 'feat_box' });
-    expect(project.metadata[featureBodyId('feat_box')]).toEqual({ name: 'Cube' });
-    const [body] = bodiesInHistory(project);
+    expect(modelOf(project).bodies[0]).toEqual({
+      id: featureBodyId('feat_box'),
+      createdBy: 'feat_box',
+    });
+    expect(modelOf(project).metadata[featureBodyId('feat_box')]).toEqual({ name: 'Cube' });
+    const [body] = bodiesInHistory(modelOf(project));
     expect(body).toMatchObject({ id: featureBodyId('feat_box'), name: 'Cube', visible: true });
   });
 
@@ -268,17 +382,20 @@ describe('object metadata', () => {
       { type: 'metadata/patch', objectId: featureBodyId('feat_box'), patch: { color: '#fff' } },
       { type: 'metadata/patch', objectId: featureBodyId('feat_box'), patch: { visible: false } },
     ]);
-    expect(project.metadata[featureBodyId('feat_box')]).toEqual({
+    expect(modelOf(project).metadata[featureBodyId('feat_box')]).toEqual({
       color: '#fff',
       visible: false,
     });
 
     const rolled = applyCommand(project, { type: 'history/set-end', featureId: HISTORY_START });
-    expect(bodiesInHistory(rolled)).toEqual([]);
-    expect(rolled.metadata[featureBodyId('feat_box')]).toEqual({ color: '#fff', visible: false });
+    expect(bodiesInHistory(modelOf(rolled))).toEqual([]);
+    expect(modelOf(rolled).metadata[featureBodyId('feat_box')]).toEqual({
+      color: '#fff',
+      visible: false,
+    });
 
     const forward = applyCommand(rolled, { type: 'history/set-end', featureId: 'feat_box' });
-    expect(bodiesInHistory(forward)[0]).toMatchObject({ visible: false, color: '#fff' });
+    expect(bodiesInHistory(modelOf(forward))[0]).toMatchObject({ visible: false, color: '#fff' });
   });
 
   it('keeps imported meshes out of solid body lists', () => {
@@ -298,10 +415,10 @@ describe('object metadata', () => {
       },
       { type: 'body/add', body: { ...bodyFor('feat_import'), kind: 'mesh' } },
     ]);
-    const [body] = bodiesInHistory(project);
+    const [body] = bodiesInHistory(modelOf(project));
     expect(body?.kind).toBe('mesh');
     expect(isMeshObject(body!)).toBe(true);
-    expect(solidBodiesInHistory(project)).toEqual([]);
+    expect(solidBodiesInHistory(modelOf(project))).toEqual([]);
   });
 
   it('recognises imported meshes saved without a kind', () => {
@@ -322,8 +439,8 @@ describe('object metadata', () => {
       { type: 'body/add', body: bodyFor('feat_import') },
     ]);
     const parsed = parseProject(JSON.parse(JSON.stringify(project)));
-    expect(parsed.bodies[0]?.kind).toBe('mesh');
-    expect(solidBodiesInHistory(parsed)).toEqual([]);
+    expect(modelOf(parsed).bodies[0]?.kind).toBe('mesh');
+    expect(solidBodiesInHistory(modelOf(parsed))).toEqual([]);
   });
 });
 
@@ -343,7 +460,9 @@ describe('history validation', () => {
       { type: 'feature/add', feature: sketchFeature() },
       { type: 'feature/add', feature: extrudeFeature() },
     ]);
-    expect(validateHistory(project).filter((issue) => issue.severity === 'error')).toEqual([]);
+    expect(validateHistory(modelOf(project)).filter((issue) => issue.severity === 'error')).toEqual(
+      [],
+    );
   });
 
   it('reports a suppressed dependency as a warning', () => {
@@ -352,7 +471,7 @@ describe('history validation', () => {
       { type: 'feature/add', feature: extrudeFeature() },
       { type: 'feature/toggle-suppressed', featureId: 'feat_sketch' },
     ]);
-    const issues = validateHistory(project);
+    const issues = validateHistory(modelOf(project));
     expect(issues.some((issue) => issue.code === 'SUPPRESSED_DEPENDENCY')).toBe(true);
     expect(issues.filter((issue) => issue.severity === 'error')).toEqual([]);
   });
@@ -389,9 +508,9 @@ describe('deleting a set of operations', () => {
 
   it('merges the dependents of every selected operation', () => {
     const project = chain();
-    expect(dependentFeaturesOf(project, ['feat_a', 'feat_c']).map((entry) => entry.id)).toEqual([
-      'feat_b',
-    ]);
+    expect(
+      dependentFeaturesOf(modelOf(project), ['feat_a', 'feat_c']).map((entry) => entry.id),
+    ).toEqual(['feat_b']);
   });
 
   it('leaves out operations that are selected anyway', () => {
@@ -401,9 +520,9 @@ describe('deleting a set of operations', () => {
       { type: 'feature/add', feature: extrudeFeature('feat_b', 'feat_a') },
       { type: 'feature/add', feature: extrudeFeature('feat_c', 'feat_a') },
     ]);
-    expect(dependentFeaturesOf(diamond, ['feat_a', 'feat_b']).map((entry) => entry.id)).toEqual([
-      'feat_c',
-    ]);
+    expect(
+      dependentFeaturesOf(modelOf(diamond), ['feat_a', 'feat_b']).map((entry) => entry.id),
+    ).toEqual(['feat_c']);
   });
 
   it('rejects removing an operation whose dependents stay', () => {
@@ -418,7 +537,7 @@ describe('deleting a set of operations', () => {
       featureId: 'feat_a',
       keepDependents: true,
     });
-    expect(project.features.map((feature) => feature.id)).toEqual(['feat_b', 'feat_c']);
+    expect(modelOf(project).features.map((feature) => feature.id)).toEqual(['feat_b', 'feat_c']);
   });
 
   it('stays editable after a removal that kept dependents', () => {
@@ -427,12 +546,12 @@ describe('deleting a set of operations', () => {
       featureId: 'feat_a',
       keepDependents: true,
     });
-    expect(project.features[0]?.name).toBe('Extrude');
+    expect(modelOf(project).features[0]?.name).toBe('Extrude');
     const renamed = applyCommand(project, {
       type: 'feature/replace',
-      feature: { ...project.features[0]!, name: 'Shell' },
+      feature: { ...modelOf(project).features[0]!, name: 'Shell' },
     });
-    expect(renamed.features[0]?.name).toBe('Shell');
+    expect(modelOf(renamed).features[0]?.name).toBe('Shell');
   });
 });
 
@@ -441,8 +560,8 @@ describe('project serialization', () => {
     const project = withBox();
     const restored = parseProject(JSON.parse(JSON.stringify(project)));
     expect(restored).toMatchObject({ id: project.id, name: project.name });
-    expect(restored.features).toHaveLength(1);
-    expect(restored.bodies).toHaveLength(1);
+    expect(modelOf(restored).features).toHaveLength(1);
+    expect(modelOf(restored).bodies).toHaveLength(1);
   });
 
   it('round-trips every primitive kind', () => {
@@ -478,22 +597,20 @@ describe('project serialization', () => {
         params: { radius: 4, height: 10 },
       } as PrimitiveFeature,
     ];
-    const project: Project = {
-      ...createProject(),
+    const project = withModel({
       features: [boxFeature(), ...primitives],
       bodies: [boxFeature(), ...primitives].map((feature) => bodyFor(feature.id)),
-    };
+    });
     const restored = parseProject(JSON.parse(JSON.stringify(project)));
     expect(
-      restored.features.map((feature) =>
+      modelOf(restored).features.map((feature) =>
         feature.type === 'primitive' ? feature.kind : feature.type,
       ),
     ).toEqual(['box', 'sphere', 'cylinder', 'cone', 'torus', 'pyramid', 'capsule']);
   });
 
   it('rejects a torus whose tube fills the hole', () => {
-    const project: Project = {
-      ...createProject(),
+    const project = withModel({
       features: [
         {
           ...boxFeature('feat_bad_torus'),
@@ -502,7 +619,7 @@ describe('project serialization', () => {
         } as PrimitiveFeature,
       ],
       bodies: [bodyFor('feat_bad_torus')],
-    };
+    });
     expect(() => parseProject(JSON.parse(JSON.stringify(project)))).toThrow(ProjectFileError);
   });
 

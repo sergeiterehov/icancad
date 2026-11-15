@@ -1,4 +1,5 @@
 import {
+  activeModel,
   createId,
   type Project,
   type SketchConstraint,
@@ -22,7 +23,11 @@ import { useTranslation } from 'react-i18next';
 import { solveSketch } from '../sketch/client';
 import { rebuildScene } from '../kernel/rebuild';
 import { autoConstraintsForEntity, isNearAxis, snapHighlightIds } from '../sketch/autoConstraints';
-import { buildConstraintActions, diagnoseSketch, removeSketchEntities } from '../sketch/constraintModel';
+import {
+  buildConstraintActions,
+  diagnoseSketch,
+  removeSketchEntities,
+} from '../sketch/constraintModel';
 import { sketchToolFromShortcut } from '../sketch/tool';
 import { useApplyConstraintAction } from '../sketch/useConstraintActions';
 import { resolveConstraintShortcut } from '../ui/constraintCatalog';
@@ -30,7 +35,11 @@ import { canEditSketch, computeSketchFrame, sketchFrameOf } from '../sketch/sect
 import { solveDrag } from '../sketch/dragSolve';
 import { liveMeasures, measureInfo } from '../sketch/measure';
 import { sketchPickKey } from '../sketch/pickKey';
-import { isProjectedEntity, projectionEntityIds, resolveSketchProjections } from '../sketch/projection';
+import {
+  isProjectedEntity,
+  projectionEntityIds,
+  resolveSketchProjections,
+} from '../sketch/projection';
 import { referenceMenuItems } from '../sketch/referenceMenu';
 import type { SketchSnap, SketchSnapInput, SketchSnapMode } from '../sketch/snap';
 import type { SketchTool } from '../sketch/tool';
@@ -72,12 +81,10 @@ function snapTargetPoint(snap: SketchSnap | null, mode: SketchSnapMode): Point2 
  */
 function currentSketchEntities(sketchId: string | null): readonly SketchEntity[] {
   if (!sketchId) return [];
-  const feature = useDocumentStore
-    .getState()
-    .project.features.find(
-      (candidate): candidate is SketchFeature =>
-        candidate.id === sketchId && candidate.type === 'sketch',
-    );
+  const feature = activeModel(useDocumentStore.getState().project).features.find(
+    (candidate): candidate is SketchFeature =>
+      candidate.id === sketchId && candidate.type === 'sketch',
+  );
   return withFundamentalEntities(feature?.entities ?? []);
 }
 
@@ -104,18 +111,17 @@ function dragEntities(drag: DragState, point: Point2, entities: SketchEntity[]):
   const moved =
     drag.mode === 'point'
       ? moveEntityControlPoint(drag.originalEntity, drag.pointIndex ?? 0, point)
-      : translateEntity(drag.originalEntity, point[0] - drag.startPoint[0], point[1] - drag.startPoint[1]);
+      : translateEntity(
+          drag.originalEntity,
+          point[0] - drag.startPoint[0],
+          point[1] - drag.startPoint[1],
+        );
   return entities.map((entity) => (entity.id === drag.entityId ? moved : entity));
 }
 
 /** Whether any constraint can move this entity, and with it, the rest. */
-function isDraggedEntityConstrained(
-  constraints: SketchConstraint[],
-  entityId: string,
-): boolean {
-  return constraints.some((constraint) =>
-    constraint.refs.some((ref) => ref.entityId === entityId),
-  );
+function isDraggedEntityConstrained(constraints: SketchConstraint[], entityId: string): boolean {
+  return constraints.some((constraint) => constraint.refs.some((ref) => ref.entityId === entityId));
 }
 
 function dragPinSets(drag: DragState): SketchConstraintRef[][] {
@@ -168,7 +174,7 @@ export function SketchEditor() {
   const tool = useUiStore((state) => state.sketchTool);
   const activeSketchReady = useUiStore((state) => state.activeSketchReady);
   const setActiveSketchReady = useUiStore((state) => state.setActiveSketchReady);
-  const project = useDocumentStore((state) => state.project);
+  const project = activeModel(useDocumentStore((state) => state.project));
   const apply = useDocumentStore((state) => state.apply);
   const preview = useDocumentStore((state) => state.preview);
   const commitPreview = useDocumentStore((state) => state.commitPreview);
@@ -260,9 +266,10 @@ export function SketchEditor() {
       // Trigger the rebuild and wait until the kernel publishes the preview of
       // this sketch. A rebuild that was already running for an older state does
       // not satisfy this condition.
-      void rebuildScene(useDocumentStore.getState().project, i18n.t('status.rebuild')).catch(
-        () => undefined,
-      );
+      void rebuildScene(
+        activeModel(useDocumentStore.getState().project),
+        i18n.t('status.rebuild'),
+      ).catch(() => undefined);
       unsubscribe = useKernelStore.subscribe((state) => {
         if (state.sceneVersion > startVersion && state.preview?.featureId === activeSketchId) {
           unsubscribe();
@@ -354,7 +361,7 @@ export function SketchEditor() {
     editedSketch.current = null;
     if (
       finished &&
-      useDocumentStore.getState().project.features.some((item) => item.id === finished)
+      activeModel(useDocumentStore.getState().project).features.some((item) => item.id === finished)
     ) {
       useDocumentStore.getState().select({ kind: 'sketch', id: finished });
     }
@@ -368,12 +375,9 @@ export function SketchEditor() {
   // Geometry is inserted without a history entry, so the entity and its
   // automatic constraints end up as a single undoable operation.
   const mergeEntity = (entity: SketchEntity) => {
-    const latest = useDocumentStore
-      .getState()
-      .project.features.find(
-        (feature): feature is SketchFeature =>
-          feature.id === sketch?.id && feature.type === 'sketch',
-      );
+    const latest = activeModel(useDocumentStore.getState().project).features.find(
+      (feature): feature is SketchFeature => feature.id === sketch?.id && feature.type === 'sketch',
+    );
     if (!latest) return;
     const entities = latest.entities.some((candidate) => candidate.id === entity.id)
       ? latest.entities.map((candidate) => (candidate.id === entity.id ? entity : candidate))
@@ -382,12 +386,9 @@ export function SketchEditor() {
   };
 
   const currentSketch = (): SketchFeature | undefined =>
-    useDocumentStore
-      .getState()
-      .project.features.find(
-        (feature): feature is SketchFeature =>
-          feature.id === sketch?.id && feature.type === 'sketch',
-      );
+    activeModel(useDocumentStore.getState().project).features.find(
+      (feature): feature is SketchFeature => feature.id === sketch?.id && feature.type === 'sketch',
+    );
 
   const applyAutoConstraintsNow = async (
     entity: SketchEntity,
@@ -690,12 +691,10 @@ export function SketchEditor() {
         while (drag.current === activeDrag && activeDrag.target) {
           const point = activeDrag.target;
           activeDrag.target = null;
-          const current = useDocumentStore
-            .getState()
-            .project.features.find(
-              (feature): feature is SketchFeature =>
-                feature.id === activeDrag.original.id && feature.type === 'sketch',
-            );
+          const current = activeModel(useDocumentStore.getState().project).features.find(
+            (feature): feature is SketchFeature =>
+              feature.id === activeDrag.original.id && feature.type === 'sketch',
+          );
           if (!current) return;
           const solved = await solveDrag({
             entities: dragEntities(activeDrag, point, current.entities),
@@ -707,12 +706,10 @@ export function SketchEditor() {
           if (drag.current !== activeDrag) return;
           if (!solved) continue;
           activeDrag.attempt = solved.attempt;
-          const latest = useDocumentStore
-            .getState()
-            .project.features.find(
-              (feature): feature is SketchFeature =>
-                feature.id === activeDrag.original.id && feature.type === 'sketch',
-            );
+          const latest = activeModel(useDocumentStore.getState().project).features.find(
+            (feature): feature is SketchFeature =>
+              feature.id === activeDrag.original.id && feature.type === 'sketch',
+          );
           if (!latest) return;
           preview({
             type: 'feature/replace',
@@ -756,7 +753,7 @@ export function SketchEditor() {
         const pick = getViewport()?.pickSketch(event.clientX, event.clientY);
         if (!pick) return;
         const state = useDocumentStore.getState();
-        const current = state.project.features.find(
+        const current = activeModel(state.project).features.find(
           (feature): feature is SketchFeature =>
             feature.id === activeDrag.original.id && feature.type === 'sketch',
         );
@@ -796,12 +793,10 @@ export function SketchEditor() {
       const activeDrag = drag.current;
       drag.current = null;
       if (!activeDrag?.active) return;
-      const latest = useDocumentStore
-        .getState()
-        .project.features.find(
-          (feature): feature is SketchFeature =>
-            feature.id === activeDrag.original.id && feature.type === 'sketch',
-        );
+      const latest = activeModel(useDocumentStore.getState().project).features.find(
+        (feature): feature is SketchFeature =>
+          feature.id === activeDrag.original.id && feature.type === 'sketch',
+      );
       if (!latest) {
         preview({ type: 'feature/replace', feature: activeDrag.original });
         return;

@@ -5,7 +5,7 @@ import {
   type BodyFaceRef,
   type EdgeTreatmentFeature,
   type EdgeTreatmentKind,
-  type Project,
+  type Model,
   type Vec3,
 } from '@icancad/model';
 import type { SelectionItem } from '../stores/documentStore';
@@ -45,11 +45,7 @@ export const MIN_EDGE_TREATMENT = 0.05;
  * handle arrow. A chamfer plane through both legs is `d·cos(wedge/2)` away; a
  * rounded corner reaches `r(1 − sin(wedge/2))/sin(wedge/2)` back from its centre.
  */
-export function treatmentFaceOffset(
-  kind: EdgeTreatmentKind,
-  size: number,
-  wedge: number,
-): number {
+export function treatmentFaceOffset(kind: EdgeTreatmentKind, size: number, wedge: number): number {
   const half = clampHalfAngle(wedge);
   if (kind === 'chamfer') return Math.max(0, size) * Math.cos(half);
   const sine = Math.max(SINE_FLOOR, Math.sin(half));
@@ -85,7 +81,7 @@ function arrowDirection(bisector: Vec3, convex: boolean): Vec3 {
 
 /** The edge treatment the current selection is attached to. */
 export function edgeTreatmentTargetFromSelection(
-  project: Project,
+  project: Model,
   selection: readonly SelectionItem[],
   meshes: Record<string, TessellationResult>,
 ): EdgeTreatmentTarget | null {
@@ -150,10 +146,7 @@ export function edgeTreatmentGeometry(
  * The mesh of the finished operation no longer contains the edge it treated,
  * so this is meant for the input of the operation.
  */
-function liveCorner(
-  mesh: TessellationResult | undefined,
-  ref: BodyEdgeRef,
-): EdgeCorner | null {
+function liveCorner(mesh: TessellationResult | undefined, ref: BodyEdgeRef): EdgeCorner | null {
   if (!mesh) return null;
   const edges = mesh.edges ?? [];
   const edge =

@@ -10,6 +10,7 @@ import type {
 import type { Vec3 } from '@icancad/model';
 import { sketchProfiles, type ProfileRegion } from '@icancad/sketch';
 import {
+  activeModel,
   HISTORY_START,
   BODY_COLORS,
   defaultRevolve,
@@ -22,7 +23,7 @@ import {
   type ExtrudeFeature,
   type Feature,
   type ImportMeshFeature,
-  type Project,
+  type Model,
   type ShellFeature,
   type SketchFeature,
   type SketchFrame,
@@ -193,11 +194,22 @@ interface GhostCollector {
 interface EvalContext {
   client: ReturnType<typeof getKernelClient>;
   epoch: number;
-  project: Project;
+  project: Model;
   ghost?: GhostCollector;
 }
 
-const rebuildCache = new RebuildCache<RebuildState>();
+// Snapshots belong to one model: switching models must not throw away the
+// history the other model already calculated.
+const rebuildCaches = new Map<string, RebuildCache<RebuildState>>();
+
+function rebuildCacheFor(modelId: string): RebuildCache<RebuildState> {
+  let cache = rebuildCaches.get(modelId);
+  if (!cache) {
+    cache = new RebuildCache<RebuildState>();
+    rebuildCaches.set(modelId, cache);
+  }
+  return cache;
+}
 
 // Tessellations are rebuilt whenever an operation is evaluated, so identity
 // alone cannot tell whether a body actually changed. The signature is cached
@@ -286,7 +298,7 @@ function trackShape(shapeId: string): string {
 
 /** Drops every snapshot. The worker was restarted, so its shapes are gone too. */
 export function resetRebuildCache(): void {
-  rebuildCache.clear();
+  rebuildCaches.clear();
   liveShapes.clear();
 }
 
@@ -296,7 +308,7 @@ export function abortRebuild(): void {
 }
 
 export function rebuildScene(
-  project: Project,
+  project: Model,
   label: string,
   options?: { fromIndex?: number },
 ): Promise<void> {
@@ -316,17 +328,17 @@ export function rebuildScene(
  * cached states captured after it.
  */
 export function rebuildFrom(featureId: string): void {
-  const project = useDocumentStore.getState().project;
+  const project = activeModel(useDocumentStore.getState().project);
   const index = project.features.findIndex((feature) => feature.id === featureId);
   if (index < 0) return;
-  rebuildCache.invalidateFrom(index);
+  rebuildCacheFor(project.id).invalidateFrom(index);
   // A rebuild that is already running may store snapshots we just dropped, so
   // the start point is passed explicitly instead of relying on the cache.
   void rebuildScene(project, i18n.t('status.rebuild'), { fromIndex: index }).catch(() => undefined);
 }
 
 async function runRebuild(
-  project: Project,
+  project: Model,
   previewFeatureId: string | null,
   fromIndex?: number,
 ): Promise<void> {
@@ -353,6 +365,7 @@ async function runRebuild(
   // operation replaces its feature object, so every snapshot from it on is
   // discarded automatically.
   const reuseUntil = fromIndex === undefined ? endIndex : Math.min(endIndex, fromIndex - 1);
+  const rebuildCache = rebuildCacheFor(project.id);
   const cached = rebuildCache.find(features, reuseUntil);
   const startIndex = cached ? cached.index + 1 : 0;
   const state = cached ? cloneState(cached.state) : emptyState();
@@ -486,7 +499,7 @@ function buildPreview(
   base: RebuildState,
   after: RebuildState,
   ghost: GhostCollector,
-  project: Project,
+  project: Model,
 ): ScenePreview {
   const bodies: PreviewBodyMark[] = [];
   let nextNumber = nextBodyNumber(project);
@@ -567,10 +580,19 @@ function buildPreview(
 }
 
 function disposeUnusedShapes(client: ReturnType<typeof getKernelClient>): void {
+  // Caches of deleted models go away with their snapshots.
+  const modelIds = new Set(
+    useDocumentStore.getState().project.superObjects.map((superObject) => superObject.id),
+  );
+  for (const modelId of rebuildCaches.keys()) {
+    if (!modelIds.has(modelId)) rebuildCaches.delete(modelId);
+  }
   const keep = new Set<string>();
   // Cached snapshots must stay continuable: their body shapes remain alive.
-  for (const checkpoint of rebuildCache.all()) {
-    for (const shapeId of checkpoint.state.bodyShapes.values()) keep.add(shapeId);
+  for (const cache of rebuildCaches.values()) {
+    for (const checkpoint of cache.all()) {
+      for (const shapeId of checkpoint.state.bodyShapes.values()) keep.add(shapeId);
+    }
   }
   for (const shapeId of [...liveShapes]) {
     if (keep.has(shapeId)) continue;
@@ -602,18 +624,15 @@ async function evaluateFeature(
     state.sketchFrames[feature.id] = frame;
     // Projected geometry follows the bodies as they exist at this point of the
     // history; the stored entities remain the snapshot for a lost link.
-    const resolved = resolveSketchProjections(
-      feature,
-      frame,
-      (bodyId) => state.meshes[bodyId],
-    );
+    const resolved = resolveSketchProjections(feature, frame, (bodyId) => state.meshes[bodyId]);
     state.sketches.set(
       feature.id,
       resolved.entities === feature.entities
         ? feature
         : { ...feature, entities: resolved.entities },
     );
-    if (resolved.lostEntityIds.length > 0) state.projectionLost[feature.id] = resolved.lostEntityIds;
+    if (resolved.lostEntityIds.length > 0)
+      state.projectionLost[feature.id] = resolved.lostEntityIds;
     else delete state.projectionLost[feature.id];
     return;
   }
@@ -724,7 +743,10 @@ function kernelErrorCode(error: unknown): string {
 
 /** Every face of a freshly built body belongs to the operation that built it. */
 function ownAllFaces(owners: Map<string, string[]>, bodyId: string, faces: number, id: string) {
-  owners.set(bodyId, Array.from({ length: Math.max(0, faces) }, () => id));
+  owners.set(
+    bodyId,
+    Array.from({ length: Math.max(0, faces) }, () => id),
+  );
 }
 
 async function applyExtrude(
@@ -770,8 +792,7 @@ async function applyExtrude(
   const frame = sketch ? (sketchFrames[sketch.id] ?? computeSketchFrame(sketch)) : null;
   // A revolve turns its inputs around a picked line; without that line there is
   // nothing to turn them around.
-  const revolve =
-    feature.method === 'revolve' ? (feature.revolve ?? defaultRevolve()) : undefined;
+  const revolve = feature.method === 'revolve' ? (feature.revolve ?? defaultRevolve()) : undefined;
   const revolveAxis = revolve
     ? resolveRevolveAxis(revolve.axis, {
         meshes,
@@ -1177,8 +1198,7 @@ async function applyExtrude(
     }
 
     const resultShapeId = trackShape(`${bodyId}:${feature.id}`);
-    const booleanOp =
-      feature.op === 'add' ? 'fuse' : feature.op === 'subtract' ? 'cut' : 'common';
+    const booleanOp = feature.op === 'add' ? 'fuse' : feature.op === 'subtract' ? 'cut' : 'common';
     const request = (shapeId: string, base: string, tool: string) =>
       client.request<MakeBoxResult>({
         type: 'boolean',
@@ -1500,8 +1520,7 @@ async function applyShell(
   context: EvalContext,
 ): Promise<void> {
   const { client, epoch } = context;
-  const { bodyShapes, bodyOwner, bodySource, faceOwners, meshes, bodyStats, createdBodies } =
-    state;
+  const { bodyShapes, bodyOwner, bodySource, faceOwners, meshes, bodyStats, createdBodies } = state;
 
   const targets = new Set<string>(feature.bodyIds ?? []);
   const openings = new Map<string, number[]>();
@@ -1547,8 +1566,7 @@ async function applyShell(
           mesh.bbox.max[2] - mesh.bbox.min[2],
         )
       : 0;
-    const ceiling =
-      feature.direction === 'inward' && extent > 0 ? extent / 2 : feature.thickness;
+    const ceiling = feature.direction === 'inward' && extent > 0 ? extent / 2 : feature.thickness;
     const thickness = Math.min(feature.thickness, ceiling);
     const resultShapeId = trackShape(`${bodyId}:${feature.id}:shell`);
     let result: ShellResult;

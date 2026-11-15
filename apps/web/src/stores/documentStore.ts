@@ -1,9 +1,11 @@
 import {
+  activeModel,
   applyCommands,
   BODY_COLORS,
   HISTORY_START,
   CommandError,
   createId,
+  createModel,
   createProject,
   defaultRevolve,
   dependentFeaturesOf,
@@ -14,6 +16,9 @@ import {
   historyInsertIndex,
   isFeatureInHistory,
   isMeshObject,
+  nextModelName,
+  touch,
+  updateActiveModel,
   type BodyEdgeRef,
   type BodyFaceRef,
   type BodyRef,
@@ -23,6 +28,7 @@ import {
   type Feature,
   type ImportMeshFeature,
   type MeshFormat,
+  type Model,
   type PrimitiveKind,
   type Project,
   type SectionPlane,
@@ -41,14 +47,7 @@ import { useKernelStore, isModelRebuilding } from './kernelStore';
 import { useUiStore } from './uiStore';
 
 export type SelectionKind =
-  | 'body'
-  | 'mesh'
-  | 'feature'
-  | 'sketch'
-  | 'face'
-  | 'sketch-edge'
-  | 'body-face'
-  | 'edge';
+  'body' | 'mesh' | 'feature' | 'sketch' | 'face' | 'sketch-edge' | 'body-face' | 'edge';
 
 export interface SelectionItem {
   kind: SelectionKind;
@@ -67,7 +66,7 @@ interface DocumentState {
   /**
    * Operation whose settings are open. The document keeps the user's cursor;
    * the scene is rendered and rebuilt against the operation's input state
-   * instead (see `projectForView`).
+   * instead (see `modelForView`).
    */
   editingFeatureId: string | null;
   /**
@@ -158,6 +157,15 @@ interface DocumentState {
   /** Reconciles body refs with the bodies the kernel actually produced. */
   syncCreatedBodies: (bodies: Map<string, string[]>, blockedFeatureId?: string | null) => void;
   renameProject: (name: string) => void;
+  /** Adds a model and makes it active; returns its id, or null when it failed. */
+  addModel: (name: string) => string | null;
+  /** Switches the edited model without an undo step. */
+  setActiveModel: (modelId: string) => void;
+  renameModel: (modelId: string, name: string) => void;
+  /** Asks for confirmation when the model still has objects. */
+  deleteModel: (modelId: string) => void;
+  /** Confirmed deletion, keeping undo history. */
+  removeModel: (modelId: string) => void;
   setHistoryEnd: (featureId: string | null) => void;
   toggleBodyVisibility: (bodyId: string) => void;
 }
@@ -199,24 +207,27 @@ const HISTORY_LIMIT = 100;
 
 /**
  * Content of a document without the parts that are bookkeeping rather than an
- * edit: the save timestamp and the camera the user happens to look from.
+ * edit: the save timestamp, the active super-object and the camera the user
+ * happens to look from.
  */
 function projectContent(project: Project): string {
   return JSON.stringify({
     ...project,
     updatedAt: '',
-    view: { ...project.view, camera: null },
+    activeSuperObjectId: '',
+    superObjects: project.superObjects.map((superObject) => ({
+      ...superObject,
+      view: { ...superObject.view, camera: null },
+    })),
   });
 }
 
 // An operation created while the timeline cursor sits in the middle of the list
 // belongs at that position, and the cursor moves onto it so everything after it
 // stays rolled back until the user moves forward again.
-function addFeatureCommands(project: Project, feature: Feature): Command[] {
-  const commands: Command[] = [
-    { type: 'feature/add', feature, index: historyInsertIndex(project) },
-  ];
-  if (project.historyEnd !== null) {
+function addFeatureCommands(model: Model, feature: Feature): Command[] {
+  const commands: Command[] = [{ type: 'feature/add', feature, index: historyInsertIndex(model) }];
+  if (model.historyEnd !== null) {
     commands.push({ type: 'history/set-end', featureId: feature.id });
   }
   return commands;
@@ -224,40 +235,38 @@ function addFeatureCommands(project: Project, feature: Feature): Command[] {
 
 // Body numbers are kept in the metadata of every body ever created, so a new
 // body never reuses the number of an existing one.
-export function nextBodyNumber(project: Project): number {
+export function nextBodyNumber(model: Model): number {
   let highest = 0;
-  for (const metadata of Object.values(project.metadata)) {
+  for (const metadata of Object.values(model.metadata)) {
     if (typeof metadata.bodyIndex === 'number') highest = Math.max(highest, metadata.bodyIndex);
   }
   return highest + 1;
 }
 
-function exists(project: Project, item: SelectionItem, editingFeatureId: string | null): boolean {
+function exists(model: Model, item: SelectionItem, editingFeatureId: string | null): boolean {
   switch (item.kind) {
     case 'body':
     case 'mesh': {
-      const body = project.bodies.find((candidate) => candidate.id === item.id);
-      if (!body || !isFeatureInHistory(project, body.createdBy)) return false;
+      const body = model.bodies.find((candidate) => candidate.id === item.id);
+      if (!body || !isFeatureInHistory(model, body.createdBy)) return false;
       return item.kind === (isMeshObject(body) ? 'mesh' : 'body');
     }
     case 'feature':
-      return item.id === editingFeatureId || isFeatureInHistory(project, item.id);
+      return item.id === editingFeatureId || isFeatureInHistory(model, item.id);
     case 'sketch':
-      return project.features.some(
+      return model.features.some(
         (feature) =>
-          feature.id === item.id &&
-          feature.type === 'sketch' &&
-          isFeatureInHistory(project, item.id),
+          feature.id === item.id && feature.type === 'sketch' && isFeatureInHistory(model, item.id),
       );
     case 'face': {
       const [sketchId] = item.id.split('#');
       return Boolean(
         sketchId &&
-        project.features.some(
+        model.features.some(
           (feature) =>
             feature.id === sketchId &&
             feature.type === 'sketch' &&
-            isFeatureInHistory(project, sketchId),
+            isFeatureInHistory(model, sketchId),
         ),
       );
     }
@@ -267,11 +276,11 @@ function exists(project: Project, item: SelectionItem, editingFeatureId: string 
       if (separator <= 0) return false;
       const sketchId = item.id.slice(0, separator);
       const entityId = item.id.slice(separator + 1);
-      return project.features.some(
+      return model.features.some(
         (feature) =>
           feature.id === sketchId &&
           feature.type === 'sketch' &&
-          isFeatureInHistory(project, sketchId) &&
+          isFeatureInHistory(model, sketchId) &&
           feature.entities.some((entity) => entity.id === entityId),
       );
     }
@@ -283,8 +292,8 @@ function exists(project: Project, item: SelectionItem, editingFeatureId: string 
       const separator = item.id.lastIndexOf('#');
       if (separator <= 0) return false;
       const bodyId = item.id.slice(0, separator);
-      const body = project.bodies.find((candidate) => candidate.id === bodyId);
-      return Boolean(body && !isMeshObject(body) && isFeatureInHistory(project, body.createdBy));
+      const body = model.bodies.find((candidate) => candidate.id === bodyId);
+      return Boolean(body && !isMeshObject(body) && isFeatureInHistory(model, body.createdBy));
     }
   }
 }
@@ -292,48 +301,48 @@ function exists(project: Project, item: SelectionItem, editingFeatureId: string 
 // The operation being edited is selected while it sits just after the cursor,
 // and the bodies it will produce only exist in the preview scene.
 function sanitizeSelection(
-  project: Project,
+  model: Model,
   selection: SelectionItem[],
   editingFeatureId: string | null,
 ): SelectionItem[] {
-  const next = selection.filter((item) => exists(project, item, editingFeatureId));
+  const next = selection.filter((item) => exists(model, item, editingFeatureId));
   return next.length === selection.length ? selection : next;
 }
 
-function withHistoryEnd(project: Project, historyEnd: string | null): Project {
-  return project.historyEnd === historyEnd ? project : { ...project, historyEnd };
+function withHistoryEnd(model: Model, historyEnd: string | null): Model {
+  return model.historyEnd === historyEnd ? model : { ...model, historyEnd };
 }
 
 // A hidden sketch cannot be configured, so it is shown while an operation that
 // reads it is open — its own settings, or the extrude built from it. This is a
 // view override only: the stored visibility is left alone, so the sketch is
 // hidden again once the operation is dismissed.
-function withVisibleSketches(project: Project, editingFeatureId: string): Project {
-  const feature = project.features.find((candidate) => candidate.id === editingFeatureId);
-  if (!feature) return project;
+function withVisibleSketches(model: Model, editingFeatureId: string): Model {
+  const feature = model.features.find((candidate) => candidate.id === editingFeatureId);
+  if (!feature) return model;
   const sketchIds = new Set<string>();
   if (feature.type === 'sketch') sketchIds.add(feature.id);
   if (feature.type === 'extrude' && feature.sketchId) sketchIds.add(feature.sketchId);
-  let metadata = project.metadata;
+  let metadata = model.metadata;
   for (const sketchId of sketchIds) {
     const objectId = sketchObjectId(sketchId);
     if (metadata[objectId]?.visible !== false) continue;
     metadata = { ...metadata, [objectId]: { ...metadata[objectId], visible: true } };
   }
-  return metadata === project.metadata ? project : { ...project, metadata };
+  return metadata === model.metadata ? model : { ...model, metadata };
 }
 
 /**
  * The sketch an operation consumes completely. Such a sketch is only the input
  * of the operation afterwards, so it hides itself once the operation closes.
  */
-function consumedSketchId(feature: Feature, project: Project): string | null {
+function consumedSketchId(feature: Feature, model: Model): string | null {
   if (feature.type !== 'extrude' || feature.suppressed) return null;
   if (feature.faceRefs.length > 0) return null;
   const sketchId = feature.sketchId;
   if (!sketchId) return null;
   if (feature.scope === 'all') return sketchId;
-  const sketch = project.features.find(
+  const sketch = model.features.find(
     (candidate): candidate is SketchFeature =>
       candidate.id === sketchId && candidate.type === 'sketch',
   );
@@ -344,18 +353,18 @@ function consumedSketchId(feature: Feature, project: Project): string | null {
   return faces.every((face) => regions.has(face.id)) ? sketchId : null;
 }
 
-function hideConsumedSketch(project: Project, featureId: string): Project {
-  const feature = project.features.find((candidate) => candidate.id === featureId);
-  if (!feature) return project;
-  const sketchId = consumedSketchId(feature, project);
-  if (!sketchId) return project;
+function hideConsumedSketch(model: Model, featureId: string): Model {
+  const feature = model.features.find((candidate) => candidate.id === featureId);
+  if (!feature) return model;
+  const sketchId = consumedSketchId(feature, model);
+  if (!sketchId) return model;
   const objectId = sketchObjectId(sketchId);
-  if (!objectVisible(project, objectId)) return project;
+  if (!objectVisible(model, objectId)) return model;
   return {
-    ...project,
+    ...model,
     metadata: {
-      ...project.metadata,
-      [objectId]: { ...project.metadata[objectId], visible: false },
+      ...model.metadata,
+      [objectId]: { ...model.metadata[objectId], visible: false },
     },
   };
 }
@@ -370,10 +379,8 @@ function closeFreshEdit(state: DocumentState, project: Project): Partial<Documen
   const fresh = state.freshFeatureId;
   if (!fresh || state.editingFeatureId !== fresh) return {};
   if (useKernelStore.getState().featureErrors[fresh]) return {};
-  const hidden = hideConsumedSketch(project, fresh);
-  return hidden === project
-    ? { freshFeatureId: null }
-    : { project: hidden, freshFeatureId: null };
+  const hidden = updateActiveModel(project, (model) => hideConsumedSketch(model, fresh));
+  return hidden === project ? { freshFeatureId: null } : { project: hidden, freshFeatureId: null };
 }
 
 // An operation is configured against the model that existed when it was
@@ -381,13 +388,14 @@ function closeFreshEdit(state: DocumentState, project: Project): Partial<Documen
 // document keeps the user's cursor untouched: the input position is derived,
 // never written back. That keeps the timeline caret where the user left it and
 // keeps autosave and project export at the user's position.
-export function projectForView(project: Project, editingFeatureId: string | null): Project {
-  if (editingFeatureId === null) return project;
-  const index = project.features.findIndex((feature) => feature.id === editingFeatureId);
-  if (index < 0) return project;
+export function modelForView(project: Project, editingFeatureId: string | null): Model {
+  const model = activeModel(project);
+  if (editingFeatureId === null) return model;
+  const index = model.features.findIndex((feature) => feature.id === editingFeatureId);
+  if (index < 0) return model;
   const inputCursor: string | null =
-    index === 0 ? HISTORY_START : (project.features[index - 1]?.id ?? HISTORY_START);
-  return withVisibleSketches(withHistoryEnd(project, inputCursor), editingFeatureId);
+    index === 0 ? HISTORY_START : (model.features[index - 1]?.id ?? HISTORY_START);
+  return withVisibleSketches(withHistoryEnd(model, inputCursor), editingFeatureId);
 }
 
 function leaveEditMode(state: DocumentState): Partial<DocumentState> {
@@ -405,7 +413,7 @@ function editModeFor(
   const single = selection.length === 1 ? selection[0] : undefined;
   const feature =
     single?.kind === 'feature'
-      ? project.features.find((candidate) => candidate.id === single.id)
+      ? activeModel(project).features.find((candidate) => candidate.id === single.id)
       : undefined;
   const next = feature ? feature.id : null;
   if (next === state.editingFeatureId) return {};
@@ -420,7 +428,11 @@ function selectFeatureForEditing(
 ): void {
   set((state) => {
     const selection: SelectionItem[] = [{ kind: 'feature', id: featureId }];
-    return { selection, ...editModeFor(state, state.project, selection), freshFeatureId: featureId };
+    return {
+      selection,
+      ...editModeFor(state, state.project, selection),
+      freshFeatureId: featureId,
+    };
   });
 }
 
@@ -435,13 +447,22 @@ function reconcileEditMode(
   if (useUiStore.getState().activeSketchId) return {};
   const editing = state.editingFeatureId;
   if (editing === null) return {};
-  const stillThere = project.features.some((feature) => feature.id === editing);
+  const stillThere = activeModel(project).features.some((feature) => feature.id === editing);
   if (!stillThere) {
     return { ...leaveEditMode(state), selection: [], ...closeFreshEdit(state, project) };
   }
   const stillSelected = selection.length === 1 && selection[0]?.id === editing;
   if (stillSelected) return {};
   return { ...leaveEditMode(state), ...closeFreshEdit(state, project) };
+}
+
+// Undo and redo restore whole-project snapshots, but the user keeps looking at
+// the model they switched to: a restore only falls back to the snapshot's model
+// when the current one did not exist yet.
+function keepActiveModel(project: Project, activeId: string): Project {
+  if (project.activeSuperObjectId === activeId) return project;
+  if (!project.superObjects.some((superObject) => superObject.id === activeId)) return project;
+  return { ...project, activeSuperObjectId: activeId };
 }
 
 export const useDocumentStore = create<DocumentState>((set, get) => ({
@@ -482,7 +503,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     const gesture = state.applyGesture;
     if (!gesture) return;
     const selection = sanitizeSelection(
-      projectForView(gesture.before, state.editingFeatureId),
+      modelForView(gesture.before, state.editingFeatureId),
       state.selection,
       state.editingFeatureId,
     );
@@ -499,7 +520,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     try {
       const project = applyCommands(state.project, commands);
       const selection = sanitizeSelection(
-        projectForView(project, state.editingFeatureId),
+        modelForView(project, state.editingFeatureId),
         state.selection,
         state.editingFeatureId,
       );
@@ -533,7 +554,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     try {
       const project = applyCommands(state.project, commands);
       const selection = sanitizeSelection(
-        projectForView(project, state.editingFeatureId),
+        modelForView(project, state.editingFeatureId),
         state.selection,
         state.editingFeatureId,
       );
@@ -550,9 +571,12 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   previewAddFeature: (feature) => {
     const state = get();
     try {
-      const project = applyCommands(state.project, addFeatureCommands(state.project, feature));
+      const project = applyCommands(
+        state.project,
+        addFeatureCommands(activeModel(state.project), feature),
+      );
       const selection = sanitizeSelection(
-        projectForView(project, state.editingFeatureId),
+        modelForView(project, state.editingFeatureId),
         state.selection,
         state.editingFeatureId,
       );
@@ -579,10 +603,11 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   undo: () => {
     get().endApplyGesture();
     const state = get();
-    const previous = state.past[state.past.length - 1];
-    if (!previous) return;
+    const snapshot = state.past[state.past.length - 1];
+    if (!snapshot) return;
+    const previous = keepActiveModel(snapshot, state.project.activeSuperObjectId);
     const selection = sanitizeSelection(
-      projectForView(previous, state.editingFeatureId),
+      modelForView(previous, state.editingFeatureId),
       state.selection,
       state.editingFeatureId,
     );
@@ -599,10 +624,11 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   redo: () => {
     get().endApplyGesture();
     const state = get();
-    const next = state.future[0];
-    if (!next) return;
+    const snapshot = state.future[0];
+    if (!snapshot) return;
+    const next = keepActiveModel(snapshot, state.project.activeSuperObjectId);
     const selection = sanitizeSelection(
-      projectForView(next, state.editingFeatureId),
+      modelForView(next, state.editingFeatureId),
       state.selection,
       state.editingFeatureId,
     );
@@ -696,7 +722,9 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 
   beginFeatureEdit: (featureId) => {
     const state = get();
-    const feature = state.project.features.find((candidate) => candidate.id === featureId);
+    const feature = activeModel(state.project).features.find(
+      (candidate) => candidate.id === featureId,
+    );
     if (!feature || featureId === state.editingFeatureId) return;
     set({ editingFeatureId: featureId, ...closeFreshEdit(state, state.project) });
   },
@@ -723,14 +751,16 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     const body: BodyRef = { id: featureBodyId(featureId), createdBy: featureId };
     if (
       !state.apply(
-        ...addFeatureCommands(state.project, feature),
+        ...addFeatureCommands(activeModel(state.project), feature),
         { type: 'body/add', body },
         {
           type: 'metadata/patch',
           objectId: body.id,
           patch: {
             name,
-            color: BODY_COLORS[state.project.bodies.length % BODY_COLORS.length] ?? '#6ea8fe',
+            color:
+              BODY_COLORS[activeModel(state.project).bodies.length % BODY_COLORS.length] ??
+              '#6ea8fe',
             visible: true,
           },
         },
@@ -760,7 +790,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       references: [],
     };
     if (
-      !get().apply(...addFeatureCommands(get().project, feature), {
+      !get().apply(...addFeatureCommands(activeModel(get().project), feature), {
         type: 'metadata/patch',
         objectId: sketchObjectId(featureId),
         patch: { visible: true },
@@ -786,7 +816,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       references: [],
     };
     if (
-      !get().apply(...addFeatureCommands(get().project, feature), {
+      !get().apply(...addFeatureCommands(activeModel(get().project), feature), {
         type: 'metadata/patch',
         objectId: sketchObjectId(featureId),
         patch: { visible: true },
@@ -805,14 +835,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     get().endFeatureEdit();
     const project = get().project;
     if (input) {
-      const sketch = project.features.find(
+      const sketch = activeModel(project).features.find(
         (candidate): candidate is SketchFeature =>
           candidate.id === input.sketchId && candidate.type === 'sketch',
       );
       if (!sketch) return null;
     }
     const featureId = createId('feat');
-    const hasBodies = project.bodies.length > 0;
+    const hasBodies = activeModel(project).bodies.length > 0;
     const regions = input?.regions ?? [];
     const feature: ExtrudeFeature = {
       id: featureId,
@@ -836,7 +866,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       bodyIds: [],
       joinRegions: true,
     };
-    if (!get().apply(...addFeatureCommands(project, feature))) return null;
+    if (!get().apply(...addFeatureCommands(activeModel(project), feature))) return null;
     selectFeatureForEditing(featureId, set);
     return featureId;
   },
@@ -857,13 +887,13 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       edgeRefs: input?.edgeRefs ?? [],
       size: 1,
     };
-    if (!get().apply(...addFeatureCommands(project, feature))) return null;
+    if (!get().apply(...addFeatureCommands(activeModel(project), feature))) return null;
     selectFeatureForEditing(featureId, set);
     return featureId;
   },
 
   setEdgeTreatmentKind: (featureId, kind) => {
-    const feature = get().project.features.find(
+    const feature = activeModel(get().project).features.find(
       (candidate): candidate is EdgeTreatmentFeature =>
         candidate.id === featureId && candidate.type === 'edge-treatment',
     );
@@ -872,7 +902,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   setEdgeTreatmentSize: (featureId, size) => {
-    const feature = get().project.features.find(
+    const feature = activeModel(get().project).features.find(
       (candidate): candidate is EdgeTreatmentFeature =>
         candidate.id === featureId && candidate.type === 'edge-treatment',
     );
@@ -882,7 +912,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   toggleEdgeTreatmentFace: (featureId, ref) => {
-    const feature = get().project.features.find(
+    const feature = activeModel(get().project).features.find(
       (candidate): candidate is EdgeTreatmentFeature =>
         candidate.id === featureId && candidate.type === 'edge-treatment',
     );
@@ -896,14 +926,16 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       feature: {
         ...feature,
         faceRefs: exists
-          ? feature.faceRefs.filter((candidate) => `${candidate.bodyId}#${candidate.faceId}` !== key)
+          ? feature.faceRefs.filter(
+              (candidate) => `${candidate.bodyId}#${candidate.faceId}` !== key,
+            )
           : [...feature.faceRefs, ref],
       },
     });
   },
 
   toggleEdgeTreatmentEdge: (featureId, ref) => {
-    const feature = get().project.features.find(
+    const feature = activeModel(get().project).features.find(
       (candidate): candidate is EdgeTreatmentFeature =>
         candidate.id === featureId && candidate.type === 'edge-treatment',
     );
@@ -917,7 +949,9 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       feature: {
         ...feature,
         edgeRefs: exists
-          ? feature.edgeRefs.filter((candidate) => `${candidate.bodyId}#${candidate.edgeId}` !== key)
+          ? feature.edgeRefs.filter(
+              (candidate) => `${candidate.bodyId}#${candidate.edgeId}` !== key,
+            )
           : [...feature.edgeRefs, ref],
       },
     });
@@ -944,13 +978,13 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       offset: 0,
       direction: 'inward',
     };
-    if (!get().apply(...addFeatureCommands(get().project, feature))) return null;
+    if (!get().apply(...addFeatureCommands(activeModel(get().project), feature))) return null;
     selectFeatureForEditing(featureId, set);
     return featureId;
   },
 
   setShellDirection: (featureId, direction) => {
-    const feature = get().project.features.find(
+    const feature = activeModel(get().project).features.find(
       (candidate): candidate is ShellFeature =>
         candidate.id === featureId && candidate.type === 'shell',
     );
@@ -959,7 +993,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   setShellThickness: (featureId, thickness) => {
-    const feature = get().project.features.find(
+    const feature = activeModel(get().project).features.find(
       (candidate): candidate is ShellFeature =>
         candidate.id === featureId && candidate.type === 'shell',
     );
@@ -969,7 +1003,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   setShellOffset: (featureId, offset) => {
-    const feature = get().project.features.find(
+    const feature = activeModel(get().project).features.find(
       (candidate): candidate is ShellFeature =>
         candidate.id === featureId && candidate.type === 'shell',
     );
@@ -979,7 +1013,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   toggleShellBody: (featureId, bodyId) => {
-    const feature = get().project.features.find(
+    const feature = activeModel(get().project).features.find(
       (candidate): candidate is ShellFeature =>
         candidate.id === featureId && candidate.type === 'shell',
     );
@@ -1001,7 +1035,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   toggleShellFace: (featureId, ref) => {
-    const feature = get().project.features.find(
+    const feature = activeModel(get().project).features.find(
       (candidate): candidate is ShellFeature =>
         candidate.id === featureId && candidate.type === 'shell',
     );
@@ -1029,7 +1063,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 
   setExtrudeInput: (featureId, input) => {
     const project = get().project;
-    const feature = project.features.find(
+    const feature = activeModel(project).features.find(
       (candidate): candidate is ExtrudeFeature =>
         candidate.id === featureId && candidate.type === 'extrude',
     );
@@ -1054,7 +1088,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   toggleExtrudeFace: (featureId, sketchId, faceId) => {
-    const feature = get().project.features.find(
+    const feature = activeModel(get().project).features.find(
       (candidate): candidate is ExtrudeFeature =>
         candidate.id === featureId && candidate.type === 'extrude',
     );
@@ -1081,7 +1115,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   toggleExtrudeBodyFace: (featureId, bodyId, faceId, normal, origin) => {
-    const feature = get().project.features.find(
+    const feature = activeModel(get().project).features.find(
       (candidate): candidate is ExtrudeFeature =>
         candidate.id === featureId && candidate.type === 'extrude',
     );
@@ -1102,7 +1136,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   toggleExtrudeBodyTarget: (featureId, bodyId) => {
-    const feature = get().project.features.find(
+    const feature = activeModel(get().project).features.find(
       (candidate): candidate is ExtrudeFeature =>
         candidate.id === featureId && candidate.type === 'extrude',
     );
@@ -1114,7 +1148,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   setExtrudeReversed: (featureId, reversed) => {
-    const feature = get().project.features.find(
+    const feature = activeModel(get().project).features.find(
       (candidate): candidate is ExtrudeFeature =>
         candidate.id === featureId && candidate.type === 'extrude',
     );
@@ -1123,7 +1157,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   setExtrudeMethod: (featureId, method) => {
-    const feature = get().project.features.find(
+    const feature = activeModel(get().project).features.find(
       (candidate): candidate is ExtrudeFeature =>
         candidate.id === featureId && candidate.type === 'extrude',
     );
@@ -1141,7 +1175,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   setRevolveAxis: (featureId, axis) => {
-    const feature = get().project.features.find(
+    const feature = activeModel(get().project).features.find(
       (candidate): candidate is ExtrudeFeature =>
         candidate.id === featureId && candidate.type === 'extrude',
     );
@@ -1154,7 +1188,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   setRevolveAngles: (featureId, angles) => {
-    const feature = get().project.features.find(
+    const feature = activeModel(get().project).features.find(
       (candidate): candidate is ExtrudeFeature =>
         candidate.id === featureId && candidate.type === 'extrude',
     );
@@ -1174,7 +1208,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   setRevolveInverted: (featureId, inverted) => {
-    const feature = get().project.features.find(
+    const feature = activeModel(get().project).features.find(
       (candidate): candidate is ExtrudeFeature =>
         candidate.id === featureId && candidate.type === 'extrude',
     );
@@ -1187,7 +1221,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   toggleExtrudeSketch: (featureId, sketchId) => {
-    const feature = get().project.features.find(
+    const feature = activeModel(get().project).features.find(
       (candidate): candidate is ExtrudeFeature =>
         candidate.id === featureId && candidate.type === 'extrude',
     );
@@ -1200,7 +1234,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   // operation removes the ref, switching back restores it with the same id.
   setExtrudeOp: (featureId, op) => {
     const project = get().project;
-    const feature = project.features.find(
+    const feature = activeModel(project).features.find(
       (candidate): candidate is ExtrudeFeature =>
         candidate.id === featureId && candidate.type === 'extrude',
     );
@@ -1235,7 +1269,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     const body: BodyRef = { id: featureBodyId(featureId), createdBy: featureId, kind: 'mesh' };
     if (
       state.apply(
-        ...addFeatureCommands(state.project, feature),
+        ...addFeatureCommands(activeModel(state.project), feature),
         { type: 'body/add', body },
         {
           type: 'metadata/patch',
@@ -1244,8 +1278,8 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
             name,
             color:
               BODY_COLORS[
-                state.project.bodies.filter((candidate) => !isMeshObject(candidate)).length %
-                  BODY_COLORS.length
+                activeModel(state.project).bodies.filter((candidate) => !isMeshObject(candidate))
+                  .length % BODY_COLORS.length
               ] ?? '#6ea8fe',
             visible: true,
           },
@@ -1258,7 +1292,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 
   toggleSketchVisibility: (sketchId) => {
     const state = get();
-    const feature = state.project.features.find(
+    const feature = activeModel(state.project).features.find(
       (candidate): candidate is SketchFeature =>
         candidate.id === sketchId && candidate.type === 'sketch',
     );
@@ -1266,26 +1300,28 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     const objectId = sketchObjectId(sketchId);
     // The eye follows what is on screen, so a sketch that is only shown because
     // its operation is open hides again when the user asks for it.
-    const shown = objectVisible(projectForView(state.project, state.editingFeatureId), objectId);
+    const shown = objectVisible(modelForView(state.project, state.editingFeatureId), objectId);
     get().apply({ type: 'metadata/patch', objectId, patch: { visible: !shown } });
   },
 
   setSectionPlanes: (planes) => {
     const project = get().project;
     set({
-      project: {
-        ...project,
-        view: { ...project.view, sectionPlanes: planes },
-      },
+      project: updateActiveModel(project, (model) => ({
+        ...model,
+        view: { ...model.view, sectionPlanes: planes },
+      })),
     });
   },
 
   removeFeatures: (featureIds) => {
     const project = get().project;
     const selected = new Set(featureIds);
-    const features = project.features.filter((candidate) => selected.has(candidate.id));
+    const features = activeModel(project).features.filter((candidate) =>
+      selected.has(candidate.id),
+    );
     if (features.length === 0) return;
-    const dependents = dependentFeaturesOf(project, featureIds);
+    const dependents = dependentFeaturesOf(activeModel(project), featureIds);
     if (dependents.length > 0) {
       useUiStore.getState().requestDelete({
         featureIds: features.map((feature) => feature.id),
@@ -1301,7 +1337,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     const project = get().project;
     // Dependents of the whole set, so a chain that only survives one of the
     // deleted operations goes as well.
-    const dependents = dependentFeaturesOf(project, featureIds);
+    const dependents = dependentFeaturesOf(activeModel(project), featureIds);
     const ids = [...new Set([...featureIds, ...dependents.map((entry) => entry.id)])];
     if (!get().apply(...ids.map((id) => ({ type: 'feature/remove' as const, featureId: id })))) {
       return;
@@ -1331,7 +1367,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   // point in the timeline while its creating operation stays editable.
   deleteBody: (bodyId, name) => {
     get().endFeatureEdit();
-    const body = get().project.bodies.find((candidate) => candidate.id === bodyId);
+    const body = activeModel(get().project).bodies.find((candidate) => candidate.id === bodyId);
     if (!body) return;
     const feature: DeleteBodyFeature = {
       id: createId('feat'),
@@ -1340,7 +1376,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       type: 'delete-body',
       bodyId,
     };
-    get().apply(...addFeatureCommands(get().project, feature));
+    get().apply(...addFeatureCommands(activeModel(get().project), feature));
   },
 
   // Deleting a mixed selection is two kinds of edit: bodies disappear through
@@ -1353,9 +1389,10 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     const featureIds: string[] = [];
     for (const target of targets) {
       if (target.kind === 'body' || target.kind === 'mesh') {
-        if (project.bodies.some((body) => body.id === target.id)) bodyIds.push(target.id);
+        if (activeModel(project).bodies.some((body) => body.id === target.id))
+          bodyIds.push(target.id);
       } else if (target.kind === 'sketch') {
-        if (project.features.some((feature) => feature.id === target.id)) {
+        if (activeModel(project).features.some((feature) => feature.id === target.id)) {
           featureIds.push(target.id);
         }
       }
@@ -1366,16 +1403,17 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       const commands: Command[] = [];
       let current = get().project;
       for (const bodyId of bodyIds) {
-        const body = current.bodies.find((candidate) => candidate.id === bodyId);
+        const model = activeModel(current);
+        const body = model.bodies.find((candidate) => candidate.id === bodyId);
         if (!body) continue;
         const feature: DeleteBodyFeature = {
           id: createId('feat'),
-          name: objectName(current, bodyId, 'Body'),
+          name: objectName(model, bodyId, 'Body'),
           suppressed: false,
           type: 'delete-body',
           bodyId,
         };
-        const batch = addFeatureCommands(current, feature);
+        const batch = addFeatureCommands(model, feature);
         commands.push(...batch);
         current = applyCommands(current, batch);
       }
@@ -1395,29 +1433,31 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     // Rebuild stops at the first failure, so bodies owned by that operation and
     // by everything after it no longer exist.
     const blockedIndex = blockedFeatureId
-      ? project.features.findIndex((feature) => feature.id === blockedFeatureId)
+      ? activeModel(project).features.findIndex((feature) => feature.id === blockedFeatureId)
       : -1;
-    const featureIndices = new Map(project.features.map((feature, index) => [feature.id, index]));
+    const featureIndices = new Map(
+      activeModel(project).features.map((feature, index) => [feature.id, index]),
+    );
     const staleBodies = new Set(
       blockedIndex >= 0
-        ? project.bodies
-            .filter((body) => (featureIndices.get(body.createdBy) ?? -1) >= blockedIndex)
+        ? activeModel(project)
+            .bodies.filter((body) => (featureIndices.get(body.createdBy) ?? -1) >= blockedIndex)
             .map((body) => body.id)
         : [],
     );
     // Numbers and colours continue the project-wide sequence instead of
     // restarting for every operation.
-    let nextNumber = nextBodyNumber(project);
-    let existingCount = project.bodies.filter((body) => !isMeshObject(body)).length;
+    let nextNumber = nextBodyNumber(activeModel(project));
+    let existingCount = activeModel(project).bodies.filter((body) => !isMeshObject(body)).length;
     for (const [featureId, bodyIds] of created) {
-      const feature = project.features.find((candidate) => candidate.id === featureId);
+      const feature = activeModel(project).features.find((candidate) => candidate.id === featureId);
       if (!feature) continue;
-      const existing = project.bodies.filter((body) => body.createdBy === featureId);
+      const existing = activeModel(project).bodies.filter((body) => body.createdBy === featureId);
       for (const bodyId of bodyIds) {
         if (existing.some((body) => body.id === bodyId)) continue;
         commands.push({ type: 'body/add', body: { id: bodyId, createdBy: featureId } });
         // A body that comes back keeps the properties it had before.
-        if (project.metadata[bodyId]) continue;
+        if (activeModel(project).metadata[bodyId]) continue;
         commands.push({
           type: 'metadata/patch',
           objectId: bodyId,
@@ -1452,7 +1492,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     set({
       project: next,
       selection: sanitizeSelection(
-        projectForView(next, state.editingFeatureId),
+        modelForView(next, state.editingFeatureId),
         state.selection,
         state.editingFeatureId,
       ),
@@ -1461,6 +1501,72 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 
   renameProject: (name) => {
     get().apply({ type: 'project/rename', name });
+  },
+
+  addModel: (baseName) => {
+    const state = get();
+    const model = createModel(nextModelName(state.project, baseName));
+    if (!state.apply({ type: 'model/add', model }, { type: 'model/activate', modelId: model.id })) {
+      return null;
+    }
+    const ui = useUiStore.getState();
+    ui.endPicking();
+    ui.setActiveSketch(null);
+    useKernelStore.getState().clearScene();
+    set({ selection: [], editingFeatureId: null, freshFeatureId: null, applyGesture: null });
+    return model.id;
+  },
+
+  setActiveModel: (modelId) => {
+    const state = get();
+    if (state.project.activeSuperObjectId === modelId) return;
+    if (!state.project.superObjects.some((superObject) => superObject.id === modelId)) return;
+    const ui = useUiStore.getState();
+    ui.endPicking();
+    ui.setActiveSketch(null);
+    useKernelStore.getState().clearScene();
+    const cleanup = closeFreshEdit(state, state.project);
+    set({
+      project: touch({
+        ...(cleanup.project ?? state.project),
+        activeSuperObjectId: modelId,
+      }),
+      selection: [],
+      editingFeatureId: null,
+      freshFeatureId: null,
+      applyGesture: null,
+    });
+  },
+
+  renameModel: (modelId, name) => {
+    get().apply({ type: 'model/rename', modelId, name });
+  },
+
+  deleteModel: (modelId) => {
+    const project = get().project;
+    const model = project.superObjects.find((superObject) => superObject.id === modelId);
+    if (!model) return;
+    if (project.superObjects.length === 1) {
+      useUiStore.getState().showToast('errors.LAST_MODEL', 'error');
+      return;
+    }
+    if (model.features.length === 0 && model.bodies.length === 0) {
+      get().removeModel(modelId);
+      return;
+    }
+    useUiStore.getState().requestModelDelete({ id: model.id, name: model.name });
+  },
+
+  removeModel: (modelId) => {
+    const state = get();
+    const wasActive = state.project.activeSuperObjectId === modelId;
+    if (!state.apply({ type: 'model/remove', modelId })) return;
+    if (!wasActive) return;
+    const ui = useUiStore.getState();
+    ui.endPicking();
+    ui.setActiveSketch(null);
+    useKernelStore.getState().clearScene();
+    set({ selection: [], editingFeatureId: null, freshFeatureId: null, applyGesture: null });
   },
 
   // Moving the cursor is an explicit navigation action: it ends operation
@@ -1501,24 +1607,24 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   toggleBodyVisibility: (bodyId) => {
-    const project = get().project;
-    const body = project.bodies.find((candidate) => candidate.id === bodyId);
+    const model = activeModel(get().project);
+    const body = model.bodies.find((candidate) => candidate.id === bodyId);
     if (!body) return;
     get().apply({
       type: 'metadata/patch',
       objectId: bodyId,
-      patch: { visible: !objectVisible(project, bodyId) },
+      patch: { visible: !objectVisible(model, bodyId) },
     });
   },
 }));
 
 /**
- * The document with the history cursor placed at the input state of the
+ * The active model with the history cursor placed at the input state of the
  * operation whose settings are open. Everything that draws or reports the model
  * reads this, while the document itself keeps the user's cursor.
  */
-export function useViewProject(): Project {
+export function useViewModel(): Model {
   const project = useDocumentStore((state) => state.project);
   const editingFeatureId = useDocumentStore((state) => state.editingFeatureId);
-  return useMemo(() => projectForView(project, editingFeatureId), [project, editingFeatureId]);
+  return useMemo(() => modelForView(project, editingFeatureId), [project, editingFeatureId]);
 }

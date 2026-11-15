@@ -1,4 +1,4 @@
-import { featureBodyId, type Project } from '@icancad/model';
+import { featureBodyId, type Model } from '@icancad/model';
 import type { SelectionItem } from './documentStore';
 
 /** Id of a solid-body face: `${bodyId}#${faceId}`. */
@@ -61,7 +61,7 @@ export function directBodyIds(selection: SelectionItem[]): string[] {
     .map((item) => item.id);
 }
 
-export function linkedBodyIds(selection: SelectionItem[], project: Project): string[] {
+export function linkedBodyIds(selection: SelectionItem[], model: Model): string[] {
   const direct = new Set(directBodyIds(selection));
   const ids = new Set<string>();
   const featureIds = new Set<string>();
@@ -72,20 +72,20 @@ export function linkedBodyIds(selection: SelectionItem[], project: Project): str
     const bodyId = selectedDetailBodyId(item);
     if (bodyId && !direct.has(bodyId)) ids.add(bodyId);
   }
-  for (const body of project.bodies) {
+  for (const body of model.bodies) {
     if (featureIds.has(body.createdBy) && !direct.has(body.id)) ids.add(body.id);
   }
   return [...ids];
 }
 
-export function selectedBodyIds(selection: SelectionItem[], project: Project): string[] {
+export function selectedBodyIds(selection: SelectionItem[], model: Model): string[] {
   const ids = new Set<string>();
   for (const item of selection) {
     if (item.kind === 'body') {
-      const body = project.bodies.find((candidate) => candidate.id === item.id);
+      const body = model.bodies.find((candidate) => candidate.id === item.id);
       if (body && body.kind !== 'mesh') ids.add(item.id);
     } else if (item.kind === 'feature') {
-      const feature = project.features.find((candidate) => candidate.id === item.id);
+      const feature = model.features.find((candidate) => candidate.id === item.id);
       if (feature && feature.type !== 'import-mesh') ids.add(featureBodyId(item.id));
     }
   }
@@ -141,8 +141,7 @@ export function selectedSketchDetailId(selection: readonly SelectionItem[]): str
   if (!sketchId) return null;
   const detail = selection.every(
     (item) =>
-      (item.kind === 'face' || item.kind === 'sketch-edge') &&
-      item.id.split('#')[0] === sketchId,
+      (item.kind === 'face' || item.kind === 'sketch-edge') && item.id.split('#')[0] === sketchId,
   );
   return detail ? sketchId : null;
 }
@@ -171,17 +170,22 @@ export function selectedEdges(
   return edges;
 }
 
-export function selectedFeatureIds(selection: SelectionItem[], project: Project): string[] {
+export function selectedFeatureIds(selection: SelectionItem[], model: Model): string[] {
   const ids = new Set<string>();
   for (const item of selection) {
     if (item.kind === 'feature' || item.kind === 'sketch') {
       ids.add(item.id);
     } else if (item.kind === 'face' || item.kind === 'sketch-edge') {
       ids.add(item.id.split('#')[0] ?? item.id);
-    } else if (item.kind === 'body' || item.kind === 'mesh' || item.kind === 'body-face' || item.kind === 'edge') {
+    } else if (
+      item.kind === 'body' ||
+      item.kind === 'mesh' ||
+      item.kind === 'body-face' ||
+      item.kind === 'edge'
+    ) {
       const bodyId =
         item.kind === 'body' || item.kind === 'mesh' ? item.id : selectedDetailBodyId(item);
-      const body = bodyId ? project.bodies.find((candidate) => candidate.id === bodyId) : undefined;
+      const body = bodyId ? model.bodies.find((candidate) => candidate.id === bodyId) : undefined;
       if (body) ids.add(body.createdBy);
     }
   }

@@ -1,12 +1,8 @@
 import type { TessellationResult } from '@icancad/kernel';
-import type { BodyFaceRef, Project, Vec3 } from '@icancad/model';
+import type { BodyFaceRef, Model, Vec3 } from '@icancad/model';
 import type { SelectionItem, ShellInput } from '../stores/documentStore';
 import { parseBodyFaceId } from '../stores/selection';
-import {
-  resolveFaceRef,
-  type FaceLookupContext,
-  type ResolvedFaceRef,
-} from '../kernel/faceLookup';
+import { resolveFaceRef, type FaceLookupContext, type ResolvedFaceRef } from '../kernel/faceLookup';
 import { faceRegion } from './geometry';
 
 export interface FacePose {
@@ -67,11 +63,7 @@ export function shellFaceRef(
   return {
     bodyId,
     faceId,
-    normal: [
-      pose.normal[0] / length,
-      pose.normal[1] / length,
-      pose.normal[2] / length,
-    ],
+    normal: [pose.normal[0] / length, pose.normal[1] / length, pose.normal[2] / length],
     origin: pose.origin,
   };
 }
@@ -100,7 +92,7 @@ export function resolveShellFaceRef(
  * Bodies are hollowed whole; a picked face also makes its body a target.
  */
 export function shellInputFromSelection(
-  project: Project,
+  project: Model,
   selection: readonly SelectionItem[],
   meshes: Record<string, TessellationResult>,
 ): ShellInput | null {

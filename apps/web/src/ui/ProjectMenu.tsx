@@ -1,8 +1,14 @@
 import { exportStlBinary } from '@icancad/io';
-import { bodiesInHistory, createId, type MeshFormat, type Project } from '@icancad/model';
 import {
-  Boxes,
+  activeModel,
+  bodiesInHistory,
+  createId,
+  type MeshFormat,
+  type Project,
+} from '@icancad/model';
+import {
   Download,
+  ExternalLink,
   FileArchive,
   FileBox,
   FilePlus2,
@@ -10,8 +16,10 @@ import {
   FolderOpen,
   HardDrive,
   Languages,
+  LayoutPanelLeft,
   Moon,
   Palette,
+  PanelLeftOpen,
   Redo2,
   Sun,
   Trash2,
@@ -50,6 +58,8 @@ const LOCALES: { value: Locale; label: string }[] = [
 
 const MESH_ACCEPT = '.stl,.obj,.ply,.glb';
 
+const SOURCE_URL = 'https://github.com/sergeiterehov/icancad';
+
 const MESH_FORMATS: Record<string, MeshFormat> = {
   stl: 'stl',
   obj: 'obj',
@@ -73,6 +83,8 @@ export function ProjectMenu() {
   const saveState = useDocumentStore((state) => state.saveState);
   const theme = useThemeStore((state) => state.theme);
   const setTheme = useThemeStore((state) => state.setTheme);
+  const docksPinned = useUiStore((state) => state.docksPinned);
+  const compactPanels = useUiStore((state) => state.compactPanels);
   const openMenu = useContextMenuStore((state) => state.open);
   const updateItems = useContextMenuStore((state) => state.updateItems);
   // Only the logo menu may be rebuilt in place; object and operation menus have
@@ -105,10 +117,12 @@ export function ProjectMenu() {
   const handleExport = async () => {
     const project = useDocumentStore.getState().project;
     const assets = new Map<string, Uint8Array>();
-    for (const feature of project.features) {
-      if (feature.type !== 'import-mesh') continue;
-      const blob = await loadAsset(feature.assetId);
-      if (blob) assets.set(feature.assetId, new Uint8Array(await blob.arrayBuffer()));
+    for (const superObject of project.superObjects) {
+      for (const feature of superObject.features) {
+        if (feature.type !== 'import-mesh') continue;
+        const blob = await loadAsset(feature.assetId);
+        if (blob) assets.set(feature.assetId, new Uint8Array(await blob.arrayBuffer()));
+      }
     }
     download(serializeProjectFile(project, assets), projectFileName(project.name));
     showToast('toast.exported');
@@ -117,7 +131,7 @@ export function ProjectMenu() {
   const handleExportStl = () => {
     const state = useDocumentStore.getState();
     const selected = new Set(directBodyIds(state.selection));
-    const candidates = bodiesInHistory(state.project).filter((body) =>
+    const candidates = bodiesInHistory(activeModel(state.project)).filter((body) =>
       selected.size > 0 ? selected.has(body.id) : body.visible,
     );
     const collected = candidates
@@ -169,7 +183,9 @@ export function ProjectMenu() {
     const currentLocale: Locale = (i18n.resolvedLanguage ?? 'en').startsWith('ru') ? 'ru' : 'en';
     const selectedBodyCount = directBodyIds(state.selection).length;
     const meshes = useKernelStore.getState().meshes;
-    const visibleBodies = bodiesInHistory(state.project).filter((body) => body.visible);
+    const visibleBodies = bodiesInHistory(activeModel(state.project)).filter(
+      (body) => body.visible,
+    );
     const projectHasGeometry =
       selectedBodyCount > 0 || visibleBodies.some((body) => meshes[body.id] !== undefined);
     return [
@@ -275,6 +291,30 @@ export function ProjectMenu() {
           onSelect: () => void setLocale(item.value),
         })),
       },
+      {
+        id: 'pin-docks',
+        label: t('project.pinPanels'),
+        icon: <PanelLeftOpen size={14} />,
+        checked: useUiStore.getState().docksPinned,
+        keepOpen: true,
+        onSelect: () => useUiStore.getState().setDocksPinned(!useUiStore.getState().docksPinned),
+      },
+      {
+        id: 'compact-panels',
+        label: t('project.compactPanels'),
+        icon: <LayoutPanelLeft size={14} />,
+        checked: useUiStore.getState().compactPanels,
+        keepOpen: true,
+        onSelect: () =>
+          useUiStore.getState().setCompactPanels(!useUiStore.getState().compactPanels),
+      },
+      { id: 'separator-5', separator: true },
+      {
+        id: 'source',
+        label: t('project.source'),
+        icon: <ExternalLink size={14} />,
+        onSelect: () => window.open(SOURCE_URL, '_blank', 'noopener,noreferrer'),
+      },
     ];
   };
 
@@ -297,12 +337,12 @@ export function ProjectMenu() {
     }
   };
 
-  // Theme and language change while the menu is open; its labels and checks are
-  // rebuilt in place so the submenu stays where it is.
+  // Theme, language and the shell switches change while the menu is open; its
+  // labels and checks are rebuilt in place so the submenu stays where it is.
   useEffect(() => {
     if (!projectMenuOpen) return;
     updateItems(menuItems(projectsRef.current));
-  }, [projectMenuOpen, theme, i18n.resolvedLanguage]);
+  }, [projectMenuOpen, theme, i18n.resolvedLanguage, docksPinned, compactPanels]);
 
   const openProjectMenu = async (event: MouseEvent<HTMLButtonElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -325,7 +365,9 @@ export function ProjectMenu() {
     if (!file) return;
     try {
       const data = new Uint8Array(await file.arrayBuffer());
-      const { project, assets } = parseProjectFile(data);
+      const { project, assets } = parseProjectFile(data, {
+        modelName: t('model.defaultName'),
+      });
       for (const [id, bytes] of assets) {
         await saveAsset(id, new Blob([new Uint8Array(bytes)]));
       }
@@ -337,8 +379,8 @@ export function ProjectMenu() {
   };
 
   return (
-    <>
-      <Tooltip content={saveLabel || t('project.menu')} className="project-anchor">
+    <div className="project-anchor">
+      <Tooltip content={saveLabel || t('project.menu')}>
         <button
           type="button"
           className="project-button"
@@ -356,6 +398,8 @@ export function ProjectMenu() {
           <span className="brand-name">{t('app.name')}</span>
         </button>
       </Tooltip>
+      <span className="project-separator" aria-hidden="true" />
+      <ProjectName />
 
       <input
         ref={fileInput}
@@ -373,11 +417,11 @@ export function ProjectMenu() {
         data-testid="import-mesh"
         onChange={(event) => void handleImportMesh(event)}
       />
-    </>
+    </div>
   );
 }
 
-/** The project name lives at the top of the model panel. */
+/** The editable project name sits next to the product mark in the corner. */
 export function ProjectName() {
   const { t } = useTranslation();
   const projectName = useDocumentStore((state) => state.project.name);
@@ -393,22 +437,21 @@ export function ProjectName() {
   };
 
   return (
-    <>
-      <Boxes className="project-strip-icon" size={15} aria-hidden="true" />
-      <input
-        className="project-name"
-        value={draft}
-        aria-label={t('project.name')}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={commit}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') event.currentTarget.blur();
-          if (event.key === 'Escape') {
-            setDraft(projectName);
-            event.currentTarget.blur();
-          }
-        }}
-      />
-    </>
+    <input
+      className="project-name"
+      value={draft}
+      aria-label={t('project.name')}
+      onFocus={(event) => event.currentTarget.select()}
+      onClick={(event) => event.currentTarget.select()}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') event.currentTarget.blur();
+        if (event.key === 'Escape') {
+          setDraft(projectName);
+          event.currentTarget.blur();
+        }
+      }}
+    />
   );
 }

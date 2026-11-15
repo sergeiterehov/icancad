@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { retryKernel } from '../kernel/client';
 import {
   activeFeatureIds,
+  activeModel,
   bodiesInHistory,
   objectColor,
   objectShowConstruction,
@@ -28,7 +29,7 @@ import {
   sketchPlaneReady,
   sketchSectionPlane,
 } from '../sketch/sectionPlane';
-import { useDocumentStore, useViewProject } from '../stores/documentStore';
+import { useDocumentStore, useViewModel } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
 import { isModelRebuilding, useKernelStore } from '../stores/kernelStore';
 import {
@@ -89,7 +90,7 @@ const AXIS_HINTS: Record<string, { text: string; color: string }> = {
 function projectPickIntoSketch(sketchId: string, pick: ScenePick | null): void {
   if (!pick) return;
   const store = useDocumentStore.getState();
-  const feature = store.project.features.find(
+  const feature = activeModel(store.project).features.find(
     (candidate): candidate is SketchFeature =>
       candidate.id === sketchId && candidate.type === 'sketch',
   );
@@ -148,18 +149,32 @@ export function Viewport() {
   const previousCount = useRef(0);
   /** Bodies the scene has already shown; a body coming back is not new. */
   const seenBodyIds = useRef(new Set<string>());
+  const activeModelId = useDocumentStore((state) => state.project.activeSuperObjectId);
+  const lastModelId = useRef(activeModelId);
+  /** A switch already chose the view: the new model's bodies must not refit it. */
+  const skipFit = useRef(false);
+  const skipFitTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (skipFitTimer.current !== null) window.clearTimeout(skipFitTimer.current);
+    },
+    [],
+  );
 
-  const project = useViewProject();
+  const project = useViewModel();
   const documentProject = useDocumentStore((state) => state.project);
   const editingFeatureId = useDocumentStore((state) => state.editingFeatureId);
   const editingPrimitive = useMemo(() => {
-    const feature = documentProject.features.find((candidate) => candidate.id === editingFeatureId);
+    const feature = activeModel(documentProject).features.find(
+      (candidate) => candidate.id === editingFeatureId,
+    );
     return feature?.type === 'primitive' ? (feature as PrimitiveFeature) : null;
   }, [documentProject, editingFeatureId]);
   // The delta mesh is generated here, in the same render as the handles, so
   // dragging a handle moves the object and the grip in one frame.
   const primitiveDelta = useMemo(
-    () => (editingPrimitive ? primitivePreview(editingPrimitive, documentProject) : null),
+    () =>
+      editingPrimitive ? primitivePreview(editingPrimitive, activeModel(documentProject)) : null,
     [editingPrimitive, documentProject],
   );
   const bodies = bodiesInHistory(project);
@@ -398,14 +413,18 @@ export function Viewport() {
         }
         if (ui.pickingShellBodies) {
           if (pick?.kind !== 'body') return;
-          const body = store.project.bodies.find((candidate) => candidate.id === pick.id);
+          const body = activeModel(store.project).bodies.find(
+            (candidate) => candidate.id === pick.id,
+          );
           if (!body || body.kind === 'mesh') return;
           store.toggleShellBody(ui.pickingShellBodies, pick.id);
           return;
         }
         if (ui.pickingShellFaces) {
           if (pick?.kind !== 'body-face') return;
-          const body = store.project.bodies.find((candidate) => candidate.id === pick.bodyId);
+          const body = activeModel(store.project).bodies.find(
+            (candidate) => candidate.id === pick.bodyId,
+          );
           if (!body || body.kind === 'mesh') return;
           // Picking runs against the input of the edited operation: its own
           // result has bodies and faces the document does not have yet.
@@ -429,7 +448,7 @@ export function Viewport() {
             ui.showToast('errors.FACE_NOT_PLANAR', 'error');
             return;
           }
-          const feature = store.project.features.find(
+          const feature = activeModel(store.project).features.find(
             (candidate): candidate is SketchFeature =>
               candidate.id === ui.pickingSketchPlane && candidate.type === 'sketch',
           );
@@ -463,7 +482,7 @@ export function Viewport() {
             ui.showToast('errors.FACE_NOT_PLANAR', 'error');
             return;
           }
-          const planes = store.project.view.sectionPlanes;
+          const planes = activeModel(store.project).view.sectionPlanes;
           const plane = planes.find((candidate) => candidate.id === ui.pickingSectionFace);
           if (!plane) {
             ui.setPickingSectionFace(null);
@@ -613,14 +632,14 @@ export function Viewport() {
         const store = useDocumentStore.getState();
         const exists =
           object.kind === 'sketch'
-            ? store.project.features.some(
+            ? activeModel(store.project).features.some(
                 (feature) => feature.id === object.id && feature.type === 'sketch',
               )
-            : store.project.bodies.some((candidate) => candidate.id === object.id);
+            : activeModel(store.project).bodies.some((candidate) => candidate.id === object.id);
         if (!exists) return;
         // Opening a menu never changes the selection: the menu acts on the
         // clicked object, or on the whole selection when it includes that object.
-        const targets = objectMenuTargets(store.project, store.selection, object);
+        const targets = objectMenuTargets(activeModel(store.project), store.selection, object);
         const labels = translationRef.current;
         const items: ContextMenuItem[] = [];
         const color = colorMenuItem(targets, labels('context.color'));
@@ -663,7 +682,7 @@ export function Viewport() {
         }
         if (isModelRebuilding(useKernelStore.getState())) return;
         const store = useDocumentStore.getState();
-        const project = store.project;
+        const project = activeModel(store.project);
         const kernel = useKernelStore.getState();
         const featureId =
           pick.kind === 'body-face'
@@ -749,12 +768,10 @@ export function Viewport() {
         const labels = translationRef.current;
         const sketchId = useUiStore.getState().activeSketchId;
         const sketchFeature = sketchId
-          ? useDocumentStore
-              .getState()
-              .project.features.find(
-                (feature): feature is SketchFeature =>
-                  feature.type === 'sketch' && feature.id === sketchId,
-              )
+          ? activeModel(useDocumentStore.getState().project).features.find(
+              (feature): feature is SketchFeature =>
+                feature.type === 'sketch' && feature.id === sketchId,
+            )
           : undefined;
         openMenuRef.current(x, y, [
           ...(sketchFeature
@@ -835,6 +852,17 @@ export function Viewport() {
     const controller = controllerRef.current;
     if (!controller) return;
 
+    // Switching a model or opening another project keeps the camera where the
+    // user left it; only the first body of a fresh scene is fitted.
+    if (lastModelId.current !== activeModelId) {
+      lastModelId.current = activeModelId;
+      skipFit.current = true;
+      if (skipFitTimer.current !== null) window.clearTimeout(skipFitTimer.current);
+      skipFitTimer.current = window.setTimeout(() => {
+        skipFit.current = false;
+      }, 1200);
+    }
+
     const marks = new Map((preview?.bodies ?? []).map((mark) => [mark.id, mark]));
     const sceneBodies: SceneBody[] = [];
     for (const body of bodies) {
@@ -902,11 +930,14 @@ export function Viewport() {
     // before entering the sketch (the same goes for rolling the timeline).
     const unseenBody = sceneBodies.some((body) => !seenBodyIds.current.has(body.id));
     for (const body of sceneBodies) seenBodyIds.current.add(body.id);
-    if (!activeSketchId && previousCount.current === 0 && unseenBody) {
+    if (skipFit.current) {
+      if (sceneBodies.length > 0) skipFit.current = false;
+    } else if (!activeSketchId && previousCount.current === 0 && unseenBody) {
       controller.fit();
     }
     previousCount.current = sceneBodies.length;
   }, [
+    activeModelId,
     activeSketchId,
     bodies,
     meshes,

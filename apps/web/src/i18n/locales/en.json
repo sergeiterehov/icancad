@@ -22,11 +22,14 @@
     "themeDark": "Dark",
     "themeLight": "Light",
     "language": "Language",
+    "pinPanels": "Pin panels",
+    "compactPanels": "Compact panels",
     "saving": "Saving…",
     "saved": "Saved",
     "saveError": "Save failed",
     "fit": "Fit view",
-    "import": "Import"
+    "import": "Import",
+    "source": "Source code"
   },
   "panels": {
     "model": "Model",
@@ -66,6 +69,7 @@
   "inspector": {
     "project": "Project",
     "selection": "Selection",
+    "properties": "Properties",
     "name": "Name",
     "units": "Units",
     "bodies": "Bodies",
@@ -123,7 +127,8 @@
     "totalLength": "Total length",
     "extrude": "Extrusion",
     "metrics": "Metrics",
-    "objects": "Objects"
+    "objects": "Objects",
+    "model": "Model"
   },
   "timeline": {
     "blockedByError": "Cannot move past the failed operation",
@@ -209,7 +214,9 @@
     "SHELL_FAILED": "This body cannot be hollowed with these settings",
     "REVOLVE_AXIS_MISSING": "Pick the edge or axis the profile turns around",
     "REVOLVE_EDGE_NOT_STRAIGHT": "Only a straight edge can be a revolve axis",
-    "REVOLVE_NO_ANGLE": "A revolve needs a non-zero angle between its ends"
+    "REVOLVE_NO_ANGLE": "A revolve needs a non-zero angle between its ends",
+    "UNKNOWN_MODEL": "Model not found",
+    "LAST_MODEL": "A project must keep at least one model"
   },
   "features": {
     "box": "Box",
@@ -271,7 +278,7 @@
     "orientToSketch": "Orient to sketch"
   },
   "section": {
-    "title": "Section",
+    "title": "Sections",
     "sketchPlane": "Sketch plane",
     "plane": "Plane {{index}}",
     "add": "Add plane",
@@ -443,6 +450,8 @@
     "wholeSketch": "Whole sketch",
     "method_revolve": "Revolve",
     "revolveAxis": "Revolve axis",
+    "axis": "Axis",
+    "rotation": "Rotation",
     "edge": "Edge",
     "selectEdge": "Select edge",
     "angleStart": "Start angle",
@@ -508,5 +517,15 @@
     "pickBodiesHint": "Click bodies in the 3D view.",
     "pickFacesHint": "Click faces in the 3D view to leave them open.",
     "maxWarning": "The maximum {{value}} mm will be used"
+  },
+  "model": {
+    "structure": "Project structure",
+    "defaultName": "Model",
+    "add": "Add",
+    "name": "Model name",
+    "rename": "Rename model",
+    "delete": "Delete model",
+    "deleteTitle": "Delete model?",
+    "deleteText": "Model “{{name}}” and everything in it will be removed. You can undo this."
   }
 }

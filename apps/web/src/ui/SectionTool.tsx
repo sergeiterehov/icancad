@@ -1,4 +1,4 @@
-import { createId, type SectionPlane } from '@icancad/model';
+import { activeModel, createId, type SectionPlane } from '@icancad/model';
 import { SquareDashedBottom } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useDocumentStore } from '../stores/documentStore';
@@ -7,7 +7,7 @@ import { IconButton } from './Controls';
 
 export function SectionTool() {
   const { t } = useTranslation();
-  const sectionPlanes = useDocumentStore((state) => state.project.view.sectionPlanes);
+  const sectionPlanes = useDocumentStore((state) => activeModel(state.project).view.sectionPlanes);
   const setSectionPlanes = useDocumentStore((state) => state.setSectionPlanes);
   const sectionEnabled = useUiStore((state) => state.sectionEnabled);
   const setSectionEnabled = useUiStore((state) => state.setSectionEnabled);

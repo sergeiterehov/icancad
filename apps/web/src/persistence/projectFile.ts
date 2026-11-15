@@ -1,5 +1,10 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
-import { parseProject, ProjectFileError, type Project } from '@icancad/model';
+import {
+  parseProject,
+  ProjectFileError,
+  type ParseProjectOptions,
+  type Project,
+} from '@icancad/model';
 
 export interface ProjectFileContents {
   project: Project;
@@ -22,7 +27,10 @@ export function serializeProjectFile(
   return new Blob([zipSync(files, { level: 6 })], { type: 'application/zip' });
 }
 
-export function parseProjectFile(data: Uint8Array): ProjectFileContents {
+export function parseProjectFile(
+  data: Uint8Array,
+  options?: ParseProjectOptions,
+): ProjectFileContents {
   let files: Record<string, Uint8Array>;
   try {
     files = unzipSync(data);
@@ -53,7 +61,7 @@ export function parseProjectFile(data: Uint8Array): ProjectFileContents {
     }
   }
 
-  return { project: parseProject(document), assets: projectsAssets };
+  return { project: parseProject(document, options), assets: projectsAssets };
 }
 
 function slugify(name: string): string {

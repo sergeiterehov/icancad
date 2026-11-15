@@ -14,6 +14,15 @@ interface Position {
   left: number;
 }
 
+/** How long reading one tooltip skips the wait for the next one. */
+const WARM_MS = 1600;
+/** Delay used while the reader is moving between tooltips. */
+const WARM_DELAY = 80;
+
+// Shared by every tooltip: once one has opened, the next ones follow at once, so
+// a strip of tooltips can be read without waiting out the delay each time.
+let warmUntil = 0;
+
 export function Tooltip({ content, delay = 1500, className, children }: TooltipProps) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<Position | null>(null);
@@ -30,13 +39,20 @@ export function Tooltip({ content, delay = 1500, className, children }: TooltipP
 
   const hide = useCallback(() => {
     clearTimer();
+    // Reading a tooltip keeps the next one warm: the wait only comes back after
+    // a pause, not between neighbours.
+    if (warmUntil > 0) warmUntil = Date.now() + WARM_MS;
     setOpen(false);
     setPosition(null);
   }, [clearTimer]);
 
   const show = useCallback(() => {
     clearTimer();
-    timer.current = window.setTimeout(() => setOpen(true), delay);
+    const wait = Date.now() < warmUntil ? WARM_DELAY : delay;
+    timer.current = window.setTimeout(() => {
+      warmUntil = Date.now() + WARM_MS;
+      setOpen(true);
+    }, wait);
   }, [clearTimer, delay]);
 
   useEffect(() => hide, [hide]);

@@ -1,4 +1,4 @@
-import { featureBodyId, type Project } from '@icancad/model';
+import { featureBodyId, type Model } from '@icancad/model';
 import { describe, expect, it } from 'vitest';
 import {
   isDirectlySelected,
@@ -28,7 +28,7 @@ const project = {
     { id: 'feat-import', type: 'import-mesh', assetId: 'asset-1' },
     { id: 'feat-sketch', type: 'sketch' },
   ],
-} as unknown as Project;
+} as unknown as Model;
 
 describe('selection helpers', () => {
   it('links a picked sketch edge to its sketch and operation', () => {

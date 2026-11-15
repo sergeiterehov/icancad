@@ -34,10 +34,13 @@ export function FloatDock({
   const setOpen = useUiStore((state) =>
     side === 'left' ? state.setLeftDockOpen : state.setRightDockOpen,
   );
+  const docksPinned = useUiStore((state) => state.docksPinned);
   const menuOpen = useContextMenuStore((state) => state.menu !== null);
   const timer = useRef<number | null>(null);
   const hovered = useRef(false);
-  const wasPinned = useRef(pinned);
+  const held = pinned || docksPinned;
+  const wasHeld = useRef(held);
+  const surface = useRef<HTMLElement>(null);
   // A context menu of the panel is drawn outside it, so the pointer leaves; the
   // panel has to wait for the menu instead of closing under it.
   const menuInside = useRef(false);
@@ -56,12 +59,12 @@ export function FloatDock({
 
   const scheduleHide = useCallback(() => {
     cancel();
-    if (pinned || menuHolds.current || !autoHideEnabled()) return;
+    if (held || menuHolds.current || !autoHideEnabled()) return;
     timer.current = window.setTimeout(() => {
       timer.current = null;
       setOpen(false);
     }, HIDE_DELAY);
-  }, [cancel, pinned, setOpen]);
+  }, [cancel, held, setOpen]);
 
   const enter = useCallback(() => {
     hovered.current = true;
@@ -97,15 +100,37 @@ export function FloatDock({
   // A pinned panel opens at once and stays open; once the selection goes away it
   // falls back to the usual auto-hide unless the pointer is still on it.
   useEffect(() => {
-    const previous = wasPinned.current;
-    wasPinned.current = pinned;
-    if (pinned) {
+    const previous = wasHeld.current;
+    wasHeld.current = held;
+    if (held) {
       cancel();
       setOpen(true);
       return;
     }
     if (previous && !hovered.current) scheduleHide();
-  }, [pinned, cancel, setOpen, scheduleHide]);
+  }, [held, cancel, setOpen, scheduleHide]);
+
+  // A short panel still holds on to the whole column it would cover at full
+  // height: the pointer below it is over the scene, so nothing is in the way —
+  // the column is only measured, never covered by an overlay.
+  useEffect(() => {
+    if (!open) return;
+    const onMove = (event: PointerEvent) => {
+      const box = surface.current?.getBoundingClientRect();
+      if (!box) return;
+      const inside = side === 'left' ? event.clientX <= box.right : event.clientX >= box.left;
+      if (inside) {
+        hovered.current = true;
+        cancel();
+        return;
+      }
+      if (!hovered.current) return;
+      hovered.current = false;
+      scheduleHide();
+    };
+    window.addEventListener('pointermove', onMove);
+    return () => window.removeEventListener('pointermove', onMove);
+  }, [open, side, cancel, scheduleHide]);
 
   return (
     <div className={`dock dock-${side}`} data-open={open ? 'true' : 'false'}>
@@ -117,6 +142,7 @@ export function FloatDock({
         onClick={() => setOpen(true)}
       />
       <aside
+        ref={surface}
         className="dock-surface"
         aria-label={label}
         data-testid={testId}

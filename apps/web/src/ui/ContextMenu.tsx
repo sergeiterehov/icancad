@@ -1,6 +1,13 @@
 import clsx from 'clsx';
 import { Check, ChevronRight } from 'lucide-react';
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { create } from 'zustand';
 import { Tooltip } from './Tooltip';
@@ -92,6 +99,9 @@ export function showContextMenu(
 
 type MenuActionItem = Extract<ContextMenuItem, { onSelect: () => void }>;
 
+/** Time a submenu survives after the pointer leaves it, so it can be crossed. */
+const SUBMENU_CLOSE_DELAY = 260;
+
 function MenuButton({ item, onSelect }: { item: MenuActionItem; onSelect: () => void }) {
   const close = useContextMenuStore((state) => state.close);
   // A checked row without an icon keeps the check in the icon column; a row
@@ -161,10 +171,38 @@ export function ContextMenuHost() {
   const ref = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
+  const submenuTimer = useRef<number | null>(null);
+
+  const cancelSubmenuClose = useCallback(() => {
+    if (submenuTimer.current === null) return;
+    window.clearTimeout(submenuTimer.current);
+    submenuTimer.current = null;
+  }, []);
+
+  const openSub = useCallback(
+    (id: string) => {
+      cancelSubmenuClose();
+      setOpenSubmenu(id);
+    },
+    [cancelSubmenuClose],
+  );
+
+  // The pointer leaves a submenu every time it crosses to the next one, so a
+  // submenu goes away on its own instead of staying behind.
+  const scheduleSubmenuClose = useCallback(() => {
+    cancelSubmenuClose();
+    submenuTimer.current = window.setTimeout(() => {
+      submenuTimer.current = null;
+      setOpenSubmenu(null);
+    }, SUBMENU_CLOSE_DELAY);
+  }, [cancelSubmenuClose]);
+
+  useEffect(() => cancelSubmenuClose, [cancelSubmenuClose]);
 
   useEffect(() => {
+    cancelSubmenuClose();
     setOpenSubmenu(null);
-  }, [menuKey]);
+  }, [menuKey, cancelSubmenuClose]);
 
   useLayoutEffect(() => {
     if (!menu) {
@@ -242,7 +280,8 @@ export function ContextMenuHost() {
             <div
               key={item.id}
               className="context-menu-sub"
-              onPointerEnter={() => setOpenSubmenu(item.id)}
+              onPointerEnter={() => openSub(item.id)}
+              onPointerLeave={scheduleSubmenuClose}
             >
               <button
                 type="button"
@@ -289,7 +328,8 @@ export function ContextMenuHost() {
             <div
               key={item.id}
               className="context-menu-sub"
-              onPointerEnter={() => setOpenSubmenu(item.id)}
+              onPointerEnter={() => openSub(item.id)}
+              onPointerLeave={scheduleSubmenuClose}
             >
               <button
                 type="button"

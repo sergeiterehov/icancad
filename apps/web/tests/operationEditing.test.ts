@@ -1,4 +1,5 @@
 import {
+  activeModel,
   createProject,
   HISTORY_START,
   objectVisible,
@@ -6,10 +7,11 @@ import {
   type Feature,
   type Project,
   type SketchEntity,
+  updateActiveModel,
 } from '@icancad/model';
 import { sketchTopology } from '@icancad/sketch';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { projectForView, useDocumentStore } from '../src/stores/documentStore';
+import { modelForView, useDocumentStore } from '../src/stores/documentStore';
 import { useKernelStore } from '../src/stores/kernelStore';
 import { useUiStore } from '../src/stores/uiStore';
 
@@ -39,8 +41,7 @@ function sketch(id: string): Feature {
 }
 
 function projectWith(...features: Feature[]): Project {
-  const project = createProject();
-  return { ...project, features };
+  return updateActiveModel(createProject(), (model) => ({ ...model, features }));
 }
 
 function squareSketch(id: string, copies: number): Feature {
@@ -107,7 +108,7 @@ function reset(project: Project): void {
 
 function viewCursor(): string | null {
   const state = useDocumentStore.getState();
-  return projectForView(state.project, state.editingFeatureId).historyEnd;
+  return modelForView(state.project, state.editingFeatureId).historyEnd;
 }
 
 describe('operation editing', () => {
@@ -131,12 +132,12 @@ describe('operation editing', () => {
     store.select({ kind: 'feature', id: 'b' });
     // The document keeps the position the user navigated to; only the view
     // rolls back to the input state of the edited operation.
-    expect(useDocumentStore.getState().project.historyEnd).toBe('c');
+    expect(activeModel(useDocumentStore.getState().project).historyEnd).toBe('c');
     expect(viewCursor()).toBe('a');
     useDocumentStore.getState().select(null);
     const state = useDocumentStore.getState();
     expect(state.editingFeatureId).toBeNull();
-    expect(state.project.historyEnd).toBe('c');
+    expect(activeModel(state.project).historyEnd).toBe('c');
   });
 
   it('keeps the operation selected while its parameters change', () => {
@@ -155,7 +156,7 @@ describe('operation editing', () => {
     store.setHistoryEnd('c');
     const state = useDocumentStore.getState();
     expect(state.editingFeatureId).toBeNull();
-    expect(state.project.historyEnd).toBe('c');
+    expect(activeModel(state.project).historyEnd).toBe('c');
   });
 
   it('stops editing when the operation is deleted', () => {
@@ -182,48 +183,52 @@ describe('operation editing', () => {
     useUiStore.setState({ activeSketchId: null });
     useDocumentStore.getState().endFeatureEdit();
     expect(useDocumentStore.getState().editingFeatureId).toBeNull();
-    expect(useDocumentStore.getState().project.historyEnd).toBeNull();
+    expect(activeModel(useDocumentStore.getState().project).historyEnd).toBeNull();
   });
 
   it('shows a hidden sketch while its operation is selected and hides it again', () => {
     const project = projectWith(sketch('s'), box('a'));
-    reset({
-      ...project,
-      metadata: { [sketchObjectId('s')]: { visible: false } },
-    });
+    reset(
+      updateActiveModel(project, (model) => ({
+        ...model,
+        metadata: { [sketchObjectId('s')]: { visible: false } },
+      })),
+    );
     const store = useDocumentStore.getState();
     const objectId = sketchObjectId('s');
-    expect(objectVisible(store.project, objectId)).toBe(false);
+    expect(objectVisible(activeModel(store.project), objectId)).toBe(false);
 
     store.select({ kind: 'feature', id: 's' });
     // Shown, because the operation cannot be configured while it is invisible.
     const editing = useDocumentStore.getState();
-    expect(objectVisible(projectForView(editing.project, editing.editingFeatureId), objectId)).toBe(
+    expect(objectVisible(modelForView(editing.project, editing.editingFeatureId), objectId)).toBe(
       true,
     );
 
     store.select(null);
     // The stored visibility is untouched, so the sketch hides again.
-    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(false);
+    expect(objectVisible(activeModel(useDocumentStore.getState().project), objectId)).toBe(false);
   });
 
   it('shows a hidden sketch while its editor is open and hides it again', () => {
     const project = projectWith(sketch('s'), box('a'));
-    reset({
-      ...project,
-      metadata: { [sketchObjectId('s')]: { visible: false } },
-    });
+    reset(
+      updateActiveModel(project, (model) => ({
+        ...model,
+        metadata: { [sketchObjectId('s')]: { visible: false } },
+      })),
+    );
     const objectId = sketchObjectId('s');
     useUiStore.setState({ activeSketchId: 's' });
     useDocumentStore.getState().beginFeatureEdit('s');
     const editing = useDocumentStore.getState();
-    expect(objectVisible(projectForView(editing.project, editing.editingFeatureId), objectId)).toBe(
+    expect(objectVisible(modelForView(editing.project, editing.editingFeatureId), objectId)).toBe(
       true,
     );
 
     useUiStore.setState({ activeSketchId: null });
     useDocumentStore.getState().endFeatureEdit();
-    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(false);
+    expect(objectVisible(activeModel(useDocumentStore.getState().project), objectId)).toBe(false);
   });
 
   it('does not take over the selection while the sketch editor is open', () => {
@@ -235,26 +240,31 @@ describe('operation editing', () => {
 
   it('derives the view project without touching the document', () => {
     const project = projectWith(box('a'), box('b'));
-    expect(projectForView(project, null)).toBe(project);
-    expect(projectForView(project, 'b').historyEnd).toBe('a');
-    expect(project.historyEnd).toBeNull();
+    expect(modelForView(project, null)).toBe(activeModel(project));
+    expect(modelForView(project, 'b').historyEnd).toBe('a');
+    expect(activeModel(project).historyEnd).toBeNull();
   });
 
   it('shows the sketch of an extrude while the extrude is configured', () => {
     const project = projectWith(sketch('s'), extrude('e', 's'));
-    reset({ ...project, metadata: { [sketchObjectId('s')]: { visible: false } } });
+    reset(
+      updateActiveModel(project, (model) => ({
+        ...model,
+        metadata: { [sketchObjectId('s')]: { visible: false } },
+      })),
+    );
     const objectId = sketchObjectId('s');
 
     useDocumentStore.getState().select({ kind: 'feature', id: 'e' });
     const editing = useDocumentStore.getState();
     expect(editing.editingFeatureId).toBe('e');
-    expect(objectVisible(projectForView(editing.project, editing.editingFeatureId), objectId)).toBe(
+    expect(objectVisible(modelForView(editing.project, editing.editingFeatureId), objectId)).toBe(
       true,
     );
 
     // The stored visibility is untouched, so nothing is hidden by the preview.
     useDocumentStore.getState().select(null);
-    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(false);
+    expect(objectVisible(activeModel(useDocumentStore.getState().project), objectId)).toBe(false);
   });
 
   it('hides a sketch consumed by a new extrude once the extrude is dismissed', () => {
@@ -266,15 +276,15 @@ describe('operation editing', () => {
     });
     expect(featureId).toBeTruthy();
     // Still visible while the operation is being configured.
-    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(true);
+    expect(objectVisible(activeModel(useDocumentStore.getState().project), objectId)).toBe(true);
 
     useDocumentStore.getState().endFeatureEdit();
-    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(false);
+    expect(objectVisible(activeModel(useDocumentStore.getState().project), objectId)).toBe(false);
 
     // Reopening the operation shows the sketch again without storing it.
     useDocumentStore.getState().select({ kind: 'feature', id: featureId! });
     const editing = useDocumentStore.getState();
-    expect(objectVisible(projectForView(editing.project, editing.editingFeatureId), objectId)).toBe(
+    expect(objectVisible(modelForView(editing.project, editing.editingFeatureId), objectId)).toBe(
       true,
     );
   });
@@ -283,11 +293,11 @@ describe('operation editing', () => {
     const project = projectWith(sketch('s'), extrude('e', 's'));
     reset(project);
     const objectId = sketchObjectId('s');
-    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(true);
+    expect(objectVisible(activeModel(useDocumentStore.getState().project), objectId)).toBe(true);
 
     useDocumentStore.getState().select({ kind: 'feature', id: 'e' });
     useDocumentStore.getState().select(null);
-    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(true);
+    expect(objectVisible(activeModel(useDocumentStore.getState().project), objectId)).toBe(true);
   });
 
   it('keeps the sketch of a failed new extrude until the operation works', () => {
@@ -301,13 +311,13 @@ describe('operation editing', () => {
 
     useDocumentStore.getState().endFeatureEdit();
     // A failed operation has consumed nothing, so the sketch stays readable.
-    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(true);
+    expect(objectVisible(activeModel(useDocumentStore.getState().project), objectId)).toBe(true);
 
     // The fixed operation hides it on the next dismissal.
     useKernelStore.setState({ featureErrors: {} });
     useDocumentStore.getState().select({ kind: 'feature', id: featureId! });
     useDocumentStore.getState().endFeatureEdit();
-    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(false);
+    expect(objectVisible(activeModel(useDocumentStore.getState().project), objectId)).toBe(false);
   });
 
   it('keeps a sketch that only partly feeds the new extrude', () => {
@@ -325,7 +335,7 @@ describe('operation editing', () => {
     });
     expect(partial).toBeTruthy();
     useDocumentStore.getState().endFeatureEdit();
-    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(true);
+    expect(objectVisible(activeModel(useDocumentStore.getState().project), objectId)).toBe(true);
 
     // Both profiles are the whole sketch, so the second extrude hides it.
     const whole = useDocumentStore.getState().addExtrude('Extrude 2', {
@@ -334,6 +344,6 @@ describe('operation editing', () => {
     });
     expect(whole).toBeTruthy();
     useDocumentStore.getState().endFeatureEdit();
-    expect(objectVisible(useDocumentStore.getState().project, objectId)).toBe(false);
+    expect(objectVisible(activeModel(useDocumentStore.getState().project), objectId)).toBe(false);
   });
 });

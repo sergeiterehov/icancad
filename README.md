@@ -43,7 +43,7 @@ STL/OBJ/PLY/GLB parsing; voxel remesh and decimation arrive in M3
 ```
 
 - **Kernel is authoritative.** Main thread never owns `TopoDS_Shape`; it receives typed arrays only.
-- **Document is declarative.** `packages/model` holds the feature list, command validation and history checks. Geometry is rebuilt from features.
+- **Document is declarative.** `packages/model` holds the project's super-objects (models today, assemblies later), each with its own feature list, plus command validation and history checks. Geometry is rebuilt from features.
 - **Tessellation respects OCCT face orientation**; triangle winding and normals are normalized for WebGL (`packages/kernel/src/engine.ts`).
 - **Mesh import** parses STL/OBJ/PLY/GLB in the IO worker; an imported mesh becomes a body directly.
 - **Section view** is view state, not history: multiple clip planes with stencil caps and screen-space hatching.
@@ -54,7 +54,7 @@ STL/OBJ/PLY/GLB parsing; voxel remesh and decimation arrive in M3
 
 ```
 apps/web/                 Vite + React app, viewport, stores, i18n, persistence
-packages/model/           Project/feature types, zod schemas, commands, history validation
+packages/model/           Project/super-object/feature types, zod schemas, commands, history validation
 packages/kernel/          OCCT bindings, engine, worker runtime, typed protocol, Node tests
 packages/sketch/          Sketch entity tessellation and helpers (solver arrives in M2)
 scripts/copy-occt.mjs     Copies the OCCT WASM asset into the web app

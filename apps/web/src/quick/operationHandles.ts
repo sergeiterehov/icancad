@@ -4,7 +4,7 @@ import {
   type EdgeTreatmentFeature,
   type EdgeTreatmentKind,
   type ExtrudeFeature,
-  type Project,
+  type Model,
   type SketchFeature,
   type SketchFrame,
   type Vec3,
@@ -91,7 +91,7 @@ export interface OperationHandle {
 }
 
 export interface OperationHandleContext {
-  project: Project;
+  project: Model;
   selection: readonly SelectionItem[];
   meshes: Record<string, TessellationResult>;
   /**

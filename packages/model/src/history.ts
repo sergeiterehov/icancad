@@ -1,5 +1,5 @@
 import { resolveBody, type BodyObject } from './project';
-import { HISTORY_START, type Feature, type Project } from './types';
+import { HISTORY_START, type Feature, type Model } from './types';
 
 export type HistoryIssueCode =
   | 'DUPLICATE_FEATURE_ID'
@@ -17,7 +17,7 @@ export interface HistoryIssue {
   featureId?: string;
 }
 
-export function activeFeatureIds(project: Project): Set<string> {
+export function activeFeatureIds(project: Model): Set<string> {
   if (project.historyEnd === null) {
     return new Set(project.features.map((feature) => feature.id));
   }
@@ -27,19 +27,19 @@ export function activeFeatureIds(project: Project): Set<string> {
   return new Set(project.features.slice(0, end + 1).map((feature) => feature.id));
 }
 
-export function isFeatureInHistory(project: Project, featureId: string): boolean {
+export function isFeatureInHistory(project: Model, featureId: string): boolean {
   return activeFeatureIds(project).has(featureId);
 }
 
 // New operations are inserted at the timeline cursor, not at the end of the list.
-export function historyInsertIndex(project: Project): number {
+export function historyInsertIndex(project: Model): number {
   if (project.historyEnd === null) return project.features.length;
   if (project.historyEnd === HISTORY_START) return 0;
   const index = project.features.findIndex((feature) => feature.id === project.historyEnd);
   return index < 0 ? project.features.length : index + 1;
 }
 
-export function bodiesInHistory(project: Project): BodyObject[] {
+export function bodiesInHistory(project: Model): BodyObject[] {
   const active = activeFeatureIds(project);
   return project.bodies
     .filter((body) => active.has(body.createdBy) && !isBodyDeleted(project, body.id, active))
@@ -47,11 +47,11 @@ export function bodiesInHistory(project: Project): BodyObject[] {
 }
 
 /** Only B-rep bodies; imported meshes are separate objects and not valid targets. */
-export function solidBodiesInHistory(project: Project): BodyObject[] {
+export function solidBodiesInHistory(project: Model): BodyObject[] {
   return bodiesInHistory(project).filter((body) => body.kind === 'solid');
 }
 
-function isBodyDeleted(project: Project, bodyId: string, active: Set<string>): boolean {
+function isBodyDeleted(project: Model, bodyId: string, active: Set<string>): boolean {
   return project.features.some(
     (feature) =>
       active.has(feature.id) && feature.type === 'delete-body' && feature.bodyId === bodyId,
@@ -60,7 +60,7 @@ function isBodyDeleted(project: Project, bodyId: string, active: Set<string>): b
 
 /** Features that would break if the given feature disappeared, transitively. */
 export function dependentFeatures(
-  project: Project,
+  project: Model,
   featureId: string,
 ): { id: string; name: string }[] {
   return dependentFeaturesOf(project, [featureId]);
@@ -68,7 +68,7 @@ export function dependentFeatures(
 
 /** Features that would break if any of the given features disappeared. */
 export function dependentFeaturesOf(
-  project: Project,
+  project: Model,
   featureIds: readonly string[],
 ): { id: string; name: string }[] {
   const removed = new Set(featureIds);
@@ -96,16 +96,11 @@ function referencedBodyIds(feature: Feature): string[] {
     case 'convert-to-solid':
       return [feature.sourceBodyId];
     case 'sketch':
-      return feature.plane.type === 'face' && feature.plane.bodyId
-        ? [feature.plane.bodyId]
-        : [];
+      return feature.plane.type === 'face' && feature.plane.bodyId ? [feature.plane.bodyId] : [];
     case 'extrude':
       return [...feature.bodyIds, ...(feature.faceRefs ?? []).map((ref) => ref.bodyId)];
     case 'shell':
-      return [
-        ...(feature.bodyIds ?? []),
-        ...(feature.removeFaces ?? []).map((ref) => ref.bodyId),
-      ];
+      return [...(feature.bodyIds ?? []), ...(feature.removeFaces ?? []).map((ref) => ref.bodyId)];
     case 'hole':
     case 'transform':
       return [feature.bodyId];
@@ -120,7 +115,7 @@ function referencedBodyIds(feature: Feature): string[] {
   }
 }
 
-export function getFeatureDependencies(feature: Feature, project: Project): string[] {
+export function getFeatureDependencies(feature: Feature, project: Model): string[] {
   const dependencies = new Set<string>();
   if (feature.type === 'extrude' && feature.sketchId) {
     dependencies.add(feature.sketchId);
@@ -139,7 +134,7 @@ export function getFeatureDependencies(feature: Feature, project: Project): stri
   return [...dependencies];
 }
 
-export function validateHistory(project: Project): HistoryIssue[] {
+export function validateHistory(project: Model): HistoryIssue[] {
   const issues: HistoryIssue[] = [];
   const featureIndices = new Map<string, number>();
 
@@ -244,6 +239,6 @@ export function validateHistory(project: Project): HistoryIssue[] {
   return issues;
 }
 
-export function historyErrors(project: Project): HistoryIssue[] {
+export function historyErrors(project: Model): HistoryIssue[] {
   return validateHistory(project).filter((issue) => issue.severity === 'error');
 }

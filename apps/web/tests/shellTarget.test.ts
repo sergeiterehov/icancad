@@ -1,33 +1,32 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { TessellationResult } from '@icancad/kernel';
-import { createProject, type Project, type ShellFeature } from '@icancad/model';
+import type { Model, Project, ShellFeature } from '@icancad/model';
 import { resolveFaceRef } from '../src/kernel/faceLookup';
-import {
-  resolveShellFaceRef,
-  shellFaceRef,
-  shellInputFromSelection,
-} from '../src/quick/shell';
+import { resolveShellFaceRef, shellFaceRef, shellInputFromSelection } from '../src/quick/shell';
 import { useDocumentStore } from '../src/stores/documentStore';
 import { cubeMesh } from './cubeMesh';
+import { modelOf, modelProject } from './modelFixture';
 
 const BODY = 'body-1';
 
 function project(): Project {
-  return {
-    ...createProject('Shell'),
-    features: [
-      {
-        id: 'box',
-        name: 'Box',
-        suppressed: false,
-        type: 'primitive',
-        kind: 'box',
-        params: { dx: 20, dy: 20, dz: 20 },
-        transform: { translation: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
-      },
-    ],
-    bodies: [{ id: BODY, createdBy: 'box' }],
-  };
+  return modelProject(
+    {
+      features: [
+        {
+          id: 'box',
+          name: 'Box',
+          suppressed: false,
+          type: 'primitive',
+          kind: 'box',
+          params: { dx: 20, dy: 20, dz: 20 },
+          transform: { translation: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
+        },
+      ],
+      bodies: [{ id: BODY, createdBy: 'box' }],
+    },
+    'Shell',
+  );
 }
 
 describe('shell input', () => {
@@ -35,13 +34,13 @@ describe('shell input', () => {
 
   it('takes selected bodies', () => {
     expect(
-      shellInputFromSelection(project(), [{ kind: 'body', id: BODY }], { [BODY]: mesh }),
+      shellInputFromSelection(modelOf(project()), [{ kind: 'body', id: BODY }], { [BODY]: mesh }),
     ).toEqual({ bodyIds: [BODY], faceRefs: [] });
   });
 
   it('takes selected faces and makes their body a target', () => {
     const input = shellInputFromSelection(
-      project(),
+      modelOf(project()),
       [{ kind: 'body-face', id: `${BODY}#5` }],
       { [BODY]: mesh },
     );
@@ -64,14 +63,12 @@ describe('shell input', () => {
   });
 
   it('ignores meshes and empty selections', () => {
-    expect(shellInputFromSelection(project(), [], {})).toBeNull();
-    const withMesh: Project = {
-      ...project(),
-      bodies: [...project().bodies, { id: 'mesh-1', createdBy: 'import', kind: 'mesh' }],
+    expect(shellInputFromSelection(modelOf(project()), [], {})).toBeNull();
+    const withMesh: Model = {
+      ...modelOf(project()),
+      bodies: [...modelOf(project()).bodies, { id: 'mesh-1', createdBy: 'import', kind: 'mesh' }],
     };
-    expect(
-      shellInputFromSelection(withMesh, [{ kind: 'mesh', id: 'mesh-1' }], {}),
-    ).toBeNull();
+    expect(shellInputFromSelection(withMesh, [{ kind: 'mesh', id: 'mesh-1' }], {})).toBeNull();
   });
 
   it('keeps a face ref readable after the body is swapped by a rebuild', () => {
@@ -113,7 +110,7 @@ describe('shell document actions', () => {
 
   const shell = (): ShellFeature | undefined => {
     const store = useDocumentStore.getState();
-    return store.project.features.find(
+    return modelOf(store.project).features.find(
       (feature): feature is ShellFeature => feature.type === 'shell',
     );
   };
@@ -121,7 +118,7 @@ describe('shell document actions', () => {
   it('creates the operation from the selection and adds a picked face body', () => {
     const mesh = cubeMesh();
     const input = shellInputFromSelection(
-      useDocumentStore.getState().project,
+      modelOf(useDocumentStore.getState().project),
       [{ kind: 'body-face', id: `${BODY}#5` }],
       { [BODY]: mesh },
     )!;
@@ -139,7 +136,7 @@ describe('shell document actions', () => {
 
   it('drops the body and its openings together', () => {
     const input = shellInputFromSelection(
-      useDocumentStore.getState().project,
+      modelOf(useDocumentStore.getState().project),
       [{ kind: 'body-face', id: `${BODY}#5` }],
       { [BODY]: cubeMesh() },
     )!;
@@ -151,7 +148,7 @@ describe('shell document actions', () => {
 
   it('keeps the body when only an opening is removed', () => {
     const input = shellInputFromSelection(
-      useDocumentStore.getState().project,
+      modelOf(useDocumentStore.getState().project),
       [{ kind: 'body-face', id: `${BODY}#5` }],
       { [BODY]: cubeMesh() },
     )!;

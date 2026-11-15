@@ -1,4 +1,5 @@
-import { createProject, type Feature, type Project } from '@icancad/model';
+import type { Feature, Project } from '@icancad/model';
+import { modelOf, modelProject } from './modelFixture';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useDocumentStore } from '../src/stores/documentStore';
 import { useUiStore } from '../src/stores/uiStore';
@@ -16,8 +17,7 @@ function box(id: string, name = id): Feature {
 }
 
 function projectWith(...features: Feature[]): Project {
-  const project = createProject();
-  return { ...project, features };
+  return modelProject({ features });
 }
 
 function reset(project: Project): void {
@@ -30,7 +30,7 @@ function rename(name: string): void {
 }
 
 function firstName(): string | undefined {
-  return useDocumentStore.getState().project.features[0]?.name;
+  return modelOf(useDocumentStore.getState().project).features[0]?.name;
 }
 
 function scroll(): void {

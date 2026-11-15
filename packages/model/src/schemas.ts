@@ -1,7 +1,11 @@
 import { z } from 'zod';
+import { createId } from './ids';
 import type { Project } from './types';
 
-export const PROJECT_SCHEMA_VERSION = 2;
+export const PROJECT_SCHEMA_VERSION = 3;
+
+/** Projects written before super-objects kept the model at the top level. */
+const LEGACY_SCHEMA_VERSION = 2;
 
 const vec3 = z.tuple([z.number(), z.number(), z.number()]);
 
@@ -362,9 +366,7 @@ const edgeTreatmentFeature = z.object({
       faceId: z.string().min(1),
       normal: vec3,
       origin: vec3,
-      handle: z
-        .object({ origin: vec3, direction: vec3, wedge: z.number().positive() })
-        .optional(),
+      handle: z.object({ origin: vec3, direction: vec3, wedge: z.number().positive() }).optional(),
     }),
   ),
   edgeRefs: z.array(
@@ -459,8 +461,39 @@ const viewState = z.object({
   sectionPlanes: z.array(sectionPlane),
 });
 
-export const projectSchema = z.object({
-  schemaVersion: z.literal(PROJECT_SCHEMA_VERSION),
+const modelSchema = z.object({
+  type: z.literal('model'),
+  id: z.string().min(1),
+  name: z.string().min(1),
+  features: z.array(featureSchema),
+  bodies: z.array(bodyRef),
+  metadata: z.record(z.string(), objectMetadata),
+  view: viewState,
+  historyEnd: z.string().nullable(),
+});
+
+// A union so assembly can join without another schema version bump.
+const superObjectSchema = z.discriminatedUnion('type', [modelSchema]);
+
+export const projectSchema = z
+  .object({
+    schemaVersion: z.literal(PROJECT_SCHEMA_VERSION),
+    id: z.string().min(1),
+    name: z.string().min(1),
+    units: z.literal('mm'),
+    superObjects: z.array(superObjectSchema).min(1),
+    activeSuperObjectId: z.string().min(1),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+  })
+  .refine(
+    (project) =>
+      project.superObjects.some((superObject) => superObject.id === project.activeSuperObjectId),
+    { message: 'The active super-object is missing', path: ['activeSuperObjectId'] },
+  );
+
+const legacyProjectSchema = z.object({
+  schemaVersion: z.literal(LEGACY_SCHEMA_VERSION),
   id: z.string().min(1),
   name: z.string().min(1),
   units: z.literal('mm'),
@@ -472,6 +505,37 @@ export const projectSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
 });
+
+function migrateLegacyProject(
+  legacy: z.infer<typeof legacyProjectSchema>,
+  modelName: string,
+): unknown {
+  const model = {
+    type: 'model',
+    id: createId('model'),
+    name: modelName,
+    features: legacy.features,
+    bodies: legacy.bodies,
+    metadata: legacy.metadata,
+    view: legacy.view,
+    historyEnd: legacy.historyEnd,
+  };
+  return {
+    schemaVersion: PROJECT_SCHEMA_VERSION,
+    id: legacy.id,
+    name: legacy.name,
+    units: legacy.units,
+    superObjects: [model],
+    activeSuperObjectId: model.id,
+    createdAt: legacy.createdAt,
+    updatedAt: legacy.updatedAt,
+  };
+}
+
+export interface ParseProjectOptions {
+  /** Name of the model a version 2 document is migrated into. */
+  modelName?: string;
+}
 
 export type ProjectFileErrorCode = 'INVALID_PROJECT' | 'UNSUPPORTED_SCHEMA_VERSION';
 
@@ -485,20 +549,30 @@ export class ProjectFileError extends Error {
   }
 }
 
-export function parseProject(input: unknown): Project {
+export function parseProject(input: unknown, options: ParseProjectOptions = {}): Project {
   const envelope = z.object({ schemaVersion: z.number() }).passthrough().safeParse(input);
   if (!envelope.success) {
     throw new ProjectFileError('INVALID_PROJECT', 'Project file has no schemaVersion', {
       cause: envelope.error,
     });
   }
-  if (envelope.data.schemaVersion !== PROJECT_SCHEMA_VERSION) {
+  const version = envelope.data.schemaVersion;
+  let candidate = input;
+  if (version === LEGACY_SCHEMA_VERSION) {
+    const legacy = legacyProjectSchema.safeParse(input);
+    if (!legacy.success) {
+      throw new ProjectFileError('INVALID_PROJECT', 'Project file is invalid', {
+        cause: legacy.error,
+      });
+    }
+    candidate = migrateLegacyProject(legacy.data, options.modelName ?? 'Model');
+  } else if (version !== PROJECT_SCHEMA_VERSION) {
     throw new ProjectFileError(
       'UNSUPPORTED_SCHEMA_VERSION',
-      `Unsupported project schema version: ${envelope.data.schemaVersion}`,
+      `Unsupported project schema version: ${version}`,
     );
   }
-  const parsed = projectSchema.safeParse(input);
+  const parsed = projectSchema.safeParse(candidate);
   if (!parsed.success) {
     throw new ProjectFileError('INVALID_PROJECT', 'Project file is invalid', {
       cause: parsed.error,
@@ -509,15 +583,20 @@ export function parseProject(input: unknown): Project {
   // they never become solid-body targets after loading.
   const project = parsed.data as Project;
   const importedFeatureIds = new Set(
-    project.features
-      .filter((feature) => feature.type === 'import-mesh')
-      .map((feature) => feature.id),
+    project.superObjects.flatMap((superObject) =>
+      superObject.features
+        .filter((feature) => feature.type === 'import-mesh')
+        .map((feature) => feature.id),
+    ),
   );
   return {
     ...project,
-    bodies: project.bodies.map((body) => ({
-      ...body,
-      kind: importedFeatureIds.has(body.createdBy) ? 'mesh' : (body.kind ?? 'solid'),
+    superObjects: project.superObjects.map((superObject) => ({
+      ...superObject,
+      bodies: superObject.bodies.map((body) => ({
+        ...body,
+        kind: importedFeatureIds.has(body.createdBy) ? 'mesh' : (body.kind ?? 'solid'),
+      })),
     })),
   };
 }

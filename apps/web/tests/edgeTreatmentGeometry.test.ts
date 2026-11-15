@@ -1,5 +1,5 @@
 import type { TessellationResult } from '@icancad/kernel';
-import { createProject, type Project } from '@icancad/model';
+import type { Model } from '@icancad/model';
 import { describe, expect, it } from 'vitest';
 import { edgeBisector, edgeCorner, edgePose, treatedEdges } from '../src/kernel/edgeTreatment';
 import {
@@ -11,25 +11,27 @@ import {
 } from '../src/quick/edgeTreatment';
 import type { SelectionItem } from '../src/stores/documentStore';
 import { edgedCube } from './edgedCube';
+import { modelOf, modelProject } from './modelFixture';
 
 const SIZE = 20;
 
-function project(): Project {
-  return {
-    ...createProject(),
-    features: [
-      {
-        id: 'box',
-        name: 'Box',
-        suppressed: false,
-        type: 'primitive',
-        kind: 'box',
-        params: { dx: SIZE, dy: SIZE, dz: SIZE },
-        transform: { translation: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
-      },
-    ],
-    bodies: [{ id: 'body-1', createdBy: 'box' }],
-  };
+function project(): Model {
+  return modelOf(
+    modelProject({
+      features: [
+        {
+          id: 'box',
+          name: 'Box',
+          suppressed: false,
+          type: 'primitive',
+          kind: 'box',
+          params: { dx: SIZE, dy: SIZE, dz: SIZE },
+          transform: { translation: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
+        },
+      ],
+      bodies: [{ id: 'body-1', createdBy: 'box' }],
+    }),
+  );
 }
 
 function edgeSelection(mesh: TessellationResult, ids: string[]): SelectionItem[] {
@@ -121,7 +123,7 @@ describe('edge treatment targets', () => {
 
   it('ignores meshes and unknown bodies', () => {
     const mesh = edgedCube(SIZE);
-    const withMeshBody: Project = {
+    const withMeshBody: Model = {
       ...project(),
       bodies: [
         { id: 'body-1', createdBy: 'box' },
@@ -129,11 +131,9 @@ describe('edge treatment targets', () => {
       ],
     };
     expect(
-      edgeTreatmentTargetFromSelection(
-        withMeshBody,
-        [{ kind: 'edge', id: 'mesh-1#0' }],
-        { 'mesh-1': mesh },
-      ),
+      edgeTreatmentTargetFromSelection(withMeshBody, [{ kind: 'edge', id: 'mesh-1#0' }], {
+        'mesh-1': mesh,
+      }),
     ).toBeNull();
     expect(
       edgeTreatmentTargetFromSelection(project(), [{ kind: 'body', id: 'body-1' }], {
@@ -171,11 +171,9 @@ describe('edge treatment size limit', () => {
   it('has no limit without edges', () => {
     const mesh = { ...edgedCube(SIZE), edges: [] };
     expect(
-      edgeTreatmentTargetFromSelection(
-        project(),
-        [{ kind: 'body-face', id: 'body-1#5' }],
-        { 'body-1': mesh },
-      ),
+      edgeTreatmentTargetFromSelection(project(), [{ kind: 'body-face', id: 'body-1#5' }], {
+        'body-1': mesh,
+      }),
     ).not.toBeNull();
     expect(edgeTreatmentLimit({ faceRefs: [], edgeRefs: [] }, { 'body-1': mesh })).toBeNull();
   });
@@ -187,7 +185,11 @@ function notchMesh(size = 20): TessellationResult {
   const normals: number[] = [];
   const indices: number[] = [];
   const faceIds: number[] = [];
-  const triangle = (points: Array<[number, number, number]>, normal: [number, number, number], faceId: number) => {
+  const triangle = (
+    points: Array<[number, number, number]>,
+    normal: [number, number, number],
+    faceId: number,
+  ) => {
     const base = positions.length / 3;
     for (const point of points) {
       positions.push(...point);

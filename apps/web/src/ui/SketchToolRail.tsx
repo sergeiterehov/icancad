@@ -10,7 +10,7 @@ import {
 } from '../sketch/constraintModel';
 import { SKETCH_TOOL_SHORTCUTS, type SketchTool } from '../sketch/tool';
 import { useApplyConstraintAction } from '../sketch/useConstraintActions';
-import { useDocumentStore } from '../stores/documentStore';
+import { useDocumentStore, useViewModel } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
 import {
   CONSTRAINT_CATALOG,
@@ -55,7 +55,7 @@ export function SketchToolRail() {
   const setSketchSelection = useUiStore((state) => state.setSketchSelection);
   const magnetEnabled = useUiStore((state) => state.sketchMagnetEnabled);
   const setMagnetEnabled = useUiStore((state) => state.setSketchMagnetEnabled);
-  const project = useDocumentStore((state) => state.project);
+  const project = useViewModel();
   const apply = useDocumentStore((state) => state.apply);
   const openMenu = useContextMenuStore((state) => state.open);
 

@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { cancelKernelWork } from '../kernel/client';
-import { useViewProject } from '../stores/documentStore';
+import { useViewModel } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { Button } from './Controls';
 import { formatNumber } from './format';
@@ -26,7 +26,7 @@ export function KernelStatus() {
   const kernelError = useKernelStore((state) => state.error);
   const tasks = useKernelStore((state) => state.tasks);
   const featureErrors = useKernelStore((state) => state.featureErrors);
-  const project = useViewProject();
+  const project = useViewModel();
   const featureCount = project.features.length;
   const bodyCount = solidBodiesInHistory(project).length;
   const meshCount = bodiesInHistory(project).filter((body) => body.kind === 'mesh').length;
