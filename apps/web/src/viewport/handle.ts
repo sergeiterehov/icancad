@@ -41,6 +41,8 @@ export interface ViewportCamera {
   distance: number;
   azimuth: number;
   polar: number;
+  /** Tilt of the horizon in a trackball view; absent means level. */
+  roll?: number;
 }
 
 /** What a click in the viewport landed on. */

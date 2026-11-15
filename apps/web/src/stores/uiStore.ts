@@ -1,5 +1,18 @@
 import { create } from 'zustand';
 import type { SketchTool } from '../sketch/tool';
+import {
+  DEFAULT_CAMERA_SCHEME,
+  DEFAULT_ORBIT_STYLE,
+  isCameraSchemeId,
+  isOrbitStyle,
+  type CameraSchemeId,
+  type OrbitStyle,
+} from '../viewport/cameraControls';
+import {
+  DEFAULT_INPUT_PREFERENCE,
+  isInputPreference,
+  type InputPreference,
+} from '../viewport/inputProfile';
 
 export interface DeleteRequest {
   /** Operations the user asked to delete, without their dependents. */
@@ -38,6 +51,15 @@ interface UiState {
   docksPinned: boolean;
   /** Panels stop at their content instead of running the full height. */
   compactPanels: boolean;
+  /** Pointer and wheel bindings the camera follows. */
+  cameraScheme: CameraSchemeId;
+  setCameraScheme: (scheme: CameraSchemeId) => void;
+  /** How a drag turns the view: a level turntable or a free trackball. */
+  orbitStyle: OrbitStyle;
+  setOrbitStyle: (style: OrbitStyle) => void;
+  /** Which gestures the device needs: the user's choice or the detected device. */
+  inputPreference: InputPreference;
+  setInputPreference: (preference: InputPreference) => void;
   /** The project structure is open; the model dock stays while it is. */
   modelListExpanded: boolean;
   setLeftDockOpen: (open: boolean) => void;
@@ -119,6 +141,9 @@ const SECTION_ENABLED_KEY = 'icancad.sectionEnabled';
 const SKETCH_MAGNET_KEY = 'icancad.sketchMagnet';
 const DOCKS_PINNED_KEY = 'icancad.docksPinned';
 const COMPACT_PANELS_KEY = 'icancad.compactPanels';
+const CAMERA_SCHEME_KEY = 'icancad.cameraScheme';
+const INPUT_PREFERENCE_KEY = 'icancad.input';
+const ORBIT_STYLE_KEY = 'icancad.orbit';
 
 function loadSketchMagnet(): boolean {
   try {
@@ -158,6 +183,36 @@ function loadSectionEnabled(): boolean {
   return true;
 }
 
+function loadCameraScheme(): CameraSchemeId {
+  try {
+    const stored = localStorage.getItem(CAMERA_SCHEME_KEY);
+    if (isCameraSchemeId(stored)) return stored;
+  } catch {
+    // localStorage can be unavailable in private mode.
+  }
+  return DEFAULT_CAMERA_SCHEME;
+}
+
+function loadInputPreference(): InputPreference {
+  try {
+    const stored = localStorage.getItem(INPUT_PREFERENCE_KEY);
+    if (isInputPreference(stored)) return stored;
+  } catch {
+    // localStorage can be unavailable in private mode.
+  }
+  return DEFAULT_INPUT_PREFERENCE;
+}
+
+function loadOrbitStyle(): OrbitStyle {
+  try {
+    const stored = localStorage.getItem(ORBIT_STYLE_KEY);
+    if (isOrbitStyle(stored)) return stored;
+  } catch {
+    // localStorage can be unavailable in private mode.
+  }
+  return DEFAULT_ORBIT_STYLE;
+}
+
 export const useUiStore = create<UiState>((set) => ({
   toast: null,
   deleteRequest: null,
@@ -167,6 +222,33 @@ export const useUiStore = create<UiState>((set) => ({
   rightDockOpen: true,
   docksPinned: loadDocksPinned(),
   compactPanels: loadCompactPanels(),
+  cameraScheme: loadCameraScheme(),
+  setCameraScheme: (cameraScheme) => {
+    try {
+      localStorage.setItem(CAMERA_SCHEME_KEY, cameraScheme);
+    } catch {
+      // A preference that cannot be stored still applies to this session.
+    }
+    set({ cameraScheme });
+  },
+  inputPreference: loadInputPreference(),
+  setInputPreference: (inputPreference) => {
+    try {
+      localStorage.setItem(INPUT_PREFERENCE_KEY, inputPreference);
+    } catch {
+      // A preference that cannot be stored still applies to this session.
+    }
+    set({ inputPreference });
+  },
+  orbitStyle: loadOrbitStyle(),
+  setOrbitStyle: (orbitStyle) => {
+    try {
+      localStorage.setItem(ORBIT_STYLE_KEY, orbitStyle);
+    } catch {
+      // A preference that cannot be stored still applies to this session.
+    }
+    set({ orbitStyle });
+  },
   modelListExpanded: false,
   setLeftDockOpen: (leftDockOpen) => set({ leftDockOpen }),
   setRightDockOpen: (rightDockOpen) => set({ rightDockOpen }),

@@ -3,9 +3,15 @@ import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
 import { useContextMenuStore } from '../ui/ContextMenu';
 
+/** Apple keyboards name their modifiers differently; hints follow the keyboard. */
+export const IS_MAC =
+  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
+
 /** Modifier shown in tooltips: ⌘ on Apple platforms, Ctrl everywhere else. */
-export const MOD_KEY =
-  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+';
+export const MOD_KEY = IS_MAC ? '⌘' : 'Ctrl+';
+
+/** The key next to the space bar: ⌥ on an Apple keyboard, Alt everywhere else. */
+export const ALT_KEY = IS_MAC ? '⌥' : 'Alt';
 
 function isTextEntry(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;

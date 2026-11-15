@@ -1,5 +1,5 @@
 import type { TessellationResult } from '@icancad/kernel';
-import { House, ScanBox, ScanSquare } from 'lucide-react';
+import { House, ScanBox, ScanSquare, SlidersHorizontal } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { retryKernel } from '../kernel/client';
@@ -42,6 +42,7 @@ import {
 } from '../stores/selection';
 import { useThemeStore } from '../stores/themeStore';
 import { Button } from '../ui/Controls';
+import { CameraHint } from '../ui/CameraHint';
 import { showContextMenu, useContextMenuStore, type ContextMenuItem } from '../ui/ContextMenu';
 import {
   colorMenuItem,
@@ -51,6 +52,8 @@ import {
 } from '../ui/objectMenu';
 import { SkeletonStage } from '../ui/Skeleton';
 import { Tooltip } from '../ui/Tooltip';
+import { CAMERA_SCHEMES, ORBIT_STYLES, cameraScheme } from './cameraControls';
+import { INPUT_PREFERENCES, primaryInputProfile, resolvedPointerKind } from './inputProfile';
 import { NavCube, type NavFace } from './NavCube';
 import { useNavCubeLift } from './useNavCubeLift';
 import {
@@ -760,64 +763,140 @@ export function Viewport() {
     controllerRef.current = controller;
     controller.setTheme(useThemeStore.getState().theme);
 
+    // The nav cube menu both drives the view and chooses how the pointer drives
+    // it. It is rebuilt on every opening and after a change, so the ticks follow
+    // the scheme the camera is actually using.
+    const navMenuItems = (): ContextMenuItem[] => {
+      const labels = translationRef.current;
+      const scheme = cameraScheme(useUiStore.getState().cameraScheme);
+      const inputPreference = useUiStore.getState().inputPreference;
+      const orbitStyle = useUiStore.getState().orbitStyle;
+      // What "automatic" means right now, so the choice is not a guess.
+      const detectedProfile = primaryInputProfile();
+      const pointerKind = resolvedPointerKind(inputPreference);
+      const automaticLabel = `${labels('nav.inputAuto')} · ${labels(
+        (detectedProfile === 'touch'
+          ? 'nav.inputTouch'
+          : pointerKind === 'trackpad'
+            ? 'nav.inputTrackpad'
+            : 'nav.inputMouse') as never,
+      )}`;
+      const sketchId = useUiStore.getState().activeSketchId;
+      const sketchFeature = sketchId
+        ? activeModel(useDocumentStore.getState().project).features.find(
+            (feature): feature is SketchFeature =>
+              feature.type === 'sketch' && feature.id === sketchId,
+          )
+        : undefined;
+      return [
+        ...(sketchFeature
+          ? [
+              {
+                id: 'orient-sketch',
+                label: labels('nav.orientToSketch'),
+                icon: <ScanSquare size={14} />,
+                onSelect: () =>
+                  controller.alignSketch(
+                    computeSketchFrame(
+                      sketchFeature,
+                      sketchFeature.plane.type === 'face'
+                        ? useKernelStore.getState().meshes[sketchFeature.plane.bodyId ?? '']
+                        : undefined,
+                    ),
+                    sketchFeature.entities,
+                  ),
+              },
+            ]
+          : []),
+        {
+          id: 'fit',
+          label: labels('project.fit'),
+          icon: <ScanBox size={14} />,
+          onSelect: () => controller.fit(),
+        },
+        {
+          id: 'iso',
+          label: labels('nav.iso'),
+          icon: <House size={14} />,
+          // Home: the usual orientation and the whole model in view at once.
+          onSelect: () => controller.fit('iso'),
+        },
+        { id: 'iso-separator', separator: true },
+        {
+          id: 'camera-controls',
+          label: labels('nav.controls'),
+          icon: <SlidersHorizontal size={14} />,
+          submenu: [
+            ...CAMERA_SCHEMES.map((option) => ({
+              id: `camera-scheme-${option.id}`,
+              label: labels(option.label as never),
+              tooltip: <CameraHint scheme={option} />,
+              checked: option.id === scheme.id,
+              // Trying the schemes is a back and forth, so the menu stays open.
+              keepOpen: true,
+              onSelect: () => {
+                useUiStore.getState().setCameraScheme(option.id);
+                useContextMenuStore.getState().updateItems(navMenuItems());
+              },
+            })),
+            { id: 'orbit-separator', separator: true },
+            { id: 'orbit-heading', heading: labels('nav.rotation') },
+            ...ORBIT_STYLES.map((style) => ({
+              id: `orbit-${style}`,
+              label: labels((style === 'trackball' ? 'nav.rotationTrackball' : 'nav.rotationTurntable') as never),
+              tooltip: labels(
+                (style === 'trackball'
+                  ? 'nav.rotationTrackballHint'
+                  : 'nav.rotationTurntableHint') as never,
+              ),
+              checked: orbitStyle === style,
+              keepOpen: true,
+              onSelect: () => {
+                useUiStore.getState().setOrbitStyle(style);
+                useContextMenuStore.getState().updateItems(navMenuItems());
+              },
+            })),
+            { id: 'input-separator', separator: true },
+            { id: 'input-heading', heading: labels('nav.input') },
+            ...INPUT_PREFERENCES.map((option) => ({
+              id: `input-${option}`,
+              label:
+                option === 'auto'
+                  ? automaticLabel
+                  : labels(
+                      (option === 'touch'
+                        ? 'nav.inputTouch'
+                        : option === 'trackpad'
+                          ? 'nav.inputTrackpad'
+                          : 'nav.inputMouse') as never,
+                    ),
+              checked: inputPreference === option,
+              keepOpen: true,
+              onSelect: () => {
+                useUiStore.getState().setInputPreference(option);
+                useContextMenuStore.getState().updateItems(navMenuItems());
+              },
+            })),
+          ],
+        },
+        { id: 'views-separator', separator: true },
+        ...(['front', 'back', 'left', 'right', 'top', 'bottom'] as const).map((view) => {
+          const hint = AXIS_HINTS[view];
+          return {
+            id: view,
+            label: labels(`nav.${view}`),
+            hint: hint ? <span style={{ color: hint.color }}>{hint.text}</span> : undefined,
+            onSelect: () => controller.setView(view),
+          };
+        }),
+      ];
+    };
+
     const navCube = new NavCube(navCanvas, labelsRef.current, useThemeStore.getState().theme, {
       onView: (view) => controller.setView(view),
       onOrientation: (azimuth, polar) => controller.setOrientation(azimuth, polar),
       onOrbit: (deltaX, deltaY) => controller.orbitBy(deltaX, deltaY),
-      onContextMenu: (x, y) => {
-        const labels = translationRef.current;
-        const sketchId = useUiStore.getState().activeSketchId;
-        const sketchFeature = sketchId
-          ? activeModel(useDocumentStore.getState().project).features.find(
-              (feature): feature is SketchFeature =>
-                feature.type === 'sketch' && feature.id === sketchId,
-            )
-          : undefined;
-        openMenuRef.current(x, y, [
-          ...(sketchFeature
-            ? [
-                {
-                  id: 'orient-sketch',
-                  label: labels('nav.orientToSketch'),
-                  icon: <ScanSquare size={14} />,
-                  onSelect: () =>
-                    controller.alignSketch(
-                      computeSketchFrame(
-                        sketchFeature,
-                        sketchFeature.plane.type === 'face'
-                          ? useKernelStore.getState().meshes[sketchFeature.plane.bodyId ?? '']
-                          : undefined,
-                      ),
-                      sketchFeature.entities,
-                    ),
-                },
-              ]
-            : []),
-          {
-            id: 'fit',
-            label: labels('project.fit'),
-            icon: <ScanBox size={14} />,
-            onSelect: () => controller.fit(),
-          },
-          {
-            id: 'iso',
-            label: labels('nav.iso'),
-            icon: <House size={14} />,
-            // Home: the usual orientation and the whole model in view at once.
-            onSelect: () => controller.fit('iso'),
-          },
-          { id: 'iso-separator', separator: true },
-          ...(['front', 'back', 'left', 'right', 'top', 'bottom'] as const).map((view) => {
-            const hint = AXIS_HINTS[view];
-            return {
-              id: view,
-              label: labels(`nav.${view}`),
-              hint: hint ? <span style={{ color: hint.color }}>{hint.text}</span> : undefined,
-              onSelect: () => controller.setView(view),
-            };
-          }),
-        ]);
-      },
+      onContextMenu: (x, y) => openMenuRef.current(x, y, navMenuItems()),
     });
     navCubeRef.current = navCube;
     const orientation = controller.getOrientation();
@@ -1264,7 +1343,7 @@ export function Viewport() {
       )}
 
       <div className="viewport-nav" ref={navRef}>
-        <Tooltip content={t('nav.hint')}>
+        <Tooltip content={<CameraHint intro />}>
           <canvas
             ref={navCubeCanvasRef}
             className="nav-cube-canvas"

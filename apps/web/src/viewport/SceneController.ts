@@ -15,6 +15,7 @@ import {
 } from '@icancad/sketch';
 import * as THREE from 'three';
 import type { Theme } from '../stores/themeStore';
+import { useUiStore } from '../stores/uiStore';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
@@ -28,6 +29,16 @@ import {
   fitDistance,
   shortestAngle,
 } from './cameraFit';
+import { cameraDragMode, cameraScheme } from './cameraControls';
+import {
+  inputProfile,
+  noteWheelKind,
+  resolvedPointerKind,
+  wheelPointerKind,
+  type PointerKind,
+} from './inputProfile';
+import { orbitAbout, orbitRotation, pointOnRayAtTarget } from './orbitPivot';
+import { trackballOrbit } from './trackball';
 import type {
   SceneArcHandle,
   SceneGhostInfo,
@@ -141,6 +152,18 @@ interface BodyEntry {
 
 const FOV_DEGREES = CAMERA_FOV_DEGREES;
 const CAMERA_TRANSITION_MS = 500;
+/** How far one pixel of a camera drag turns the view, in radians. */
+const ORBIT_RADIANS_PER_PIXEL = 0.008;
+/** A two-finger scroll moves much less per pixel than a drag does. */
+const SCROLL_RADIANS_PER_PIXEL = 0.004;
+/**
+ * Zoom per wheel unit. A mouse sends whole notches of about a hundred units, a
+ * trackpad scrolls in single units, and a pinch comes as a few of them, so the
+ * same factor would make a pinch crawl.
+ */
+const WHEEL_ZOOM_RATE = 0.0012;
+const SCROLL_ZOOM_RATE = 0.004;
+const PINCH_ZOOM_RATE = 0.01;
 
 /** Faces selected for an operation, plus the one under the cursor. */
 export interface FaceHighlightState {
@@ -163,6 +186,8 @@ interface CameraPose {
   distance: number;
   azimuth: number;
   polar: number;
+  /** Tilt of the horizon; a view preset always levels it. */
+  roll?: number;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -360,6 +385,20 @@ export class SceneController {
 
   private target = new THREE.Vector3(0, 0, 0);
   private distance = 200;
+  /** Tilt of the horizon about the view direction; zero for a turntable. */
+  private roll = 0;
+  /**
+   * Point a drag turns the view around. It is the geometry under the pointer, or
+   * the point of the pointer's ray at the depth of the target, and it stays on
+   * its pixel while the model swings around it. Null keeps the plain turntable.
+   */
+  private orbitPivot: THREE.Vector3 | null = null;
+  /** Fingers on the view, in client pixels, by pointer id. */
+  private readonly fingers = new Map<number, { x: number; y: number }>();
+  /** Centre and spread of the two-finger gesture, as they were one frame ago. */
+  private pinch: { centre: { x: number; y: number }; spread: number } | null = null;
+  /** A second finger joined, so what is left of the gesture only pans and pinches. */
+  private multiTouch = false;
   private azimuth = -Math.PI / 4;
   private polar = Math.PI / 3;
   private theme: Theme = 'dark';
@@ -379,6 +418,7 @@ export class SceneController {
     from: CameraPose;
     to: CameraPose;
     azimuthDelta: number;
+    rollDelta: number;
     startedAt: number;
     duration: number;
   } | null = null;
@@ -2021,9 +2061,68 @@ export class SceneController {
 
   orbitBy(deltaX: number, deltaY: number): void {
     this.transition = null;
-    this.azimuth -= deltaX * 0.008;
-    this.polar = clamp(this.polar - deltaY * 0.008, 0.001, Math.PI - 0.001);
+    // The nav cube speaks for the whole view, so it turns around the target the
+    // camera already has.
+    this.orbitPivot = null;
+    this.orbit(deltaX, deltaY);
+  }
+
+  /**
+   * Turns the view by a pointer delta. With a pivot the eye and the target
+   * rotate about it together, so the point under the pointer keeps its pixel
+   * while the model swings around it. A turntable keeps the world up axis up; a
+   * trackball turns the model in its own frame and lets the horizon tilt.
+   */
+  private orbit(
+    deltaX: number,
+    deltaY: number,
+    pivot: THREE.Vector3 | null = this.orbitPivot,
+    radiansPerPixel = ORBIT_RADIANS_PER_PIXEL,
+  ): void {
+    if (useUiStore.getState().orbitStyle === 'trackball') {
+      const turn = trackballOrbit(
+        { azimuth: this.azimuth, polar: this.polar, roll: this.roll },
+        deltaX,
+        deltaY,
+        radiansPerPixel,
+      );
+      if (pivot) this.target.copy(orbitAbout(pivot, turn.rotation, this.target));
+      this.azimuth = turn.state.azimuth;
+      this.polar = turn.state.polar;
+      this.roll = turn.state.roll;
+      this.updateCamera();
+      return;
+    }
+    const from = { azimuth: this.azimuth, polar: this.polar };
+    const to = {
+      azimuth: from.azimuth - deltaX * radiansPerPixel,
+      polar: clamp(from.polar - deltaY * radiansPerPixel, 0.001, Math.PI - 0.001),
+    };
+    if (pivot) {
+      this.target.copy(orbitAbout(pivot, orbitRotation(from, to), this.target));
+    }
+    this.azimuth = to.azimuth;
+    this.polar = to.polar;
+    this.roll = 0;
     this.updateCamera();
+  }
+
+  /**
+   * The point a drag turns the view around: the surface under the pointer, or
+   * the point of its ray at the depth the user is looking at when the ray hits
+   * nothing at all.
+   */
+  private orbitPivotAt(clientX: number, clientY: number): THREE.Vector3 {
+    const raycaster = this.pointerToRay(clientX, clientY);
+    const bodyMeshes = [...this.bodies.values()]
+      .filter((entry) => entry.group.visible && entry.interactive)
+      .map((entry) => entry.hitMesh);
+    const hit = firstUnclippedHit(
+      raycaster.intersectObjects(bodyMeshes, false),
+      this.sectionClipPlanes,
+    );
+    if (hit) return hit.point.clone();
+    return pointOnRayAtTarget(raycaster.ray.origin, raycaster.ray.direction, this.target);
   }
 
   setSection(planes: SectionPlane[]): void {
@@ -2379,6 +2478,7 @@ export class SceneController {
       distance: this.distance,
       azimuth: this.azimuth,
       polar: this.polar,
+      roll: this.roll,
     };
   }
 
@@ -2388,6 +2488,7 @@ export class SceneController {
       distance: state.distance,
       azimuth: state.azimuth,
       polar: state.polar,
+      roll: state.roll ?? 0,
     });
   }
 
@@ -2449,11 +2550,13 @@ export class SceneController {
       distance: this.distance,
       azimuth: this.azimuth,
       polar: this.polar,
+      roll: this.roll,
     };
     this.transition = {
       from,
       to: pose,
       azimuthDelta: shortestAngle(from.azimuth, pose.azimuth),
+      rollDelta: shortestAngle(from.roll ?? 0, pose.roll ?? 0),
       startedAt: performance.now(),
       duration: CAMERA_TRANSITION_MS,
     };
@@ -2474,6 +2577,7 @@ export class SceneController {
         : from.distance + (to.distance - from.distance) * eased;
     this.azimuth = from.azimuth + transition.azimuthDelta * eased;
     this.polar = from.polar + (to.polar - from.polar) * eased;
+    this.roll = (from.roll ?? 0) + transition.rollDelta * eased;
     if (progress >= 1) this.transition = null;
     this.updateCamera();
   }
@@ -3295,9 +3399,19 @@ export class SceneController {
       this.target.y + eye * sinPolar * Math.sin(this.azimuth),
       this.target.z + eye * Math.cos(this.polar),
     );
-    this.camera.up.set(0, 0, 1);
-    if (Math.abs(Math.cos(this.polar)) > 0.999) {
-      this.camera.up.set(0, 1, 0);
+    // The up vector is the turntable one, rolled about the view direction when a
+    // trackball has tilted the horizon.
+    const basis = cameraBasis(this.azimuth, this.polar);
+    this.camera.up.copy(basis.up);
+    if (this.roll !== 0) {
+      this.camera.up.applyAxisAngle(
+        new THREE.Vector3(
+          sinPolar * Math.cos(this.azimuth),
+          sinPolar * Math.sin(this.azimuth),
+          Math.cos(this.polar),
+        ),
+        this.roll,
+      );
     }
     this.camera.lookAt(this.target);
     this.camera.updateProjectionMatrix();
@@ -3337,6 +3451,7 @@ export class SceneController {
 
   private onPointerDown = (event: PointerEvent): void => {
     this.transition = null;
+    if (this.touchDown(event)) return;
     // A handle is grabbed before orbit, pan or selection, but not while a
     // picking tool owns the pointer. Shift is the second edge treatment kind,
     // so it must not turn a grab into a pan.
@@ -3358,12 +3473,22 @@ export class SceneController {
       this.pointerMoved = false;
     }
 
-    const wantsPan =
-      event.button === 2 || ((event.button === 0 || event.button === 1) && event.shiftKey);
-    const wantsOrbit = event.button === 1 || (event.button === 0 && event.altKey);
-    if (wantsPan) this.dragMode = 'pan';
-    else if (wantsOrbit) this.dragMode = 'orbit';
-    else return;
+    const scheme = cameraScheme(useUiStore.getState().cameraScheme);
+    const mode = cameraDragMode(scheme, {
+      button: event.button,
+      shift: event.shiftKey,
+      alt: event.altKey,
+      ctrl: event.ctrlKey || event.metaKey,
+    });
+    if (!mode) return;
+    this.dragMode = mode;
+    // Only a turn picks a pivot, and only when the scheme takes it from the
+    // pointer: the nav cube and the schemes that keep the middle of the model
+    // turn around the target the camera already has.
+    this.orbitPivot =
+      mode === 'orbit' && scheme.pivot === 'cursor'
+        ? this.orbitPivotAt(event.clientX, event.clientY)
+        : null;
 
     event.preventDefault();
     this.lastX = event.clientX;
@@ -3372,6 +3497,7 @@ export class SceneController {
   };
 
   private onPointerMove = (event: PointerEvent): void => {
+    if (this.touchMove(event)) return;
     if (this.dragMode === 'handle' && this.handleDrag) {
       const drag = this.handleDrag;
       if (drag.arc) {
@@ -3458,21 +3584,16 @@ export class SceneController {
     this.lastY = event.clientY;
 
     if (this.dragMode === 'orbit') {
-      this.azimuth -= dx * 0.008;
-      this.polar = clamp(this.polar - dy * 0.008, 0.001, Math.PI - 0.001);
-      this.updateCamera();
+      this.orbit(dx, dy);
       return;
     }
 
-    const unitsPerPixel = (this.camera.top - this.camera.bottom) / this.height;
-    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
-    const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
-    this.target.addScaledVector(right, -dx * unitsPerPixel);
-    this.target.addScaledVector(up, dy * unitsPerPixel);
+    this.panBy(dx, dy);
     this.updateCamera();
   };
 
   private onPointerUp = (event: PointerEvent): void => {
+    this.touchUp(event);
     if (this.dragMode === 'handle') {
       this.finishHandleDrag(event.type === 'pointercancel', event.pointerId);
       return;
@@ -3529,6 +3650,110 @@ export class SceneController {
       }
     }
   };
+
+  /**
+   * A finger on the view turns it: one finger orbits the point it holds, two
+   * fingers pan and pinch. A tap still selects, because the release goes through
+   * the same press tracking as a click.
+   */
+  private touchDown(event: PointerEvent): boolean {
+    if (!this.touchGestures(event)) return false;
+    this.fingers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    event.preventDefault();
+    if (this.fingers.size >= 2) {
+      // The second finger takes the gesture over: the turn the first one started
+      // is dropped, and the release must not select anything.
+      this.multiTouch = true;
+      this.dragMode = null;
+      this.pointerMoved = true;
+      this.pinch = this.pinchState();
+      return true;
+    }
+    this.pointerDown = { x: event.clientX, y: event.clientY };
+    this.pointerMoved = false;
+    this.dragMode = 'orbit';
+    this.orbitPivot = this.orbitPivotAt(event.clientX, event.clientY);
+    this.lastX = event.clientX;
+    this.lastY = event.clientY;
+    return true;
+  }
+
+  private touchMove(event: PointerEvent): boolean {
+    if (!this.touchGestures(event)) return false;
+    if (!this.fingers.has(event.pointerId)) return false;
+    this.fingers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (this.multiTouch) {
+      const next = this.pinchState();
+      if (next && this.pinch) {
+        this.panBy(next.centre.x - this.pinch.centre.x, next.centre.y - this.pinch.centre.y);
+        this.zoomAt(next.centre.x, next.centre.y, this.pinch.spread / next.spread);
+      }
+      this.pinch = next;
+      return true;
+    }
+    if (this.dragMode !== 'orbit') return true;
+    const dx = event.clientX - this.lastX;
+    const dy = event.clientY - this.lastY;
+    this.lastX = event.clientX;
+    this.lastY = event.clientY;
+    if (dx !== 0 || dy !== 0) this.pointerMoved = true;
+    this.orbit(dx, dy);
+    return true;
+  }
+
+  /** Lifts a finger. The press tracking of the click path finishes the gesture. */
+  private touchUp(event: PointerEvent): void {
+    if (!this.touchGestures(event)) return;
+    if (!this.fingers.delete(event.pointerId)) return;
+    this.pinch = this.fingers.size >= 2 ? this.pinchState() : null;
+    if (this.fingers.size === 0) {
+      this.multiTouch = false;
+      this.dragMode = null;
+    }
+  }
+
+  /**
+   * True for a finger when the camera follows touch. The sketch editor owns
+   * touches while it is open: there they draw and drag geometry.
+   */
+  private touchGestures(event: PointerEvent): boolean {
+    if (event.pointerType !== 'touch') return false;
+    if (useUiStore.getState().activeSketchId) return false;
+    return inputProfile(useUiStore.getState().inputPreference) === 'touch';
+  }
+
+  /** Centre and spread of the two fingers on the view, or null for one. */
+  private pinchState(): { centre: { x: number; y: number }; spread: number } | null {
+    const [first, second] = [...this.fingers.values()];
+    if (!first || !second) return null;
+    return {
+      centre: { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 },
+      spread: Math.max(1, Math.hypot(first.x - second.x, first.y - second.y)),
+    };
+  }
+
+  /** Moves the view with the pointer: the target follows it on screen. */
+  private panBy(dx: number, dy: number): void {
+    const unitsPerPixel = (this.camera.top - this.camera.bottom) / this.height;
+    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+    const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
+    this.target.addScaledVector(right, -dx * unitsPerPixel);
+    this.target.addScaledVector(up, dy * unitsPerPixel);
+  }
+
+  /**
+   * Zooms by a ratio and keeps the point under the pixel where it is: the target
+   * slides towards that point by the same ratio the viewport shrinks.
+   */
+  private zoomAt(clientX: number, clientY: number, ratio: number): void {
+    if (!Number.isFinite(ratio) || ratio <= 0) return;
+    const distance = clamp(this.distance * ratio, 0.05, 10_000_000);
+    const raycaster = this.pointerToRay(clientX, clientY);
+    const anchor = pointOnRayAtTarget(raycaster.ray.origin, raycaster.ray.direction, this.target);
+    this.target.sub(anchor).multiplyScalar(distance / this.distance).add(anchor);
+    this.distance = distance;
+    this.updateCamera();
+  }
 
   private pointerToRay(clientX: number, clientY: number): THREE.Raycaster {
     const rect = this.canvas.getBoundingClientRect();
@@ -4288,10 +4513,47 @@ export class SceneController {
   private onWheel = (event: WheelEvent): void => {
     event.preventDefault();
     this.transition = null;
-    const factor = Math.exp(event.deltaY * 0.0012);
-    this.distance = clamp(this.distance * factor, 0.05, 10_000_000);
+    const scheme = cameraScheme(useUiStore.getState().cameraScheme);
+    const kind = this.pointerKind(event);
+    // A pinch reaches the page as the wheel with Ctrl held, whatever the device.
+    if (event.ctrlKey) {
+      this.zoomAt(event.clientX, event.clientY, Math.exp(event.deltaY * PINCH_ZOOM_RATE));
+      return;
+    }
+    if (kind === 'trackpad' && scheme.scrollOrbits) {
+      // Two fingers scroll: the same scroll pans with Shift held, and the pinch
+      // above zooms. The directions are the reverse of dragging the model, which
+      // is how Blender turns a trackpad.
+      if (event.shiftKey) {
+        this.panBy(-event.deltaX, -event.deltaY);
+        this.updateCamera();
+      } else {
+        this.orbit(
+          -event.deltaX,
+          -event.deltaY,
+          this.orbitPivotAt(event.clientX, event.clientY),
+          SCROLL_RADIANS_PER_PIXEL,
+        );
+      }
+      return;
+    }
+    const ratio = Math.exp(
+      event.deltaY * (kind === 'mouse' ? WHEEL_ZOOM_RATE : SCROLL_ZOOM_RATE),
+    );
+    if (scheme.zoomToCursor) {
+      this.zoomAt(event.clientX, event.clientY, ratio);
+      return;
+    }
+    this.distance = clamp(this.distance * ratio, 0.05, 10_000_000);
     this.updateCamera();
   };
+
+  /** The device behind a wheel event, remembered for the next one. */
+  private pointerKind(event: WheelEvent): PointerKind {
+    const preference = useUiStore.getState().inputPreference;
+    noteWheelKind(wheelPointerKind(event));
+    return resolvedPointerKind(preference);
+  }
 
   private onContextMenu = (event: MouseEvent): void => {
     event.preventDefault();
