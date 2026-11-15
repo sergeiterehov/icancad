@@ -38,6 +38,7 @@ import {
   type PointerKind,
 } from './inputProfile';
 import { orbitAbout, orbitRotation, pointOnRayAtTarget } from './orbitPivot';
+import { facesPlane, sketchTurnMode } from './sketchView';
 import { trackballOrbit } from './trackball';
 import type {
   SceneArcHandle,
@@ -2064,9 +2065,21 @@ export class SceneController {
   orbitBy(deltaX: number, deltaY: number): void {
     this.transition = null;
     // The nav cube speaks for the whole view, so it turns around the target the
-    // camera already has.
+    // camera already has. It also turns in a sketch: taking the view off the
+    // plane is exactly what the cube is for there.
     this.orbitPivot = null;
     this.orbit(deltaX, deltaY);
+  }
+
+  /**
+   * Whether the camera looks straight at the plane of the sketch being edited.
+   * The frame of the active sketch is already in the scene, so the answer needs
+   * no state of its own.
+   */
+  private facesSketchPlane(): boolean {
+    const frame = this.sketchEntries.find((entry) => entry.active)?.frame;
+    if (!frame) return false;
+    return facesPlane(this.azimuth, this.polar, frame.normal);
   }
 
   /**
@@ -3471,12 +3484,17 @@ export class SceneController {
       ctrl: event.ctrlKey || event.metaKey,
     });
     if (mode) {
-      this.dragMode = mode;
+      // A sketch is drawn flat: while the camera faces its plane a turn pans
+      // instead, so the sheet the user works on cannot tilt away under the
+      // gesture. Turning the nav cube takes the view off the plane, and rotation
+      // comes back with it.
+      const turn = mode === 'orbit' ? sketchTurnMode(this.facesSketchPlane()) : mode;
+      this.dragMode = turn;
       // Only a turn picks a pivot, and only when the scheme takes it from the
       // pointer: the nav cube and the schemes that keep the middle of the model
       // turn around the target the camera already has.
       this.orbitPivot =
-        mode === 'orbit' && scheme.pivot === 'cursor'
+        turn === 'orbit' && scheme.pivot === 'cursor'
           ? this.orbitPivotAt(event.clientX, event.clientY)
           : null;
       event.preventDefault();
@@ -4542,6 +4560,11 @@ export class SceneController {
       // above zooms. The directions are the reverse of dragging the model, which
       // is how Blender turns a trackpad.
       if (event.shiftKey) {
+        this.panBy(-event.deltaX, -event.deltaY);
+        this.updateCamera();
+      } else if (this.facesSketchPlane()) {
+        // In a sketch the view stays on the plane: the same two fingers move the
+        // sheet instead of turning it away.
         this.panBy(-event.deltaX, -event.deltaY);
         this.updateCamera();
       } else {

@@ -60,4 +60,23 @@ describe('camera hint', () => {
       }
     }
   });
+
+  it('adds the sketch rule to the hint while a sketch is open', () => {
+    // A sketch turns a turn into a pan, and the cube's hint is where that is
+    // learnt. The rule is a part of its own: a rule, the name with the icon of
+    // the sketch, and the sentence that says what a turn does now.
+    const lines = cameraHintLines(schemeOf('blender'), { ...mouse, sketching: true }, t);
+    expect(lines.slice(0, -3)).toEqual(cameraHintLines(schemeOf('blender'), mouse, t));
+    expect(lines.slice(-3)).toEqual([
+      { id: 'sketch-divider', text: '', divider: true },
+      { id: 'sketch-heading', text: 'nav.hintSketch', heading: true, icon: 'sketch' },
+      { id: 'sketch-rule', text: 'nav.hintSketchPans' },
+    ]);
+  });
+
+  it('leaves the rule out when no sketch is open', () => {
+    expect(lines(schemeOf('blender'), mouse).some((line) => line.id.startsWith('sketch'))).toBe(
+      false,
+    );
+  });
 });

@@ -1293,6 +1293,25 @@ button:disabled {
   gap: 2px;
 }
 
+/* A heading in the stack names the lines under it; the words themselves are the
+   separation, so it only needs to stand out from them. */
+.tooltip-stack-heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  font-weight: 600;
+}
+
+/* A rule inside the stack parts two answers, e.g. the gestures of the camera and
+   the rule a sketch adds to them. */
+.tooltip-stack-divider {
+  height: 1px;
+  margin: 4px 0 2px;
+  background: currentColor;
+  opacity: 0.2;
+}
+
 .tool-separator {
   width: 1px;
   height: 18px;
