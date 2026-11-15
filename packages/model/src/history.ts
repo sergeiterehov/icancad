@@ -127,12 +127,13 @@ export function getFeatureDependencies(feature: Feature, project: Model): string
   }
   if (feature.type === 'array') {
     // Repeating the bodies an operation made depends on that operation.
-    if (feature.target === 'operations') {
+    if (feature.target === 'geometry') {
       for (const featureId of feature.featureIds) dependencies.add(featureId);
     }
     for (const direction of feature.directions) {
-      if (direction.kind === 'path' && direction.path) {
-        dependencies.add(direction.path.sketchId);
+      if (direction.kind !== 'path') continue;
+      for (const path of direction.paths) {
+        if (path.kind === 'sketch-edge') dependencies.add(path.sketchId);
       }
     }
   }

@@ -81,7 +81,15 @@ export function LeftPanel() {
   const projectionLost = useKernelStore((state) => state.projectionLost);
   const preview = useKernelStore((state) => state.preview);
   const setActiveSketch = useUiStore((state) => state.setActiveSketch);
+  const pickingArrayBodies = useUiStore((state) => state.pickingArrayBodies);
   const [renaming, setRenaming] = useState<string | null>(null);
+  // While an array waits for bodies, the ones it already has stay readable in
+  // the tree in the same accent as a selection.
+  const pickedArrayBodies = (() => {
+    if (!pickingArrayBodies) return null;
+    const feature = project.features.find((candidate) => candidate.id === pickingArrayBodies);
+    return feature?.type === 'array' ? new Set(feature.bodyIds) : null;
+  })();
 
   // Renaming happens in the tree: double click on an object row, or the context
   // menu. A sketch row is the operation that creates it, so its name is stored
@@ -228,6 +236,7 @@ export function LeftPanel() {
   const renderBody = (body: BodyObject): ReactNode => {
     const kind = body.kind === 'mesh' ? 'mesh' : 'body';
     const direct = isDirectlySelected(selection, kind, body.id);
+    const picked = pickedArrayBodies?.has(body.id) ?? false;
     const linked = !direct && highlightedBodyIds.includes(body.id);
     const mark = previewMarks.get(body.id);
     return (
@@ -236,6 +245,7 @@ export function LeftPanel() {
         className={clsx(
           'tree-row',
           direct && 'selected',
+          picked && 'picked',
           linked && 'linked',
           !body.visible && 'muted',
           mark && `preview-${mark.kind}`,

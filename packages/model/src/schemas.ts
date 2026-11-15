@@ -377,6 +377,8 @@ const edgeTreatmentFeature = z.object({
       start: vec3,
       mid: vec3,
       end: vec3,
+      length: z.number().nonnegative().optional(),
+      closed: z.boolean().optional(),
       bisector: vec3,
       wedge: z.number().positive().optional(),
       convex: z.boolean().optional(),
@@ -385,36 +387,90 @@ const edgeTreatmentFeature = z.object({
   size: z.number().positive(),
 });
 
-const arrayPath = z.object({
-  kind: z.literal('sketch-edge'),
-  sketchId: z.string().min(1),
-  entityId: z.string().min(1),
-});
+const arrayPath = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('body-edge'),
+    bodyId: z.string().min(1),
+    edgeId: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal('sketch-edge'),
+    sketchId: z.string().min(1),
+    entityId: z.string().min(1),
+  }),
+]);
 
-const arrayDirection = z.discriminatedUnion('kind', [
+const arrayAxis = z.preprocess(
+  (value) => {
+    // An axis used to be a picked edge, either of a body or of a sketch. The
+    // rotation now turns around a world axis with a radius or around an arc, so
+    // such an axis falls back to the world axis the line of a body was closest
+    // to in spirit: no offset, copies turning where they are.
+    if (value && typeof value === 'object') {
+      const kind = (value as { kind?: unknown }).kind;
+      if (kind === 'body-edge' || kind === 'sketch-edge') {
+        return { kind: 'world', axis: 'z', radius: 0 };
+      }
+    }
+    return value;
+  },
+  z.discriminatedUnion('kind', [
+    z.object({
+      kind: z.literal('world'),
+      axis: z.enum(['x', 'y', 'z']),
+    }),
+    z.object({
+      kind: z.literal('arc'),
+      sketchId: z.string().min(1),
+      entityId: z.string().min(1),
+    }),
+  ]),
+);
+
+const arrayDirectionShape = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('linear'),
     direction: vec3,
     spacing: z.number(),
-    count: z.number().int().min(1).max(100),
+    angle: z.number().optional(),
+    count: z.number().int().min(1).max(120),
   }),
   z.object({
     kind: z.literal('rotation'),
-    axis: revolveAxis,
+    axis: arrayAxis,
     angle: z.number(),
-    count: z.number().int().min(1).max(100),
+    inverted: z.boolean().optional(),
+    count: z.number().int().min(1).max(120),
   }),
   z.object({
     kind: z.literal('path'),
-    path: arrayPath.nullable(),
-    count: z.number().int().min(1).max(100),
+    // Written while a path was a single curve; that is a chain of one.
+    path: arrayPath.nullable().optional(),
+    paths: z.array(arrayPath).optional(),
+    count: z.number().int().min(1).max(120),
   }),
 ]);
+
+const arrayDirection = arrayDirectionShape.transform((direction) => {
+  if (direction.kind !== 'path') return direction;
+  return {
+    kind: 'path' as const,
+    paths: direction.paths ?? (direction.path ? [direction.path] : []),
+    count: direction.count,
+  };
+});
+
+// Projects written before the target was named honestly stored operations;
+// they repeat the geometry of those operations, which is what 'geometry' means.
+const arrayTarget = z.preprocess(
+  (value) => (value === 'operations' ? 'geometry' : value),
+  z.enum(['bodies', 'geometry']),
+);
 
 const arrayFeature = z.object({
   ...featureBase,
   type: z.literal('array'),
-  target: z.enum(['bodies', 'operations']),
+  target: arrayTarget,
   bodyIds: z.array(z.string().min(1)).default([]),
   featureIds: z.array(z.string().min(1)).default([]),
   directions: z.array(arrayDirection).default([]),
@@ -486,12 +542,14 @@ const sectionPlane = z.object({
 });
 
 const viewState = z.object({
+  // The view the model was last looked at from; every model has its own.
   camera: z
     .object({
       target: vec3,
       distance: z.number().positive(),
       azimuth: z.number(),
       polar: z.number(),
+      roll: z.number().optional(),
     })
     .nullable(),
   sectionPlanes: z.array(sectionPlane),
@@ -629,10 +687,32 @@ export function parseProject(input: unknown, options: ParseProjectOptions = {}):
     ...project,
     superObjects: project.superObjects.map((superObject) => ({
       ...superObject,
+      features: superObject.features.map(normalizeFeature),
       bodies: superObject.bodies.map((body) => ({
         ...body,
         kind: importedFeatureIds.has(body.createdBy) ? 'mesh' : (body.kind ?? 'solid'),
       })),
     })),
   };
+}
+
+/**
+ * Brings one operation to the shape the rest of the app expects. A rotation span
+ * used to carry its direction as the sign of the angle: the sign is a state of
+ * its own now, so an old direction becomes a positive span plus `inverted`.
+ */
+function normalizeFeature(feature: Project['superObjects'][number]['features'][number]) {
+  if (feature.type !== 'array') return feature;
+  let changed = false;
+  const directions = feature.directions.map((direction) => {
+    if (direction.kind !== 'rotation') return direction;
+    const span = Math.max(0, Math.min(360, Math.abs(direction.angle)));
+    const inverted = direction.angle < 0 ? !direction.inverted : (direction.inverted ?? false);
+    if (span === direction.angle && inverted === (direction.inverted ?? false)) {
+      return direction;
+    }
+    changed = true;
+    return { ...direction, angle: span, inverted };
+  });
+  return changed ? { ...feature, directions } : feature;
 }

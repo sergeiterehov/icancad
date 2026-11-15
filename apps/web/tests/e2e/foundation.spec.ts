@@ -484,13 +484,14 @@ test.describe('ICANCad foundation', () => {
     const bodyRows = page.locator('.tree-row');
     await expect(bodyRows).toHaveCount(2);
 
-    // Selecting an operation dims nothing; selecting an unrelated body dims it.
+    // Selecting an operation lights nothing else; selecting a body lights up the
+    // operation that made it, the way the pointer would.
     await page.locator('.timeline-op').last().click();
     await expect(page.locator('.timeline-op.selected')).toHaveCount(1);
-    await expect(page.locator('.timeline-op.dimmed')).toHaveCount(0);
+    await expect(page.locator('.timeline-op.related')).toHaveCount(0);
     await commitOperation(page);
     await bodyRows.first().click();
-    await expect(page.locator('.timeline-op.dimmed')).toHaveCount(1);
+    await expect(page.locator('.timeline-op.related')).toHaveCount(1);
     await bodyRows.nth(1).click({ modifiers: ['Meta'] });
     await expect(page.locator('.selection-item')).toHaveCount(2);
 

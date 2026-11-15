@@ -772,10 +772,49 @@ describe('OCCT kernel engine', () => {
     const map = result.facesFromBase;
     expect(map).toBeDefined();
     expect(map).toHaveLength(result.stats.faces);
-    // The four sides of the plate survive the hole; its top and bottom are
-    // rebuilt because their boundary changes, and the four walls are new.
-    expect(map!.filter((index) => index >= 0)).toHaveLength(4);
-    expect(map!.filter((index) => index < 0)).toHaveLength(6);
+    // The four sides of the plate survive the hole as they are; its top and
+    // bottom are rebuilt around the hole but still belong to the plate. Only the
+    // walls of the hole are new, so every base face is accounted for once.
+    expect([...new Set(map!.filter((index) => index >= 0))].sort((a, b) => a - b)).toEqual([
+      0, 1, 2, 3, 4, 5,
+    ]);
+    const created = map!.filter((index) => index < 0).length;
+    expect(created).toBeGreaterThan(0);
+    expect(created).toBeLessThan(result.stats.faces);
+  });
+
+  it('applies every placement of a tool in one boolean', () => {
+    engine.makeBox({ shapeId: 'all-base', dx: 40, dy: 20, dz: 5, at: [-20, -10, 0] });
+    engine.makeBox({ shapeId: 'all-tool', dx: 4, dy: 4, dz: 10, at: [-2, -2, 0] });
+    const placements = [0, 10, -10].map(
+      (x) => [1, 0, 0, x, 0, 1, 0, 0, 0, 0, 1, 0] as number[],
+    );
+    const together = engine.booleanAll({
+      shapeId: 'all-one',
+      baseShapeId: 'all-base',
+      tools: placements.map((matrix) => ({ sourceShapeId: 'all-tool', matrix })),
+      op: 'fuse',
+      trackFaces: true,
+    });
+    expect(together.stats.solids).toBe(1);
+    const mesh = engine.tessellate('all-one');
+    // The plate plus three bosses standing 5 mm out of it.
+    expect(meshSignedVolume(mesh)).toBeCloseTo(40 * 20 * 5 + 3 * (4 * 4 * 5), 0);
+
+    // One call must mean the same as one call per placement.
+    let current = 'all-base';
+    for (const [index, matrix] of placements.entries()) {
+      engine.transformShape({ shapeId: `seq-tool-${index}`, sourceShapeId: 'all-tool', matrix });
+      const result = engine.booleanShape({
+        shapeId: `seq-${index}`,
+        baseShapeId: current,
+        toolShapeId: `seq-tool-${index}`,
+        op: 'fuse',
+      });
+      expect(result.stats.solids).toBe(1);
+      current = `seq-${index}`;
+    }
+    expect(meshSignedVolume(engine.tessellate(current))).toBeCloseTo(meshSignedVolume(mesh), 3);
   });
 
   it('splits a cut that separates a body into independent solids', () => {
@@ -1293,6 +1332,14 @@ describe('OCCT kernel engine', () => {
     expect(result.stats.solids).toBe(1);
     // The wall has the outer and the inner faces of the box.
     expect(result.stats.faces).toBe(12);
+    // The outside of the body is not the shell's: its six faces still name the
+    // faces of the box, and only the six cavity faces are new.
+    const map = result.facesFromBase;
+    expect(map).toHaveLength(12);
+    expect([...new Set(map!.filter((index) => index >= 0))].sort((a, b) => a - b)).toEqual([
+      0, 1, 2, 3, 4, 5,
+    ]);
+    expect(map!.filter((index) => index < 0)).toHaveLength(6);
     const mesh = engine.tessellate('shell-cavity');
     expect(meshSignedVolume(mesh)).toBeCloseTo(20 * 20 * 20 - 16 * 16 * 16, 0);
     expect(mesh.bbox.min).toEqual([0, 0, 0]);

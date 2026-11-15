@@ -51,6 +51,7 @@ import {
   visibilityMenuItem,
 } from '../ui/objectMenu';
 import { SkeletonStage } from '../ui/Skeleton';
+import { GeometryTooltip } from '../ui/GeometryTooltip';
 import { Tooltip } from '../ui/Tooltip';
 import { CAMERA_SCHEMES, ORBIT_STYLES, cameraScheme } from './cameraControls';
 import { INPUT_PREFERENCES, primaryInputProfile, resolvedPointerKind } from './inputProfile';
@@ -69,6 +70,7 @@ import { findBoundExtrude, quickTargetFromSelection } from '../quick/target';
 import { bodyEdgeAxisRef } from '../sketch/revolveAxis';
 import { formatNumber } from '../ui/format';
 import { SceneController, type SceneBody } from './SceneController';
+import { featureOfHit, featureOfPick } from './featurePick';
 import { resolveSelectionHit } from './selectionPick';
 import { SketchAnnotations } from './SketchAnnotations';
 import { SketchEditor } from './SketchEditor';
@@ -78,7 +80,7 @@ import {
   resolveSketchProjections,
   type ProjectionPick,
 } from '../sketch/projection';
-import { getViewport, registerViewport, type ScenePick } from './handle';
+import { getViewport, registerViewport, type ScenePick, type ViewportCamera } from './handle';
 
 const AXIS_HINTS: Record<string, { text: string; color: string }> = {
   right: { text: '+X', color: '#d48282' },
@@ -153,7 +155,11 @@ export function Viewport() {
   /** Bodies the scene has already shown; a body coming back is not new. */
   const seenBodyIds = useRef(new Set<string>());
   const activeModelId = useDocumentStore((state) => state.project.activeSuperObjectId);
-  const lastModelId = useRef(activeModelId);
+  // Null on the first render, so the stored view of the open model is restored.
+  const lastModelId = useRef<string | null>(null);
+  /** Latest camera pose, written to the model once the gesture settles. */
+  const cameraRef = useRef<ViewportCamera | null>(null);
+  const cameraTimer = useRef<number | null>(null);
   /** A switch already chose the view: the new model's bodies must not refit it. */
   const skipFit = useRef(false);
   const skipFitTimer = useRef<number | null>(null);
@@ -195,6 +201,10 @@ export function Viewport() {
   const pickingSketchPlane = useUiStore((state) => state.pickingSketchPlane);
   const pickingSectionFace = useUiStore((state) => state.pickingSectionFace);
   const pickingRevolveAxis = useUiStore((state) => state.pickingRevolveAxis);
+  const pickingArrayBodies = useUiStore((state) => state.pickingArrayBodies);
+  const pickingArrayOperations = useUiStore((state) => state.pickingArrayOperations);
+  const pickingArrayArc = useUiStore((state) => state.pickingArrayArc);
+  const pickingArrayPath = useUiStore((state) => state.pickingArrayPath);
   const sketchSectionEnabled = useUiStore((state) => state.sketchSectionEnabled);
   const sketchConstraintIds = useUiStore((state) => state.sketchConstraintIds);
   const sketchFrozenEntityIds = useUiStore((state) => state.sketchFrozenEntityIds);
@@ -252,6 +262,10 @@ export function Viewport() {
     Boolean(pickingSketchPlane) ||
     Boolean(pickingSectionFace) ||
     Boolean(pickingRevolveAxis) ||
+    // The array's own grips are only meaningful once what it repeats is picked,
+    // and while picking they would take the clicks aimed at the geometry.
+    Boolean(pickingArrayBodies) ||
+    Boolean(pickingArrayOperations) ||
     status !== 'ready';
   const boundExtrude = useMemo(
     () => (quickTarget ? findBoundExtrude(project, quickTarget) : undefined),
@@ -297,6 +311,9 @@ export function Viewport() {
       tubeDiameter: t('inspector.tubeDiameter'),
       sides: t('inspector.sides'),
       sidesTooltip: t('handles.sides'),
+      arraySpacing: t('array.spacing'),
+      arrayCount: t('array.count'),
+      arrayAngle: t('array.angle'),
     }),
     [t],
   );
@@ -313,8 +330,19 @@ export function Viewport() {
             sketchFrames,
             bodies: quickBodies,
             labels: handleLabels,
+            ...(preview?.arraySeed ? { arraySeed: preview.arraySeed } : {}),
           }),
-    [quickBlocked, project, selection, meshes, baseMeshes, sketchFrames, quickBodies, handleLabels],
+    [
+      quickBlocked,
+      project,
+      selection,
+      meshes,
+      baseMeshes,
+      sketchFrames,
+      quickBodies,
+      handleLabels,
+      preview,
+    ],
   );
   const handles = useMemo(
     () =>
@@ -331,8 +359,13 @@ export function Viewport() {
         ...(handle.fixedLengthPx ? { fixedLengthPx: handle.fixedLengthPx } : {}),
         ...(handle.shaft ? { shaft: handle.shaft } : {}),
         ...(handle.tipOnly ? { tipOnly: handle.tipOnly } : {}),
+        ...(handle.endGapPx ? { endGapPx: handle.endGapPx } : {}),
         ...(handle.arc ? { arc: handle.arc } : {}),
         ...(handle.orbit ? { orbit: handle.orbit } : {}),
+        // The grip of a path rides inside the route of the copies: without it
+        // the ball is drawn on a straight ray from the seed and misses the
+        // first copy as soon as the path bends.
+        ...(handle.trail ? { trail: handle.trail } : {}),
       })),
     [operationHandleList],
   );
@@ -583,6 +616,47 @@ export function Viewport() {
           }
           return;
         }
+        if (ui.pickingArrayArc) {
+          const picker = ui.pickingArrayArc;
+          if (pick?.kind !== 'sketch-edge') return;
+          // A rotation turns around the centre of a round curve, inside the
+          // plane the curve is drawn in: an arc or a full circle, nothing else.
+          const model = activeModel(store.project);
+          const sketch = model.features.find(
+            (candidate): candidate is SketchFeature =>
+              candidate.id === pick.sketchId && candidate.type === 'sketch',
+          );
+          const entity = sketch?.entities.find((candidate) => candidate.id === pick.entityId);
+          if (!entity || (entity.type !== 'arc' && entity.type !== 'circle')) {
+            ui.showToast('errors.ARRAY_ARC_NEEDED', 'error');
+            return;
+          }
+          store.setArrayAxisArc(picker.featureId, picker.index, {
+            kind: 'arc',
+            sketchId: pick.sketchId,
+            entityId: pick.entityId,
+          });
+          ui.setPickingArrayArc(null);
+          return;
+        }
+        if (ui.pickingArrayPath) {
+          const picker = ui.pickingArrayPath;
+          if (!pick) return;
+          if (pick.kind === 'body-edge') {
+            store.toggleArrayPath(picker.featureId, picker.index, {
+              kind: 'body-edge',
+              bodyId: pick.bodyId,
+              edgeId: pick.edgeId,
+            });
+          } else if (pick.kind === 'sketch-edge') {
+            store.toggleArrayPath(picker.featureId, picker.index, {
+              kind: 'sketch-edge',
+              sketchId: pick.sketchId,
+              entityId: pick.entityId,
+            });
+          }
+          return;
+        }
         const picking = ui.pickingExtrude;
         if (picking) {
           if (!pick) return;
@@ -666,6 +740,17 @@ export function Viewport() {
           navCubeCanvasRef.current.dataset.polar = String(polar);
           navCubeCanvasRef.current.dataset.distance = String(distance);
         }
+        // Every model keeps the view it was last looked from. The write is
+        // debounced, so orbiting does not touch the document on every frame.
+        cameraRef.current = controllerRef.current?.getCameraState() ?? null;
+        if (cameraTimer.current !== null) return;
+        cameraTimer.current = window.setTimeout(() => {
+          cameraTimer.current = null;
+          const pose = cameraRef.current;
+          if (!pose) return;
+          const store = useDocumentStore.getState();
+          store.setModelCamera(store.project.activeSuperObjectId, pose);
+        }, 700);
       },
       // A double click on a face opens the operation that produced it: the
       // shape a body currently has comes from the operation that last built it,
@@ -708,6 +793,17 @@ export function Viewport() {
         onSelectPick: (hit, additive) => {
           if (useUiStore.getState().activeSketchId) return;
           const store = useDocumentStore.getState();
+          const ui = useUiStore.getState();
+          // An array asks for operations: the geometry the pointer is on is the
+          // operation it stands for, so a click takes that operation instead of
+          // selecting the body it belongs to.
+          if (ui.pickingArrayOperations) {
+            const featureId = hit
+              ? featureOfHit(hit, useKernelStore.getState(), activeModel(store.project))
+              : null;
+            if (featureId) store.toggleArrayOperation(ui.pickingArrayOperations, featureId);
+            return;
+          }
           const resolution = resolveSelectionHit(hit, store.selection, { additive });
           if (!resolution) {
             store.select(null);
@@ -758,6 +854,19 @@ export function Viewport() {
         },
         onHandleHover: (event) =>
           setHandleHover(event ? { x: event.x, y: event.y, text: event.text } : null),
+        // The geometry under the pointer names the operation that made it, but
+        // only while operations are being picked: the tip answers what a click
+        // there would take, which is the question the picking mode asks.
+        onGeometryHover: (event) => {
+          const ui = useUiStore.getState();
+          if (!event || !ui.pickingArrayOperations) {
+            ui.setHoveredFeature(null);
+            return;
+          }
+          const project = activeModel(useDocumentStore.getState().project);
+          const featureId = featureOfPick(event.pick, useKernelStore.getState(), project);
+          ui.setHoveredFeature(featureId ? { featureId, x: event.x, y: event.y } : null);
+        },
       },
     );
     controllerRef.current = controller;
@@ -931,15 +1040,31 @@ export function Viewport() {
     const controller = controllerRef.current;
     if (!controller) return;
 
-    // Switching a model or opening another project keeps the camera where the
-    // user left it; only the first body of a fresh scene is fitted.
+    // Every model is its own space, so each one keeps the view it was last
+    // looked from: the pose of the model being left is stored and the pose of
+    // the next one is restored. A model that has never been looked at is fitted
+    // to its first body.
     if (lastModelId.current !== activeModelId) {
+      const previous = lastModelId.current;
+      const leaving = controller.getCameraState();
       lastModelId.current = activeModelId;
-      skipFit.current = true;
-      if (skipFitTimer.current !== null) window.clearTimeout(skipFitTimer.current);
-      skipFitTimer.current = window.setTimeout(() => {
+      const store = useDocumentStore.getState();
+      if (previous) store.setModelCamera(previous, leaving);
+      const model = store.project.superObjects.find(
+        (candidate) => candidate.id === activeModelId,
+      );
+      const pose = model?.view.camera ?? null;
+      cameraRef.current = pose;
+      if (pose) {
+        controller.setCameraState(pose);
+        skipFit.current = true;
+        if (skipFitTimer.current !== null) window.clearTimeout(skipFitTimer.current);
+        skipFitTimer.current = window.setTimeout(() => {
+          skipFit.current = false;
+        }, 1200);
+      } else {
         skipFit.current = false;
-      }, 1200);
+      }
     }
 
     const marks = new Map((preview?.bodies ?? []).map((mark) => [mark.id, mark]));
@@ -1037,9 +1162,13 @@ export function Viewport() {
     controllerRef.current?.setSelectionDetail({
       bodyIds: drilledBodyIds(selection),
       sketchId: selectedSketchId ?? null,
-      geometrySelected: selection.some((item) => item.kind === 'body-face' || item.kind === 'edge'),
+      // An array picks operations from the geometry, so every body offers its
+      // faces while it is asking: the face under the pointer is the operation.
+      geometrySelected:
+        Boolean(pickingArrayOperations) ||
+        selection.some((item) => item.kind === 'body-face' || item.kind === 'edge'),
     });
-  }, [selection, selectedSketchId]);
+  }, [selection, selectedSketchId, pickingArrayOperations]);
 
   useEffect(() => {
     controllerRef.current?.setHandles(handles);
@@ -1119,9 +1248,17 @@ export function Viewport() {
         Boolean(pickingSketchPlane) ||
         Boolean(pickingSectionFace) ||
         Boolean(pickingRevolveAxis) ||
+        Boolean(pickingArrayArc) ||
+        Boolean(pickingArrayPath) ||
         sketchProjecting,
       bodyPicking: Boolean(pickingExtrudeBodies) || Boolean(pickingShellBodies),
-      edgePicking: Boolean(pickingEdges) || Boolean(pickingRevolveAxis) || sketchProjecting,
+      edgePicking:
+        Boolean(pickingEdges) ||
+        Boolean(pickingRevolveAxis) ||
+        Boolean(pickingArrayArc) ||
+        Boolean(pickingArrayPath) ||
+        sketchProjecting,
+      vertexPicking: false,
       projecting: sketchProjecting,
       bodyFacesOnly: Boolean(pickingSketchPlane) || Boolean(pickingSectionFace),
     });
@@ -1137,6 +1274,8 @@ export function Viewport() {
     pickingShellBodies,
     pickingShellFaces,
     pickingRevolveAxis,
+    pickingArrayArc,
+    pickingArrayPath,
     sketchProjecting,
     activeSketchId,
     boundExtrude,
@@ -1341,6 +1480,8 @@ export function Viewport() {
           {handleHover.text}
         </div>
       )}
+
+      <GeometryTooltip />
 
       <div className="viewport-nav" ref={navRef}>
         <Tooltip content={<CameraHint intro />}>

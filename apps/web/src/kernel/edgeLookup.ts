@@ -39,6 +39,33 @@ function distance(a: Vec3, b: Vec3): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
 
+function polylineLength(points: readonly number[]): number {
+  let length = 0;
+  for (let index = 0; index + 5 < points.length; index += 3) {
+    length += Math.hypot(
+      points[index + 3]! - points[index]!,
+      points[index + 4]! - points[index + 1]!,
+      points[index + 5]! - points[index + 2]!,
+    );
+  }
+  return length;
+}
+
+/**
+ * The edge id survives when the geometry that made an edge only moves: the
+ * rebuilt shape has the same traversal, so the edge is the same one at another
+ * pose. Length and closure tell it apart from an edge the operation reshaped.
+ */
+function sameEdgeShape(
+  edge: { points: number[]; closed: boolean },
+  ref: BodyEdgeRef,
+): boolean {
+  if (ref.length === undefined) return false;
+  if (ref.closed !== undefined && ref.closed !== edge.closed) return false;
+  const tolerance = Math.max(1e-3, ref.length * 1e-4);
+  return Math.abs(polylineLength(edge.points) - ref.length) <= tolerance;
+}
+
 /** Distance from a point to the polyline of an edge. */
 function distanceToEdge(points: readonly number[], point: Vec3): number {
   let best = Infinity;
@@ -114,7 +141,9 @@ export function resolveEdgeRef(
   const directMesh = context.meshes[ref.bodyId];
   if (directMesh && context.bodyShapes.has(ref.bodyId)) {
     const direct = directMesh.edges?.find(
-      (edge) => edge.id === ref.edgeId && edgeMatchDistance(edge, ref) !== null,
+      (edge) =>
+        edge.id === ref.edgeId &&
+        (edgeMatchDistance(edge, ref) !== null || sameEdgeShape(edge, ref)),
     );
     if (direct) return { bodyId: ref.bodyId, edgeId: direct.id };
   }

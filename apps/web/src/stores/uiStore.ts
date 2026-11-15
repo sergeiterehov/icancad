@@ -39,6 +39,12 @@ export interface ModelDeleteRequest {
   name: string;
 }
 
+/** One direction of one array, named so a pick knows where it lands. */
+export interface ArrayDirectionPicker {
+  featureId: string;
+  index: number;
+}
+
 interface UiState {
   toast: ToastMessage | null;
   deleteRequest: DeleteRequest | null;
@@ -88,6 +94,10 @@ interface UiState {
   pickingArrayBodies: string | null;
   /** Array waiting for the operations whose bodies it should repeat. */
   pickingArrayOperations: string | null;
+  /** Array rotation waiting for the arc it should turn around. */
+  pickingArrayArc: ArrayDirectionPicker | null;
+  /** Array path waiting for curves that run end to end. */
+  pickingArrayPath: ArrayDirectionPicker | null;
   /** Face pick started from the sketch tool: open the editor after a pick. */
   sketchPlanePickThenEdit: string | null;
   sectionEnabled: boolean;
@@ -101,6 +111,11 @@ interface UiState {
   sketchAutoHighlightIds: string[];
   /** Geometry under the pointer while selecting; empty while a tool creates. */
   sketchHoverIds: string[];
+  /**
+   * The operation the geometry under the pointer belongs to. The timeline reads
+   * the id to light the chip up, and the tooltip reads the position.
+   */
+  hoveredFeature: { featureId: string; x: number; y: number } | null;
   sketchProblemConstraintIds: string[];
   sketchMagnetEnabled: boolean;
   sketchTool: SketchTool;
@@ -117,6 +132,8 @@ interface UiState {
   setPickingRevolveAxis: (featureId: string | null) => void;
   setPickingArrayBodies: (featureId: string | null) => void;
   setPickingArrayOperations: (featureId: string | null) => void;
+  setPickingArrayArc: (picker: ArrayDirectionPicker | null) => void;
+  setPickingArrayPath: (picker: ArrayDirectionPicker | null) => void;
   /** Leaves whichever picker is open; every operation shares one. */
   endPicking: () => void;
   startSketchPlanePicking: (featureId: string, enterEdit: boolean) => void;
@@ -133,9 +150,40 @@ interface UiState {
   setSketchFrozen: (ids: string[]) => void;
   setSketchAutoHighlight: (ids: string[]) => void;
   setSketchHover: (ids: string[]) => void;
+  setHoveredFeature: (hover: { featureId: string; x: number; y: number } | null) => void;
   setSketchProblems: (ids: string[]) => void;
   setSketchMagnetEnabled: (enabled: boolean) => void;
   setSketchTool: (tool: SketchTool) => void;
+}
+
+/**
+ * Every picker of the app. Opening one closes the others, so a click in the 3D
+ * view can never feed two operations at once.
+ */
+const PICKER_KEYS = [
+  'pickingExtrude',
+  'pickingExtrudeBodies',
+  'pickingEdges',
+  'pickingShellBodies',
+  'pickingShellFaces',
+  'pickingSketchPlane',
+  'pickingSectionFace',
+  'pickingRevolveAxis',
+  'pickingArrayBodies',
+  'pickingArrayOperations',
+  'pickingArrayArc',
+  'pickingArrayPath',
+] as const;
+
+type PickerKey = (typeof PICKER_KEYS)[number];
+
+function clearedPickers(): Pick<UiState, PickerKey> {
+  return Object.fromEntries(PICKER_KEYS.map((key) => [key, null])) as Pick<UiState, PickerKey>;
+}
+
+/** The state of opening one picker, with every other picker closed. */
+function onlyPicker<K extends PickerKey>(key: K, value: UiState[K]): Partial<UiState> {
+  return (value ? { ...clearedPickers(), [key]: value } : { [key]: value }) as Partial<UiState>;
 }
 
 let toastSequence = 0;
@@ -267,6 +315,8 @@ export const useUiStore = create<UiState>((set) => ({
   pickingRevolveAxis: null,
   pickingArrayBodies: null,
   pickingArrayOperations: null,
+  pickingArrayArc: null,
+  pickingArrayPath: null,
   sketchPlanePickThenEdit: null,
   sectionEnabled: loadSectionEnabled(),
   sketchSectionEnabled: true,
@@ -277,6 +327,7 @@ export const useUiStore = create<UiState>((set) => ({
   sketchFrozenEntityIds: [],
   sketchAutoHighlightIds: [],
   sketchHoverIds: [],
+  hoveredFeature: null,
   sketchProblemConstraintIds: [],
   sketchMagnetEnabled: loadSketchMagnet(),
   sketchTool: 'select',
@@ -286,212 +337,34 @@ export const useUiStore = create<UiState>((set) => ({
   },
   dismissToast: () => set({ toast: null }),
   requestDelete: (deleteRequest) => set({ deleteRequest }),
-  // Face and body picking are mutually exclusive.
-  setPickingExtrude: (pickingExtrude) =>
-    set(
-      pickingExtrude
-        ? {
-            pickingExtrude,
-            pickingExtrudeBodies: null,
-            pickingEdges: null,
-            pickingShellBodies: null,
-            pickingShellFaces: null,
-            pickingSketchPlane: null,
-            pickingSectionFace: null,
-            pickingRevolveAxis: null,
-            pickingArrayBodies: null,
-            pickingArrayOperations: null,
-          }
-        : { pickingExtrude },
-    ),
-  setPickingEdges: (pickingEdges) =>
-    set(
-      pickingEdges
-        ? {
-            pickingEdges,
-            pickingExtrude: null,
-            pickingExtrudeBodies: null,
-            pickingShellBodies: null,
-            pickingShellFaces: null,
-            pickingSketchPlane: null,
-            pickingSectionFace: null,
-            pickingRevolveAxis: null,
-            pickingArrayBodies: null,
-            pickingArrayOperations: null,
-          }
-        : { pickingEdges },
-    ),
+  // Face, edge and body picking are mutually exclusive; the flag that is set
+  // names the operation the pick belongs to.
+  setPickingExtrude: (pickingExtrude) => set(onlyPicker('pickingExtrude', pickingExtrude)),
+  setPickingEdges: (pickingEdges) => set(onlyPicker('pickingEdges', pickingEdges)),
   setPickingShellBodies: (pickingShellBodies) =>
-    set(
-      pickingShellBodies
-        ? {
-            pickingShellBodies,
-            pickingExtrude: null,
-            pickingExtrudeBodies: null,
-            pickingEdges: null,
-            pickingShellFaces: null,
-            pickingSketchPlane: null,
-            pickingSectionFace: null,
-            pickingRevolveAxis: null,
-            pickingArrayBodies: null,
-            pickingArrayOperations: null,
-            sketchPlanePickThenEdit: null,
-          }
-        : { pickingShellBodies },
-    ),
-  setPickingShellFaces: (pickingShellFaces) =>
-    set(
-      pickingShellFaces
-        ? {
-            pickingShellFaces,
-            pickingExtrude: null,
-            pickingExtrudeBodies: null,
-            pickingEdges: null,
-            pickingShellBodies: null,
-            pickingSketchPlane: null,
-            pickingSectionFace: null,
-            pickingRevolveAxis: null,
-            pickingArrayBodies: null,
-            pickingArrayOperations: null,
-            sketchPlanePickThenEdit: null,
-          }
-        : { pickingShellFaces },
-    ),
+    set(onlyPicker('pickingShellBodies', pickingShellBodies)),
+  setPickingShellFaces: (pickingShellFaces) => set(onlyPicker('pickingShellFaces', pickingShellFaces)),
   setPickingExtrudeBodies: (pickingExtrudeBodies) =>
-    set(
-      pickingExtrudeBodies
-        ? {
-            pickingExtrudeBodies,
-            pickingExtrude: null,
-            pickingEdges: null,
-            pickingShellBodies: null,
-            pickingShellFaces: null,
-            pickingSketchPlane: null,
-            pickingSectionFace: null,
-            pickingRevolveAxis: null,
-            pickingArrayBodies: null,
-            pickingArrayOperations: null,
-          }
-        : { pickingExtrudeBodies },
-    ),
+    set(onlyPicker('pickingExtrudeBodies', pickingExtrudeBodies)),
   setPickingSketchPlane: (pickingSketchPlane) =>
-    set(
-      pickingSketchPlane
-        ? {
-            pickingSketchPlane,
-            sketchPlanePickThenEdit: null,
-            pickingExtrude: null,
-            pickingExtrudeBodies: null,
-            pickingEdges: null,
-            pickingShellBodies: null,
-            pickingShellFaces: null,
-            pickingSectionFace: null,
-            pickingRevolveAxis: null,
-            pickingArrayBodies: null,
-            pickingArrayOperations: null,
-          }
-        : { pickingSketchPlane, sketchPlanePickThenEdit: null },
-    ),
+    set({ ...onlyPicker('pickingSketchPlane', pickingSketchPlane), sketchPlanePickThenEdit: null }),
   setPickingSectionFace: (pickingSectionFace) =>
-    set(
-      pickingSectionFace
-        ? {
-            pickingSectionFace,
-            pickingExtrude: null,
-            pickingExtrudeBodies: null,
-            pickingEdges: null,
-            pickingShellBodies: null,
-            pickingShellFaces: null,
-            pickingSketchPlane: null,
-            pickingRevolveAxis: null,
-            pickingArrayBodies: null,
-            pickingArrayOperations: null,
-            sketchPlanePickThenEdit: null,
-          }
-        : { pickingSectionFace },
-    ),
+    set(onlyPicker('pickingSectionFace', pickingSectionFace)),
   setPickingRevolveAxis: (pickingRevolveAxis) =>
-    set(
-      pickingRevolveAxis
-        ? {
-            pickingRevolveAxis,
-            pickingExtrude: null,
-            pickingExtrudeBodies: null,
-            pickingEdges: null,
-            pickingShellBodies: null,
-            pickingShellFaces: null,
-            pickingSketchPlane: null,
-            pickingSectionFace: null,
-            pickingArrayBodies: null,
-            pickingArrayOperations: null,
-            sketchPlanePickThenEdit: null,
-          }
-        : { pickingRevolveAxis },
-    ),
+    set(onlyPicker('pickingRevolveAxis', pickingRevolveAxis)),
   setPickingArrayBodies: (pickingArrayBodies) =>
-    set(
-      pickingArrayBodies
-        ? {
-            pickingArrayBodies,
-            pickingArrayOperations: null,
-            pickingExtrude: null,
-            pickingExtrudeBodies: null,
-            pickingEdges: null,
-            pickingShellBodies: null,
-            pickingShellFaces: null,
-            pickingSketchPlane: null,
-            pickingSectionFace: null,
-            pickingRevolveAxis: null,
-            sketchPlanePickThenEdit: null,
-          }
-        : { pickingArrayBodies },
-    ),
+    set(onlyPicker('pickingArrayBodies', pickingArrayBodies)),
   setPickingArrayOperations: (pickingArrayOperations) =>
-    set(
-      pickingArrayOperations
-        ? {
-            pickingArrayOperations,
-            pickingArrayBodies: null,
-            pickingExtrude: null,
-            pickingExtrudeBodies: null,
-            pickingEdges: null,
-            pickingShellBodies: null,
-            pickingShellFaces: null,
-            pickingSketchPlane: null,
-            pickingSectionFace: null,
-            pickingRevolveAxis: null,
-            sketchPlanePickThenEdit: null,
-          }
-        : { pickingArrayOperations },
-    ),
+    set(onlyPicker('pickingArrayOperations', pickingArrayOperations)),
+  setPickingArrayArc: (picker) => set(onlyPicker('pickingArrayArc', picker)),
+  setPickingArrayPath: (picker) => set(onlyPicker('pickingArrayPath', picker)),
   startSketchPlanePicking: (sketchPlanePickThenEdit, enterEdit) =>
     set({
+      ...clearedPickers(),
       pickingSketchPlane: sketchPlanePickThenEdit,
       sketchPlanePickThenEdit: enterEdit ? sketchPlanePickThenEdit : null,
-      pickingExtrude: null,
-      pickingExtrudeBodies: null,
-      pickingEdges: null,
-      pickingShellBodies: null,
-      pickingShellFaces: null,
-      pickingSectionFace: null,
-      pickingRevolveAxis: null,
-      pickingArrayBodies: null,
-      pickingArrayOperations: null,
     }),
-  endPicking: () =>
-    set({
-      pickingExtrude: null,
-      pickingExtrudeBodies: null,
-      pickingEdges: null,
-      pickingShellBodies: null,
-      pickingShellFaces: null,
-      pickingSketchPlane: null,
-      pickingSectionFace: null,
-      pickingRevolveAxis: null,
-      pickingArrayBodies: null,
-      pickingArrayOperations: null,
-      sketchPlanePickThenEdit: null,
-    }),
+  endPicking: () => set({ ...clearedPickers(), sketchPlanePickThenEdit: null }),
   cancelDelete: () => set({ deleteRequest: null }),
   setActiveSketch: (activeSketchId) =>
     set({
@@ -544,6 +417,24 @@ export const useUiStore = create<UiState>((set) => ({
         ? state
         : { sketchHoverIds },
     ),
+  // The pointer reports the same operation many times in a row; only a real
+  // change of the operation or of the position it is shown at is stored.
+  setHoveredFeature: (hoveredFeature) =>
+    set((state) => {
+      if (hoveredFeature === null) {
+        return state.hoveredFeature === null ? state : { hoveredFeature: null };
+      }
+      const current = state.hoveredFeature;
+      if (
+        current &&
+        current.featureId === hoveredFeature.featureId &&
+        Math.abs(current.x - hoveredFeature.x) < 1 &&
+        Math.abs(current.y - hoveredFeature.y) < 1
+      ) {
+        return state;
+      }
+      return { hoveredFeature };
+    }),
   setSketchMagnetEnabled: (sketchMagnetEnabled) => {
     try {
       localStorage.setItem(SKETCH_MAGNET_KEY, String(sketchMagnetEnabled));

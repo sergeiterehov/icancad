@@ -37,6 +37,9 @@ const labels = {
   tubeDiameter: 'Tube diameter',
   sides: 'Sides',
   sidesTooltip: 'Sides tooltip',
+  arraySpacing: 'Step',
+  arrayCount: 'Count',
+  arrayAngle: 'Angle',
 };
 
 function projectWith(feature: PrimitiveFeature): Project {

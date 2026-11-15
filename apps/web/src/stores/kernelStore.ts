@@ -4,7 +4,7 @@ import type {
   ShapeStats,
   TessellationResult,
 } from '@icancad/kernel';
-import type { SketchFrame } from '@icancad/model';
+import type { SketchFrame, Vec3 } from '@icancad/model';
 import { create } from 'zustand';
 import type { MeshStats } from '@icancad/io';
 import type { KernelTask } from '../kernel/scheduler';
@@ -53,6 +53,12 @@ export interface SceneGhost {
   /** Opacity of the delta volume; the operation ghosts keep the default. */
   opacity?: number;
   /**
+   * Placement of the volume, as a row-major 3x4 affine (`a11 a12 a13 a14 a21 …
+   * a34`). An array draws one repeated volume many times, so the tessellation is
+   * shared and only its placement changes.
+   */
+  matrix?: number[];
+  /**
    * Soft edges of the ghost: beyond the given plane the opacity fades out over
    * roughly 100 screen pixels, so a through cut does not end abruptly.
    */
@@ -75,6 +81,11 @@ export interface ScenePreview {
   ghosts: SceneGhost[];
   /** Faces the operation creates, coloured while it is being edited. */
   faceMarks?: PreviewFaceMark[];
+  /**
+   * Centre of the volume an array repeats. Its handles start there: the step
+   * arrow grows along the repeat direction, the count grip moves by one step.
+   */
+  arraySeed?: { featureId: string; origin: Vec3 };
 }
 
 interface KernelState {
@@ -130,6 +141,18 @@ interface KernelState {
     projectionLost: Record<string, string[]>,
     preview: ScenePreview | null,
   ) => void;
+  /**
+   * Replaces the drawn copies of the operation being edited, without a rebuild.
+   * An array's copies are one measured volume placed many times, so a drag only
+   * changes where they sit.
+   */
+  setPreviewGhosts: (featureId: string, ghosts: SceneGhost[]) => void;
+  /**
+   * Drops the draft of the operation being edited. A rebuild that could not
+   * finish leaves the scene at its last good state, and the draft would then be
+   * drawn over a model it no longer belongs to.
+   */
+  clearPreview: () => void;
   setBodyOperations: (bodyOperations: Record<string, string>) => void;
   setFaceOperations: (faceOperations: Record<string, string[]>) => void;
   setFeatureLimits: (featureLimits: Record<string, { requested: number; applied: number }>) => void;
@@ -220,6 +243,15 @@ export const useKernelStore = create<KernelState>((set) => ({
     })),
 
   setBodyOperations: (bodyOperations) => set({ bodyOperations }),
+
+  setPreviewGhosts: (featureId, ghosts) =>
+    set((state) =>
+      state.preview && state.preview.featureId === featureId
+        ? { preview: { ...state.preview, ghosts } }
+        : state,
+    ),
+
+  clearPreview: () => set((state) => (state.preview ? { preview: null } : state)),
 
   setFaceOperations: (faceOperations) => set({ faceOperations }),
 

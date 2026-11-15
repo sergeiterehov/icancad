@@ -40,11 +40,14 @@ import {
   type ArrayDirection,
   type ArrayFeature,
   type ArrayPath,
+  type ArrayRotationAxis,
+  type CameraState,
 } from '@icancad/model';
 import { sketchTopology } from '@icancad/sketch';
 import { useMemo } from 'react';
 import { create } from 'zustand';
 import { i18n } from '../i18n';
+import { MAX_ARRAY_ANGLE, MAX_ARRAY_COPIES } from '../kernel/arrayPlacement';
 import { defaultPrimitiveFeature } from '../primitive/params';
 import { useKernelStore, isModelRebuilding } from './kernelStore';
 import { useUiStore } from './uiStore';
@@ -135,8 +138,17 @@ interface DocumentState {
   setArraySpacing: (featureId: string, index: number, spacing: number) => void;
   setArrayAngle: (featureId: string, index: number, angle: number) => void;
   setArrayAxis: (featureId: string, index: number, axis: 'x' | 'y' | 'z') => void;
+  /** Tilt of a straight direction, in degrees; zero is the axis itself. */
+  setArrayTilt: (featureId: string, index: number, angle: number) => void;
+  /** Turning around the centre of a picked arc; null takes the world axis back. */
+  setArrayAxisArc: (
+    featureId: string,
+    index: number,
+    arc: Extract<ArrayRotationAxis, { kind: 'arc' }> | null,
+  ) => void;
   invertArrayDirection: (featureId: string, index: number) => void;
-  setArrayPath: (featureId: string, index: number, path: ArrayPath | null) => void;
+  /** Adds a curve to a path direction, or drops it when it is already there. */
+  toggleArrayPath: (featureId: string, index: number, path: ArrayPath) => void;
   setShellDirection: (featureId: string, direction: ShellFeature['direction']) => void;
   setShellThickness: (featureId: string, thickness: number) => void;
   setShellOffset: (featureId: string, offset: number) => void;
@@ -172,6 +184,11 @@ interface DocumentState {
   setConstructionVisible: (sketchId: string, visible: boolean) => void;
   addImportedMesh: (name: string, featureId: string, format: MeshFormat) => void;
   setSectionPlanes: (planes: SectionPlane[]) => void;
+  /**
+   * Remembers the view a model was last looked from. A camera is not an edit:
+   * it never enters the history, and every model keeps its own.
+   */
+  setModelCamera: (modelId: string, camera: CameraState | null) => void;
   /** Asks what to do with the operations that depend on the removed ones. */
   removeFeatures: (featureIds: string[]) => void;
   confirmRemoveFeature: (featureIds: string[]) => void;
@@ -235,6 +252,21 @@ function withOrderKey(order: readonly string[] | undefined, key: string, add: bo
   return current.includes(key) ? [...current] : [...current, key];
 }
 
+/** Whether two camera poses are close enough to be the same view. */
+function sameCamera(a: CameraState | null, b: CameraState | null): boolean {
+  if (!a || !b) return a === b;
+  const close = (left: number, right: number) => Math.abs(left - right) < 1e-4;
+  return (
+    close(a.target[0], b.target[0]) &&
+    close(a.target[1], b.target[1]) &&
+    close(a.target[2], b.target[2]) &&
+    close(a.distance, b.distance) &&
+    close(a.azimuth, b.azimuth) &&
+    close(a.polar, b.polar) &&
+    close(a.roll ?? 0, b.roll ?? 0)
+  );
+}
+
 const HISTORY_LIMIT = 100;
 
 /**
@@ -291,9 +323,10 @@ function defaultArrayDirection(
     case 'linear':
       return { kind, direction: [1, 0, 0], spacing: 10, count };
     case 'rotation':
-      return { kind, axis: { kind: 'world', axis: 'z' }, angle: 90, count };
+      // A full turn by default: a ring is what a rotation is usually for.
+      return { kind, axis: { kind: 'world', axis: 'z' }, angle: 360, inverted: false, count };
     case 'path':
-      return { kind, path: null, count };
+      return { kind, paths: [], count };
   }
 }
 
@@ -301,6 +334,13 @@ function defaultArrayDirection(
 const MAX_ARRAY_DIRECTIONS = 3;
 /** Copies one array may make; matches the rebuild's own ceiling. */
 const MAX_ARRAY_POSITIONS = 200;
+
+/** A picked path named by what it points at, so a curve is in the list once. */
+export function pathKey(path: ArrayPath): string {
+  return path.kind === 'body-edge'
+    ? `body:${path.bodyId}#${path.edgeId}`
+    : `sketch:${path.sketchId}#${path.entityId}`;
+}
 
 function withArrayDirection(
   feature: ArrayFeature,
@@ -409,7 +449,10 @@ function withVisibleSketches(model: Model, editingFeatureId: string): Model {
   if (feature.type === 'array') {
     // A path lives in a sketch, so the sketch is shown while the array is open.
     for (const direction of feature.directions) {
-      if (direction.kind === 'path' && direction.path) sketchIds.add(direction.path.sketchId);
+      if (direction.kind !== 'path') continue;
+      for (const path of direction.paths) {
+        if (path.kind === 'sketch-edge') sketchIds.add(path.sketchId);
+      }
     }
   }
   let metadata = model.metadata;
@@ -570,20 +613,6 @@ function openPicker(ui: ReturnType<typeof useUiStore.getState>): boolean {
       ui.pickingArrayBodies ??
       ui.pickingArrayOperations,
   );
-}
-
-/**
- * The array whose settings are open, if any. While one is being configured the
- * timeline belongs to it: a chip feeds its operation list instead of leaving it.
- * The visible pencil only says whether the picker is armed, not whether the
- * chips mean something.
- */
-function editingArray(state: DocumentState): ArrayFeature | undefined {
-  if (!state.editingFeatureId) return undefined;
-  const feature = activeModel(state.project).features.find(
-    (candidate) => candidate.id === state.editingFeatureId,
-  );
-  return feature?.type === 'array' ? feature : undefined;
 }
 
 export const useDocumentStore = create<DocumentState>((set, get) => ({
@@ -815,26 +844,18 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       return;
     }
     if (ui.pickingArrayBodies) {
-      // The array takes both kinds of input: a chip clicked while bodies are
-      // being picked switches the target to operations instead of being
-      // swallowed by the body picker.
       if (item?.kind === 'body') get().toggleArrayBody(ui.pickingArrayBodies, item.id);
-      else if (item?.kind === 'feature') {
-        get().toggleArrayOperation(ui.pickingArrayBodies, item.id);
-      }
       return;
     }
     if (ui.pickingArrayOperations) {
       if (item?.kind === 'feature') {
         get().toggleArrayOperation(ui.pickingArrayOperations, item.id);
-      } else if (item?.kind === 'body') {
-        get().toggleArrayBody(ui.pickingArrayOperations, item.id);
+      } else if (item?.kind === 'body' || item?.kind === 'mesh') {
+        // A body stands for the operation that built its current shape, the
+        // same answer the 3D view gives when a face of it is clicked.
+        const owner = useKernelStore.getState().bodyOperations[item.id];
+        if (owner) get().toggleArrayOperation(ui.pickingArrayOperations, owner);
       }
-      return;
-    }
-    const editedArray = editingArray(get());
-    if (editedArray && item?.kind === 'feature' && item.id !== editedArray.id) {
-      get().toggleArrayOperation(editedArray.id, item.id);
       return;
     }
     // Open faces and treatment edges are picked in the 3D view, so a click
@@ -866,14 +887,6 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       return;
     }
     const state = get();
-    // This path skips `select`, so the array's ownership of the timeline has to
-    // be honoured here too: a range or a plain chip click adds the clicked
-    // operation to the array being configured.
-    const editedArray = editingArray(state);
-    if (editedArray && clicked.kind === 'feature' && clicked.id !== editedArray.id) {
-      get().toggleArrayOperation(editedArray.id, clicked.id);
-      return;
-    }
     set({ selection: items, ...editModeFor(state, state.project, items) });
   },
 
@@ -1225,18 +1238,26 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     const featureId = createId('feat');
     const featureIds = [...new Set(input?.featureIds ?? [])];
     const bodyIds = [...new Set(input?.bodyIds ?? [])];
+    // Repeating picked bodies is the only case that starts on bodies; every
+    // other array starts on geometry, which is what the feature is for.
+    const target = bodyIds.length > 0 && featureIds.length === 0 ? 'bodies' : 'geometry';
     const feature: ArrayFeature = {
       id: featureId,
       name,
       suppressed: false,
       type: 'array',
-      target: featureIds.length > 0 ? 'operations' : 'bodies',
+      target,
       bodyIds,
       featureIds,
       directions: [defaultArrayDirection('linear')],
     };
     if (!get().apply(...addFeatureCommands(activeModel(get().project), feature))) return null;
     selectFeatureForEditing(featureId, set);
+    // A new array opens asking for what it repeats: the picker is part of
+    // creating the operation, not of editing it later.
+    const ui = useUiStore.getState();
+    if (target === 'geometry') ui.setPickingArrayOperations(featureId);
+    else ui.setPickingArrayBodies(featureId);
     return featureId;
   },
 
@@ -1266,21 +1287,45 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   toggleArrayOperation: (featureId, operationId) => {
-    // An operation that made its own bodies is repeated body by body. An
-    // extrude that adds to or cuts a body made none, but its tool can still be
-    // applied at every placement, which is what makes rows of ribs or slots.
-    // A fillet or a boolean has no such tool, so it is not offered.
+    // Every operation that builds or changes a body can be repeated: the
+    // rebuild replays what it did, so this only has to reject operations with
+    // no solid result at all.
+    // An array cannot repeat itself, and it cannot depend on an operation that
+    // comes after it in the history.
+    if (operationId === featureId) return;
     const model = activeModel(get().project);
-    const operation = model.features.find((candidate) => candidate.id === operationId);
-    const madeBodies = model.bodies.some((body) => body.createdBy === operationId);
-    if (!madeBodies && operation?.type !== 'extrude') return;
+    const arrayIndex = model.features.findIndex((candidate) => candidate.id === featureId);
+    const operationIndex = model.features.findIndex((candidate) => candidate.id === operationId);
+    if (operationIndex < 0) {
+      // The operation is gone, so the reference can only be removed: a row that
+      // names something that no longer exists is still a row the user can drop.
+      replaceArrayFeature(
+        featureId,
+        (feature) =>
+          feature.featureIds.includes(operationId)
+            ? { ...feature, featureIds: feature.featureIds.filter((id) => id !== operationId) }
+            : null,
+        get,
+      );
+      return;
+    }
+    if (arrayIndex >= 0 && operationIndex >= arrayIndex) return;
+    const operation = model.features[operationIndex];
+    if (!operation) return;
+    if (
+      operation.type === 'sketch' ||
+      operation.type === 'import-mesh' ||
+      operation.type === 'delete-body'
+    ) {
+      return;
+    }
     replaceArrayFeature(
       featureId,
       (feature) => {
         const exists = feature.featureIds.includes(operationId);
         return {
           ...feature,
-          target: 'operations',
+          target: 'geometry',
           featureIds: exists
             ? feature.featureIds.filter((candidate) => candidate !== operationId)
             : [...feature.featureIds, operationId],
@@ -1328,7 +1373,10 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         const others = feature.directions
           .filter((_, position) => position !== index)
           .reduce((total, direction) => total * Math.max(1, direction.count), 1);
-        const ceiling = Math.max(1, Math.min(100, Math.floor(MAX_ARRAY_POSITIONS / others)));
+        const ceiling = Math.max(
+          1,
+          Math.min(MAX_ARRAY_COPIES, Math.floor(MAX_ARRAY_POSITIONS / others)),
+        );
         const next = Math.max(1, Math.min(ceiling, Math.floor(count)));
         if (next === current.count) return null;
         return withArrayDirection(feature, index, { ...current, count: next });
@@ -1356,8 +1404,11 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       (feature) => {
         const current = feature.directions[index];
         if (!current || current.kind !== 'rotation') return null;
-        if (!Number.isFinite(angle) || angle === current.angle) return null;
-        return withArrayDirection(feature, index, { ...current, angle });
+        // The span of a turn is 0…360 and never signed: which way the copies
+        // go is `inverted`, so the field cannot show a minus sign.
+        const next = Math.max(0, Math.min(MAX_ARRAY_ANGLE, Math.round(Math.abs(angle) * 10) / 10));
+        if (!Number.isFinite(angle) || next === current.angle) return null;
+        return withArrayDirection(feature, index, { ...current, angle: next });
       },
       get,
     );
@@ -1386,6 +1437,38 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     );
   },
 
+  setArrayTilt: (featureId, index, angle) => {
+    replaceArrayFeature(
+      featureId,
+      (feature) => {
+        const current = feature.directions[index];
+        if (!current || current.kind !== 'linear' || !Number.isFinite(angle)) return null;
+        // Past half a turn the same row comes back the other way, so the field
+        // keeps the short way round.
+        const next = Math.max(-180, Math.min(180, Math.round(angle * 10) / 10));
+        if ((current.angle ?? 0) === next) return null;
+        return withArrayDirection(feature, index, { ...current, angle: next });
+      },
+      get,
+    );
+  },
+
+  setArrayAxisArc: (featureId, index, arc) => {
+    replaceArrayFeature(
+      featureId,
+      (feature) => {
+        const current = feature.directions[index];
+        if (!current || current.kind !== 'rotation') return null;
+        if (!arc) return withArrayDirection(feature, index, {
+          ...current,
+          axis: { kind: 'world', axis: 'z' },
+        });
+        return withArrayDirection(feature, index, { ...current, axis: arc });
+      },
+      get,
+    );
+  },
+
   invertArrayDirection: (featureId, index) => {
     replaceArrayFeature(
       featureId,
@@ -1396,19 +1479,29 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
           const [x, y, z] = current.direction;
           return withArrayDirection(feature, index, { ...current, direction: [-x, -y, -z] });
         }
-        return withArrayDirection(feature, index, { ...current, angle: -current.angle });
+        return withArrayDirection(feature, index, {
+          ...current,
+          inverted: !current.inverted,
+        });
       },
       get,
     );
   },
 
-  setArrayPath: (featureId, index, path) => {
+  toggleArrayPath: (featureId, index, path) => {
     replaceArrayFeature(
       featureId,
       (feature) => {
         const current = feature.directions[index];
         if (!current || current.kind !== 'path') return null;
-        return withArrayDirection(feature, index, { ...current, path });
+        const key = pathKey(path);
+        const exists = current.paths.some((candidate) => pathKey(candidate) === key);
+        return withArrayDirection(feature, index, {
+          ...current,
+          paths: exists
+            ? current.paths.filter((candidate) => pathKey(candidate) !== key)
+            : [...current.paths, path],
+        });
       },
       get,
     );
@@ -1655,6 +1748,23 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     // its operation is open hides again when the user asks for it.
     const shown = objectVisible(modelForView(state.project, state.editingFeatureId), objectId);
     get().apply({ type: 'metadata/patch', objectId, patch: { visible: !shown } });
+  },
+
+  setModelCamera: (modelId, camera) => {
+    const project = get().project;
+    const model = project.superObjects.find((candidate) => candidate.id === modelId);
+    if (!model) return;
+    if (sameCamera(model.view.camera, camera)) return;
+    set({
+      project: touch({
+        ...project,
+        superObjects: project.superObjects.map((candidate) =>
+          candidate.id === modelId
+            ? { ...candidate, view: { ...candidate.view, camera } }
+            : candidate,
+        ),
+      }),
+    });
   },
 
   setSectionPlanes: (planes) => {

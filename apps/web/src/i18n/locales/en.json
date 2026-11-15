@@ -221,8 +221,11 @@
     "ARRAY_TOO_LARGE": "Too many copies; shorten a direction.",
     "ARRAY_DIRECTION_MISSING": "A straight direction needs a vector.",
     "ARRAY_AXIS_MISSING": "The rotation axis cannot be found.",
-    "ARRAY_PATH_MISSING": "Pick a sketch curve for the path.",
-    "ARRAY_PATH_EMPTY": "The path has no length."
+    "ARRAY_PATH_MISSING": "Pick a curve for the path.",
+    "ARRAY_PATH_EMPTY": "The path has no length.",
+    "ARRAY_PATH_BROKEN": "The path curves do not meet end to end.",
+    "ARRAY_ANGLE_EMPTY": "The angle is zero: set a turn for the copies.",
+    "ARRAY_ARC_NEEDED": "Pick an arc or a circle: only a round curve has a centre to turn around."
   },
   "features": {
     "box": "Box",
@@ -261,7 +264,8 @@
     "rename": "Rename",
     "ok": "OK",
     "yes": "Yes",
-    "no": "No"
+    "no": "No",
+    "clear": "Clear"
   },
   "context": {
     "edit": "Edit",
@@ -565,7 +569,6 @@
     "deleteText": "Model “{{name}}” and everything in it will be removed. You can undo this."
   },
   "array": {
-    "type": "Type",
     "bodies": "Bodies",
     "operations": "Operations",
     "targets": "Objects",
@@ -584,7 +587,7 @@
     "pickBodies": "Pick bodies",
     "pickOperations": "Pick operations",
     "emptyBodies": "Pick bodies to repeat.",
-    "emptyOperations": "Pick operations whose bodies are repeated.",
+    "emptyOperations": "Pick operations whose shape change is repeated.",
     "pickBodiesHint": "Click bodies in the 3D view.",
     "pickOperationsHint": "Click operations in the timeline.",
     "emptyDirections": "Add a direction to repeat the objects.",
@@ -592,7 +595,24 @@
     "noPath": "Pick a sketch curve",
     "pathMenu": "Path",
     "multiHint": "Each direction repeats the result of the previous one.",
+    "missingOperation": "Operation deleted",
     "copies": "× {{count}}",
-    "modifies": "edits a body"
+    "modifies": "edits a body",
+    "repeat": "Repeat",
+    "geometry": "Geometry",
+    "arc": "Arc",
+    "arcOfSketch": "Arc · {{sketch}}",
+    "pickArc": "Pick an arc",
+    "arcHint": "Turns the copies around the centre of a picked arc or circle, inside the plane it is drawn in.",
+    "curves": "Path",
+    "pickCurves": "Pick edges",
+    "pickCurvesHint": "Click edges or sketch curves in the 3D view.",
+    "emptyCurves": "Pick the curves the copies follow.",
+    "pathBroken": "The curves do not meet end to end, so the copies have nowhere to go.",
+    "angleHint": "The whole angle the copies span; the step is that angle over the gaps.",
+    "tilt": "Tilt",
+    "tiltHint": "Tilt of a straight direction: X and Y lean inside the horizontal plane, Z turns around X. The array becomes a parallelepiped instead of a box.",
+    "sketchCurve": "Sketch curve",
+    "removeCurve": "Remove curve"
   }
 }

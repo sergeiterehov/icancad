@@ -103,8 +103,14 @@ export interface SceneHandle {
   arc?: SceneArcHandle;
   /** Present on a radial orbit handle: the grip slides along a circle. */
   orbit?: SceneArcHandle;
+  /**
+   * A trajectory the grip slides along, as world-space points. The pointer is
+   * read where it meets the trajectory, so a count follows the curve it counts
+   * along instead of a straight line from the seed.
+   */
+  trail?: [number, number, number][];
   /** A move grip is a circle; every other handle is an arrow. */
-  kind?: 'arrow' | 'move';
+  kind?: 'arrow' | 'move' | 'ball';
   /** Translation arrows take the colour of their world axis. */
   axis?: 'x' | 'y' | 'z';
   /** A short translation arrow keeps its screen length instead of a model size. */
@@ -113,6 +119,11 @@ export interface SceneHandle {
   shaft?: 'solid' | 'dashed';
   /** Only the arrowhead is grabbable; the shaft is just a dimension line. */
   tipOnly?: boolean;
+  /**
+   * Screen distance the arrow stops short of its value, so a grip drawn at the
+   * same point (a ball on the dial) keeps its outline clear.
+   */
+  endGapPx?: number;
 }
 
 /** Where a handle is on screen, for the drag chip and for tests. */
@@ -124,7 +135,7 @@ export interface SceneHandleScreen {
   tipY: number;
   value: number;
   enabled: boolean;
-  kind?: 'arrow' | 'move';
+  kind?: 'arrow' | 'move' | 'ball';
 }
 
 /** A preview ghost as the scene draws it; exposed for tests and diagnostics. */

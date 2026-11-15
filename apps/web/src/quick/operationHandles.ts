@@ -33,6 +33,7 @@ import {
   resolveQuickTarget,
 } from './target';
 import { primitiveHandles } from './primitiveHandles';
+import { arrayHandles } from './arrayHandles';
 import { quickTargetKey, type QuickTargetGeometry } from './types';
 
 /** A drag started by an operation handle. */
@@ -77,8 +78,10 @@ export interface OperationHandle {
   arc?: SceneArcHandle;
   /** Present on a radial orbit handle: the grip slides along a circle. */
   orbit?: SceneArcHandle;
+  /** A trajectory the grip slides along: the pointer is read along it. */
+  trail?: Vec3[];
   /** A move grip is a circle; every other handle is an arrow. */
-  kind?: 'arrow' | 'move';
+  kind?: 'arrow' | 'move' | 'ball';
   /** Translation arrows take the colour of their world axis. */
   axis?: 'x' | 'y' | 'z';
   /** A short translation arrow keeps its screen length instead of a model size. */
@@ -87,6 +90,8 @@ export interface OperationHandle {
   shaft?: 'solid' | 'dashed';
   /** Only the arrowhead is grabbable; the shaft is just a dimension line. */
   tipOnly?: boolean;
+  /** Screen distance the arrow stops short of its value, for a grip beside it. */
+  endGapPx?: number;
   beginDrag(): OperationHandleDrag;
 }
 
@@ -139,7 +144,16 @@ export interface OperationHandleContext {
     tubeDiameter: string;
     sides: string;
     sidesTooltip: string;
+    /** Array step arrow, angle arc and count grip. */
+    arraySpacing: string;
+    arrayCount: string;
+    arrayAngle: string;
   };
+  /**
+   * Centre of the volume the edited array repeats, named after the array it
+   * belongs to. The array handles start there.
+   */
+  arraySeed?: { featureId: string; origin: Vec3 };
 }
 
 /**
@@ -151,6 +165,7 @@ export function operationHandles(context: OperationHandleContext): OperationHand
     ...extrudeHandles(context),
     ...edgeTreatmentHandles(context),
     ...primitiveHandles(context),
+    ...arrayHandles(context),
   ];
 }
 

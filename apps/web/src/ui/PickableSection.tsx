@@ -1,6 +1,6 @@
 import { AlertCircle, Check, Pencil, X } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { IconButton, PanelSection } from './Controls';
+import { FormError, IconButton, PanelSection } from './Controls';
 import { Tooltip } from './Tooltip';
 
 export function ErrorBadge({ message }: { message: string }) {
@@ -37,7 +37,9 @@ export function PickableSection({
   emptyHint,
   pickHint,
   removeLabel,
+  error,
   rows,
+  divided = true,
 }: {
   title: string;
   count?: number;
@@ -46,17 +48,24 @@ export function PickableSection({
   pickLabel: string;
   finishLabel: string;
   hint?: string;
+  /** Why the picked set cannot be used yet; shown as the section's error strip. */
+  error?: string;
   emptyHint: string;
   pickHint: string;
   removeLabel: string;
   rows: PickableRow[];
+  /** A rule above the section; off for a list inside a block that has one. */
+  divided?: boolean;
 }) {
   const actionLabel = picking ? finishLabel : pickLabel;
   return (
     <PanelSection
       title={title}
       count={count}
-      divided
+      divided={divided}
+      // Inside a block the list is part of it, so it adds no inset of its own
+      // and lines up with the rows above.
+      className={divided ? undefined : 'panel-section-inline'}
       action={
         <IconButton
           label={actionLabel}
@@ -68,6 +77,7 @@ export function PickableSection({
         </IconButton>
       }
     >
+      {error && <FormError message={error} />}
       {hint && <p className="panel-hint">{hint}</p>}
       {rows.length === 0 ? (
         !hint && <p className="panel-hint">{picking ? pickHint : emptyHint}</p>

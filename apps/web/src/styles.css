@@ -18,6 +18,8 @@
   --text-faint: #6e7787;
   --accent: #5b8cff;
   --accent-soft: #1c2949;
+  /* Selection colour of the 3D view: faces, edges and picked operations. */
+  --pick: #bb86fc;
   --danger: #f07171;
   --ok: #58c98a;
   --warn: #e6b45a;
@@ -38,6 +40,7 @@
   --text-faint: #8a93a0;
   --accent: #2f6fed;
   --accent-soft: #e3ecff;
+  --pick: #7c3aed;
   --danger: #d14343;
   --ok: #1f9d5a;
   --warn: #b7791f;
@@ -484,10 +487,8 @@ button:disabled {
   color: var(--text);
 }
 
-.timeline-status[data-state='ready'] .kernel-indicator {
-  color: var(--ok);
-}
-
+/* A healthy kernel needs nothing from the user, so it keeps the muted colour of
+   a quiet control; only a failure is allowed to call attention (ADR 0030). */
 .timeline-status[data-state='error'] .kernel-indicator {
   color: var(--danger);
 }
@@ -663,6 +664,12 @@ button:disabled {
 
 .panel-section-divided:first-child {
   border-top: none;
+}
+
+/* A list that lives inside another block is that block's own content: it adds
+   no inset and no rule of its own. */
+.panel-section-inline {
+  padding: 0;
 }
 
 /* Keep the rule clear of the content right above it. */
@@ -849,6 +856,16 @@ button:disabled {
 .tree-row.selected {
   background: var(--accent-soft);
   color: var(--text);
+}
+
+/* A body already picked for the array, marked only while it asks for bodies. */
+.tree-row.picked {
+  background: color-mix(in srgb, var(--pick) 26%, transparent);
+  color: var(--text);
+}
+
+.tree-row.picked:hover {
+  background: color-mix(in srgb, var(--pick) 36%, transparent);
 }
 
 .tree-row.muted {
@@ -1038,6 +1055,32 @@ button:disabled {
   color: var(--text-faint);
 }
 
+/* A single picker holds one object; the cross drops it without opening the
+   picker again. It only shows while the pointer is on the field. */
+.picker-field-clear {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  border-radius: 4px;
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.picker-field:hover .picker-field-clear,
+.picker-field:focus-visible .picker-field-clear {
+  opacity: 1;
+}
+
+.picker-field-clear:hover {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
 .btn {
   height: 28px;
   padding: 0 10px;
@@ -1219,36 +1262,34 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
-.error,
-.error-box {
+.error {
   color: var(--danger);
 }
 
-.error-box {
-  margin: 8px 0;
-  padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
-  font-size: 11px;
-}
-
-/* Operation errors use the section rhythm, tinted red instead of a box. */
-.panel-section.operation-error {
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
-  border-bottom-color: color-mix(in srgb, var(--danger) 28%, transparent);
-}
-
-.panel-section.operation-error .panel-section-title,
-.operation-error-text {
+/* One look for an error inside a panel: a strip that runs from edge to edge of
+   the section it belongs to, without side margins or rounding, so it reads as
+   part of the form instead of a floating box. Panels pad themselves by 8px, so
+   the strip pulls that back out on both sides. */
+.form-error {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* Side padding is the panel's own inset, so the text never touches the edge
+     of the plate and lines up with the fields above it. */
+  margin: 4px 0 0;
+  padding: 7px 8px;
+  border-top: 1px solid color-mix(in srgb, var(--danger) 26%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 26%, transparent);
+  background: color-mix(in srgb, var(--danger) 11%, transparent);
   color: var(--danger);
-}
-
-.operation-error-text {
-  margin: 0;
   font-size: 11px;
   line-height: 1.45;
 }
+
+.form-error-title {
+  font-weight: 600;
+}
+
 
 .link-button {
   border: none;
@@ -1291,6 +1332,11 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+/* A quieter line under the name of an action: what it does, in a sentence. */
+.tooltip-hint {
+  color: var(--text-dim);
 }
 
 /* A heading in the stack names the lines under it; the words themselves are the
@@ -1672,12 +1718,26 @@ button:disabled {
   color: var(--text);
 }
 
+/* The operations a selected object relates to are lit like a hovered chip: the
+   pointer and the selection speak the same language. */
+.timeline-op.related {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
 .timeline-op.muted {
   opacity: 0.45;
 }
 
-.timeline-op.dimmed {
-  opacity: 0.3;
+/* An operation already picked for the array, marked only while it asks for
+   operations: the same violet a selected face or edge has, half see-through. */
+.timeline-op.picked {
+  background: color-mix(in srgb, var(--pick) 30%, transparent);
+  color: var(--text);
+}
+
+.timeline-op.picked:hover {
+  background: color-mix(in srgb, var(--pick) 42%, transparent);
 }
 
 /* A failed operation is red instead of showing a separate "!" badge. */
@@ -2225,27 +2285,56 @@ button.selection-item[data-active='true'][data-error='true'] {
   gap: 4px;
 }
 
-/* One direction of an array: its kind, its step and its axis. */
+/* One direction of an array: its kind, its step and its axis. Directions are a
+   list, not cards: a dashed line separates one from the next. */
+/* The axis of a direction and the one setting that belongs to it: the tabs
+   carry no value of their own, so the field sits beside them. */
+.array-axis-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* The setting beside the axis tabs fills whatever the tabs leave, out to the
+   same edge as every other row of the panel. */
+.array-axis-row > .tooltip-anchor {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.array-axis-row .dimension-field {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.array-axis-row .picker-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+}
+
 .array-direction {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel-2);
+}
+
+/* A dashed line between two directions needs air on both sides: the room under
+   the direction above it, plus a little of its own below. */
+.array-direction:not(:last-child) {
+  padding-bottom: 16px;
+}
+
+.array-direction + .array-direction {
+  padding-top: 12px;
+  border-top: 1px dashed var(--border-strong);
 }
 
 .array-direction-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-}
-
-.array-axis-row {
-  display: flex;
-  align-items: center;
   gap: 6px;
 }
 
@@ -2257,6 +2346,17 @@ button.selection-item[data-active='true'][data-error='true'] {
 .dimension-row > .tooltip-anchor {
   flex: 1 1 0;
   min-width: 0;
+}
+
+/* A button in a dimension row is a control of its own, not a field. */
+.dimension-row > .tooltip-anchor:has(> .icon-btn) {
+  flex: 0 0 auto;
+  width: 30px;
+}
+
+.dimension-row > .tooltip-anchor > .icon-btn {
+  width: 100%;
+  height: 30px;
 }
 
 .dimension-field {
@@ -2745,6 +2845,11 @@ button.selection-item[data-active='true'][data-error='true'] {
   background: var(--panel-2);
 }
 
+/* A row of symbols does not need the whole width of the panel. */
+.segmented.compact {
+  width: fit-content;
+}
+
 .segmented-tab {
   display: inline-flex;
   flex: 1 1 auto;
@@ -2763,6 +2868,18 @@ button.selection-item[data-active='true'][data-error='true'] {
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
+}
+
+/* A tab with a word in it needs room on both sides of the text. */
+.segmented-tab:not(.square) {
+  padding: 0 7px;
+}
+
+/* One symbol in a tab of its own: as wide as it is tall. */
+.segmented-tab.square {
+  flex: 0 0 auto;
+  width: 26px;
+  padding: 0;
 }
 
 .segmented-tab:hover:not(:disabled) {
@@ -3136,6 +3253,29 @@ button.selection-item[data-active='true'][data-error='true'] {
   line-height: 1.35;
   pointer-events: none;
   box-shadow: 0 6px 18px rgb(0 0 0 / 25%);
+}
+
+/* The operation that made the geometry under the pointer. */
+.geometry-tooltip {
+  position: fixed;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.35;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 25%);
+}
+
+.geometry-tooltip svg {
+  color: var(--text-dim);
 }
 
 /* One control height across the inspector: fields, pickers, buttons and the

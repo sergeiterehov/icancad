@@ -68,6 +68,7 @@ import {
   DimensionField,
   IconButton,
   NumberField,
+  FormError,
   ObjectPickerField,
   PanelSection,
   Segmented,
@@ -1351,13 +1352,13 @@ export function Inspector() {
             )}
 
             {featureErrors[sketchObject.id] && (
-              <div className="error-box">
-                {translate(
+              <FormError
+                message={translate(
                   t,
                   `errors.${featureErrors[sketchObject.id]}`,
                   featureErrors[sketchObject.id],
                 )}
-              </div>
+              />
             )}
           </>
         ) : feature ? (
@@ -1559,6 +1560,14 @@ export function Inspector() {
                                   pickingRevolveAxis === feature.id ? null : feature.id,
                                 )
                               }
+                              // A picked edge is one object: dropping it leaves
+                              // the sweep on a world axis, which is never empty.
+                              onClear={
+                                edgeAxis
+                                  ? () => setRevolveAxis(feature.id, { kind: 'world', axis: 'z' })
+                                  : undefined
+                              }
+                              clearLabel={t('common.clear')}
                               testId="revolve-axis-picker"
                             />
                           )}
@@ -1692,11 +1701,10 @@ export function Inspector() {
                 )}
 
                 {featureError && (
-                  <PanelSection title={t('inspector.operationError')} className="operation-error">
-                    <p className="operation-error-text">
-                      {translate(t, `errors.${featureError}`, featureError)}
-                    </p>
-                  </PanelSection>
+                  <FormError
+                    title={t('inspector.operationError')}
+                    message={translate(t, `errors.${featureError}`, featureError)}
+                  />
                 )}
 
                 {feature.op !== 'new' && (
@@ -1874,11 +1882,10 @@ export function Inspector() {
                 />
 
                 {featureError && (
-                  <PanelSection title={t('inspector.operationError')} className="operation-error">
-                    <p className="operation-error-text">
-                      {translate(t, `errors.${featureError}`, featureError)}
-                    </p>
-                  </PanelSection>
+                  <FormError
+                    title={t('inspector.operationError')}
+                    message={translate(t, `errors.${featureError}`, featureError)}
+                  />
                 )}
               </>
             )}
@@ -1907,9 +1914,7 @@ export function Inspector() {
             )}
 
             {feature.type !== 'extrude' && featureError && (
-              <div className="error-box">
-                {translate(t, `errors.${featureError}`, featureError)}
-              </div>
+              <FormError message={translate(t, `errors.${featureError}`, featureError)} />
             )}
           </>
         ) : body ? (

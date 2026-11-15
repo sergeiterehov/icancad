@@ -3,6 +3,7 @@ import {
   Box,
   Circle,
   Cone,
+  Cuboid,
   Cylinder,
   Torus,
   LayoutArrowDown,
@@ -143,7 +144,7 @@ export function ToolRail() {
       {
         id: 'box',
         label: t('features.cube'),
-        icon: <Box size={14} />,
+        icon: <Cuboid size={14} />,
         onSelect: () => create('box', 'features.cube'),
       },
       {
@@ -187,6 +188,8 @@ export function ToolRail() {
 
   return (
     <nav className="tool-rail" aria-label={t('panels.tools')}>
+      {/* What is drawn first, then what is built from it, then what is done to
+          the result (ADR 0030). */}
       <IconButton
         label={t('tools.sketch')}
         active={Boolean(activeSketchId)}
@@ -198,6 +201,14 @@ export function ToolRail() {
       <div className="tool-separator" />
 
       <IconButton
+        label={t('tools.primitives')}
+        tooltip={t('tools.primitives')}
+        onClick={openPrimitiveMenu}
+      >
+        <Shapes size={17} />
+      </IconButton>
+
+      <IconButton
         label={t('tools.extrude')}
         tooltip={t('tools.extrude')}
         onClick={() => addExtrude(t('features.extrude'), sketchSelection ?? undefined)}
@@ -206,21 +217,20 @@ export function ToolRail() {
       </IconButton>
 
       <IconButton
-        label={t('tools.shell')}
-        tooltip={t('tools.shell')}
+        label={t('tools.array')}
+        tooltip={t('tools.array')}
         onClick={() => {
           const store = useDocumentStore.getState();
-          const input = shellInputFromSelection(
-            activeModel(store.project),
-            store.selection,
-            useKernelStore.getState().meshes,
-          );
-          const id = addShell(t('features.shell'), input ?? undefined);
-          if (id && !input) useUiStore.getState().setPickingShellBodies(id);
+          const input = arrayInputFromSelection(activeModel(store.project), store.selection);
+          // The new array arms its own picker: what it repeats is the question
+          // it opens with.
+          addArray(t('features.array'), input ?? undefined);
         }}
       >
-        <ShellIcon size={17} />
+        <LayoutArrowDown size={17} />
       </IconButton>
+
+      <div className="tool-separator" />
 
       <IconButton
         label={t('tools.edgeTreatment')}
@@ -240,24 +250,20 @@ export function ToolRail() {
       </IconButton>
 
       <IconButton
-        label={t('tools.array')}
-        tooltip={t('tools.array')}
+        label={t('tools.shell')}
+        tooltip={t('tools.shell')}
         onClick={() => {
           const store = useDocumentStore.getState();
-          const input = arrayInputFromSelection(activeModel(store.project), store.selection);
-          const id = addArray(t('features.array'), input ?? undefined);
-          if (id && !input) useUiStore.getState().setPickingArrayBodies(id);
+          const input = shellInputFromSelection(
+            activeModel(store.project),
+            store.selection,
+            useKernelStore.getState().meshes,
+          );
+          const id = addShell(t('features.shell'), input ?? undefined);
+          if (id && !input) useUiStore.getState().setPickingShellBodies(id);
         }}
       >
-        <LayoutArrowDown size={17} />
-      </IconButton>
-
-      <IconButton
-        label={t('tools.primitives')}
-        tooltip={t('tools.primitives')}
-        onClick={openPrimitiveMenu}
-      >
-        <Shapes size={17} />
+        <ShellIcon size={17} />
       </IconButton>
 
       <div className="tool-separator" />

@@ -72,7 +72,19 @@ export function Timeline() {
   const activeSketchId = useUiStore((state) => state.activeSketchId);
   const setActiveSketch = useUiStore((state) => state.setActiveSketch);
   const editingFeatureId = useDocumentStore((state) => state.editingFeatureId);
+  const editingFeature = editingFeatureId
+    ? project.features.find((feature) => feature.id === editingFeatureId)
+    : undefined;
   const pickingArrayOperations = useUiStore((state) => state.pickingArrayOperations);
+  // The operations an array already repeats are marked only while it is asking
+  // for them: the picking mode is what makes a marked chip mean "already in the
+  // list", in the same violet a selected face has.
+  const pickedOperations =
+    pickingArrayOperations &&
+    editingFeature?.type === 'array' &&
+    editingFeature.target === 'geometry'
+      ? new Set(editingFeature.featureIds)
+      : null;
   // While an operation is being edited the model is evaluated at its position,
   // so the cursor stays put until the operation is dismissed. Picking operations
   // for an array is the one case that needs the strip to stay live: the chips
@@ -130,8 +142,12 @@ export function Timeline() {
 
   const hasObjectSelection = selection.some((item) => item.kind !== 'feature');
   const hasFeatureSelection = selection.some((item) => item.kind === 'feature');
-  const dimmingEnabled = hasObjectSelection && !hasFeatureSelection;
+  // An object on its own does not dim the rest of the strip: the operations it
+  // relates to are lit the way the pointer lights them, and everything else
+  // stays as readable as before.
+  const relatedHighlight = hasObjectSelection && !hasFeatureSelection;
   const highlightedFeatureIds = selectedFeatureIds(selection, project);
+  const hoveredFeatureId = useUiStore((state) => state.hoveredFeature?.featureId ?? null);
 
   // Rebuild stops at the first failed operation, so nothing after it exists.
   // The red caret sits in front of that operation; the positions inside it and
@@ -177,8 +193,12 @@ export function Timeline() {
           <div className="timeline-track" ref={track}>
             {project.features.map((feature, index) => {
               const direct = isDirectlySelected(selection, 'feature', feature.id);
-              const related = highlightedFeatureIds.includes(feature.id);
-              const dimmed = dimmingEnabled && !related;
+              const picked = pickedOperations?.has(feature.id) ?? false;
+              const related = relatedHighlight && highlightedFeatureIds.includes(feature.id);
+              // Geometry under the pointer names its operation, but only while
+              // operations are being picked: the strip answers a question the
+              // picking mode is asking.
+              const pointed = pickingArrayOperations !== null && hoveredFeatureId === feature.id;
               const sketchEditable =
                 feature.type === 'sketch' && canEditSketch(feature, featureErrors);
               // The operation being edited sits behind the cursor, but the user
@@ -200,7 +220,8 @@ export function Timeline() {
                       className={clsx(
                         'timeline-op',
                         direct && 'selected',
-                        dimmed && 'dimmed',
+                        picked && 'picked',
+                        (related || pointed) && 'related',
                         (rolledBack || feature.suppressed) && 'muted',
                         Boolean(featureErrors[feature.id]) && 'error',
                         !featureErrors[feature.id] && projectionWarning(feature) && 'warning',

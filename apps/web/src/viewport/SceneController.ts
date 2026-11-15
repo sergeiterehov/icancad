@@ -69,7 +69,103 @@ function lineGeometry(positions: Float32Array): THREE.BufferGeometry | null {
   return geometry;
 }
 
+/** How a ghost looks, so a redraw can tell whether it may keep its material. */
+function ghostLook(ghost: SceneGhost): string {
+  return `${ghost.color}|${ghost.opacity ?? ''}|${ghost.fade ? JSON.stringify(ghost.fade) : ''}`;
+}
+
+/** Identity of a pick, so the pointer only reports geometry that changed. */
+function pickKey(pick: ScenePick): string {
+  switch (pick.kind) {
+    case 'body':
+    case 'mesh':
+      return `${pick.kind}:${pick.id}`;
+    case 'face':
+      return `face:${pick.sketchId}#${pick.faceId}`;
+    case 'body-face':
+      return `body-face:${pick.bodyId}#${pick.faceId}`;
+    case 'body-edge':
+      return `body-edge:${pick.bodyId}#${pick.edgeId}`;
+    case 'body-vertex':
+      return `body-vertex:${pick.bodyId}#${pick.elementId}`;
+    case 'sketch-edge':
+      return `sketch-edge:${pick.sketchId}#${pick.entityId}`;
+  }
+}
+
+/** A placement of a ghost, from a row-major 3x4 affine to a scene matrix. */
+function ghostPlacement(values: readonly number[]): THREE.Matrix4 {
+  const [
+    a11 = 1,
+    a12 = 0,
+    a13 = 0,
+    a14 = 0,
+    a21 = 0,
+    a22 = 1,
+    a23 = 0,
+    a24 = 0,
+    a31 = 0,
+    a32 = 0,
+    a33 = 1,
+    a34 = 0,
+  ] = values;
+  return new THREE.Matrix4().set(
+    a11,
+    a12,
+    a13,
+    a14,
+    a21,
+    a22,
+    a23,
+    a24,
+    a31,
+    a32,
+    a33,
+    a34,
+    0,
+    0,
+    0,
+    1,
+  );
+}
+
 /** Where the grip of an angle handle sits, in world space. */
+/** How far along a trail a point sits, in world units from its start. */
+function trailLengths(points: readonly [number, number, number][]): number[] {
+  const lengths = [0];
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1]!;
+    const point = points[index]!;
+    lengths.push(
+      lengths[index - 1]! +
+        Math.hypot(point[0] - previous[0], point[1] - previous[1], point[2] - previous[2]),
+    );
+  }
+  return lengths;
+}
+
+/** The point of a trail at `distance` from its start. */
+function pointOnTrail(
+  points: readonly [number, number, number][],
+  distance: number,
+): THREE.Vector3 {
+  if (points.length === 0) return new THREE.Vector3();
+  const lengths = trailLengths(points);
+  const total = lengths[lengths.length - 1] ?? 0;
+  const target = Math.min(Math.max(distance, 0), total);
+  let index = 1;
+  while (index < lengths.length - 1 && lengths[index]! < target) index += 1;
+  const previous = points[index - 1]!;
+  const point = points[index] ?? previous;
+  const span = (lengths[index] ?? 0) - (lengths[index - 1] ?? 0);
+  const t = span > 1e-12 ? (target - lengths[index - 1]!) / span : 0;
+  return new THREE.Vector3(
+    previous[0] + (point[0] - previous[0]) * t,
+    previous[1] + (point[1] - previous[1]) * t,
+    previous[2] + (point[2] - previous[2]) * t,
+  );
+}
+
 function arcGripPoint(arc: SceneArcHandle, angle: number): THREE.Vector3 {
   const axis = new THREE.Vector3(...arc.axis).normalize();
   const reference = new THREE.Vector3(...arc.reference).normalize();
@@ -178,6 +274,8 @@ export interface FaceHighlightState {
   bodyFacesOnly?: boolean;
   /** Pick body edges; a hit within the click tolerance wins over the face. */
   edgePicking?: boolean;
+  /** Pick body vertices; a hit within the click tolerance wins over the edges. */
+  vertexPicking?: boolean;
   /** Pick body vertices, edges or faces to project them into a sketch. */
   projecting?: boolean;
 }
@@ -327,8 +425,19 @@ export class SceneController {
   private readonly ghostGroup = new THREE.Group();
   private readonly ghostEntries = new Map<
     string,
-    { mesh: THREE.Mesh; material: THREE.MeshStandardMaterial; geometry: THREE.BufferGeometry }
+    {
+      mesh: THREE.Mesh;
+      material: THREE.MeshStandardMaterial;
+      geometry: THREE.BufferGeometry;
+      /** Bounds of the volume where it is drawn, placement included. */
+      box: THREE.Box3;
+      /** Tessellation and look the entry was built from; a match means reuse. */
+      source: TessellationResult;
+      look: string;
+    }
   >();
+  /** Geometries of the volumes the current ghosts draw; copies share one. */
+  private readonly ghostGeometries = new Map<TessellationResult, THREE.BufferGeometry>();
   private ghostSources: readonly SceneGhost[] = [];
   /** Highlight surfaces for picked faces, keyed by `s:`/`b:` refs. */
   private readonly sketchFaceMaterials = new Map<string, THREE.MeshBasicMaterial>();
@@ -351,6 +460,7 @@ export class SceneController {
     bodyPicking: boolean;
     bodyFacesOnly: boolean;
     edgePicking: boolean;
+    vertexPicking: boolean;
     projecting: boolean;
   } = {
     selected: new Set(),
@@ -360,6 +470,7 @@ export class SceneController {
     bodyFacesOnly: false,
     projecting: false,
     edgePicking: false,
+    vertexPicking: false,
   };
   private bodyStyles: {
     selected: Set<string>;
@@ -370,6 +481,8 @@ export class SceneController {
   private hoveredFaceKey: string | null = null;
   private hoverFrame = 0;
   private hoverPoint: { x: number; y: number } | null = null;
+  /** The geometry reported to the interface last, so the pointer can be quiet. */
+  private geometryHover: { key: string; x: number; y: number } | null = null;
   private sketchOverlay: THREE.Group | null = null;
   private sketchLineMaterials: LineMaterial[] = [];
   private readonly pointTexture = createCircleTexture();
@@ -466,6 +579,10 @@ export class SceneController {
     move: boolean;
     /** Angle handles turn with the pointer instead of sliding along an axis. */
     arc?: SceneArcHandle & { lastPointerAngle: number };
+    /** The grip slides along this world-space trajectory, not along an axis. */
+    trail?: readonly [number, number, number][];
+    /** An orbit grip is read where the pointer points on its circle. */
+    orbit?: boolean;
     lastValue: number;
     startX: number;
     startY: number;
@@ -513,6 +630,12 @@ export class SceneController {
           text: string;
         } | null,
       ) => void;
+      /**
+       * Geometry under the pointer, as the pick a click would take. Hovering a
+       * face tells which operation made it, which is what the timeline lights
+       * up and what the geometry tooltip names.
+       */
+      onGeometryHover?: (event: { pick: ScenePick; x: number; y: number } | null) => void;
     } = {},
   ) {
     this.renderer = new THREE.WebGLRenderer({
@@ -649,11 +772,20 @@ export class SceneController {
   }
 
   getGhosts(): SceneGhostInfo[] {
-    return this.ghostSources.map((ghost) => ({
-      id: ghost.id,
-      color: ghost.color,
-      bbox: ghost.mesh.bbox,
-    }));
+    // A repeated ghost is one tessellation at many placements, so the bounds
+    // are read from where it is drawn, not from the volume itself.
+    return this.ghostSources.map((ghost) => {
+      const box = this.ghostEntries.get(ghost.id)?.box;
+      if (!box) return { id: ghost.id, color: ghost.color, bbox: ghost.mesh.bbox };
+      return {
+        id: ghost.id,
+        color: ghost.color,
+        bbox: {
+          min: [box.min.x, box.min.y, box.min.z],
+          max: [box.max.x, box.max.y, box.max.z],
+        },
+      };
+    });
   }
 
   getHandles(): SceneHandleScreen[] {
@@ -722,6 +854,12 @@ export class SceneController {
       };
     }
     const origin = new THREE.Vector3(...handle.origin);
+    const trail = handle.trail;
+    if (trail && trail.length >= 2) {
+      // A grip on a trajectory sits where the trajectory is at its value.
+      const grip = pointOnTrail(trail, Math.abs(handle.value));
+      return { origin: this.projectWorld(origin), tip: this.projectWorld(grip) };
+    }
     if (handle.kind === 'move') {
       const projected = this.projectWorld(origin);
       return {
@@ -740,7 +878,7 @@ export class SceneController {
         ? handle.fixedLengthPx * worldPerPixel
         : handle.value === 0
           ? HANDLE_IDLE_PX * worldPerPixel
-          : Math.max(Math.abs(handle.value), minimum);
+          : Math.max(Math.abs(handle.value) - (handle.endGapPx ?? 0) * worldPerPixel, minimum);
     const tip = origin.clone().addScaledVector(arrowDirection, length);
     const projectedOrigin = this.projectWorld(origin);
     const projectedTip = this.projectWorld(tip);
@@ -766,9 +904,89 @@ export class SceneController {
         this.addMoveHandle(handle);
         continue;
       }
+      if (handle.kind === 'ball') {
+        this.addBallHandle(handle);
+        continue;
+      }
       if (!this.handleScreenGeometry(handle)) continue;
       this.addArrowHandle(handle);
     }
+  }
+
+  /**
+   * A grip that travels along a dashed line and stops at whole steps, such as
+   * the number of copies of an array: the line is a guide, the ball is the grip.
+   */
+  private addBallHandle(handle: SceneHandle): void {
+    const worldPerPixel = 1 / this.pixelsPerWorldUnit();
+    const origin = new THREE.Vector3(...handle.origin);
+    const direction = new THREE.Vector3(...handle.direction).normalize();
+    const arrowDirection = handle.value < 0 ? direction.clone().negate() : direction;
+    const length =
+      handle.fixedLengthPx !== undefined
+        ? handle.fixedLengthPx * worldPerPixel
+        : handle.value === 0
+          ? HANDLE_IDLE_PX * worldPerPixel
+          : Math.max(Math.abs(handle.value), 18 * worldPerPixel);
+    const trail = handle.trail;
+    const onTrail = trail && trail.length >= 2;
+    // A grip that slides along a trajectory sits on it, and the guide is the
+    // trajectory itself, so the whole route the drag follows is visible.
+    const tip = onTrail
+      ? pointOnTrail(trail, Math.abs(handle.value))
+      : origin.clone().addScaledVector(arrowDirection, length);
+    const hovered = this.hoveredHandleId === handle.id;
+    const color = hovered ? 0xffffff : this.handleColor();
+    const outlineColor = this.handleOutlineColor();
+    const radius = Math.max(0.001, 4.5 * (handle.thickness ?? 1) * worldPerPixel);
+
+    const guideGeometry = new THREE.BufferGeometry().setFromPoints(
+      onTrail ? trail.map(([x, y, z]) => new THREE.Vector3(x, y, z)) : [origin, tip],
+    );
+    const guideMaterial = new THREE.LineDashedMaterial({
+      color,
+      dashSize: 5 * worldPerPixel,
+      gapSize: 4 * worldPerPixel,
+      transparent: true,
+      opacity: 0.65,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const guide = new THREE.Line(guideGeometry, guideMaterial);
+    guide.computeLineDistances();
+    guide.renderOrder = RenderOrder.handleOutline;
+    guide.userData.handleId = handle.id;
+
+    const ballMaterial = new THREE.MeshBasicMaterial({
+      color,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+    });
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(radius, 16, 12), ballMaterial);
+    ball.position.copy(tip);
+    ball.renderOrder = RenderOrder.handle;
+    ball.userData.handleId = handle.id;
+
+    const outlineBall = new THREE.Mesh(
+      new THREE.SphereGeometry(radius + worldPerPixel, 16, 12),
+      new THREE.MeshBasicMaterial({
+        color: outlineColor,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+      }),
+    );
+    outlineBall.position.copy(tip);
+    outlineBall.renderOrder = RenderOrder.handleOutline;
+    outlineBall.userData.handleId = handle.id;
+
+    this.handleGroup.add(guide, outlineBall, ball);
+    this.handleEntries.push({
+      handle,
+      objects: [guide, outlineBall, ball],
+      colors: [guideMaterial, ballMaterial],
+    });
   }
 
   private addArrowHandle(handle: SceneHandle): void {
@@ -781,7 +999,7 @@ export class SceneController {
         ? handle.fixedLengthPx * worldPerPixel
         : handle.value === 0
           ? HANDLE_IDLE_PX * worldPerPixel
-          : Math.max(Math.abs(handle.value), 18 * worldPerPixel);
+          : Math.max(Math.abs(handle.value) - (handle.endGapPx ?? 0) * worldPerPixel, 18 * worldPerPixel);
     const tip = origin.clone().addScaledVector(arrowDirection, length);
     const coneHeight = Math.min(12 * worldPerPixel, length * 0.7);
     const base = tip.clone().addScaledVector(arrowDirection, -coneHeight);
@@ -1113,9 +1331,9 @@ export class SceneController {
   }
 
   /**
-   * An angle handle: the arc from the zero angle to the grip, plus a grip dot.
-   * The arc is drawn a pixel wider in the colour of the space behind it, so it
-   * stays readable on a body of the same blue.
+   * An angle handle: the arc from the zero angle to an arrowhead, so dragging it
+   * reads as turning the arc. The arc is drawn a pixel wider in the colour of
+   * the space behind it, so it stays readable on a body of the same blue.
    */
   private addArcHandle(handle: SceneHandle): void {
     const arc = handle.arc;
@@ -1153,24 +1371,62 @@ export class SceneController {
       return line;
     };
 
+    // The whole circle the direction turns along, dashed like the guide of a
+    // path: the arrow shows the span the copies take out of it.
+    const ring: number[] = [];
+    for (let index = 0; index <= 96; index += 1) {
+      const point = arcGripPoint(arc, (Math.PI * 2 * index) / 96);
+      ring.push(point.x, point.y, point.z);
+    }
+    const guideGeometry = new THREE.BufferGeometry().setFromPoints(
+      Array.from({ length: ring.length / 3 }, (_, index) =>
+        new THREE.Vector3(ring[index * 3]!, ring[index * 3 + 1]!, ring[index * 3 + 2]!),
+      ),
+    );
+    const guideMaterial = new THREE.LineDashedMaterial({
+      color,
+      dashSize: 5 * worldPerPixel,
+      gapSize: 4 * worldPerPixel,
+      transparent: true,
+      opacity: 0.65,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const guide = new THREE.Line(guideGeometry, guideMaterial);
+    guide.computeLineDistances();
+    guide.renderOrder = RenderOrder.handleOutline;
+    guide.userData.handleId = handle.id;
+
     const outline = makeArc(outlineColor, linewidth + 2, RenderOrder.handleOutline);
     const line = makeArc(color, linewidth, RenderOrder.handle);
     const material = line.material as LineMaterial;
 
+    // The arc ends in an arrowhead pointing the way the grip turns.
+    const radial = grip.clone().sub(new THREE.Vector3(...arc.center));
+    const axis = new THREE.Vector3(...arc.axis).normalize();
+    const tangent = new THREE.Vector3().crossVectors(axis, radial);
+    if (tangent.lengthSq() < 1e-12) tangent.copy(new THREE.Vector3(...arc.reference));
+    tangent.normalize();
+    const turn = new THREE.Quaternion().setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0),
+      tangent,
+    );
+    const tipHeight = Math.max(0.002, 7.5 * (handle.thickness ?? 1) * worldPerPixel);
+    const tipRadius = Math.max(0.001, 3.2 * (handle.thickness ?? 1) * worldPerPixel);
     const dotMaterial = new THREE.MeshBasicMaterial({
       color,
       depthTest: false,
       depthWrite: false,
       transparent: true,
     });
-    const radius = Math.max(0.001, 4.5 * (handle.thickness ?? 1) * worldPerPixel);
-    const dot = new THREE.Mesh(new THREE.SphereGeometry(radius, 16, 12), dotMaterial);
-    dot.position.copy(grip);
+    const dot = new THREE.Mesh(new THREE.ConeGeometry(tipRadius, tipHeight, 16), dotMaterial);
+    dot.position.copy(grip).addScaledVector(tangent, tipHeight / 2);
+    dot.quaternion.copy(turn);
     dot.renderOrder = RenderOrder.handle;
     dot.userData.handleId = handle.id;
 
     const outlineDot = new THREE.Mesh(
-      new THREE.SphereGeometry(radius + halo, 16, 12),
+      new THREE.ConeGeometry(tipRadius + halo, tipHeight + halo * 2, 16),
       new THREE.MeshBasicMaterial({
         color: outlineColor,
         depthTest: false,
@@ -1178,15 +1434,16 @@ export class SceneController {
         transparent: true,
       }),
     );
-    outlineDot.position.copy(grip);
+    outlineDot.position.copy(dot.position);
+    outlineDot.quaternion.copy(turn);
     outlineDot.renderOrder = RenderOrder.handleOutline;
     outlineDot.userData.handleId = handle.id;
 
-    this.handleGroup.add(outline, line, outlineDot, dot);
+    this.handleGroup.add(guide, outline, line, outlineDot, dot);
     this.handleEntries.push({
       handle,
-      objects: [outline, line, outlineDot, dot],
-      colors: [material, dotMaterial],
+      objects: [guide, outline, line, outlineDot, dot],
+      colors: [guideMaterial, material, dotMaterial],
       line,
       material,
       outlineMaterial: outline.material as LineMaterial,
@@ -1336,6 +1593,36 @@ export class SceneController {
       pixelsPerMm: best.pixelsPerRadian,
       distance: best.distance,
     };
+  }
+
+  /**
+   * How far along a trajectory the pointer is, in world units from its start.
+   * The trajectory is projected to the screen and the pointer is taken to its
+   * nearest point, which is what makes the grip follow a curve under the mouse.
+   */
+  private trailValueAt(
+    trail: readonly [number, number, number][],
+    clientX: number,
+    clientY: number,
+  ): number | null {
+    const local = this.localPoint(clientX, clientY);
+    const lengths = trailLengths(trail);
+    let best: { distance: number; along: number } | null = null;
+    let previousScreen = this.projectWorld(new THREE.Vector3(...trail[0]!));
+    for (let index = 1; index < trail.length; index += 1) {
+      const point = trail[index]!;
+      const screen = this.projectWorld(new THREE.Vector3(point[0], point[1], point[2]));
+      const a: Point2 = [previousScreen.x, previousScreen.y];
+      const b: Point2 = [screen.x, screen.y];
+      const closest = closestOnSegment([local.x, local.y], a, b);
+      const span = (lengths[index] ?? 0) - (lengths[index - 1] ?? 0);
+      const total = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const t = total > 1e-6 ? Math.hypot(closest.point[0] - a[0], closest.point[1] - a[1]) / total : 0;
+      const along = (lengths[index - 1] ?? 0) + span * t;
+      if (!best || closest.distance < best.distance) best = { distance: closest.distance, along };
+      previousScreen = screen;
+    }
+    return best ? best.along : null;
   }
 
   /** Angle of the pointer around a handle's axis, or null when it is edge-on. */
@@ -1514,6 +1801,8 @@ export class SceneController {
       axisY: hit.axisY,
       pixelsPerMm: hit.pixelsPerMm,
       pointerId: event.pointerId,
+      ...(hit.handle.trail ? { trail: hit.handle.trail } : {}),
+      ...(hit.handle.orbit ? { orbit: true } : {}),
     };
     this.canvas.style.cursor = 'grabbing';
     this.callbacks.onHandleHover?.(null);
@@ -1848,6 +2137,7 @@ export class SceneController {
       bodyPicking: state.bodyPicking,
       bodyFacesOnly: Boolean(state.bodyFacesOnly),
       edgePicking: Boolean(state.edgePicking),
+      vertexPicking: Boolean(state.vertexPicking),
       projecting: Boolean(state.projecting),
     };
     if (!state.picking) {
@@ -1867,27 +2157,113 @@ export class SceneController {
     if (this.ghostSources === ghosts) return;
     if (ghosts.length === 0 && this.ghostSources.length === 0) return;
     this.ghostSources = ghosts;
-    for (const [id, entry] of this.ghostEntries) {
+
+    // A repeated volume keeps its meshes between two evaluations: only the
+    // placement changes, so a drag moves what is already on screen instead of
+    // rebuilding it.
+    const used = new Set<TessellationResult>();
+    const kept = new Set<string>();
+    for (const ghost of ghosts) {
+      used.add(ghost.mesh);
+      const look = ghostLook(ghost);
+      const existing = this.ghostEntries.get(ghost.id);
+      const entry =
+        existing && existing.source === ghost.mesh && existing.look === look
+          ? existing
+          : this.createGhostEntry(ghost, look);
+      if (entry !== existing) {
+        // The same id can come back with a different volume: a primitive keeps
+        // its ghost id while the handle resizes it. The entry it replaces has to
+        // leave the group, or every size it passed stays drawn over the model
+        // for the rest of the session, always on top and never in the way.
+        if (existing) {
+          this.ghostGroup.remove(existing.mesh);
+          existing.material.dispose();
+        }
+        this.ghostEntries.set(ghost.id, entry);
+      }
+      this.placeGhost(entry, ghost.matrix);
+      kept.add(ghost.id);
+    }
+    for (const [id, entry] of [...this.ghostEntries]) {
+      if (kept.has(id)) continue;
       this.ghostGroup.remove(entry.mesh);
-      entry.geometry.dispose();
       entry.material.dispose();
       this.ghostEntries.delete(id);
     }
-    for (const ghost of ghosts) {
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', new THREE.BufferAttribute(ghost.mesh.positions, 3));
-      geometry.setAttribute('normal', new THREE.BufferAttribute(ghost.mesh.normals, 3));
-      geometry.setIndex(new THREE.BufferAttribute(ghost.mesh.indices, 1));
-      geometry.computeBoundingBox();
-      geometry.computeBoundingSphere();
-      const material = this.createGhostMaterial(ghost);
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.renderOrder = RenderOrder.delta;
-      this.ghostGroup.add(mesh);
-      this.ghostEntries.set(ghost.id, { mesh, material, geometry });
+    for (const [source, geometry] of [...this.ghostGeometries]) {
+      if (used.has(source)) continue;
+      geometry.dispose();
+      this.ghostGeometries.delete(source);
     }
     this.updateGhostFades();
     this.invalidate();
+  }
+
+  private createGhostEntry(
+    ghost: SceneGhost,
+    look: string,
+  ): {
+    mesh: THREE.Mesh;
+    material: THREE.MeshStandardMaterial;
+    geometry: THREE.BufferGeometry;
+    box: THREE.Box3;
+    source: TessellationResult;
+    look: string;
+  } {
+    const geometry = this.ghostGeometry(ghost.mesh);
+    const material = this.createGhostMaterial(ghost);
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.renderOrder = RenderOrder.delta;
+    this.ghostGroup.add(mesh);
+    return {
+      mesh,
+      material,
+      geometry,
+      box: new THREE.Box3(),
+      source: ghost.mesh,
+      look,
+    };
+  }
+
+  /** One geometry per volume: its copies share the tessellation. */
+  private ghostGeometry(mesh: TessellationResult): THREE.BufferGeometry {
+    const existing = this.ghostGeometries.get(mesh);
+    if (existing) return existing;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(mesh.normals, 3));
+    geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+    this.ghostGeometries.set(mesh, geometry);
+    return geometry;
+  }
+
+  /** Puts a ghost where the operation drew it, and remembers the bounds there. */
+  private placeGhost(
+    entry: {
+      mesh: THREE.Mesh;
+      geometry: THREE.BufferGeometry;
+      box: THREE.Box3;
+    },
+    matrix: readonly number[] | undefined,
+  ): void {
+    const local = entry.geometry.boundingBox ?? new THREE.Box3();
+    if (matrix) {
+      const placement = ghostPlacement(matrix);
+      entry.mesh.matrixAutoUpdate = false;
+      entry.mesh.matrix.copy(placement);
+      entry.mesh.updateMatrixWorld(true);
+      entry.box.copy(local).applyMatrix4(placement);
+      return;
+    }
+    if (!entry.mesh.matrixAutoUpdate) {
+      entry.mesh.matrixAutoUpdate = true;
+      entry.mesh.matrix.identity();
+      entry.mesh.updateMatrixWorld(true);
+    }
+    entry.box.copy(local);
   }
 
   private createGhostMaterial(ghost: SceneGhost): THREE.MeshStandardMaterial {
@@ -3184,10 +3560,11 @@ export class SceneController {
     for (const id of [...this.bodies.keys()]) this.removeEntry(id);
     for (const entry of this.ghostEntries.values()) {
       this.ghostGroup.remove(entry.mesh);
-      entry.geometry.dispose();
       entry.material.dispose();
     }
     this.ghostEntries.clear();
+    for (const geometry of this.ghostGeometries.values()) geometry.dispose();
+    this.ghostGeometries.clear();
     for (const { mesh, material } of this.bodyFaceOverlays.values()) {
       this.faceOverlayGroup.remove(mesh);
       mesh.geometry.dispose();
@@ -3379,7 +3756,7 @@ export class SceneController {
     for (const entry of this.bodies.values()) {
       if (entry.group.visible) collect(entry.geometry);
     }
-    for (const entry of this.ghostEntries.values()) collect(entry.geometry);
+    for (const entry of this.ghostEntries.values()) box.union(entry.box);
     if (box.isEmpty()) return 100;
 
     let radius = 0;
@@ -3466,6 +3843,9 @@ export class SceneController {
 
   private onPointerDown = (event: PointerEvent): void => {
     this.transition = null;
+    // A press is the start of a gesture or of a selection: the tooltip of the
+    // geometry under the pointer would be in the way of both.
+    this.clearGeometryHover();
     if (this.touchDown(event)) return;
     if (event.button === 0) {
       this.pointerDown = { x: event.clientX, y: event.clientY };
@@ -3525,9 +3905,42 @@ export class SceneController {
     if (this.touchMove(event)) return;
     if (this.dragMode === 'handle' && this.handleDrag) {
       const drag = this.handleDrag;
+      // A grip on a trajectory is read where the pointer meets the trajectory,
+      // so it follows a curve instead of a straight line.
+      if (drag.trail && drag.trail.length >= 2) {
+        const value = this.trailValueAt(drag.trail, event.clientX, event.clientY);
+        if (value === null) return;
+        if (Math.abs(value - drag.lastValue) < 0.02) return;
+        drag.lastValue = value;
+        this.callbacks.onHandleDrag?.({
+          id: drag.id,
+          value,
+          phase: 'move',
+          x: event.clientX,
+          y: event.clientY,
+          shift: event.shiftKey,
+        });
+        return;
+      }
       if (drag.arc) {
         const angle = this.pointerAngleAt(drag.arc, event.clientX, event.clientY);
         if (angle === null) return;
+        if (drag.orbit) {
+          // An orbit grip is where the pointer points: the angle from the start
+          // of the circle is the value, not a delta from where it was grabbed.
+          const value = (angle * 180) / Math.PI;
+          if (Math.abs(value - drag.lastValue) < 0.05) return;
+          drag.lastValue = value;
+          this.callbacks.onHandleDrag?.({
+            id: drag.id,
+            value,
+            phase: 'move',
+            x: event.clientX,
+            y: event.clientY,
+            shift: event.shiftKey,
+          });
+          return;
+        }
         let delta = angle - drag.arc.lastPointerAngle;
         // The pointer can cross the branch cut of atan2 between two moves.
         if (delta > Math.PI) delta -= Math.PI * 2;
@@ -3658,15 +4071,18 @@ export class SceneController {
         const toolPicking = this.faceHighlights.picking || this.faceHighlights.bodyPicking;
         if (toolPicking || !this.callbacks.onSelectPick) {
           const projecting = Boolean(this.faceHighlights.projecting);
+          // A vertex is a finer target than an edge, so picking one wins over
+          // the edge it belongs to.
+          const vertexPicking = projecting || Boolean(this.faceHighlights.vertexPicking);
           const pick = this.pickSceneAt(
             event.clientX,
             event.clientY,
-            this.faceHighlights.picking,
+            this.faceHighlights.picking && !vertexPicking,
             this.faceHighlights.bodyFacesOnly,
             // Projecting aims at the solid, never at the sketch face pickers.
-            projecting,
+            projecting || vertexPicking,
             projecting || Boolean(this.faceHighlights.edgePicking),
-            projecting,
+            vertexPicking,
           );
           this.onPick?.(pick, additive);
         } else {
@@ -4365,9 +4781,37 @@ export class SceneController {
     if (this.hoverFrame) return;
     this.hoverFrame = requestAnimationFrame(() => {
       this.hoverFrame = 0;
-      if (!this.hoverPoint || !this.hoverEnabled) return;
+      if (!this.hoverPoint || !this.hoverEnabled) {
+        this.clearGeometryHover();
+        return;
+      }
       this.updateHover(this.hoverPoint.x, this.hoverPoint.y);
+      this.emitGeometryHover(this.hoverPoint.x, this.hoverPoint.y);
     });
+  }
+
+  /**
+   * Reports the face under the pointer with the whole detail of a tool pick, so
+   * the operation behind it can be named. The hover itself stays as it is: an
+   * object-level hover still selects the object on a click.
+   */
+  private emitGeometryHover(clientX: number, clientY: number): void {
+    const pick = this.pickSceneAt(clientX, clientY, true, false, true, true);
+    const key = pick ? pickKey(pick) : '';
+    const previous = this.geometryHover;
+    if (previous && previous.key === key && Math.hypot(clientX - previous.x, clientY - previous.y) < 3) {
+      return;
+    }
+    if (!previous && !pick) return;
+    this.geometryHover = pick ? { key, x: clientX, y: clientY } : null;
+    this.callbacks.onGeometryHover?.(pick ? { pick, x: clientX, y: clientY } : null);
+  }
+
+  /** The pointer left the geometry: nothing is being pointed at any more. */
+  private clearGeometryHover(): void {
+    if (!this.geometryHover) return;
+    this.geometryHover = null;
+    this.callbacks.onGeometryHover?.(null);
   }
 
   /**
@@ -4387,9 +4831,16 @@ export class SceneController {
     const edgeKey = pick?.kind === 'body-edge' ? `${pick.bodyId}#${pick.edgeId}` : null;
     const faceKey =
       !edgeKey && pick?.kind === 'body-face' ? `b:${pick.bodyId}#${pick.faceId}` : null;
+    // A curve of a sketch is a pickable edge too: a path or an axis takes it,
+    // so it lights up under the pointer like a body edge does.
+    const sketchEdge =
+      !edgeKey && pick?.kind === 'sketch-edge'
+        ? { sketchId: pick.sketchId, entityId: pick.entityId }
+        : null;
     if (
       edgeKey === this.hoveredEdgeKey &&
       faceKey === this.hoveredFaceKey &&
+      sketchEdge?.entityId === this.hoveredSketchEdge?.entityId &&
       this.hoveredBodyId === null
     ) {
       return;
@@ -4397,8 +4848,9 @@ export class SceneController {
     this.hoveredBodyId = null;
     this.hoveredFaceKey = faceKey;
     this.setHoveredSketch(null);
-    this.canvas.style.cursor = edgeKey || faceKey ? 'pointer' : '';
+    this.canvas.style.cursor = edgeKey || faceKey || sketchEdge ? 'pointer' : '';
     this.setHoveredEdge(edgeKey);
+    this.setHoveredSketchEdge(sketchEdge);
     this.applyBodyMaterials();
     this.applyFaceHighlights();
     this.invalidate();
@@ -4600,6 +5052,7 @@ export class SceneController {
   };
 
   private onPointerLeave = (): void => {
+    this.clearGeometryHover();
     if (this.hoveredHandleId !== null) {
       this.hoveredHandleId = null;
       this.canvas.style.cursor = '';

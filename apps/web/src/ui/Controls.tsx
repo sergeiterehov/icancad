@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { TriangleAlert } from 'lucide-react';
+import { TriangleAlert, X } from 'lucide-react';
 import {
   useEffect,
   useRef,
@@ -11,6 +11,7 @@ import {
   type RefObject,
 } from 'react';
 import { Tooltip } from './Tooltip';
+import { useContextMenuStore } from './ContextMenu';
 import { formatStep, parseNumber, steppedValue, wheelStep } from './numberStep';
 import { useDocumentStore } from '../stores/documentStore';
 
@@ -42,9 +43,18 @@ export function IconButton({
   );
 }
 
-export function Segmented({ ariaLabel, children }: { ariaLabel: string; children: ReactNode }) {
+export function Segmented({
+  ariaLabel,
+  compact,
+  children,
+}: {
+  ariaLabel: string;
+  /** The row shrinks to its tabs instead of filling the panel. */
+  compact?: boolean;
+  children: ReactNode;
+}) {
   return (
-    <div className="segmented" role="group" aria-label={ariaLabel}>
+    <div className={clsx('segmented', compact && 'compact')} role="group" aria-label={ariaLabel}>
       {children}
     </div>
   );
@@ -80,6 +90,7 @@ export function SegmentedTab({
   icon,
   active,
   disabled,
+  square,
   tooltip,
   onClick,
 }: {
@@ -87,16 +98,19 @@ export function SegmentedTab({
   icon?: ReactNode;
   active?: boolean;
   disabled?: boolean;
+  /** A square tab: one symbol, as wide as it is tall. */
+  square?: boolean;
   tooltip?: string;
   onClick?: () => void;
 }) {
   return (
     <button
       type="button"
-      className="segmented-tab"
+      className={clsx('segmented-tab', square && 'square')}
       data-active={active ? 'true' : undefined}
       disabled={disabled}
       aria-pressed={active}
+      aria-label={square ? label : undefined}
       title={tooltip}
       onClick={onClick}
     >
@@ -155,6 +169,20 @@ export function PanelSection({
       </header>
       {children}
     </section>
+  );
+}
+
+/**
+ * The one place an error is shown inside a panel: a strip from edge to edge of
+ * its section, red text on a tinted background. Dialogs and pickers use it too,
+ * so a failure always reads the same way.
+ */
+export function FormError({ title, message }: { title?: string; message: string }) {
+  return (
+    <div className="form-error" role="alert">
+      {title && <span className="form-error-title">{title}</span>}
+      <span>{message}</span>
+    </div>
   );
 }
 
@@ -220,6 +248,8 @@ export function ObjectPickerField({
   active,
   invalid,
   onClick,
+  onClear,
+  clearLabel,
   testId,
   compact = false,
 }: {
@@ -230,10 +260,16 @@ export function ObjectPickerField({
   active?: boolean;
   invalid?: boolean;
   onClick: (event: MouseEvent<HTMLButtonElement>) => void;
+  /** Drops the picked object; the picker then holds nothing again. */
+  onClear?: () => void;
+  /** Name of the clear action, for its tooltip and its menu entry. */
+  clearLabel?: string;
   testId?: string;
   /** Sits in a row of controls instead of a labelled form field. */
   compact?: boolean;
 }) {
+  const openMenu = useContextMenuStore((state) => state.open);
+  const clear = value ? onClear : undefined;
   const button = (
     <button
       type="button"
@@ -243,6 +279,21 @@ export function ObjectPickerField({
       data-invalid={invalid ? 'true' : undefined}
       data-testid={testId}
       onClick={onClick}
+      // A single picker holds one object: Delete and Backspace drop it, and the
+      // context menu offers the same thing for a mouse.
+      onKeyDown={(event) => {
+        if (!clear) return;
+        if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+        event.preventDefault();
+        clear();
+      }}
+      onContextMenu={(event) => {
+        if (!clear || !clearLabel) return;
+        event.preventDefault();
+        openMenu(event.clientX, event.clientY, [
+          { id: 'clear', label: clearLabel, icon: <X size={13} />, onSelect: clear },
+        ]);
+      }}
     >
       <span className="picker-field-icon" aria-hidden="true">
         {icon}
@@ -250,6 +301,21 @@ export function ObjectPickerField({
       <span className={clsx('picker-field-value', !value && 'placeholder')}>
         {value ?? placeholder}
       </span>
+      {clear && clearLabel && (
+        <span
+          className="picker-field-clear"
+          role="button"
+          tabIndex={-1}
+          aria-label={clearLabel}
+          title={clearLabel}
+          onClick={(event) => {
+            event.stopPropagation();
+            clear();
+          }}
+        >
+          <X size={12} />
+        </span>
+      )}
     </button>
   );
   if (compact) return button;

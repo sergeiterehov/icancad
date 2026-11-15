@@ -100,6 +100,16 @@ export interface OcctPrismMaker {
 export interface OcctBooleanMaker {
   Build(): void;
   Shape(): OcctShape;
+  /**
+   * The faces a face became. A cut trims the faces around the tool, so `IsSame`
+   * cannot find them in the result; this is the only way to keep their identity.
+   */
+  Modified(shape: OcctShape): OcctShapeList;
+}
+
+/** The part of a maker that maps the faces it touched, boolean or treatment. */
+export interface OcctFaceMapper {
+  Modified(shape: OcctShape): OcctShapeList;
 }
 
 export interface OcctShapeMaker {
@@ -234,6 +244,12 @@ export interface OcctBindings {
     Edge_1(shape: OcctShape): OcctShape;
     Shell_1(shape: OcctShape): OcctShape;
     Solid_1(shape: OcctShape): OcctShape;
+  };
+  TopoDS_Compound: new () => OcctShape;
+  /** `BRep_Builder`: gathers shapes into one compound, which a boolean takes. */
+  BRep_Builder: new () => {
+    MakeCompound(shape: OcctShape): void;
+    Add(shape: OcctShape, child: OcctShape): void;
   };
   GProp_GProps_1: new () => { Mass(): number; CentreOfMass(): OcctPoint3 };
   BRepGProp: {

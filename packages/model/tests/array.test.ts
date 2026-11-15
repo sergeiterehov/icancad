@@ -49,8 +49,17 @@ const array: ArrayFeature = {
   featureIds: [],
   directions: [
     { kind: 'linear', direction: [1, 0, 0], spacing: 12, count: 3 },
-    { kind: 'rotation', axis: { kind: 'world', axis: 'z' }, angle: 45, count: 2 },
-    { kind: 'path', path: { kind: 'sketch-edge', sketchId: sketch.id, entityId: 'line' }, count: 4 },
+    {
+      kind: 'rotation',
+      axis: { kind: 'world', axis: 'z' },
+      angle: 45,
+      count: 2,
+    },
+    {
+      kind: 'path',
+      paths: [{ kind: 'sketch-edge', sketchId: sketch.id, entityId: 'line' }],
+      count: 4,
+    },
   ],
 };
 
@@ -83,5 +92,18 @@ describe('array feature', () => {
       (feature): feature is ArrayFeature => feature.type === 'array',
     );
     expect(parsedArray).toEqual(array);
+  });
+
+  it('maps the old operations target to geometry', () => {
+    const raw = JSON.parse(JSON.stringify(arrayProject()));
+    const rawArray = raw.superObjects[0].features.find(
+      (feature: { type: string }) => feature.type === 'array',
+    );
+    rawArray.target = 'operations';
+    const parsed = parseProject(raw);
+    const parsedArray = activeModel(parsed).features.find(
+      (feature): feature is ArrayFeature => feature.type === 'array',
+    );
+    expect(parsedArray?.target).toBe('geometry');
   });
 });

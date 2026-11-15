@@ -164,6 +164,12 @@ export interface MakePrismParams {
   regions: ProfileRegion[];
   /** Signed extrusion distances along the plane normal; one or two of them. */
   distances: number[];
+  /**
+   * How far the first sweep reaches back behind the plane, so a tool that
+   * stands on a face shares material with the body instead of only touching
+   * it. The overlap is part of the same prism, never a second one.
+   */
+  embed?: number;
 }
 
 export interface MakeFacePrismParams {
@@ -222,6 +228,21 @@ export interface BooleanParams {
   trackFaces?: boolean;
 }
 
+/**
+ * The same boolean applied to many placements of the same tools in one go. OCCT
+ * treats the placed tools as one set, which is several times faster than a
+ * boolean per placement: an array of twenty bosses is one operation instead of
+ * twenty.
+ */
+export interface BooleanAllParams {
+  shapeId: string;
+  baseShapeId: string;
+  /** Each tool copied to where it applies. */
+  tools: Array<{ sourceShapeId: string; matrix: number[] }>;
+  op: 'fuse' | 'cut' | 'common';
+  trackFaces?: boolean;
+}
+
 export interface EdgeTreatmentParams {
   shapeId: string;
   /** Body the edges belong to. */
@@ -265,6 +286,12 @@ export interface ShellResult {
   stats: ShapeStats;
   /** Thickness the wall was actually built with; never above the request. */
   applied: number;
+  /**
+   * For every face of the result, the index of the source face it is. An
+   * inward shell keeps the outside of the body, so those faces stay owned by the
+   * operation that made them; the new cavity faces report -1.
+   */
+  facesFromBase?: number[];
 }
 
 /**
@@ -307,6 +334,7 @@ export type KernelRequestPayload =
   | { type: 'make-revolve'; params: MakeRevolveParams }
   | { type: 'make-face-revolve'; params: MakeFaceRevolveParams }
   | { type: 'boolean'; params: BooleanParams }
+  | { type: 'boolean-all'; params: BooleanAllParams }
   | { type: 'split-solids'; params: SplitSolidsParams }
   | { type: 'edge-treatment'; params: EdgeTreatmentParams }
   | { type: 'shell'; params: ShellParams }

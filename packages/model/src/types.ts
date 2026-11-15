@@ -301,6 +301,13 @@ export interface BodyEdgeRef {
   start: Vec3;
   mid: Vec3;
   end: Vec3;
+  /**
+   * Length and closure of the tessellated polyline. The traversal id stays the
+   * same when the geometry that made the edge moves, so these let the reference
+   * follow a shape whose pose changed (a sketch circle dragged sideways).
+   */
+  length?: number;
+  closed?: boolean;
   /** Bisector of the two face normals, pointing away from the material. */
   bisector: Vec3;
   /** Angle between the two faces at the edge, measured where the face appears. */
@@ -425,26 +432,61 @@ export interface TransformFeature extends FeatureBase {
   transform: Transform;
 }
 
-/** What an array repeats: picked bodies, or the bodies picked operations made. */
-export type ArrayTarget = 'bodies' | 'operations';
+/**
+ * What an array repeats: picked bodies, or the geometry of picked operations
+ * (the material they added and removed, repeated as a stamp).
+ */
+export type ArrayTarget = 'bodies' | 'geometry';
 
-/** A curve the copies follow; it lives in a sketch plane. */
-export interface ArrayPath {
-  kind: 'sketch-edge';
-  sketchId: string;
-  entityId: string;
-}
-
+/**
+ * A curve the copies follow: an edge of a body, or a curve drawn in a sketch
+ * plane. Several of them make one path when they meet end to end.
+ */
+export type ArrayPath =
+  | { kind: 'body-edge'; bodyId: string; edgeId: string }
+  | { kind: 'sketch-edge'; sketchId: string; entityId: string };
 /**
  * One step of an array. `count` includes the seed, so 1 leaves only the
  * original. Directions are applied one after another: the second one repeats
  * the whole result of the first (ADR 0029).
  */
 export type ArrayDirection =
-  | { kind: 'linear'; direction: Vec3; spacing: number; count: number }
-  | { kind: 'rotation'; axis: RevolveAxis; angle: number; count: number }
-  /** `path` is null while the direction waits for a curve to be picked. */
-  | { kind: 'path'; path: ArrayPath | null; count: number };
+  | {
+      kind: 'linear';
+      direction: Vec3;
+      spacing: number;
+      /**
+       * Tilt of the direction, in degrees. Two directions of a grid meet at any
+       * angle instead of a right one, which is what turns a box of copies into
+       * a parallelepiped (ADR 0029).
+       */
+      angle?: number;
+      count: number;
+    }
+  | {
+      kind: 'rotation';
+      axis: ArrayRotationAxis;
+      /**
+       * Total angle the copies span, in degrees, 0…360; the step is the angle
+       * over the gaps. The span is always positive: which way the copies turn
+       * is a state of its own, so the field never shows a minus sign.
+       */
+      angle: number;
+      /** The copies turn the other way round: the span is measured backwards. */
+      inverted?: boolean;
+      count: number;
+    }
+  /** `paths` is empty while the direction waits for curves to be picked. */
+  | { kind: 'path'; paths: ArrayPath[]; count: number };
+
+/**
+ * What the copies of a rotation turn around: a world axis through the centre of
+ * the model, or the centre of a picked arc, inside the plane the arc is drawn
+ * in.
+ */
+export type ArrayRotationAxis =
+  | { kind: 'world'; axis: 'x' | 'y' | 'z' }
+  | { kind: 'arc'; sketchId: string; entityId: string };
 
 /**
  * Repeats bodies along one or more directions. The copies are new bodies of
@@ -522,6 +564,8 @@ export interface CameraState {
   distance: number;
   azimuth: number;
   polar: number;
+  /** Tilt of the horizon in a trackball view; absent means level. */
+  roll?: number;
 }
 
 export interface ViewState {

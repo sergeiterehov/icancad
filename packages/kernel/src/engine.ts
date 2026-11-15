@@ -1,5 +1,6 @@
 import type {
   BodyEdge,
+  BooleanAllParams,
   BooleanParams,
   BoxParams,
   EdgeTreatmentParams,
@@ -29,7 +30,9 @@ import type {
 import { DEFAULT_TESSELLATION_QUALITY } from './protocol';
 import type {
   OcctBindings,
+  OcctBooleanMaker,
   OcctEdgeMaker,
+  OcctFaceMapper,
   OcctPolygonOnTriangulation,
   OcctShape,
   OcctTransformation,
@@ -459,14 +462,13 @@ export class KernelEngine {
       throw new KernelOpError('INVALID_PARAMS', 'Extrude distance must be a positive number');
     }
 
-    const vectors = this.prismVectors(params);
     let shape: OcctShape | null = null;
     for (const region of regions) {
       // Holes are removed with booleans: wire orientation inside a face is easy to
       // get wrong, while cutting the hole prisms is exact and orientation-free.
-      let solid: OcctShape | null = this.extrudeLoop(region.outer, vectors, params);
+      let solid: OcctShape | null = this.extrudeLoop(region.outer, params);
       for (const hole of region.holes) {
-        const holeSolid = this.extrudeLoop(hole, vectors, params);
+        const holeSolid = this.extrudeLoop(hole, params);
         solid = this.boolean(solid, holeSolid, 'cut');
       }
       shape = shape ? this.boolean(shape, solid, 'fuse') : solid;
@@ -609,15 +611,41 @@ export class KernelEngine {
     if (!shapeId) throw new KernelOpError('INVALID_PARAMS', 'shapeId is required');
     const base = this.getShape(baseShapeId);
     const tool = this.getShape(toolShapeId);
-    const fused = this.boolean(base, tool, op);
+    const maker = this.booleanMaker(base, tool, op);
+    const fused = maker.Shape();
     const shape = op === 'fuse' ? this.unify(fused) : fused;
     this.shapes.set(shapeId, shape);
     const result: MakeBoxResult = { shapeId, stats: this.countTopology(shape) };
-    // A fuse merges coplanar faces, which replaces their identity, so only the
-    // boolean itself can be asked where a face came from.
-    if (params.trackFaces) result.facesFromBase = this.facesFromBase(shape, base);
+    // A cut trims the faces around the tool and `IsSame` loses them, so the
+    // boolean itself is asked where each face came from.
+    if (params.trackFaces) result.facesFromBase = this.mappedFaces(maker, shape, base);
     return result;
   }
+
+  /**
+   * One boolean for many placements of the same tools. The placed tools are
+   * gathered into one compound, which OCCT intersects with the base in a single
+   * pass: an array of twenty bosses costs one boolean instead of twenty, and
+   * the new material is merged once instead of growing a shape step by step.
+   */
+  booleanAll(params: BooleanAllParams): MakeBoxResult {
+    const { shapeId, op } = params;
+    if (!shapeId) throw new KernelOpError('INVALID_PARAMS', 'shapeId is required');
+    if (params.tools.length === 0) {
+      throw new KernelOpError('INVALID_PARAMS', 'A boolean needs at least one tool');
+    }
+    const base = this.getShape(params.baseShapeId);
+    const placed = params.tools.map((tool) => this.copyAt(tool.sourceShapeId, tool.matrix));
+    const tool = placed.length === 1 ? placed[0]! : this.compound(placed);
+    const maker = this.booleanMaker(base, tool, op);
+    const fused = maker.Shape();
+    const shape = op === 'fuse' ? this.unify(fused) : fused;
+    this.shapes.set(shapeId, shape);
+    const result: MakeBoxResult = { shapeId, stats: this.countTopology(shape) };
+    if (params.trackFaces) result.facesFromBase = this.mappedFaces(maker, shape, base);
+    return result;
+  }
+
 
   /**
    * Extracts the solids of a shape as independent shapes. A cut that separates
@@ -1002,9 +1030,9 @@ export class KernelEngine {
     // first pass left behind, and the first names the face it came from.
     const facesFromBase = (() => {
       if (!maker) return this.facesFromBase(shape, source);
-      if (!splitFirst) return this.treatedFaces(maker, shape, source);
-      const passed = this.treatedFaces(splitFirst.maker, splitFirst.shape, source);
-      return this.treatedFaces(maker, shape, splitFirst.shape).map((from) =>
+      if (!splitFirst) return this.mappedFaces(maker, shape, source);
+      const passed = this.mappedFaces(splitFirst.maker, splitFirst.shape, source);
+      return this.mappedFaces(maker, shape, splitFirst.shape).map((from) =>
         from >= 0 ? (passed[from] ?? -1) : -1,
       );
     })();
@@ -1061,6 +1089,9 @@ export class KernelEngine {
       shapeId: params.shapeId,
       stats: this.countTopology(built.shape),
       applied: built.applied,
+      // An inward shell keeps the outside faces of the body in place; a face it
+      // only moved stays owned by the operation that made it.
+      facesFromBase: this.facesFromBase(built.shape, source),
     };
   }
 
@@ -1069,13 +1100,20 @@ export class KernelEngine {
    * so an array can repeat one body without rebuilding it from its history.
    */
   transformShape(params: TransformShapeParams): MakeBoxResult {
-    const oc = this.requireOc();
     if (!params.shapeId) throw new KernelOpError('INVALID_PARAMS', 'shapeId is required');
-    if (params.matrix.length !== 12 || params.matrix.some((value) => !Number.isFinite(value))) {
+    const shape = this.copyAt(params.sourceShapeId, params.matrix);
+    this.shapes.set(params.shapeId, shape);
+    return { shapeId: params.shapeId, stats: this.countTopology(shape) };
+  }
+
+  /** A copy of a shape at a row-major 3x4 affine. */
+  private copyAt(sourceShapeId: string, matrix: readonly number[]): OcctShape {
+    const oc = this.requireOc();
+    if (matrix.length !== 12 || matrix.some((value) => !Number.isFinite(value))) {
       throw new KernelOpError('INVALID_PARAMS', 'A transform needs 12 finite matrix values');
     }
-    const source = this.getShape(params.sourceShapeId);
-    const [a11, a12, a13, a14, a21, a22, a23, a24, a31, a32, a33, a34] = params.matrix as [
+    const source = this.getShape(sourceShapeId);
+    const [a11, a12, a13, a14, a21, a22, a23, a24, a31, a32, a33, a34] = matrix as [
       number,
       number,
       number,
@@ -1095,9 +1133,17 @@ export class KernelEngine {
     if (!maker.IsDone()) {
       throw new KernelOpError('OP_FAILED', 'The shape could not be transformed');
     }
-    const shape = maker.Shape();
-    this.shapes.set(params.shapeId, shape);
-    return { shapeId: params.shapeId, stats: this.countTopology(shape) };
+    return maker.Shape();
+  }
+
+  /** The given shapes as one compound, which a boolean takes as its tool. */
+  private compound(shapes: readonly OcctShape[]): OcctShape {
+    const oc = this.requireOc();
+    const builder = new oc.BRep_Builder();
+    const result = new oc.TopoDS_Compound();
+    builder.MakeCompound(result);
+    for (const shape of shapes) builder.Add(result, shape);
+    return result;
   }
 
   /** Requested thickness first, then the largest one the geometry still takes. */
@@ -1292,7 +1338,7 @@ export class KernelEngine {
    * Where every result face came from. A face the treatment only trimmed keeps
    * the operation that made it; only the surfaces the treatment creates are new.
    */
-  private treatedFaces(maker: OcctEdgeMaker, shape: OcctShape, source: OcctShape): number[] {
+  private mappedFaces(maker: OcctFaceMapper, shape: OcctShape, source: OcctShape): number[] {
     const oc = this.requireOc();
     const resultFaces: OcctShape[] = [];
     const resultExplorer = new oc.TopExp_Explorer_2(
@@ -1529,17 +1575,10 @@ export class KernelEngine {
     this.shapeEdges.clear();
   }
 
-  private prismVectors(params: MakePrismParams): unknown[] {
-    const oc = this.requireOc();
-    const [nx, ny, nz] = profilePlane(params).normal;
-    return params.distances.map(
-      (distance) => new oc.gp_Vec_4(nx * distance, ny * distance, nz * distance),
-    );
-  }
-
-  private extrudeLoop(loop: ProfileLoop, vectors: unknown[], params: MakePrismParams): OcctShape {
+  private extrudeLoop(loop: ProfileLoop, params: MakePrismParams): OcctShape {
     const oc = this.requireOc();
     const plane = profilePlane(params);
+    const [nx, ny, nz] = plane.normal;
     const wire = this.buildWire(loop, plane);
     const maker = new oc.BRepBuilderAPI_MakeFace_15(wire, false);
     if (!maker.IsDone()) {
@@ -1547,12 +1586,28 @@ export class KernelEngine {
     }
     const face = maker.Face();
     let solid: OcctShape | null = null;
-    for (const vector of vectors) {
+    for (const [index, distance] of params.distances.entries()) {
+      // A union reaches a hair behind its plane so it shares material with the
+      // body it joins: a tool that only touches a face stays a solid of its
+      // own, and the boolean silently adds nothing. The overlap belongs to the
+      // same sweep — two prisms stacked on one plane leave a seam that stops
+      // the union from joining anything.
+      const overlap = index === 0 && distance > 0 ? Math.max(0, params.embed ?? 0) : 0;
+      const length = distance + overlap;
+      const vector = new oc.gp_Vec_4(nx * length, ny * length, nz * length);
       const prism = new oc.BRepPrimAPI_MakePrism_1(face, vector, false, true);
       if (!prism.IsDone()) {
         throw new KernelOpError('OP_FAILED', 'Extrude failed for a sketch region');
       }
-      solid = solid ? this.boolean(solid, prism.Shape(), 'fuse') : prism.Shape();
+      let part = prism.Shape();
+      if (overlap > 0) {
+        // The sweep grew along the normal, so it moves back into the material
+        // by the overlap it was given.
+        const back = new oc.gp_Trsf_1();
+        back.SetTranslation_1(new oc.gp_Vec_4(-nx * overlap, -ny * overlap, -nz * overlap));
+        part = new oc.BRepBuilderAPI_Transform_2(part, back, true).Shape();
+      }
+      solid = solid ? this.boolean(solid, part, 'fuse') : part;
     }
     if (!solid) throw new KernelOpError('OP_FAILED', 'Extrude produced no geometry');
     return solid;
@@ -1682,20 +1737,22 @@ export class KernelEngine {
   }
 
   private boolean(base: OcctShape, tool: OcctShape, op: BooleanParams['op']): OcctShape {
+    return this.booleanMaker(base, tool, op).Shape();
+  }
+
+  private booleanMaker(base: OcctShape, tool: OcctShape, op: BooleanParams['op']): OcctBooleanMaker {
     const oc = this.requireOc();
-    const make = () =>
+    const maker =
       op === 'fuse'
         ? new oc.BRepAlgoAPI_Fuse_3(base, tool)
         : op === 'cut'
           ? new oc.BRepAlgoAPI_Cut_3(base, tool)
           : new oc.BRepAlgoAPI_Common_3(base, tool);
-    const maker = make();
     maker.Build();
-    const shape = maker.Shape();
-    if (shape.IsNull()) {
+    if (maker.Shape().IsNull()) {
       throw new KernelOpError('OP_FAILED', `Boolean ${op} produced an empty shape`);
     }
-    return shape;
+    return maker;
   }
 
   /**

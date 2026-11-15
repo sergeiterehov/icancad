@@ -5,6 +5,7 @@ import {
   Circle,
   CircleDot,
   Cone,
+  Cuboid,
   Cylinder,
   Torus,
   DraftingCompass,
@@ -95,7 +96,7 @@ export function FeatureIcon({ feature, size = 16 }: { feature: Feature; size?: n
     case 'primitive':
       switch (feature.kind) {
         case 'box':
-          return <Box size={size} />;
+          return <Cuboid size={size} />;
         case 'sphere':
           return <Circle size={size} />;
         case 'cylinder':

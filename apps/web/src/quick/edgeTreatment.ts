@@ -156,6 +156,18 @@ function liveCorner(mesh: TessellationResult | undefined, ref: BodyEdgeRef): Edg
   return edgeCorner(mesh, edge.faceIds, edgePose(edge.points).mid);
 }
 
+function polylineLength(points: readonly number[]): number {
+  let length = 0;
+  for (let index = 0; index + 5 < points.length; index += 3) {
+    length += Math.hypot(
+      points[index + 3]! - points[index]!,
+      points[index + 4]! - points[index + 1]!,
+      points[index + 5]! - points[index + 2]!,
+    );
+  }
+  return length;
+}
+
 /** An edge picked for a treatment, with the corner it sits in. */
 export function edgeTreatmentEdgeRef(
   mesh: TessellationResult,
@@ -175,6 +187,8 @@ export function edgeTreatmentEdgeRef(
     edgeId,
     faceIds: [...edge.faceIds],
     ...pose,
+    length: polylineLength(edge.points),
+    closed: edge.closed,
     bisector,
     ...(corner ? { wedge: corner.wedge, convex: corner.convex } : {}),
   };
