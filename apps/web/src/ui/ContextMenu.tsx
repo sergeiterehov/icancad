@@ -102,6 +102,63 @@ type MenuActionItem = Extract<ContextMenuItem, { onSelect: () => void }>;
 /** Time a submenu survives after the pointer leaves it, so it can be crossed. */
 const SUBMENU_CLOSE_DELAY = 260;
 
+/** Room a menu keeps between itself and the edge of the window. */
+const EDGE_MARGIN = 8;
+
+/**
+ * A nested menu. It opens beside its row, and turns to the other side of the row
+ * when the window has no room there: the row can sit anywhere, including the
+ * right edge, where the nav cube opens its menu. It also steps up when its list
+ * would reach below the window.
+ */
+function SubmenuPanel({ label, children }: { label: string; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [placement, setPlacement] = useState<{ left: number; top: number } | null>(null);
+
+  // Measured before the first paint, so the menu never shows on the wrong side.
+  useLayoutEffect(() => {
+    const panel = ref.current;
+    const row = panel?.parentElement;
+    if (!panel || !row) return;
+    const rowBox = row.getBoundingClientRect();
+    const width = panel.offsetWidth;
+    const height = panel.offsetHeight;
+    // Beside the row while there is room, on the roomier side when there is not,
+    // and inside the window either way: the row can sit anywhere.
+    const roomRight = window.innerWidth - rowBox.right - EDGE_MARGIN;
+    const roomLeft = rowBox.left - EDGE_MARGIN;
+    const beside =
+      width > roomRight && roomLeft > roomRight ? rowBox.left - 4 - width : rowBox.right + 4;
+    const left = Math.max(
+      EDGE_MARGIN,
+      Math.min(beside, window.innerWidth - EDGE_MARGIN - width),
+    );
+    const top = Math.max(
+      EDGE_MARGIN,
+      Math.min(rowBox.top - 5, window.innerHeight - EDGE_MARGIN - height),
+    );
+    const next = {
+      left: Math.round(left - rowBox.left),
+      top: Math.round(top - rowBox.top),
+    };
+    setPlacement((current) =>
+      current && current.left === next.left && current.top === next.top ? current : next,
+    );
+  });
+
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      aria-label={label}
+      className="context-menu context-submenu"
+      style={placement ?? undefined}
+    >
+      {children}
+    </div>
+  );
+}
+
 function MenuButton({ item, onSelect }: { item: MenuActionItem; onSelect: () => void }) {
   const close = useContextMenuStore((state) => state.close);
   // A checked row without an icon keeps the check in the icon column; a row
@@ -299,7 +356,7 @@ export function ContextMenuHost() {
                 </span>
               </button>
               {openSubmenu === item.id && (
-                <div className="context-menu context-submenu" role="menu" aria-label={item.label}>
+                <SubmenuPanel label={item.label}>
                   <div className="context-palette">
                     {palette.map((color) => (
                       <button
@@ -318,7 +375,7 @@ export function ContextMenuHost() {
                       />
                     ))}
                   </div>
-                </div>
+                </SubmenuPanel>
               )}
             </div>
           );
@@ -347,7 +404,7 @@ export function ContextMenuHost() {
                 </span>
               </button>
               {openSubmenu === item.id && (
-                <div className="context-menu context-submenu" role="menu" aria-label={item.label}>
+                <SubmenuPanel label={item.label}>
                   {item.submenu.map((child) =>
                     'separator' in child && child.separator ? (
                       <div key={child.id} className="context-menu-separator" />
@@ -359,7 +416,7 @@ export function ContextMenuHost() {
                       <MenuButton key={child.id} item={child} onSelect={child.onSelect} />
                     ) : null,
                   )}
-                </div>
+                </SubmenuPanel>
               )}
             </div>
           );
