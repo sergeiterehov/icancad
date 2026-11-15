@@ -865,7 +865,9 @@ export function Viewport() {
 
     const marks = new Map((preview?.bodies ?? []).map((mark) => [mark.id, mark]));
     const sceneBodies: SceneBody[] = [];
-    for (const body of bodies) {
+    // The order of this list is the order of the tree, and the scene uses it to
+    // decide which of two bodies owns a surface they share.
+    for (const [order, body] of bodies.entries()) {
       const mesh = meshes[body.id];
       if (!mesh) continue;
       const mark = marks.get(body.id);
@@ -878,6 +880,7 @@ export function Viewport() {
         mesh: renderBase ? mark!.baseMesh! : mesh,
         color: body.color,
         visible: body.visible,
+        order,
         ...(mark
           ? {
               ghost: mark.kind,
@@ -889,7 +892,8 @@ export function Viewport() {
       });
     }
     // Bodies the edited operation will create are shown translucent and cannot
-    // be picked: they are not part of the document yet.
+    // be picked: they are not part of the document yet. They come last, where
+    // the object they will become will sit in the tree.
     for (const mark of preview?.bodies ?? []) {
       if (mark.kind !== 'added' || mark.ghostOnly) continue;
       if (bodies.some((body) => body.id === mark.id)) continue;
@@ -903,6 +907,7 @@ export function Viewport() {
         mesh,
         color: resolved?.color ?? mark.color,
         visible: resolved?.visible ?? true,
+        order: sceneBodies.length,
         ghost: 'added',
         interactive: false,
       });

@@ -40,3 +40,28 @@ export const RenderOrder = {
   sketchPointActive: 31,
   sketchPhantom: 32,
 } as const;
+
+/**
+ * Depth-buffer units one row of the object tree is worth when two solids meet
+ * on a surface. Two bodies that share a plane — a cylinder standing on a box,
+ * the same primitive twice — compute almost the same depth there, and the
+ * winner changes from pixel to pixel, which is the stipple along the seam.
+ */
+const SOLID_DEPTH_STEP = 1;
+
+/**
+ * Ceiling of the whole bias. A long list keeps its newest rows apart and lets
+ * the oldest share a bias, which beats shifting a body far enough to show.
+ */
+const SOLID_DEPTH_MAX = 24;
+
+/**
+ * Depth bias of a solid, counted from its place in the object tree. The last
+ * row keeps no bias at all and every row above it is pushed back one step, so a
+ * shared surface belongs to the object listed lower, the way a later object
+ * covers an earlier one in the panel. Values are depth-buffer units, far below
+ * a millimetre, so only surfaces lying on each other are separated.
+ */
+export function solidDepthBias(order: number, count: number): number {
+  return Math.min(SOLID_DEPTH_MAX, Math.max(0, count - 1 - order) * SOLID_DEPTH_STEP);
+}

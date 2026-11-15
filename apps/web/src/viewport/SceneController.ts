@@ -43,7 +43,7 @@ import { hoverColor, selectionColor } from './interactionColors';
 import { isPlanarFace } from './planarFace';
 import { OUTLINE_CREASE_RADIANS, outlineSegments } from './bodyOutline';
 import { bodyElements } from '../sketch/projection';
-import { RenderOrder } from './renderOrder';
+import { RenderOrder, solidDepthBias } from './renderOrder';
 import { firstUnclippedHit, sectionCrossings } from './sectionPick';
 import { hoverTargetOf } from './hoverMode';
 import { handleDragValue } from '../quick/handleDrag';
@@ -97,6 +97,11 @@ export interface SceneBody {
   mesh: TessellationResult;
   color: string;
   visible: boolean;
+  /**
+   * Place of the object in the object tree, from the top. It decides which body
+   * owns a surface two of them share; the last row wins.
+   */
+  order?: number;
   /** Phantom delta of the operation being edited. */
   ghost?: PreviewMarkKind;
   /** Draw the ghost translucent; opaque moves stay solid so holes read as cuts. */
@@ -127,6 +132,8 @@ interface BodyEntry {
   hitGeometry: THREE.BufferGeometry | null;
   hitRef: TessellationResult;
   color: string;
+  /** Depth units the body gives up to the objects listed below it. */
+  depthBias: number;
   ghost: PreviewMarkKind | null;
   translucent: boolean;
   interactive: boolean;
@@ -525,7 +532,7 @@ export class SceneController {
     };
     let sectionChanged = false;
 
-    for (const body of bodies) {
+    for (const [index, body] of bodies.entries()) {
       seen.add(body.id);
       const existing = this.bodies.get(body.id);
       if (existing && existing.meshRef !== body.mesh) {
@@ -548,6 +555,8 @@ export class SceneController {
       entry.group.visible = body.visible;
       entry.kind = body.kind;
       entry.color = body.color;
+      // A shared surface goes to the object listed lower in the tree.
+      entry.depthBias = solidDepthBias(body.order ?? index, bodies.length);
       entry.ghost = body.ghost ?? null;
       entry.translucent = body.translucent !== false;
       entry.interactive = body.interactive !== false;
@@ -1694,9 +1703,13 @@ export class SceneController {
     entry.material.transparent = false;
     entry.material.depthTest = true;
     entry.material.depthWrite = true;
-    entry.material.polygonOffset = false;
-    entry.material.polygonOffsetFactor = 0;
-    entry.material.polygonOffsetUnits = 0;
+    // Two solids that meet on a surface compute the same depth there and fight
+    // for it pixel by pixel. The body listed lower in the object tree gives up
+    // nothing and the ones above it step back, so the seam belongs to the object
+    // the user can point at in the panel.
+    entry.material.polygonOffset = entry.depthBias > 0;
+    entry.material.polygonOffsetFactor = entry.depthBias;
+    entry.material.polygonOffsetUnits = entry.depthBias;
     entry.material.opacity = 1;
     entry.material.side = THREE.FrontSide;
     entry.material.color.set(entry.color);
@@ -3153,6 +3166,7 @@ export class SceneController {
       hitGeometry: null,
       hitRef: body.mesh,
       color: body.color,
+      depthBias: 0,
       ghost: body.ghost ?? null,
       translucent: body.translucent !== false,
       interactive: body.interactive !== false,
