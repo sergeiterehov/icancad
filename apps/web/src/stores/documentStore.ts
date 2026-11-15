@@ -97,6 +97,12 @@ interface DocumentState {
   hydrate: (project: Project) => void;
   select: (item: SelectionItem | null, options?: { additive?: boolean }) => void;
   /**
+   * Replaces the selection with a list of rows, which is what a Shift range in
+   * a panel produces. A click that belongs to an open picker is passed on to the
+   * picker instead: it takes one row per click.
+   */
+  selectMany: (items: SelectionItem[], clicked: SelectionItem) => void;
+  /**
    * Opens an operation for editing without touching the selection. Used by the
    * sketch editor, which owns the selection itself.
    */
@@ -465,6 +471,22 @@ function keepActiveModel(project: Project, activeId: string): Project {
   return { ...project, activeSuperObjectId: activeId };
 }
 
+/**
+ * True while an operation waits for the user to pick geometry. Such a picker
+ * owns clicks: they feed it instead of changing the selection and ending it.
+ */
+function openPicker(ui: ReturnType<typeof useUiStore.getState>): boolean {
+  return Boolean(
+    ui.pickingExtrude ??
+      ui.pickingExtrudeBodies ??
+      ui.pickingEdges ??
+      ui.pickingShellBodies ??
+      ui.pickingShellFaces ??
+      ui.pickingSketchPlane ??
+      ui.pickingSectionFace,
+  );
+}
+
 export const useDocumentStore = create<DocumentState>((set, get) => ({
   project: createProject(),
   past: [],
@@ -661,14 +683,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     // or the sketch face list feed that control instead of replacing the
     // selection and closing the control.
     const ui = useUiStore.getState();
-    const pickingGeometry =
-      ui.pickingExtrude ??
-      ui.pickingExtrudeBodies ??
-      ui.pickingEdges ??
-      ui.pickingShellBodies ??
-      ui.pickingShellFaces ??
-      ui.pickingSketchPlane ??
-      ui.pickingSectionFace;
+    const pickingGeometry = openPicker(ui);
     if (
       pickingGeometry &&
       item &&
@@ -718,6 +733,18 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         index >= 0 ? state.selection.filter((_, i) => i !== index) : [...state.selection, item];
     }
     set({ selection, ...editModeFor(state, state.project, selection) });
+  },
+
+  selectMany: (items, clicked) => {
+    const ui = useUiStore.getState();
+    if (openPicker(ui)) {
+      // A picker takes one row per click, so it gets the row that was clicked.
+      // Feeding it the whole range would toggle rows it already picked.
+      get().select(clicked, { additive: true });
+      return;
+    }
+    const state = get();
+    set({ selection: items, ...editModeFor(state, state.project, items) });
   },
 
   beginFeatureEdit: (featureId) => {

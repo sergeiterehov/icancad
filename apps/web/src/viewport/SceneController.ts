@@ -20,6 +20,7 @@ import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { SketchSnap } from '../sketch/snap';
 import type { PreviewFaceMark, PreviewMarkKind, SceneGhost } from '../stores/kernelStore';
+import { isAdditiveClick } from '../ui/listSelection';
 import {
   CAMERA_FOV_DEGREES,
   cameraFrustum,
@@ -3491,7 +3492,7 @@ export class SceneController {
           if (pick) this.onDoublePick?.(pick);
           return;
         }
-        const additive = event.metaKey || event.ctrlKey || event.shiftKey;
+        const additive = isAdditiveClick(event);
         // Tool picking keeps its own contract; normal selection drills from the
         // object into its faces and edges.
         const toolPicking = this.faceHighlights.picking || this.faceHighlights.bodyPicking;

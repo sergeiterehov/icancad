@@ -31,6 +31,7 @@ import {
 import { sketchToolFromShortcut } from '../sketch/tool';
 import { useApplyConstraintAction } from '../sketch/useConstraintActions';
 import { resolveConstraintShortcut } from '../ui/constraintCatalog';
+import { isAdditiveClick } from '../ui/listSelection';
 import { canEditSketch, computeSketchFrame, sketchFrameOf } from '../sketch/sectionPlane';
 import { solveDrag } from '../sketch/dragSolve';
 import { liveMeasures, measureInfo } from '../sketch/measure';
@@ -647,7 +648,7 @@ export function SketchEditor() {
       pointerDown.current = { x: event.clientX, y: event.clientY };
       const activeTool = useUiStore.getState().sketchTool;
       if (activeTool !== 'select' || !sketch) return;
-      const additive = event.metaKey || event.ctrlKey || event.shiftKey;
+      const additive = isAdditiveClick(event);
       const pick = getViewport()?.pickSketch(
         event.clientX,
         event.clientY,
@@ -850,7 +851,7 @@ export function SketchEditor() {
           ? sketchEntityIndex(sketch.entities).get(pick.entityId)
           : undefined;
         const key = sketchPickKey(pick, pickEntity);
-        const additive = event.metaKey || event.ctrlKey || event.shiftKey;
+        const additive = isAdditiveClick(event);
         if (!key) {
           if (!additive) setSketchSelection([]);
         } else if (!additive) {

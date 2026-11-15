@@ -15,6 +15,7 @@ import { KernelStatus } from './KernelStatus';
 import { Tooltip } from './Tooltip';
 import { translate } from './translate';
 import { timelineCaretMark, type TimelineCaretMark } from './timelineCaret';
+import { useListSelection } from './useListSelection';
 
 function RollbackCaret({
   index,
@@ -60,7 +61,7 @@ export function Timeline() {
   const { t } = useTranslation();
   const project = useViewModel();
   const selection = useDocumentStore((state) => state.selection);
-  const select = useDocumentStore((state) => state.select);
+  const selectMany = useDocumentStore((state) => state.selectMany);
   const setHistoryEnd = useDocumentStore((state) => state.setHistoryEnd);
   const removeFeatures = useDocumentStore((state) => state.removeFeatures);
   const setObjectsVisible = useDocumentStore((state) => state.setObjectsVisible);
@@ -73,6 +74,18 @@ export function Timeline() {
   // While an operation is being edited the model is evaluated at its position,
   // so the cursor stays put until the operation is dismissed.
   const locked = activeSketchId !== null || editingFeatureId !== null;
+
+  // The strip is a list of operations in build order, so Shift takes the range
+  // between two chips just like it does between two rows of the tree.
+  const clickFeature = useListSelection({
+    ids: project.features.map((feature) => feature.id),
+    selected: selection.filter((item) => item.kind === 'feature').map((item) => item.id),
+    onSelect: (ids, { id }) =>
+      selectMany(
+        ids.map((featureId) => ({ kind: 'feature' as const, id: featureId })),
+        { kind: 'feature', id },
+      ),
+  });
 
   const position =
     project.historyEnd === null
@@ -234,12 +247,7 @@ export function Timeline() {
                           },
                         ]);
                       }}
-                      onClick={(event) =>
-                        select(
-                          { kind: 'feature', id: feature.id },
-                          { additive: event.metaKey || event.ctrlKey || event.shiftKey },
-                        )
-                      }
+                      onClick={(event) => clickFeature(event, feature.id)}
                       onDoubleClick={() => {
                         if (feature.type === 'sketch' && canEditSketch(feature, featureErrors)) {
                           setActiveSketch(feature.id);

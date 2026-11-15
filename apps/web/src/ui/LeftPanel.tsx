@@ -25,8 +25,13 @@ import {
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { canEditSketch, sketchPlaneReady } from '../sketch/sectionPlane';
-import { useDocumentStore, useViewModel, type SelectionKind } from '../stores/documentStore';
-import { useKernelStore, type PreviewMarkKind } from '../stores/kernelStore';
+import {
+  useDocumentStore,
+  useViewModel,
+  type SelectionItem,
+  type SelectionKind,
+} from '../stores/documentStore';
+import { useKernelStore, type PreviewBodyMark, type PreviewMarkKind } from '../stores/kernelStore';
 import { isDirectlySelected, linkedBodyIds } from '../stores/selection';
 import { useUiStore } from '../stores/uiStore';
 import { IconButton } from './Controls';
@@ -36,6 +41,32 @@ import { FeatureIcon, SketchIcon } from './featureIcons';
 import { ModelSwitcher } from './ModelSwitcher';
 import { RenameInput } from './RenameInput';
 import { Tooltip } from './Tooltip';
+import { useListSelection } from './useListSelection';
+
+/** One row of the tree, in the order it is shown. */
+type TreeEntry =
+  | { kind: 'body'; key: string; body: BodyObject }
+  | { kind: 'sketch'; key: string; feature: SketchFeature; phantom: boolean }
+  | { kind: 'preview'; key: string; mark: PreviewBodyMark };
+
+/** The document object a body row stands for. */
+function bodySelection(body: BodyObject): SelectionItem {
+  return { kind: body.kind === 'mesh' ? 'mesh' : 'body', id: body.id };
+}
+
+/** Key a list row is selected by: the object it names. */
+function selectionKey(item: SelectionItem): string {
+  return `${item.kind}:${item.id}`;
+}
+
+/** The object a row selects, or null for a row that cannot be selected. */
+function entrySelection(entry: TreeEntry): SelectionItem | null {
+  if (entry.kind === 'body') return bodySelection(entry.body);
+  if (entry.kind === 'sketch' && !entry.phantom) {
+    return { kind: 'sketch', id: entry.feature.id };
+  }
+  return null;
+}
 
 export function LeftPanel() {
   const { t } = useTranslation();
@@ -43,7 +74,7 @@ export function LeftPanel() {
   const bodies = bodiesInHistory(project);
   const activeIds = activeFeatureIds(project);
   const selection = useDocumentStore((state) => state.selection);
-  const select = useDocumentStore((state) => state.select);
+  const selectMany = useDocumentStore((state) => state.selectMany);
   const toggleBodyVisibility = useDocumentStore((state) => state.toggleBodyVisibility);
   const toggleSketchVisibility = useDocumentStore((state) => state.toggleSketchVisibility);
   const featureErrors = useKernelStore((state) => state.featureErrors);
@@ -115,6 +146,73 @@ export function LeftPanel() {
   const previewAdded = (preview?.bodies ?? []).filter((mark) => mark.kind === 'added');
   const isEmpty = bodies.length === 0 && !hasSketches && previewAdded.length === 0;
 
+  // The tree is a list like every other one: the rows are collected in the
+  // order they are shown, so a Shift click can take the range between two of
+  // them. Rows the operation only previews are not part of it: they cannot be
+  // selected, so they cannot be inside a range either.
+  const bodiesByCreator = new Map<string, BodyObject[]>();
+  for (const body of bodies) {
+    const list = bodiesByCreator.get(body.createdBy) ?? [];
+    list.push(body);
+    bodiesByCreator.set(body.createdBy, list);
+  }
+  const placedBodies = new Set<string>();
+  const entries: TreeEntry[] = [];
+
+  // The operation being edited is not in the active history, but its preview is
+  // on screen, so its sketch object is listed as a phantom row.
+  const previewedSketchId = preview?.featureId ?? null;
+  for (const feature of project.features) {
+    const previewedSketch = feature.id === previewedSketchId && feature.type === 'sketch';
+    if (!activeIds.has(feature.id) && !previewedSketch) continue;
+    if (feature.type === 'sketch') {
+      if (sketchPlaneReady(feature) && !featureErrors[feature.id]) {
+        entries.push({
+          kind: 'sketch',
+          key: selectionKey({ kind: 'sketch', id: feature.id }),
+          feature,
+          phantom: previewedSketch && !activeIds.has(feature.id),
+        });
+      }
+    }
+    for (const body of bodiesByCreator.get(feature.id) ?? []) {
+      entries.push({ kind: 'body', key: selectionKey(bodySelection(body)), body });
+      placedBodies.add(body.id);
+    }
+  }
+  for (const body of bodies) {
+    if (!placedBodies.has(body.id)) {
+      entries.push({ kind: 'body', key: selectionKey(bodySelection(body)), body });
+    }
+  }
+  // Objects the edited operation will add are not document objects yet: they
+  // are shown dimmed and cannot be selected.
+  for (const mark of previewAdded) {
+    if (bodies.some((body) => body.id === mark.id)) continue;
+    entries.push({ kind: 'preview', key: `preview-${mark.id}`, mark });
+  }
+
+  const selectable = entries.flatMap((entry) => {
+    const item = entrySelection(entry);
+    return item ? [{ key: entry.key, item }] : [];
+  });
+  const itemByKey = new Map(selectable.map(({ key, item }) => [key, item]));
+  const clickRow = useListSelection({
+    ids: selectable.map(({ key }) => key),
+    selected: selection.map(selectionKey),
+    onSelect: (keys, { id }) => {
+      const clicked = itemByKey.get(id);
+      if (!clicked) return;
+      selectMany(
+        keys.flatMap((key) => {
+          const item = itemByKey.get(key);
+          return item ? [item] : [];
+        }),
+        clicked,
+      );
+    },
+  });
+
   const markIcon = (kind: PreviewMarkKind) => {
     if (kind === 'added') return <SquarePlus size={13} />;
     if (kind === 'modified') return <SquarePen size={13} />;
@@ -166,12 +264,7 @@ export function LeftPanel() {
           <button
             type="button"
             className="tree-main"
-            onClick={(event) =>
-              select(
-                { kind, id: body.id },
-                { additive: event.metaKey || event.ctrlKey || event.shiftKey },
-              )
-            }
+            onClick={(event) => clickRow(event, selectionKey({ kind, id: body.id }))}
             onDoubleClick={() => setRenaming(body.id)}
           >
             <span className="tree-icon" style={{ color: body.color }}>
@@ -271,12 +364,7 @@ export function LeftPanel() {
           <button
             type="button"
             className="tree-main"
-            onClick={(event) =>
-              select(
-                { kind: 'sketch', id: feature.id },
-                { additive: event.metaKey || event.ctrlKey || event.shiftKey },
-              )
-            }
+            onClick={(event) => clickRow(event, selectionKey({ kind: 'sketch', id: feature.id }))}
             onDoubleClick={() => {
               if (canEditSketch(feature, featureErrors)) setActiveSketch(feature.id);
             }}
@@ -309,39 +397,9 @@ export function LeftPanel() {
     );
   };
 
-  const bodiesByCreator = new Map<string, BodyObject[]>();
-  for (const body of bodies) {
-    const list = bodiesByCreator.get(body.createdBy) ?? [];
-    list.push(body);
-    bodiesByCreator.set(body.createdBy, list);
-  }
-  const placedBodies = new Set<string>();
-  const rows: ReactNode[] = [];
-
-  // The operation being edited is not in the active history, but its preview is
-  // on screen, so its sketch object is listed as a phantom row.
-  const previewedSketchId = preview?.featureId ?? null;
-  for (const feature of project.features) {
-    const previewedSketch = feature.id === previewedSketchId && feature.type === 'sketch';
-    if (!activeIds.has(feature.id) && !previewedSketch) continue;
-    if (feature.type === 'sketch') {
-      if (sketchPlaneReady(feature) && !featureErrors[feature.id]) {
-        rows.push(renderSketch(feature, previewedSketch && !activeIds.has(feature.id)));
-      }
-    }
-    for (const body of bodiesByCreator.get(feature.id) ?? []) {
-      rows.push(renderBody(body));
-      placedBodies.add(body.id);
-    }
-  }
-  for (const body of bodies) {
-    if (!placedBodies.has(body.id)) rows.push(renderBody(body));
-  }
-  // Objects the edited operation will add are not document objects yet: they
-  // are shown dimmed and cannot be selected.
-  for (const mark of previewAdded) {
-    if (bodies.some((body) => body.id === mark.id)) continue;
-    rows.push(
+  const renderPreview = (mark: PreviewBodyMark): ReactNode => {
+    const creator = project.features.find((candidate) => featureBodyId(candidate.id) === mark.id);
+    return (
       <div
         key={`preview-${mark.id}`}
         className="tree-row preview-added"
@@ -349,21 +407,24 @@ export function LeftPanel() {
       >
         <span className="tree-main">
           <span className="tree-icon" style={{ color: mark.color }}>
-            {(() => {
-              const feature = project.features.find(
-                (candidate) => featureBodyId(candidate.id) === mark.id,
-              );
-              return feature ? <FeatureIcon feature={feature} size={14} /> : <Box size={14} />;
-            })()}
+            {creator ? <FeatureIcon feature={creator} size={14} /> : <Box size={14} />}
           </span>
           <span className="tree-name">{mark.name}</span>
         </span>
         <span className="tree-preview-icon added" aria-hidden="true">
           <SquarePlus size={13} />
         </span>
-      </div>,
+      </div>
     );
-  }
+  };
+
+  const rows = entries.map((entry) =>
+    entry.kind === 'body'
+      ? renderBody(entry.body)
+      : entry.kind === 'sketch'
+        ? renderSketch(entry.feature, entry.phantom)
+        : renderPreview(entry.mark),
+  );
 
   return (
     <div className="panel">

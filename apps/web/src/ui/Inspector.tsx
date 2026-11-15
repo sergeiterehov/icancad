@@ -96,6 +96,7 @@ import { resolveRevolveAxis } from '../sketch/revolveAxis';
 import { SketchConstraints } from './SketchConstraints';
 import { Tooltip } from './Tooltip';
 import { translate } from './translate';
+import { useListSelection } from './useListSelection';
 
 function sketchEntityLabel(t: (key: string) => string, entity: SketchEntity): string {
   switch (entity.type) {
@@ -408,6 +409,14 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
   );
   const constraintEntityIds = new Set(constraintsGeometryIds(selectedConstraints));
   const lostEntityIds = new Set(projectionLost[feature.id] ?? []);
+  // Geometry of a sketch is listed in the order it was drawn, so Shift takes the
+  // range between two rows and Cmd or Ctrl toggles one. A point picked inside an
+  // entity keeps its `#index` suffix, which is not a row of this list.
+  const clickEntity = useListSelection({
+    ids: feature.entities.map((entity) => entity.id),
+    selected: sketchSelectionIds.filter((key) => !key.includes('#')),
+    onSelect: (ids) => setSketchSelection(ids),
+  });
 
   return (
     <PanelSection title={t('sketch.composition')} count={feature.entities.length} divided>
@@ -435,19 +444,7 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
                 data-dimmed={dimmed ? 'true' : undefined}
                 data-construction={entity.construction ? 'true' : undefined}
                 disabled={activeSketchId !== feature.id}
-                onClick={(event) => {
-                  const additive = event.metaKey || event.ctrlKey || event.shiftKey;
-                  if (!additive) {
-                    setSketchSelection([entity.id]);
-                    return;
-                  }
-                  const current = sketchSelectionIds.filter((key) => !key.includes('#'));
-                  setSketchSelection(
-                    current.includes(entity.id)
-                      ? current.filter((id) => id !== entity.id)
-                      : [...current, entity.id],
-                  );
-                }}
+                onClick={(event) => clickEntity(event, entity.id)}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   // Right-clicking a member of a multi-selection keeps it so
@@ -537,6 +534,7 @@ export function Inspector() {
   const apply = useDocumentStore((state) => state.apply);
   const renameProject = useDocumentStore((state) => state.renameProject);
   const select = useDocumentStore((state) => state.select);
+  const selectMany = useDocumentStore((state) => state.selectMany);
   const setExtrudeOp = useDocumentStore((state) => state.setExtrudeOp);
   const setExtrudeInput = useDocumentStore((state) => state.setExtrudeInput);
   const toggleExtrudeFace = useDocumentStore((state) => state.toggleExtrudeFace);
@@ -621,6 +619,30 @@ export function Inspector() {
     : undefined;
 
   const sketchGeometry = sketchObject ? sketchTopology(sketchObject.entities) : undefined;
+  // The faces and edges of a sketch are listed in topology order, so a Shift
+  // click selects the stretch between two of them.
+  const clickSketchFace = useListSelection({
+    ids: sketchObject
+      ? (sketchGeometry?.faces ?? []).map((face) => `${sketchObject.id}#${face.id}`)
+      : [],
+    selected: selection.filter((item) => item.kind === 'face').map((item) => item.id),
+    onSelect: (ids, { id }) =>
+      selectMany(
+        ids.map((faceId) => ({ kind: 'face' as const, id: faceId })),
+        { kind: 'face', id },
+      ),
+  });
+  const clickSketchEdge = useListSelection({
+    ids: sketchObject
+      ? (sketchGeometry?.edges ?? []).map((edge) => `${sketchObject.id}#${edge.id}`)
+      : [],
+    selected: selection.filter((item) => item.kind === 'sketch-edge').map((item) => item.id),
+    onSelect: (ids, { id }) =>
+      selectMany(
+        ids.map((edgeId) => ({ kind: 'sketch-edge' as const, id: edgeId })),
+        { kind: 'sketch-edge', id },
+      ),
+  });
   const sketchOffset =
     feature?.type === 'sketch'
       ? feature.plane.type === 'datum'
@@ -1356,12 +1378,7 @@ export function Inspector() {
                         type="button"
                         className="selection-item"
                         data-active={active ? 'true' : undefined}
-                        onClick={(event) =>
-                          select(
-                            { kind: 'face', id: faceKey },
-                            { additive: event.metaKey || event.ctrlKey || event.shiftKey },
-                          )
-                        }
+                        onClick={(event) => clickSketchFace(event, faceKey)}
                       >
                         <span className="tree-name">{t('sketch.face', { index: index + 1 })}</span>
                         <span className="tree-meta">{formatNumber(face.area, locale, 1)} mm²</span>
@@ -1393,12 +1410,7 @@ export function Inspector() {
                         type="button"
                         className="selection-item"
                         data-active={active ? 'true' : undefined}
-                        onClick={(event) =>
-                          select(
-                            { kind: 'sketch-edge', id: edgeKey },
-                            { additive: event.metaKey || event.ctrlKey || event.shiftKey },
-                          )
-                        }
+                        onClick={(event) => clickSketchEdge(event, edgeKey)}
                       >
                         <span className="tree-name">{t('sketch.edge', { index: index + 1 })}</span>
                         <span className="tree-meta">{formatNumber(edge.length, locale, 1)} mm</span>

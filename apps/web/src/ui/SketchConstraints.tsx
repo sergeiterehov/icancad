@@ -15,6 +15,7 @@ import { useContextMenuStore } from './ContextMenu';
 import { PanelSection } from './Controls';
 import { formatNumber } from './format';
 import { Tooltip } from './Tooltip';
+import { useListSelection } from './useListSelection';
 
 function constraintValue(constraint: SketchFeature['constraints'][number], locale: string): string {
   if (!isNumericConstraint(constraint)) return '';
@@ -58,8 +59,16 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
     selectionKeys.map((key) => key.split('#')[0]).filter((id): id is string => Boolean(id)),
   );
   const activeConstraintIds = new Set(selectedConstraintIds);
-  const soleConstraintId =
-    selectedConstraintIds.length === 1 ? selectedConstraintIds[0] : undefined;
+
+  // Constraints select like every other list. A plain click on the constraint
+  // that is already alone in the selection closes it again, which is how the
+  // value editor in the panel is dismissed.
+  const clickConstraint = useListSelection({
+    ids: visibleConstraints.map((constraint) => constraint.id),
+    selected: selectedConstraintIds,
+    repeatClears: true,
+    onSelect: (ids) => selectConstraints(ids),
+  });
 
   const removeConstraint = (id: string) => {
     const next = {
@@ -71,18 +80,6 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
       selectConstraint(null);
     }
     void diagnoseSketch(next);
-  };
-
-  const toggleConstraint = (id: string, additive: boolean) => {
-    if (!additive) {
-      selectConstraint(soleConstraintId === id ? null : id);
-      return;
-    }
-    selectConstraints(
-      activeConstraintIds.has(id)
-        ? selectedConstraintIds.filter((candidate) => candidate !== id)
-        : [...selectedConstraintIds, id],
-    );
   };
 
   return (
@@ -127,19 +124,11 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
                 data-problem={problems.has(constraint.id) ? 'true' : undefined}
                 role="button"
                 tabIndex={0}
-                onClick={(event) =>
-                  toggleConstraint(
-                    constraint.id,
-                    event.metaKey || event.ctrlKey || event.shiftKey,
-                  )
-                }
+                onClick={(event) => clickConstraint(event, constraint.id)}
                 onKeyDown={(event) => {
                   if (event.key !== 'Enter' && event.key !== ' ') return;
                   event.preventDefault();
-                  toggleConstraint(
-                    constraint.id,
-                    event.metaKey || event.ctrlKey || event.shiftKey,
-                  );
+                  clickConstraint(event, constraint.id);
                 }}
                 onContextMenu={(event) => {
                   event.preventDefault();
