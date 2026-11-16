@@ -75,8 +75,9 @@ interface DocumentState {
    */
   editingFeatureId: string | null;
   /**
-   * Operation created in this session that has not been dismissed yet. It is
-   * the one that hides the sketches it consumed when its settings close.
+   * Operation (or sketch) created in this session that has not been dismissed
+   * yet. It is the one that hides the sketches it consumed when its settings
+   * close, and the one that is removed again when it never got an input.
    */
   freshFeatureId: string | null;
   /**
@@ -469,14 +470,80 @@ function hideConsumedSketch(model: Model, featureId: string): Model {
 }
 
 /**
+ * An operation that was created but never given anything to work on builds
+ * nothing, which is exactly what the rebuild skips. Such an operation is the
+ * mark of a tool that was opened and closed again, not a step of the model.
+ */
+function nothingConfigured(feature: Feature): boolean {
+  switch (feature.type) {
+    case 'sketch':
+      return feature.entities.length === 0;
+    case 'extrude':
+      return !feature.sketchId && feature.faceRefs.length === 0;
+    case 'edge-treatment':
+      return feature.faceRefs.length === 0 && feature.edgeRefs.length === 0;
+    case 'shell':
+      return feature.bodyIds.length === 0 && feature.removeFaces.length === 0;
+    case 'array':
+      return feature.bodyIds.length === 0 && feature.featureIds.length === 0;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Takes back the operation the user has just created and never configured. The
+ * step that created it goes with it when nothing else was recorded in between,
+ * so undo does not walk through a tool that was only opened.
+ */
+function discardFreshFeature(
+  state: DocumentState,
+  project: Project,
+  featureId: string,
+): Partial<DocumentState> {
+  let next: Project;
+  try {
+    next = applyCommands(project, [{ type: 'feature/remove', featureId }]);
+  } catch {
+    // A dependent keeps the removal from being valid; the operation then stays
+    // as it is instead of taking the rest of the history with it.
+    return { freshFeatureId: null };
+  }
+  // Creating a sketch also gave its object the default visibility. A sketch
+  // that is thrown away takes that entry with it, so the creation is undone
+  // whole rather than leaving a trace behind in the metadata.
+  next = updateActiveModel(next, (model) => {
+    const objectId = sketchObjectId(featureId);
+    const entry = model.metadata[objectId];
+    if (!entry || entry.visible !== true || Object.keys(entry).length !== 1) return model;
+    const metadata = { ...model.metadata };
+    delete metadata[objectId];
+    return { ...model, metadata };
+  });
+  const past = [...state.past];
+  const previous = past[past.length - 1];
+  if (previous && projectContent(previous) === projectContent(next)) past.pop();
+  else past.push(project);
+  // A picker that fed this operation has nothing left to feed.
+  useUiStore.getState().endPicking();
+  return { project: next, past, future: [], selection: [], freshFeatureId: null };
+}
+
+/**
  * Dismissing the operation the user has just created hides the sketch it
  * consumes completely: the operation stands for that sketch from now on. An
  * older operation keeps whatever visibility the user gave its inputs, and a
- * failed one has not consumed anything yet, so the sketch stays in view.
+ * failed one has not consumed anything yet, so the sketch stays in view. A
+ * fresh operation that never got an input is not a step of the model at all:
+ * leaving it removes it again (an empty sketch goes the same way).
  */
 function closeFreshEdit(state: DocumentState, project: Project): Partial<DocumentState> {
   const fresh = state.freshFeatureId;
   if (!fresh || state.editingFeatureId !== fresh) return {};
+  const feature = activeModel(project).features.find((candidate) => candidate.id === fresh);
+  if (feature && nothingConfigured(feature)) {
+    return discardFreshFeature(state, project, fresh);
+  }
   if (useKernelStore.getState().featureErrors[fresh]) return {};
   const hidden = updateActiveModel(project, (model) => hideConsumedSketch(model, fresh));
   return hidden === project ? { freshFeatureId: null } : { project: hidden, freshFeatureId: null };
@@ -935,7 +1002,9 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     ) {
       return null;
     }
-    set({ selection: [{ kind: 'sketch', id: featureId }] });
+    // A sketch that is left without a single curve was never meant to be:
+    // closing its editor takes it off the timeline again (see closeFreshEdit).
+    set({ selection: [{ kind: 'sketch', id: featureId }], freshFeatureId: featureId });
     return featureId;
   },
 
@@ -1914,6 +1983,9 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   addModel: (baseName) => {
+    // Switching models commits whatever operation was being configured, the
+    // same way creating an object does.
+    get().endFeatureEdit();
     const state = get();
     const model = createModel(nextModelName(state.project, baseName));
     if (!state.apply({ type: 'model/add', model }, { type: 'model/activate', modelId: model.id })) {
@@ -1937,6 +2009,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     useKernelStore.getState().clearScene();
     const cleanup = closeFreshEdit(state, state.project);
     set({
+      ...cleanup,
       project: touch({
         ...(cleanup.project ?? state.project),
         activeSuperObjectId: modelId,
@@ -1982,7 +2055,10 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   // Moving the cursor is an explicit navigation action: it ends operation
   // editing and places the cursor where the user asked.
   setHistoryEnd: (featureId) => {
-    if (get().editingFeatureId !== null) set({ editingFeatureId: null });
+    const state = get();
+    if (state.editingFeatureId !== null) {
+      set({ ...leaveEditMode(state), ...closeFreshEdit(state, state.project) });
+    }
     get().apply({ type: 'history/set-end', featureId });
   },
 

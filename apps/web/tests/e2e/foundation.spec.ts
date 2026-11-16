@@ -146,6 +146,18 @@ async function commitOperation(page: Page) {
   await expect(markers).toHaveCount(0);
 }
 
+/** An empty sketch is taken off the timeline when it is left, so a test that
+ * wants one to survive draws a line in it first. */
+async function drawLine(page: Page) {
+  const canvas = page.getByTestId('viewport-canvas');
+  const box = await canvas.boundingBox();
+  await page.getByRole('button', { name: 'Line', exact: true }).click();
+  await page.mouse.click(box!.x + 260, box!.y + 320);
+  await page.waitForTimeout(320);
+  await page.mouse.click(box!.x + 430, box!.y + 320);
+  await page.waitForTimeout(320);
+}
+
 test.describe('ICANCad foundation', () => {
   test('creates, edits, persists and round-trips a project file', async ({ page }) => {
     await openApp(page);
@@ -222,6 +234,8 @@ test.describe('ICANCad foundation', () => {
     await page.getByRole('menuitem', { name: 'XY plane' }).click();
     await expect(page.locator('.sketch-overlay')).toBeVisible();
     await page.waitForTimeout(600);
+    // An empty sketch is discarded when it is left, so it needs a curve.
+    await drawLine(page);
     await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
     await expect(page.locator('.sketch-overlay')).toHaveCount(0);
 
@@ -837,6 +851,32 @@ test.describe('ICANCad foundation', () => {
     await expect(page.locator('.sketch-overlay')).toBeVisible();
   });
 
+  test('discards a sketch that is left empty', async ({ page }) => {
+    await openApp(page);
+    await page.getByRole('button', { name: 'Sketch', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'XY plane' }).click();
+    await expect(page.locator('.sketch-overlay')).toBeVisible();
+    await page.getByRole('button', { name: 'Finish sketch' }).click();
+    await expect(page.locator('.sketch-overlay')).toHaveCount(0);
+
+    // The tool was opened and closed again: the timeline keeps nothing for it.
+    await expect(page.locator('.timeline-op')).toHaveCount(0);
+    await expect(page.locator('.tree-row')).toHaveCount(0);
+  });
+
+  test('discards an operation that was given nothing', async ({ page }) => {
+    await openApp(page);
+    const inspector = page.getByTestId('inspector');
+    await page
+      .getByRole('navigation', { name: 'Tools' })
+      .getByRole('button', { name: 'Extrude', exact: true })
+      .click();
+    await expect(inspector.getByText('No faces yet: pick them in the view')).toBeVisible();
+
+    await commitOperation(page);
+    await expect(page.locator('.timeline-op')).toHaveCount(0);
+  });
+
   test('creates a sketch on a planar face', async ({ page }) => {
     await openApp(page);
     await addBox(page);
@@ -844,6 +884,10 @@ test.describe('ICANCad foundation', () => {
     await page.getByRole('button', { name: 'Sketch', exact: true }).click();
     await page.getByRole('menuitem', { name: 'XY plane' }).click();
     await expect(page.locator('.sketch-overlay')).toBeVisible();
+    // The sketch keeps its place on the timeline, so it needs geometry to
+    // survive the visit; only then can its placement be changed.
+    await page.waitForTimeout(600);
+    await drawLine(page);
     await page.getByRole('button', { name: 'Finish sketch' }).click();
     await page.locator('.timeline-op').last().click();
 
@@ -914,6 +958,8 @@ test.describe('ICANCad foundation', () => {
       await page.getByRole('menuitem', { name: plane }).click();
       await expect(page.locator('.sketch-overlay')).toBeVisible();
       await page.waitForTimeout(700);
+      // A sketch that is left empty is discarded, so it needs a curve to stay.
+      await drawLine(page);
       await page.getByRole('button', { name: 'Finish sketch' }).click();
     };
 
@@ -963,6 +1009,8 @@ test.describe('ICANCad foundation', () => {
       await page.getByRole('menuitem', { name: plane }).click();
       await expect(page.locator('.sketch-overlay')).toBeVisible();
       await page.waitForTimeout(700);
+      // A sketch that is left empty is discarded, so it needs a curve to stay.
+      await drawLine(page);
       await page.getByRole('button', { name: 'Finish sketch' }).click();
       await expect(page.locator('.sketch-overlay')).toHaveCount(0);
     };
@@ -1072,6 +1120,8 @@ test.describe('ICANCad foundation', () => {
     await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
     await expect(page.locator('.sketch-overlay')).toBeVisible();
     await page.waitForTimeout(700);
+    // Both sketches have to survive their visit: one curve each keeps them.
+    await drawLine(page);
     const facePolar = Number(await cube.getAttribute('data-polar'));
     const faceAzimuth = Number(await cube.getAttribute('data-azimuth'));
     await page.getByRole('button', { name: 'Finish sketch' }).click();
@@ -1082,6 +1132,7 @@ test.describe('ICANCad foundation', () => {
     await expect
       .poll(async () => Number(await cube.getAttribute('data-polar')))
       .toBeGreaterThan(1.5);
+    await drawLine(page);
     await page.getByRole('button', { name: 'Finish sketch' }).click();
 
     const sketchRows = page.locator('.tree-row').filter({ hasText: 'Sketch' });
@@ -1146,6 +1197,8 @@ test.describe('ICANCad foundation', () => {
     );
     await expect(page.locator('.sketch-overlay')).toBeVisible();
     await expect.poll(async () => Number(await cube.getAttribute('data-polar'))).toBeLessThan(0.2);
+    // The face sketch has to keep its place on the timeline after the visit.
+    await drawLine(page);
     const facePolar = Number(await cube.getAttribute('data-polar'));
     const faceAzimuth = Number(await cube.getAttribute('data-azimuth'));
     await page.getByRole('button', { name: 'Finish sketch' }).click();
@@ -1891,6 +1944,8 @@ test.describe('ICANCad foundation', () => {
     await expect(page.locator('.sketch-overlay')).toBeVisible();
     // Entering a sketch animates the camera; wait so clicks map to the settled view.
     await page.waitForTimeout(600);
+    // An empty sketch is discarded when it is left, so it needs a curve.
+    await drawLine(page);
     await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
     await expect(page.locator('.sketch-overlay')).toHaveCount(0);
 
@@ -1916,6 +1971,8 @@ test.describe('ICANCad foundation', () => {
     await expect(page.locator('.sketch-overlay')).toBeVisible();
     // Entering a sketch animates the camera; wait so clicks map to the settled view.
     await page.waitForTimeout(600);
+    // An empty sketch is discarded when it is left, so it needs a curve.
+    await drawLine(page);
     await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
     await expect(page.locator('.sketch-overlay')).toHaveCount(0);
 
