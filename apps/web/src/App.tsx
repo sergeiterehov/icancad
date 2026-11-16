@@ -54,7 +54,7 @@ export default function App() {
   const selectedFeatureId = useDocumentStore(
     (state) => state.selection.find((item) => item.kind === 'feature')?.id ?? null,
   );
-  const pinnedOperation = activeSketchId === null ? (editingFeatureId ?? selectedFeatureId) : null;
+  const subjectOperation = activeSketchId === null ? (editingFeatureId ?? selectedFeatureId) : null;
   // A click carries no pointer type of its own, so the press before it is what
   // says whether a finger or a mouse asked for the selection.
   useEffect(() => installPointerWatch(), []);
@@ -85,7 +85,7 @@ export default function App() {
               side="right"
               label={t('panels.inspector')}
               testId="right"
-              pinned={pinnedOperation}
+              subject={subjectOperation}
             >
               <SectionPanel />
               <Inspector />

@@ -25,9 +25,12 @@ export function opensOnHover(hand: DockHand): boolean {
  * opens the panel by coming to it and gives it back by leaving, so an open panel
  * needs no way out drawn on it. A finger has no such way back, so its tongue
  * stays on screen whenever the panel does.
+ *
+ * A pinned panel is on screen by the user's wish and stays there: a tongue would
+ * be a handle for a panel that never leaves, so none is drawn for either hand.
  */
-export function showsTab(hand: DockHand, open: boolean): boolean {
-  return hand === 'touch' || !open;
+export function showsTab(hand: DockHand, open: boolean, pinned = false): boolean {
+  return !pinned && (hand === 'touch' || !open);
 }
 
 /**
@@ -35,8 +38,14 @@ export function showsTab(hand: DockHand, open: boolean): boolean {
  * open: the inspector of a selected operation is a form the user reads, not a
  * panel that disappears because the mouse crossed the scene. A menu opened
  * inside the panel holds it too — the menu is drawn over the scene, so reading
- * it would otherwise take away the row it belongs to.
+ * it would otherwise take away the row it belongs to. A pinned panel is not
+ * given back at all.
  */
-export function closesOnLeave(hand: DockHand, held: boolean, menuOpen = false): boolean {
-  return hand === 'hover' && !held && !menuOpen;
+export function closesOnLeave(
+  hand: DockHand,
+  held: boolean,
+  menuOpen = false,
+  pinned = false,
+): boolean {
+  return !pinned && hand === 'hover' && !held && !menuOpen;
 }

@@ -68,6 +68,11 @@ interface UiState {
   rightDockShown: boolean;
   /** Panels stop at their content instead of running the full height. */
   compactPanels: boolean;
+  /**
+   * Both panels are held on screen: for a finger that means no tongues at all,
+   * for a cursor that the panels never close as it leaves them.
+   */
+  pinnedPanels: boolean;
   /** Pointer and wheel bindings the camera follows. */
   cameraScheme: CameraSchemeId;
   setCameraScheme: (scheme: CameraSchemeId) => void;
@@ -87,6 +92,7 @@ interface UiState {
   setLeftDockShown: (shown: boolean) => void;
   setRightDockShown: (shown: boolean) => void;
   setCompactPanels: (compact: boolean) => void;
+  setPinnedPanels: (pinned: boolean) => void;
   setModelListExpanded: (expanded: boolean) => void;
   requestProjectDelete: (request: ProjectDeleteRequest) => void;
   cancelProjectDelete: () => void;
@@ -209,6 +215,7 @@ let toastSequence = 0;
 const SECTION_ENABLED_KEY = 'icancad.sectionEnabled';
 const SKETCH_MAGNET_KEY = 'icancad.sketchMagnet';
 const COMPACT_PANELS_KEY = 'icancad.compactPanels';
+const PINNED_PANELS_KEY = 'icancad.pinnedPanels';
 const CAMERA_SCHEME_KEY = 'icancad.cameraScheme';
 const INPUT_PREFERENCE_KEY = 'icancad.input';
 const ORBIT_STYLE_KEY = 'icancad.orbit';
@@ -237,6 +244,15 @@ function loadSketchMagnet(): boolean {
 function loadCompactPanels(): boolean {
   try {
     return localStorage.getItem(COMPACT_PANELS_KEY) === 'true';
+  } catch {
+    // localStorage can be unavailable in private mode.
+  }
+  return false;
+}
+
+function loadPinnedPanels(): boolean {
+  try {
+    return localStorage.getItem(PINNED_PANELS_KEY) === 'true';
   } catch {
     // localStorage can be unavailable in private mode.
   }
@@ -293,6 +309,7 @@ export const useUiStore = create<UiState>((set) => ({
   leftDockShown: true,
   rightDockShown: true,
   compactPanels: loadCompactPanels(),
+  pinnedPanels: loadPinnedPanels(),
   cameraScheme: loadCameraScheme(),
   setCameraScheme: (cameraScheme) => {
     try {
@@ -345,6 +362,14 @@ export const useUiStore = create<UiState>((set) => ({
       // A preference that cannot be stored still applies to this session.
     }
     set({ compactPanels });
+  },
+  setPinnedPanels: (pinnedPanels) => {
+    try {
+      localStorage.setItem(PINNED_PANELS_KEY, String(pinnedPanels));
+    } catch {
+      // A preference that cannot be stored still applies to this session.
+    }
+    set({ pinnedPanels });
   },
   setModelListExpanded: (modelListExpanded) => set({ modelListExpanded }),
   requestProjectDelete: (projectDeleteRequest) => set({ projectDeleteRequest }),

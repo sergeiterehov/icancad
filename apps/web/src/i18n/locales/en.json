@@ -24,6 +24,7 @@
     "language": "Language",
     "panels": "Panels",
     "compactPanels": "Compact",
+    "pinPanels": "Pin",
     "saving": "Saving…",
     "saved": "Saved",
     "saveError": "Save failed",

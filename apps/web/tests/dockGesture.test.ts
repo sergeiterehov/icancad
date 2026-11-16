@@ -52,3 +52,23 @@ describe('a dock under a finger', () => {
     expect(showsTab('touch', false)).toBe(true);
   });
 });
+
+describe('panels the user pinned', () => {
+  it('are not given back by a cursor that leaves', () => {
+    expect(closesOnLeave('hover', false, false, true)).toBe(false);
+    // A pinned panel holds even without a subject, and the menu does not matter.
+    expect(closesOnLeave('hover', false, true, true)).toBe(false);
+  });
+
+  it('carry no tongue for either hand', () => {
+    // There is nothing for a tongue to open: the panel never goes away.
+    expect(showsTab('hover', false, true)).toBe(false);
+    expect(showsTab('hover', true, true)).toBe(false);
+    expect(showsTab('touch', true, true)).toBe(false);
+  });
+
+  it('leave the rest of the dock as it was', () => {
+    expect(opensOnHover('hover')).toBe(true);
+    expect(showsTab('hover', false)).toBe(true);
+  });
+});

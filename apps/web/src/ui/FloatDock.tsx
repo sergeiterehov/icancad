@@ -28,13 +28,14 @@ export const STARTUP_TUCK_MS = 1000;
  *
  * The one planned move is at the very start: a panel is open so the workspace
  * shows what it has, and it tucks itself away a moment later on every device, so
- * the model keeps the screen.
+ * the model keeps the screen. A panel the user pinned is the exception: it is on
+ * screen because of that wish, so it does not tuck away and keeps no tongue.
  */
 export function FloatDock({
   side,
   label,
   testId,
-  pinned = null,
+  subject = null,
   children,
 }: {
   side: 'left' | 'right';
@@ -44,7 +45,7 @@ export function FloatDock({
    * What on screen needs this panel, if anything. It unfolds the panel and rules
    * over its own state; a different subject unfolds it again.
    */
-  pinned?: string | null;
+  subject?: string | null;
   children: ReactNode;
 }) {
   const open = useUiStore((state) => (side === 'left' ? state.leftDockOpen : state.rightDockOpen));
@@ -54,6 +55,8 @@ export function FloatDock({
   const setShown = useUiStore((state) =>
     side === 'left' ? state.setLeftDockShown : state.setRightDockShown,
   );
+  // Panels the user has pinned stay on screen whatever the hand does.
+  const pinnedPanels = useUiStore((state) => state.pinnedPanels);
   // Set the moment the user works the panel, so the start-up tuck below leaves it
   // alone from then on.
   const touched = useRef(false);
@@ -67,11 +70,11 @@ export function FloatDock({
     primaryInputProfile() === 'touch' ? 'touch' : dockHand(lastPointerType()),
   );
   useEffect(() => {
-    if (pinned) setSubjectOpen(true);
-  }, [pinned]);
+    if (subject) setSubjectOpen(true);
+  }, [subject]);
 
-  const held = pinned !== null;
-  const shown = held ? subjectOpen : open;
+  const held = subject !== null;
+  const shown = pinnedPanels || (held ? subjectOpen : open);
   // The rest of the layout follows what is on screen, not what the user asked
   // for: a panel unfolded by its subject takes the same room as one unfolded by
   // hand, and the bars and the cube keep clear of it either way.
@@ -111,7 +114,8 @@ export function FloatDock({
       inner = window.requestAnimationFrame(() => {
         timer = window.setTimeout(() => {
           timer = null;
-          if (!touched.current) setOpen(false);
+          // A pinned panel is open by the user's wish, not as an invitation.
+          if (!touched.current && !useUiStore.getState().pinnedPanels) setOpen(false);
         }, STARTUP_TUCK_MS);
       });
     });
@@ -126,7 +130,7 @@ export function FloatDock({
     <div
       className={`dock dock-${side}`}
       data-open={shown ? 'true' : 'false'}
-      data-tab={showsTab(hand, shown) ? 'true' : 'false'}
+      data-tab={showsTab(hand, shown, pinnedPanels) ? 'true' : 'false'}
       // Enter and leave are read on the dock as a whole, so moving between the
       // edge, the tongue and the panel itself is not a departure.
       onPointerEnter={(event) => {
@@ -137,7 +141,9 @@ export function FloatDock({
       onPointerLeave={() => {
         // A menu opened from the panel is drawn over the scene, so it counts as
         // still being at the panel rather than having left it.
-        if (closesOnLeave(hand, held, useContextMenuStore.getState().menu !== null)) hide();
+        if (closesOnLeave(hand, held, useContextMenuStore.getState().menu !== null, pinnedPanels)) {
+          hide();
+        }
       }}
     >
       <div className="dock-trigger" aria-hidden="true" onClick={show} />

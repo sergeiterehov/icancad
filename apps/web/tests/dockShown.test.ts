@@ -10,6 +10,7 @@ describe('a dock on screen', () => {
   beforeEach(() => {
     useUiStore.setState({ leftDockOpen: true, rightDockOpen: true });
     useUiStore.setState({ leftDockShown: true, rightDockShown: true });
+    useUiStore.setState({ pinnedPanels: false });
   });
 
   it('is a separate fact from the wish to have it open', () => {
@@ -36,6 +37,18 @@ describe('a dock on screen', () => {
     expect(useUiStore.getState().leftDockOpen).toBe(false);
     // Showing or hiding a panel is not a preference: it does not fold it away.
     store.setLeftDockShown(true);
+    expect(useUiStore.getState().leftDockOpen).toBe(false);
+  });
+
+  it('is pinned by a wish of its own that keeps what the hand did', () => {
+    const store = useUiStore.getState();
+    store.setLeftDockOpen(false);
+    store.setPinnedPanels(true);
+    // The pin rules over the hand for as long as it is on, but the hand's own
+    // state waits underneath for the moment it is turned off.
+    expect(useUiStore.getState().pinnedPanels).toBe(true);
+    expect(useUiStore.getState().leftDockOpen).toBe(false);
+    store.setPinnedPanels(false);
     expect(useUiStore.getState().leftDockOpen).toBe(false);
   });
 });

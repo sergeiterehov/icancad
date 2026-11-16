@@ -7,6 +7,7 @@ import {
   type Project,
 } from '@icancad/model';
 import {
+  Columns3,
   Download,
   ExternalLink,
   FileArchive,
@@ -84,6 +85,7 @@ export function ProjectMenu() {
   const theme = useThemeStore((state) => state.theme);
   const setTheme = useThemeStore((state) => state.setTheme);
   const compactPanels = useUiStore((state) => state.compactPanels);
+  const pinnedPanels = useUiStore((state) => state.pinnedPanels);
   const openMenu = useContextMenuStore((state) => state.open);
   const updateItems = useContextMenuStore((state) => state.updateItems);
   // Only the logo menu may be rebuilt in place; object and operation menus have
@@ -273,6 +275,15 @@ export function ProjectMenu() {
         icon: <PanelLeft size={14} />,
         submenu: [
           {
+            id: 'pin-panels',
+            label: t('project.pinPanels'),
+            icon: <Columns3 size={14} />,
+            checked: useUiStore.getState().pinnedPanels,
+            keepOpen: true,
+            onSelect: () =>
+              useUiStore.getState().setPinnedPanels(!useUiStore.getState().pinnedPanels),
+          },
+          {
             id: 'compact-panels',
             label: t('project.compactPanels'),
             icon: <LayoutPanelLeft size={14} />,
@@ -340,7 +351,7 @@ export function ProjectMenu() {
   useEffect(() => {
     if (!projectMenuOpen) return;
     updateItems(menuItems(projectsRef.current));
-  }, [projectMenuOpen, theme, i18n.resolvedLanguage, compactPanels]);
+  }, [projectMenuOpen, theme, i18n.resolvedLanguage, compactPanels, pinnedPanels]);
 
   const openProjectMenu = async (event: MouseEvent<HTMLButtonElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();

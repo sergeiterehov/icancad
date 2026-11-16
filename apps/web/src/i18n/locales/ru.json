@@ -24,6 +24,7 @@
     "language": "Язык",
     "panels": "Панели",
     "compactPanels": "Компактные",
+    "pinPanels": "Фиксировать",
     "saving": "Сохранение…",
     "saved": "Сохранено",
     "saveError": "Ошибка сохранения",
