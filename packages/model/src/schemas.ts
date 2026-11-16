@@ -402,14 +402,13 @@ const arrayPath = z.discriminatedUnion('kind', [
 
 const arrayAxis = z.preprocess(
   (value) => {
-    // An axis used to be a picked edge, either of a body or of a sketch. The
-    // rotation now turns around a world axis with a radius or around an arc, so
-    // such an axis falls back to the world axis the line of a body was closest
-    // to in spirit: no offset, copies turning where they are.
+    // An axis used to be a picked edge or an arc of a sketch. Both are gone, so
+    // such an axis falls back to the world axis through the centre of the
+    // model, which is where a rotation with nothing picked starts.
     if (value && typeof value === 'object') {
       const kind = (value as { kind?: unknown }).kind;
-      if (kind === 'body-edge' || kind === 'sketch-edge') {
-        return { kind: 'world', axis: 'z', radius: 0 };
+      if (kind === 'body-edge' || kind === 'sketch-edge' || kind === 'arc') {
+        return { kind: 'world', axis: 'z' };
       }
     }
     return value;
@@ -420,9 +419,18 @@ const arrayAxis = z.preprocess(
       axis: z.enum(['x', 'y', 'z']),
     }),
     z.object({
-      kind: z.literal('arc'),
+      kind: z.literal('face'),
+      bodyId: z.string().min(1),
+      faceId: z.string().min(1),
+      origin: vec3,
+      normal: vec3,
+    }),
+    z.object({
+      kind: z.literal('sketch-face'),
       sketchId: z.string().min(1),
-      entityId: z.string().min(1),
+      faceId: z.string().min(1),
+      origin: vec3,
+      normal: vec3,
     }),
   ]),
 );

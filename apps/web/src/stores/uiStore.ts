@@ -94,8 +94,8 @@ interface UiState {
   pickingArrayBodies: string | null;
   /** Array waiting for the operations whose bodies it should repeat. */
   pickingArrayOperations: string | null;
-  /** Array rotation waiting for the arc it should turn around. */
-  pickingArrayArc: ArrayDirectionPicker | null;
+  /** Array rotation waiting for the face it should turn around. */
+  pickingArrayFace: ArrayDirectionPicker | null;
   /** Array path waiting for curves that run end to end. */
   pickingArrayPath: ArrayDirectionPicker | null;
   /** Face pick started from the sketch tool: open the editor after a pick. */
@@ -132,7 +132,7 @@ interface UiState {
   setPickingRevolveAxis: (featureId: string | null) => void;
   setPickingArrayBodies: (featureId: string | null) => void;
   setPickingArrayOperations: (featureId: string | null) => void;
-  setPickingArrayArc: (picker: ArrayDirectionPicker | null) => void;
+  setPickingArrayFace: (picker: ArrayDirectionPicker | null) => void;
   setPickingArrayPath: (picker: ArrayDirectionPicker | null) => void;
   /** Leaves whichever picker is open; every operation shares one. */
   endPicking: () => void;
@@ -171,7 +171,7 @@ const PICKER_KEYS = [
   'pickingRevolveAxis',
   'pickingArrayBodies',
   'pickingArrayOperations',
-  'pickingArrayArc',
+  'pickingArrayFace',
   'pickingArrayPath',
 ] as const;
 
@@ -315,7 +315,7 @@ export const useUiStore = create<UiState>((set) => ({
   pickingRevolveAxis: null,
   pickingArrayBodies: null,
   pickingArrayOperations: null,
-  pickingArrayArc: null,
+  pickingArrayFace: null,
   pickingArrayPath: null,
   sketchPlanePickThenEdit: null,
   sectionEnabled: loadSectionEnabled(),
@@ -356,7 +356,7 @@ export const useUiStore = create<UiState>((set) => ({
     set(onlyPicker('pickingArrayBodies', pickingArrayBodies)),
   setPickingArrayOperations: (pickingArrayOperations) =>
     set(onlyPicker('pickingArrayOperations', pickingArrayOperations)),
-  setPickingArrayArc: (picker) => set(onlyPicker('pickingArrayArc', picker)),
+  setPickingArrayFace: (picker) => set(onlyPicker('pickingArrayFace', picker)),
   setPickingArrayPath: (picker) => set(onlyPicker('pickingArrayPath', picker)),
   startSketchPlanePicking: (sketchPlanePickThenEdit, enterEdit) =>
     set({

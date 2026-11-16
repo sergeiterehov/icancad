@@ -1,4 +1,4 @@
-import { createId, type SectionPlane, type SketchFeature } from '@icancad/model';
+import { createId, objectName, type SectionPlane, type SketchFeature } from '@icancad/model';
 import {
   ArrowLeftRight,
   ChevronDown,
@@ -16,6 +16,7 @@ import { useDocumentStore, useViewModel } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { useUiStore } from '../stores/uiStore';
 import { IconButton, NumberField, ObjectPickerField } from './Controls';
+import { faceNumber, geometryName } from './geometryNames';
 import { Tooltip } from './Tooltip';
 
 type Axis = 'x' | 'y' | 'z';
@@ -216,7 +217,12 @@ export function SectionPanel() {
                         compact
                         label={t('section.selectFace')}
                         value={
-                          face ? t('section.face', { index: Number(face.topoId) + 1 }) : undefined
+                          face
+                            ? geometryName(
+                                objectName(project, face.bodyId, 'Body'),
+                                faceNumber(face.topoId),
+                              )
+                            : undefined
                         }
                         placeholder={t('section.selectFace')}
                         icon={<Hexagon size={12} />}
@@ -225,6 +231,8 @@ export function SectionPanel() {
                         onClick={() =>
                           setPickingSectionFace(pickingSectionFace === plane.id ? null : plane.id)
                         }
+                        onClear={() => update(plane.id, { face: null })}
+                        clearLabel={t('common.clear')}
                         testId="section-face-picker"
                       />
                     </div>

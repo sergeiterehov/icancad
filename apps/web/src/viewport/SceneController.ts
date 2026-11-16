@@ -4898,13 +4898,17 @@ export class SceneController {
       return;
     }
 
+    // A curve of a sketch is a finer target than the surface under it, so it
+    // answers first while objects are selected or edges are being picked. A
+    // face picker is not asking for curves: the face under the pointer is.
+    const edgesFirst = this.faceHighlights.edgePicking || !this.faceHighlights.picking;
     let pick = this.pickSceneAt(
       clientX,
       clientY,
       true,
       this.faceHighlights.bodyFacesOnly,
       false,
-      true,
+      edgesFirst,
     );
     // A face-picking tool shows the face or region under the pointer itself.
     if (this.faceHighlights.picking) {
@@ -4925,7 +4929,7 @@ export class SceneController {
         true,
         this.faceHighlights.bodyFacesOnly,
         true,
-        true,
+        edgesFirst,
       );
     }
     if (pick?.kind === 'sketch-edge') {

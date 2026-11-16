@@ -1,7 +1,6 @@
 import type { TessellationResult } from '@icancad/kernel';
 import type { ArrayDirection, ArrayPath, SketchFeature, SketchFrame, Vec3 } from '@icancad/model';
 import { sketchPointToWorld, tessellateEntity } from '@icancad/sketch';
-import { sketchFrameOf } from '../sketch/sectionPlane';
 import {
   arrayCombinations,
   IDENTITY_MATRIX,
@@ -250,40 +249,26 @@ function cross(a: Vec3, b: Vec3): Vec3 {
   return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 }
 
-function worldPointOf(frame: SketchFrame, x: number, y: number): Vec3 {
-  return [
-    frame.origin[0] + frame.xAxis[0] * x + frame.yAxis[0] * y,
-    frame.origin[1] + frame.xAxis[1] * x + frame.yAxis[1] * y,
-    frame.origin[2] + frame.xAxis[2] * x + frame.yAxis[2] * y,
-  ];
-}
-
 /**
  * The line a rotation direction turns around, in world space.
  *
  * A world axis runs through the centre of the model: the copies swing around it
  * at whatever distance they happen to be, so the freedom is the angle and the
- * count only. A picked arc turns the copies around its centre, inside the plane
- * the arc is drawn in.
+ * count only. A picked face turns them around its normal, through the centre of
+ * the face.
  */
 export function rotationAxisOf(
   direction: Extract<ArrayDirection, { kind: 'rotation' }>,
-  context: ArrayPlacementContext,
 ): { origin: Vec3; direction: Vec3 } | null {
   const axis = direction.axis;
   if (axis.kind === 'world') {
     return { origin: [0, 0, 0], direction: AXIS_DIRECTIONS[axis.axis] };
   }
-  const sketch = context.sketches.find((candidate) => candidate.id === axis.sketchId);
-  if (!sketch) return null;
-  const entity = sketch.entities.find((candidate) => candidate.id === axis.entityId);
-  // Only a round curve has a centre to turn around.
-  if (!entity || (entity.type !== 'arc' && entity.type !== 'circle')) return null;
-  const frame = context.frames?.[sketch.id] ?? sketchFrameOf(sketch);
-  return {
-    origin: worldPointOf(frame, entity.cx, entity.cy),
-    direction: unit(frame.normal) ?? AXIS_DIRECTIONS.z,
-  };
+  // A face of a body and a region of a sketch both store the centre and the
+  // normal they were picked with, so the turn is the same line either way.
+  const normal = unit(axis.normal);
+  if (!normal) return null;
+  return { origin: axis.origin, direction: normal };
 }
 
 /**
@@ -307,7 +292,7 @@ export function directionMatrices(
   const count = clampArrayCount(direction.count);
   if (direction.kind === 'linear') return linearMatrices(direction, count);
   if (direction.kind === 'rotation') {
-    const axis = rotationAxisOf(direction, context);
+    const axis = rotationAxisOf(direction);
     if (!axis) throw new Error('ARRAY_AXIS_MISSING');
     const span = rotationSpan(direction);
     // A turn of nothing would stack every copy on the seed.

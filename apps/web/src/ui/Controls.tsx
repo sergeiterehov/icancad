@@ -111,7 +111,7 @@ export function SegmentedTab({
       disabled={disabled}
       aria-pressed={active}
       aria-label={square ? label : undefined}
-      title={tooltip}
+      title={tooltip ?? (square ? label : undefined)}
       onClick={onClick}
     >
       {icon ? (
@@ -119,7 +119,9 @@ export function SegmentedTab({
           {icon}
         </span>
       ) : null}
-      <span className="segmented-tab-label">{label}</span>
+      {/* A square tab with an icon is the symbol alone: the label is its name,
+          for the screen reader and the tooltip, not a word on the button. */}
+      {square && icon ? null : <span className="segmented-tab-label">{label}</span>}
     </button>
   );
 }

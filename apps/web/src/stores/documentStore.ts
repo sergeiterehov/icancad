@@ -140,11 +140,11 @@ interface DocumentState {
   setArrayAxis: (featureId: string, index: number, axis: 'x' | 'y' | 'z') => void;
   /** Tilt of a straight direction, in degrees; zero is the axis itself. */
   setArrayTilt: (featureId: string, index: number, angle: number) => void;
-  /** Turning around the centre of a picked arc; null takes the world axis back. */
-  setArrayAxisArc: (
+  /** Turning around a picked face; null takes the world axis back. */
+  setArrayAxisFace: (
     featureId: string,
     index: number,
-    arc: Extract<ArrayRotationAxis, { kind: 'arc' }> | null,
+    face: Exclude<ArrayRotationAxis, { kind: 'world' }> | null,
   ) => void;
   invertArrayDirection: (featureId: string, index: number) => void;
   /** Adds a curve to a path direction, or drops it when it is already there. */
@@ -1453,17 +1453,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     );
   },
 
-  setArrayAxisArc: (featureId, index, arc) => {
+  setArrayAxisFace: (featureId, index, face) => {
     replaceArrayFeature(
       featureId,
       (feature) => {
         const current = feature.directions[index];
         if (!current || current.kind !== 'rotation') return null;
-        if (!arc) return withArrayDirection(feature, index, {
-          ...current,
-          axis: { kind: 'world', axis: 'z' },
-        });
-        return withArrayDirection(feature, index, { ...current, axis: arc });
+        const axis: ArrayRotationAxis = face ?? { kind: 'world', axis: 'z' };
+        return withArrayDirection(feature, index, { ...current, axis });
       },
       get,
     );

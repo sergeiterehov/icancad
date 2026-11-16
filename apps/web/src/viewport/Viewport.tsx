@@ -65,6 +65,8 @@ import {
 import { primitivePreview } from '../primitive/preview';
 import { resolveEdgeRef } from '../kernel/edgeLookup';
 import { edgeTreatmentEdgeRef, edgeTreatmentFaceRef } from '../quick/edgeTreatment';
+import { outwardNormal } from '../quick/geometry';
+import { sketchRegionPlane } from '../sketch/regionPlane';
 import { shellFaceRef } from '../quick/shell';
 import { findBoundExtrude, quickTargetFromSelection } from '../quick/target';
 import { bodyEdgeAxisRef } from '../sketch/revolveAxis';
@@ -203,7 +205,7 @@ export function Viewport() {
   const pickingRevolveAxis = useUiStore((state) => state.pickingRevolveAxis);
   const pickingArrayBodies = useUiStore((state) => state.pickingArrayBodies);
   const pickingArrayOperations = useUiStore((state) => state.pickingArrayOperations);
-  const pickingArrayArc = useUiStore((state) => state.pickingArrayArc);
+  const pickingArrayFace = useUiStore((state) => state.pickingArrayFace);
   const pickingArrayPath = useUiStore((state) => state.pickingArrayPath);
   const sketchSectionEnabled = useUiStore((state) => state.sketchSectionEnabled);
   const sketchConstraintIds = useUiStore((state) => state.sketchConstraintIds);
@@ -616,27 +618,58 @@ export function Viewport() {
           }
           return;
         }
-        if (ui.pickingArrayArc) {
-          const picker = ui.pickingArrayArc;
-          if (pick?.kind !== 'sketch-edge') return;
-          // A rotation turns around the centre of a round curve, inside the
-          // plane the curve is drawn in: an arc or a full circle, nothing else.
-          const model = activeModel(store.project);
-          const sketch = model.features.find(
-            (candidate): candidate is SketchFeature =>
-              candidate.id === pick.sketchId && candidate.type === 'sketch',
-          );
-          const entity = sketch?.entities.find((candidate) => candidate.id === pick.entityId);
-          if (!entity || (entity.type !== 'arc' && entity.type !== 'circle')) {
-            ui.showToast('errors.ARRAY_ARC_NEEDED', 'error');
+        if (ui.pickingArrayFace) {
+          const picker = ui.pickingArrayFace;
+          // A face of a body or a region of a sketch: both are a plane, and the
+          // copies turn around the normal of that plane through its centre.
+          if (pick?.kind === 'face') {
+            const sketch = activeModel(store.project).features.find(
+              (candidate): candidate is SketchFeature =>
+                candidate.id === pick.sketchId && candidate.type === 'sketch',
+            );
+            const plane = sketch
+              ? sketchRegionPlane(
+                  sketch,
+                  pick.faceId,
+                  useKernelStore.getState().sketchFrames[pick.sketchId],
+                )
+              : null;
+            if (!plane) return;
+            store.setArrayAxisFace(picker.featureId, picker.index, {
+              kind: 'sketch-face',
+              sketchId: pick.sketchId,
+              faceId: pick.faceId,
+              origin: plane.origin,
+              normal: plane.normal,
+            });
+            ui.setPickingArrayFace(null);
             return;
           }
-          store.setArrayAxisArc(picker.featureId, picker.index, {
-            kind: 'arc',
-            sketchId: pick.sketchId,
-            entityId: pick.entityId,
+          if (pick?.kind !== 'body-face') return;
+          if (!pick.planar) {
+            ui.showToast('errors.FACE_NOT_PLANAR', 'error');
+            return;
+          }
+          // The face is read from the input the operation works on, which is
+          // the base mesh while a preview shows its result.
+          const kernelState = useKernelStore.getState();
+          const mark = kernelState.preview?.bodies.find(
+            (candidate) => candidate.id === pick.bodyId,
+          );
+          const mesh = mark?.baseMesh ?? kernelState.meshes[pick.bodyId];
+          const face = mesh ? outwardNormal(mesh, Number(pick.faceId)) : null;
+          if (!face) {
+            ui.showToast('errors.FACE_NOT_PLANAR', 'error');
+            return;
+          }
+          store.setArrayAxisFace(picker.featureId, picker.index, {
+            kind: 'face',
+            bodyId: pick.bodyId,
+            faceId: pick.faceId,
+            origin: face.centroid,
+            normal: face.normal,
           });
-          ui.setPickingArrayArc(null);
+          ui.setPickingArrayFace(null);
           return;
         }
         if (ui.pickingArrayPath) {
@@ -1166,9 +1199,10 @@ export function Viewport() {
       // faces while it is asking: the face under the pointer is the operation.
       geometrySelected:
         Boolean(pickingArrayOperations) ||
+        Boolean(pickingArrayFace) ||
         selection.some((item) => item.kind === 'body-face' || item.kind === 'edge'),
     });
-  }, [selection, selectedSketchId, pickingArrayOperations]);
+  }, [selection, selectedSketchId, pickingArrayOperations, pickingArrayFace]);
 
   useEffect(() => {
     controllerRef.current?.setHandles(handles);
@@ -1248,18 +1282,19 @@ export function Viewport() {
         Boolean(pickingSketchPlane) ||
         Boolean(pickingSectionFace) ||
         Boolean(pickingRevolveAxis) ||
-        Boolean(pickingArrayArc) ||
+        Boolean(pickingArrayFace) ||
         Boolean(pickingArrayPath) ||
         sketchProjecting,
       bodyPicking: Boolean(pickingExtrudeBodies) || Boolean(pickingShellBodies),
       edgePicking:
         Boolean(pickingEdges) ||
         Boolean(pickingRevolveAxis) ||
-        Boolean(pickingArrayArc) ||
         Boolean(pickingArrayPath) ||
         sketchProjecting,
       vertexPicking: false,
       projecting: sketchProjecting,
+      // A section plane needs a face of a body; a rotation axis also takes a
+      // region of a sketch, which is drawn over the face it lies on.
       bodyFacesOnly: Boolean(pickingSketchPlane) || Boolean(pickingSectionFace),
     });
   }, [
@@ -1274,7 +1309,7 @@ export function Viewport() {
     pickingShellBodies,
     pickingShellFaces,
     pickingRevolveAxis,
-    pickingArrayArc,
+    pickingArrayFace,
     pickingArrayPath,
     sketchProjecting,
     activeSketchId,
@@ -1385,7 +1420,13 @@ export function Viewport() {
         const selectedEdgeKeys = selectedSketchEdges(selection)
           .filter((edge) => edge.sketchId === feature.id)
           .map((edge) => edge.entityId);
-        const facesPicking = Boolean(pickingExtrude) || feature.id === selectedSketchId;
+        // Regions of a sketch are offered while a tool picks faces: a rotation
+        // axis can be the plane of a sketch region, and the fill has to sit
+        // above the body face it lies on for the pick to reach it.
+        const facesPicking =
+          Boolean(pickingExtrude) ||
+          Boolean(pickingArrayFace) ||
+          feature.id === selectedSketchId;
         const operationSelected = selection.some(
           (item) => item.kind === 'feature' && item.id === feature.id,
         );
@@ -1432,6 +1473,7 @@ export function Viewport() {
     sketchAutoHighlightIds,
     sketchHoverIds,
     pickingExtrude,
+    pickingArrayFace,
     featureErrors,
     sketchFrames,
     activeSketchReady,

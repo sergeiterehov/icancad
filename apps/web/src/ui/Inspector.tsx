@@ -55,6 +55,7 @@ import {
   selectedSketchDetailId,
 } from '../stores/selection';
 import { findBoundExtrude, quickTargetFromSelection } from '../quick/target';
+import { bodyEdgeNumber, faceNumber, geometryName } from './geometryNames';
 import {
   PYRAMID_MAX_SIDES,
   PYRAMID_MIN_SIDES,
@@ -639,11 +640,15 @@ export function Inspector() {
   const revolveSpec = revolve ?? defaultRevolve();
   const edgeAxis = revolve && revolve.axis.kind !== 'world' ? revolve.axis : undefined;
   const edgeAxisLabel = edgeAxis
-    ? edgeAxis.kind === 'body-edge'
-      ? `${t('extrude.edge')} · ${objectName(project, edgeAxis.bodyId, 'Body')}`
-      : `${t('extrude.edge')} · ${
-          project.features.find((candidate) => candidate.id === edgeAxis.sketchId)?.name ?? ''
-        }`
+    ? geometryName(
+        edgeAxis.kind === 'body-edge'
+          ? objectName(project, edgeAxis.bodyId, 'Body')
+          : (project.features.find((candidate) => candidate.id === edgeAxis.sketchId)?.name ??
+            edgeAxis.sketchId),
+        edgeAxis.kind === 'body-edge'
+          ? bodyEdgeNumber(meshes[edgeAxis.bodyId], edgeAxis.edgeId)
+          : null,
+      )
     : undefined;
   const axisResolved = revolve
     ? resolveRevolveAxis(revolve.axis, {
@@ -752,7 +757,8 @@ export function Inspector() {
     key: string;
     kind: 'sketch' | 'face' | 'body-face';
     name: string;
-    meta: string;
+    /** A second line under the name, when the name alone is not enough. */
+    meta?: string;
     error?: string;
     remove: () => void;
   }
@@ -783,8 +789,7 @@ export function Inspector() {
             entries.set(key, {
               key,
               kind: 'face',
-              name: index >= 0 ? t('sketch.face', { index: index + 1 }) : t('extrude.face'),
-              meta: name,
+              name: geometryName(name, index >= 0 ? index + 1 : null),
               remove: () => toggleExtrudeFace(extrudeFeature.id, sketch.id, regionId),
             });
           }
@@ -798,8 +803,10 @@ export function Inspector() {
       entries.set(key, {
         key,
         kind: 'body-face',
-        name: t('sketch.face', { index: Number(ref.faceId) + 1 }),
-        meta: owner ? objectName(project, owner.id, 'Body') : ref.bodyId,
+        name: geometryName(
+          owner ? objectName(project, owner.id, 'Body') : ref.bodyId,
+          faceNumber(ref.faceId),
+        ),
         ...(error ? { error } : {}),
         remove: () =>
           toggleExtrudeBodyFace(extrudeFeature.id, ref.bodyId, ref.faceId, ref.normal, ref.origin),

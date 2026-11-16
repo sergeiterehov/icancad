@@ -108,19 +108,15 @@ describe('array placements', () => {
     expect(move(matrices[1]!, [10, 0, 0])).toEqual([0, 10, 0]);
   });
 
-  it('turns around the centre of a picked arc, in its own plane', () => {
-    const sketch: SketchFeature = {
-      ...sketchWith([]),
-      entities: [{ id: 'arc_0', type: 'circle', construction: false, cx: 5, cy: 0, r: 2 }],
-    };
+  it('turns around the normal of a picked face, through its centre', () => {
     const direction: ArrayDirection = {
       kind: 'rotation',
-      axis: { kind: 'arc', sketchId: sketch.id, entityId: 'arc_0' },
+      axis: { kind: 'face', bodyId: 'body_1', faceId: '3', origin: [5, 0, 0], normal: [0, 0, 1] },
       angle: 180,
       count: 2,
     };
-    const matrices = directionMatrices(direction, context(sketch));
-    // The centre of the circle is the centre of the turn.
+    const matrices = directionMatrices(direction, { meshes: {}, sketches: [] });
+    // The centre of the face is the centre of the turn.
     expect(move(matrices[1]!, [5, 0, 0])).toEqual([5, 0, 0]);
     expect(move(matrices[1]!, [15, 0, 0])).toEqual([-5, 0, 0]);
   });

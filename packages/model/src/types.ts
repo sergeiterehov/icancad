@@ -481,12 +481,29 @@ export type ArrayDirection =
 
 /**
  * What the copies of a rotation turn around: a world axis through the centre of
- * the model, or the centre of a picked arc, inside the plane the arc is drawn
- * in.
+ * the model, or the normal of a picked planar face, through the centre of that
+ * face. The pose is captured at pick time, so the turn survives a rebuild that
+ * renumbers faces.
  */
 export type ArrayRotationAxis =
   | { kind: 'world'; axis: 'x' | 'y' | 'z' }
-  | { kind: 'arc'; sketchId: string; entityId: string };
+  | {
+      kind: 'face';
+      bodyId: string;
+      faceId: string;
+      /** Centre of the face: the point the copies turn around. */
+      origin: Vec3;
+      /** Normal of the face: the direction of the axis, right-handed. */
+      normal: Vec3;
+    }
+  | {
+      /** A region of a sketch: its plane is the plane of the sketch. */
+      kind: 'sketch-face';
+      sketchId: string;
+      faceId: string;
+      origin: Vec3;
+      normal: Vec3;
+    };
 
 /**
  * Repeats bodies along one or more directions. The copies are new bodies of

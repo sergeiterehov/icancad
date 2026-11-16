@@ -177,7 +177,7 @@ export function arrayHandles(context: OperationHandleContext): OperationHandle[]
     }
 
     if (direction.kind === 'rotation') {
-      const axis = rotationAxisOf(direction, placements);
+      const axis = rotationAxisOf(direction);
       if (!axis) return;
       const arc = rotationArc(axis, seed);
       // The copies turn by the span, which is the field's angle signed by
