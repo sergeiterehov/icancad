@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      remote_dir:
+        description: Directory on the host that the domain serves from
+        required: false
+        default: /www/icancad.com
 
 # The upload only reads the repository; the host is reached with the FTP_*
 # secrets, which are handed to the upload step alone.
@@ -24,6 +29,9 @@ jobs:
       # corepack fetches the pnpm version pinned in package.json; never wait for
       # a confirmation prompt on a fresh runner.
       COREPACK_ENABLE_DOWNLOAD_PROMPT: 0
+      # A manual run can point at another directory without an edit; a push
+      # keeps the one the domain serves from.
+      REMOTE_DIR: ${{ inputs.remote_dir || '/www/icancad.com' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -62,28 +70,48 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends lftp
 
+      # The secrets are trimmed once here: one pasted with a trailing line break
+      # would be sent as an extra empty line, and the server reads that as an
+      # empty password. GITHUB_ENV carries them to the steps that need them, and
+      # the runner masks a secret value wherever it appears in a log.
+      - name: Read the account
+        env:
+          FTP_HOST: ${{ secrets.FTP_HOST }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+        run: |
+          host="${FTP_HOST//[[:space:]]/}"
+          user="${FTP_USERNAME//[[:space:]]/}"
+          password="$FTP_PASSWORD"
+          while [ "${password%[$'\r\n']}" != "$password" ]; do
+            password="${password%[$'\r\n']}"
+          done
+          {
+            echo "SITE_HOST=$host"
+            echo "SITE_USER=$user"
+            echo "SITE_PASSWORD=$password"
+          } >> "$GITHUB_ENV"
+
+      # --delete is what keeps the chunks of an older build off the host, so a
+      # mistyped directory would empty something else: the mirror only accepts a
+      # path below the account root.
+      - name: Refuse to mirror into the account root
+        run: |
+          depth=$(awk -F/ '{print NF-1}' <<< "$REMOTE_DIR")
+          if [ "$depth" -lt 2 ]; then
+            echo "::error::refusing to mirror into $REMOTE_DIR"
+            exit 1
+          fi
+
       # mirror -R sends only new and changed files and removes what the build no
       # longer contains. --upload-older covers hosts that cannot preserve file
       # times, where a fresh local file can otherwise look older than the remote
       # copy and be skipped. The target has no trailing slash: lftp would append
       # the source directory name to it.
-      - name: Upload the build to /www/icancad.com
+      - name: Upload the build
         env:
-          FTP_HOST: ${{ secrets.FTP_HOST }}
-          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
-          LFTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          LFTP_PASSWORD: ${{ env.SITE_PASSWORD }}
         run: |
-          # A secret pasted with a trailing line break is sent as an extra empty
-          # line, and the server reads the login as an empty password, so the
-          # line breaks are dropped before lftp sees them.
-          host="${FTP_HOST//[[:space:]]/}"
-          user="${FTP_USERNAME//[[:space:]]/}"
-          password="$LFTP_PASSWORD"
-          while [ "${password%[$'\r\n']}" != "$password" ]; do
-            password="${password%[$'\r\n']}"
-          done
-          export LFTP_PASSWORD="$password"
-
           # The password reaches lftp through LFTP_PASSWORD, so it never appears
           # in the command line or in an error message. The listing asks for
           # hidden files so that .htaccess is compared like any other file, and
@@ -93,7 +121,35 @@ jobs:
           set ftp:list-options -a
           set net:max-retries 3
           set net:timeout 30
-          open --env-password -u '$user' 'ftp://$host:21'
-          mkdir -p /www/icancad.com
-          mirror --reverse --delete --upload-older --parallel=4 --verbose=1 apps/web/dist/ /www/icancad.com
+          open --env-password -u '$SITE_USER' 'ftp://$SITE_HOST:21'
+          mkdir -p $REMOTE_DIR
+          mirror --reverse --delete --upload-older --parallel=4 --verbose=1 apps/web/dist/ $REMOTE_DIR
           "
+
+      # The upload lands where the account points it, but only the domain says
+      # whether that is the directory it serves from, so the site itself is
+      # asked once the mirror is done.
+      - name: Check the domain serves the build
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 20 https://icancad.com/ | grep -q '<title>ICanCAD</title>'; then
+              echo "icancad.com serves the build"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::icancad.com does not serve the uploaded build; check the site root in the hosting panel"
+          exit 1
+
+      - name: Show the account's directories
+        if: failure()
+        env:
+          LFTP_PASSWORD: ${{ env.SITE_PASSWORD }}
+        run: |
+          lftp -c "
+          set ftp:list-options -a
+          open --env-password -u '$SITE_USER' 'ftp://$SITE_HOST:21'
+          pwd
+          cls -1 /
+          cls -1 /www
+          " || true
