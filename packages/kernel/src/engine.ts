@@ -651,10 +651,16 @@ export class KernelEngine {
   }
 
   /**
-   * One boolean for many placements of the same tools. The placed tools are
-   * gathered into one compound, which OCCT intersects with the base in a single
-   * pass: an array of twenty bosses costs one boolean instead of twenty, and
-   * the new material is merged once instead of growing a shape step by step.
+   * One request for many placements of the same tool. Copies that keep apart
+   * are gathered into one compound, which OCCT intersects with the base in a
+   * single pass: an array of twenty bosses costs one boolean instead of twenty.
+   *
+   * Copies that overlap are another matter. A boolean reads each of its two
+   * arguments as a set of shapes that do not overlap one another, and a copy
+   * hidden inside another is simply not applied — a row of cubes spaced closer
+   * than their own size would lose every second cube. So overlapping copies are
+   * applied in turn, which is what the caller would do anyway; only the round
+   * trips are saved.
    */
   booleanAll(params: BooleanAllParams): MakeBoxResult {
     const { shapeId, op } = params;
@@ -664,14 +670,67 @@ export class KernelEngine {
     }
     const base = this.getShape(params.baseShapeId);
     const placed = params.tools.map((tool) => this.copyAt(tool.sourceShapeId, tool.matrix));
-    const tool = placed.length === 1 ? placed[0]! : this.compound(placed);
-    const maker = this.booleanMaker(base, tool, op);
-    const fused = maker.Shape();
-    const shape = op === 'fuse' ? this.unify(fused) : fused;
+
+    let shape: OcctShape;
+    let owners: number[] | undefined;
+    if (this.apartFromEachOther(placed)) {
+      const tool = placed.length === 1 ? placed[0]! : this.compound(placed);
+      const maker = this.booleanMaker(base, tool, op);
+      const fused = maker.Shape();
+      shape = op === 'fuse' ? this.unify(fused) : fused;
+      if (params.trackFaces) owners = this.mappedFaces(maker, shape, base);
+    } else {
+      shape = base;
+      for (const tool of placed) {
+        const maker = this.booleanMaker(shape, tool, op);
+        const next = maker.Shape();
+        if (params.trackFaces) {
+          // Each step maps its own result onto what it was given, so the run is
+          // walked back to the faces of the base the caller knows.
+          const step = this.mappedFaces(maker, next, shape);
+          owners = step.map((from) => (from >= 0 ? (owners ? (owners[from] ?? -1) : from) : -1));
+        }
+        shape = next;
+      }
+      if (op === 'fuse') {
+        const faces = owners?.length;
+        shape = this.unify(shape);
+        // A merge reorders faces; a mapping that no longer lines up would name
+        // the wrong operation for a face, so it is left out instead.
+        if (faces !== undefined && this.countTopology(shape).faces !== faces) owners = undefined;
+      }
+    }
+
     this.shapes.set(shapeId, shape);
     const result: MakeBoxResult = { shapeId, stats: this.countTopology(shape) };
-    if (params.trackFaces) result.facesFromBase = this.mappedFaces(maker, shape, base);
+    if (owners) result.facesFromBase = owners;
     return result;
+  }
+
+  /** Whether the boxes of the shapes keep clear of one another. */
+  private apartFromEachOther(shapes: readonly OcctShape[]): boolean {
+    const oc = this.requireOc();
+    const boxes = shapes.map((shape) => {
+      const box = new oc.Bnd_Box_1();
+      oc.BRepBndLib.AddOptimal(shape, box, false, false);
+      return {
+        min: [box.GetXmin(), box.GetYmin(), box.GetZmin()],
+        max: [box.GetXmax(), box.GetYmax(), box.GetZmax()],
+      };
+    });
+    // Boxes that touch are not clear of each other: their faces still interfere.
+    const slack = 1e-6;
+    for (let first = 0; first < boxes.length; first += 1) {
+      for (let second = first + 1; second < boxes.length; second += 1) {
+        const a = boxes[first]!;
+        const b = boxes[second]!;
+        const clear = [0, 1, 2].some(
+          (axis) => a.max[axis]! + slack < b.min[axis]! || b.max[axis]! + slack < a.min[axis]!,
+        );
+        if (!clear) return false;
+      }
+    }
+    return true;
   }
 
 

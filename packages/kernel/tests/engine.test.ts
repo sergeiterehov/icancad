@@ -817,6 +817,45 @@ describe('OCCT kernel engine', () => {
     expect(meshSignedVolume(engine.tessellate(current))).toBeCloseTo(meshSignedVolume(mesh), 3);
   });
 
+  it('applies every placement even when the copies overlap', () => {
+    // A row of cubes closer than their own size. A boolean reads its arguments
+    // as shapes that keep apart, so a copy hidden inside another would drop out
+    // and the row would come out short.
+    engine.makeBox({ shapeId: 'row-box', dx: 20, dy: 20, dz: 20 });
+    const placements = [10, 20].map(
+      (x) => [1, 0, 0, x, 0, 1, 0, 0, 0, 0, 1, 0] as number[],
+    );
+    const fused = engine.booleanAll({
+      shapeId: 'row-all',
+      baseShapeId: 'row-box',
+      tools: placements.map((matrix) => ({ sourceShapeId: 'row-box', matrix })),
+      op: 'fuse',
+      trackFaces: true,
+    });
+    expect(fused.stats.solids).toBe(1);
+    const mesh = engine.tessellate('row-all');
+    expect(mesh.bbox.max[0]).toBeCloseTo(40, 6);
+    expect(meshSignedVolume(mesh)).toBeCloseTo(40 * 20 * 20, 0);
+  });
+
+  it('leaves a copy that lands away from the body a solid of its own', () => {
+    engine.makeBox({ shapeId: 'apart-box', dx: 20, dy: 20, dz: 20 });
+    const placements = [10, 60].map(
+      (x) => [1, 0, 0, x, 0, 1, 0, 0, 0, 0, 1, 0] as number[],
+    );
+    const fused = engine.booleanAll({
+      shapeId: 'apart-all',
+      baseShapeId: 'apart-box',
+      tools: placements.map((matrix) => ({ sourceShapeId: 'apart-box', matrix })),
+      op: 'fuse',
+    });
+    expect(fused.stats.solids).toBe(2);
+    const mesh = engine.tessellate('apart-all');
+    expect(mesh.bbox.max[0]).toBeCloseTo(80, 6);
+    // The near copy grows the body into a 30 mm bar; the far one stays alone.
+    expect(meshSignedVolume(mesh)).toBeCloseTo(30 * 20 * 20 + 20 * 20 * 20, 0);
+  });
+
   it('splits a cut that separates a body into independent solids', () => {
     engine.makeBox({ shapeId: 'split-base', dx: 20, dy: 20, dz: 20 });
     engine.makeBox({ shapeId: 'split-tool', dx: 22, dy: 2, dz: 22, at: [-1, 9, -1] });

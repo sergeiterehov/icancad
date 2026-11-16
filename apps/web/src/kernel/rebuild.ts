@@ -1895,14 +1895,11 @@ async function applyArray(
     state.featureBodyErrors[feature.id] = errors;
   };
 
-  // Bodies made by the selected operations map to the operation that made them:
-  // a later change of such a body belongs to its copies, not to the seed.
-  const createdBy = new Map<string, string>();
-  for (const source of sources) {
-    for (const entry of source.created) createdBy.set(entry.bodyId, source.featureId);
-  }
+  // A copy that could not join its body stays a body of its own, and a later
+  // change of the source belongs to that copy, not to the body it came from.
+  const separateCopies = new Map<string, string>();
   const targetBodyOf = (bodyId: string, placementKey: string): string =>
-    createdBy.has(bodyId) ? arrayBodyId(feature.id, bodyId, placementKey) : bodyId;
+    separateCopies.get(`${bodyId}|${placementKey}`) ?? bodyId;
 
   const copyBody = async (
     bodyId: string,
@@ -2024,15 +2021,6 @@ async function applyArray(
     const deltas = await deltasOf(source, sourceIndex);
     if (deltas === null) return;
 
-    // Bodies the operation made are copies of the shape it left behind, one per
-    // placement, so they exist before anything is applied to them.
-    for (const placement of placements) {
-      for (const entry of source.created) {
-        await copyBody(entry.bodyId, entry.shapeId, placement, sourceIndex);
-        if (epoch !== rebuildEpoch) return;
-      }
-    }
-
     type PlacedTool = { sourceShapeId: string; matrix: Matrix3x4 };
     const collect = (map: Map<string, PlacedTool[]>, targetId: string, tool: PlacedTool): void => {
       const list = map.get(targetId) ?? [];
@@ -2150,11 +2138,86 @@ async function applyArray(
       await applyOneByOne(targetId, tools, op, label);
     };
 
+    // A body the picked operation made is repeated as material, not as a body:
+    // repeating a primitive adds the primitive where the copies land, which is
+    // what the copies of a preview look like — volumes added to the model. A
+    // copy that lands on nothing has nothing to join, so it stays a body of its
+    // own.
+    if (source.created.length > 0 && placements.length > 0) {
+      for (const entry of source.created) {
+        if (feature.target === 'bodies') {
+          // Repeating a body gives bodies: the copies are what was picked.
+          for (const placement of placements) {
+            await copyBody(entry.bodyId, entry.shapeId, placement, sourceIndex);
+            if (epoch !== rebuildEpoch) return;
+            separateCopies.set(
+              `${entry.bodyId}|${placement.key}`,
+              arrayBodyId(feature.id, entry.bodyId, placement.key),
+            );
+          }
+          continue;
+        }
+        const seedId = entry.bodyId;
+        if (!bodyShapes.has(seedId)) {
+          markBodyError(seedId, meshes[seedId] ? 'BODY_NOT_SOLID' : 'UNKNOWN_BODY');
+          continue;
+        }
+        const tools = placements.map((placement) => ({
+          sourceShapeId: entry.shapeId,
+          matrix: placement.matrix,
+        }));
+        const outcome = await applyBatch(seedId, tools, 'fuse', `repeat:${seedId}`, true);
+        if (epoch !== rebuildEpoch) return;
+        if (outcome !== 'loose') continue;
+        // Some copy stands on its own. Which one is only known by trying, so
+        // each placement is decided in turn: joined where it lands on the body,
+        // a body of its own where it lands on nothing.
+        for (const placement of placements) {
+          const copyId = arrayBodyId(feature.id, seedId, placement.key);
+          const placedId = trackShape(`tool:${feature.id}:${sourceIndex}:repeat:${placement.key}`);
+          const resultId = trackShape(`${seedId}:${feature.id}:${sourceIndex}:repeat:${placement.key}`);
+          try {
+            const placed = await client.request<MakeBoxResult>({
+              type: 'transform-shape',
+              params: { shapeId: placedId, sourceShapeId: entry.shapeId, matrix: placement.matrix },
+            });
+            if (epoch !== rebuildEpoch) return;
+            const fused = await client.request<MakeBoxResult>({
+              type: 'boolean',
+              params: {
+                shapeId: resultId,
+                baseShapeId: bodyShapes.get(seedId)!,
+                toolShapeId: placedId,
+                op: 'fuse',
+                trackFaces: true,
+              },
+            });
+            if (epoch !== rebuildEpoch) return;
+            if (fused.stats.solids > solidsOf(seedId)) {
+              disposeShape(resultId);
+              bodyOwner.set(copyId, feature.id);
+              settle(copyId, placedId, placed.stats);
+              ownAllFaces(faceOwners, copyId, placed.stats.faces, feature.id);
+              newBodies.push(copyId);
+              separateCopies.set(`${seedId}|${placement.key}`, copyId);
+              continue;
+            }
+            solidCounts.set(seedId, fused.stats.solids);
+            takeOwners(seedId, fused.facesFromBase);
+            settle(seedId, resultId, fused.stats);
+          } catch (error) {
+            markBodyError(seedId, kernelErrorCode(error));
+            return;
+          }
+        }
+      }
+    }
+
     if (source.tool) {
       const booleanOp =
         source.tool.op === 'add' ? 'fuse' : source.tool.op === 'subtract' ? 'cut' : 'common';
-      // Placements that apply to the same body share one call; a copy of a
-      // created body is a target of its own.
+      // Placements that apply to the same body share one call; a copy that could
+      // not join its body is a target of its own.
       const byTarget = new Map<string, PlacedTool[]>();
       for (const bodyId of source.tool.targets) {
         for (const placement of placements) {
