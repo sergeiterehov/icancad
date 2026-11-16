@@ -710,9 +710,12 @@ export class KernelEngine {
   /** Whether the boxes of the shapes keep clear of one another. */
   private apartFromEachOther(shapes: readonly OcctShape[]): boolean {
     const oc = this.requireOc();
+    // The plain box, not the optimal one: it is a hundred times cheaper on a
+    // curved surface and it only ever comes out larger, which sends a doubtful
+    // run down the careful path instead of the wrong way.
     const boxes = shapes.map((shape) => {
       const box = new oc.Bnd_Box_1();
-      oc.BRepBndLib.AddOptimal(shape, box, false, false);
+      oc.BRepBndLib.Add(shape, box, false);
       return {
         min: [box.GetXmin(), box.GetYmin(), box.GetZmin()],
         max: [box.GetXmax(), box.GetYmax(), box.GetZmax()],
@@ -856,10 +859,13 @@ export class KernelEngine {
       const face = oc.TopoDS.Face_1(explorer.Current());
       const reversed = face.Orientation_1() === oc.TopAbs_Orientation.TopAbs_REVERSED;
       const location = new oc.TopLoc_Location_1();
-      const handle = oc.BRep_Tool.Triangulation(face, location);
+      // The handle may hold nothing: meshing leaves a face it could not mesh
+      // — a sliver left by a boolean, say — without a triangulation, and the
+      // shape is still worth drawing with the faces that did come out.
+      const triangulationHandle = oc.BRep_Tool.Triangulation(face, location);
+      const triangulation = triangulationHandle ? triangulationHandle.get() : null;
 
-      if (handle) {
-        const triangulation = handle.get();
+      if (triangulationHandle && triangulation) {
         const nbNodes = triangulation.NbNodes();
         const nbTriangles = triangulation.NbTriangles();
         const nodes = triangulation.Nodes();
@@ -939,7 +945,11 @@ export class KernelEngine {
         while (edgeExplorer.More()) {
           const edgeShape = oc.TopoDS.Edge_1(edgeExplorer.Current());
           edgeExplorer.Next();
-          const raw = oc.BRep_Tool.PolygonOnTriangulation_1(edgeShape, handle, location) as unknown;
+          const raw = oc.BRep_Tool.PolygonOnTriangulation_1(
+            edgeShape,
+            triangulationHandle,
+            location,
+          ) as unknown;
           const polygon =
             raw && typeof (raw as { get?: unknown }).get === 'function'
               ? (raw as { get(): OcctPolygonOnTriangulation }).get()
@@ -1910,12 +1920,51 @@ export class KernelEngine {
         const unify = new oc.ShapeUpgrade_UnifySameDomain_2(shape, unifyEdges, unifyFaces, concat);
         unify.Build();
         const result = unify.Shape();
-        if (!result.IsNull()) return result;
+        if (result.IsNull()) continue;
+        if (unifyFaces && !this.mergedFacesValid(shape, result)) continue;
+        return result;
       } catch {
         // Try the next mode, then keep the shape as it is.
       }
     }
     return shape;
+  }
+
+  /**
+   * Whether every face the merge created is a valid face.
+   *
+   * Merging faces that lie on one surface is not always sound. Two regions of
+   * the same torus that meet only along the cut of a boolean — the inner and the
+   * outer side of the tube — become one face that no longer closes the solid,
+   * and the body then has holes in it. The merge is a cosmetic step, so a merge
+   * that produces a face the checker refuses is thrown away and the next, more
+   * careful mode is tried.
+   */
+  private mergedFacesValid(before: OcctShape, after: OcctShape): boolean {
+    const oc = this.requireOc();
+    const kept: OcctShape[] = [];
+    const beforeExplorer = new oc.TopExp_Explorer_2(
+      before,
+      oc.TopAbs_ShapeEnum.TopAbs_FACE,
+      oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+    );
+    while (beforeExplorer.More()) {
+      kept.push(beforeExplorer.Current());
+      beforeExplorer.Next();
+    }
+    const afterExplorer = new oc.TopExp_Explorer_2(
+      after,
+      oc.TopAbs_ShapeEnum.TopAbs_FACE,
+      oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+    );
+    while (afterExplorer.More()) {
+      const face = afterExplorer.Current();
+      afterExplorer.Next();
+      // A face the merge did not touch is the very same face it was before.
+      if (kept.some((candidate) => candidate.IsSame(face))) continue;
+      if (!new oc.BRepCheck_Analyzer(face, true).IsValid_2()) return false;
+    }
+    return true;
   }
 
   private boolean(base: OcctShape, tool: OcctShape, op: BooleanParams['op']): OcctShape {

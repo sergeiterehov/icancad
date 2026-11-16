@@ -856,6 +856,42 @@ describe('OCCT kernel engine', () => {
     expect(meshSignedVolume(mesh)).toBeCloseTo(30 * 20 * 20 + 20 * 20 * 20, 0);
   });
 
+  it('keeps a fused pair of rings a whole body', () => {
+    // Two rings of one tube share their surface in two separate regions, and
+    // merging those regions into one face tears the body open: the union has to
+    // stay closed, with every face drawn.
+    engine.makePrimitive({
+      shapeId: 'ring-a',
+      kind: 'torus',
+      majorRadius: 20,
+      tubeRadius: 5,
+    });
+    engine.makePrimitive({
+      shapeId: 'ring-b',
+      kind: 'torus',
+      majorRadius: 20,
+      tubeRadius: 5,
+    });
+    engine.transformShape({
+      shapeId: 'ring-b-moved',
+      sourceShapeId: 'ring-b',
+      matrix: [1, 0, 0, 26.6, 0, 1, 0, 0, 0, 0, 1, 0],
+    });
+    const fused = engine.booleanShape({
+      shapeId: 'rings',
+      baseShapeId: 'ring-a',
+      toolShapeId: 'ring-b-moved',
+      op: 'fuse',
+    });
+    expect(fused.stats.solids).toBe(1);
+    const mesh = engine.tessellate('rings');
+    expect(mesh.bbox.max[0]).toBeCloseTo(51.6, 3);
+    expect(new Set(mesh.faceIds).size).toBe(fused.stats.faces);
+    // Both rings, less the crust they get from each other.
+    expect(Math.abs(meshSignedVolume(mesh))).toBeGreaterThan(18000);
+    expect(Math.abs(meshSignedVolume(mesh))).toBeLessThan(2 * 9870);
+  });
+
   it('splits a cut that separates a body into independent solids', () => {
     engine.makeBox({ shapeId: 'split-base', dx: 20, dy: 20, dz: 20 });
     engine.makeBox({ shapeId: 'split-tool', dx: 22, dy: 2, dz: 22, at: [-1, 9, -1] });

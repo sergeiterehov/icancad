@@ -83,7 +83,8 @@ export interface OcctTriangulation {
 }
 
 export interface OcctTriangulationHandle {
-  get(): OcctTriangulation;
+  /** Null when meshing gave the face no triangulation. */
+  get(): OcctTriangulation | null;
 }
 
 /** `Poly_PolygonOnTriangulation`: node indices into the face triangulation. */
@@ -283,6 +284,8 @@ export interface OcctBindings {
   gp_Ax3_3: new (point: OcctPoint3, direction: unknown, xDirection: unknown) => OcctAxis3;
   Bnd_Box_1: new () => OcctBoundingBox;
   BRepBndLib: {
+    /** Box of the shape's own curves and surfaces; loose, but cheap. */
+    Add(shape: OcctShape, box: OcctBoundingBox, useTriangulation: boolean): void;
     /** Box of the exact curves and surfaces, not of a tessellation. */
     AddOptimal(
       shape: OcctShape,
