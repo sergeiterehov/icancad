@@ -3,6 +3,15 @@
     "name": "ICanCAD",
     "subtitle": "Браузерный CAD для 3D-печати"
   },
+  "pwa": {
+    "install": "Установить приложение",
+    "installHint": "Добавьте ICanCAD на главный экран через «Поделиться» или меню браузера.",
+    "installed": "ICanCAD установлен",
+    "updateReady": "Доступна новая версия",
+    "updateAvailable": "Обновить ICanCAD",
+    "reload": "Перезагрузить",
+    "offlineReady": "Можно работать офлайн"
+  },
   "project": {
     "menu": "Меню проекта",
     "name": "Название проекта",

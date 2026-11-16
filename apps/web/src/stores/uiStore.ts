@@ -28,11 +28,20 @@ export interface DeleteRequest {
   dependents: { id: string; name: string }[];
 }
 
+/** A button inside a toast, such as reloading into a downloaded update. */
+export interface ToastAction {
+  /** Translation key of the button label. */
+  key: string;
+  onSelect: () => void;
+}
+
 export interface ToastMessage {
   id: number;
   key: string;
   kind: 'info' | 'error';
   params?: Record<string, unknown>;
+  /** A toast with an action waits for the user instead of timing out. */
+  action?: ToastAction;
 }
 
 export interface ProjectDeleteRequest {
@@ -162,7 +171,12 @@ interface UiState {
   endPicking: () => void;
   startSketchPlanePicking: (featureId: string, enterEdit: boolean) => void;
   cancelDelete: () => void;
-  showToast: (key: string, kind?: 'info' | 'error', params?: Record<string, unknown>) => void;
+  showToast: (
+    key: string,
+    kind?: 'info' | 'error',
+    params?: Record<string, unknown>,
+    action?: ToastAction,
+  ) => void;
   dismissToast: () => void;
   setSectionEnabled: (enabled: boolean) => void;
   setSketchSectionEnabled: (enabled: boolean) => void;
@@ -403,8 +417,8 @@ export const useUiStore = create<UiState>((set) => ({
   sketchMagnetEnabled: loadSketchMagnet(),
   sketchTool: 'select',
   sketchToolNonce: 0,
-  showToast: (key, kind = 'info', params) => {
-    set({ toast: { id: ++toastSequence, key, kind, params } });
+  showToast: (key, kind = 'info', params, action) => {
+    set({ toast: { id: ++toastSequence, key, kind, params, action } });
   },
   dismissToast: () => set({ toast: null }),
   requestDelete: (deleteRequest) => set({ deleteRequest }),

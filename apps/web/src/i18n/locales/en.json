@@ -3,6 +3,15 @@
     "name": "ICanCAD",
     "subtitle": "Browser CAD for 3D printing"
   },
+  "pwa": {
+    "install": "Install app",
+    "installHint": "Add ICanCAD to your home screen from the browser's Share or app menu.",
+    "installed": "ICanCAD is installed",
+    "updateReady": "A new version is ready",
+    "updateAvailable": "Update ICanCAD",
+    "reload": "Reload",
+    "offlineReady": "Ready to work offline"
+  },
   "project": {
     "menu": "Project menu",
     "name": "Project name",

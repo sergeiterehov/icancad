@@ -19,9 +19,11 @@ import {
   Languages,
   LayoutPanelLeft,
   Moon,
+  MonitorSmartphone,
   Palette,
   PanelLeft,
   Redo2,
+  RefreshCw,
   Sun,
   Trash2,
   Undo2,
@@ -44,9 +46,12 @@ import {
   serializeProjectFile,
   stlFileName,
 } from '../persistence/projectFile';
+import { promptInstall } from '../pwa/install';
+import { applyUpdate } from '../pwa/updates';
 import { directBodyIds } from '../stores/selection';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
+import { usePwaStore } from '../stores/pwaStore';
 import { useThemeStore } from '../stores/themeStore';
 import { useUiStore } from '../stores/uiStore';
 import { useContextMenuStore, type ContextMenuItem } from './ContextMenu';
@@ -86,6 +91,8 @@ export function ProjectMenu() {
   const setTheme = useThemeStore((state) => state.setTheme);
   const compactPanels = useUiStore((state) => state.compactPanels);
   const pinnedPanels = useUiStore((state) => state.pinnedPanels);
+  const pwaUpdateReady = usePwaStore((state) => state.updateReady);
+  const pwaInstalled = usePwaStore((state) => state.installed);
   const openMenu = useContextMenuStore((state) => state.open);
   const updateItems = useContextMenuStore((state) => state.updateItems);
   // Only the logo menu may be rebuilt in place; object and operation menus have
@@ -176,6 +183,11 @@ export function ProjectMenu() {
         onSelect: () => requestProjectDelete({ id: project.id, name: project.name }),
       },
     }));
+  };
+
+  const requestInstall = async () => {
+    const outcome = await promptInstall();
+    if (outcome === null) showToast('pwa.installHint');
   };
 
   const menuItems = (projects: Project[]): ContextMenuItem[] => {
@@ -318,6 +330,26 @@ export function ProjectMenu() {
         ],
       },
       { id: 'separator-5', separator: true },
+      ...(pwaUpdateReady
+        ? [
+            {
+              id: 'update',
+              label: t('pwa.updateAvailable'),
+              icon: <RefreshCw size={14} />,
+              onSelect: () => void applyUpdate(),
+            },
+          ]
+        : []),
+      ...(pwaInstalled
+        ? []
+        : [
+            {
+              id: 'install',
+              label: t('pwa.install'),
+              icon: <MonitorSmartphone size={14} />,
+              onSelect: () => void requestInstall(),
+            },
+          ]),
       {
         id: 'source',
         label: t('project.source'),
@@ -351,7 +383,15 @@ export function ProjectMenu() {
   useEffect(() => {
     if (!projectMenuOpen) return;
     updateItems(menuItems(projectsRef.current));
-  }, [projectMenuOpen, theme, i18n.resolvedLanguage, compactPanels, pinnedPanels]);
+  }, [
+    projectMenuOpen,
+    theme,
+    i18n.resolvedLanguage,
+    compactPanels,
+    pinnedPanels,
+    pwaUpdateReady,
+    pwaInstalled,
+  ]);
 
   const openProjectMenu = async (event: MouseEvent<HTMLButtonElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();

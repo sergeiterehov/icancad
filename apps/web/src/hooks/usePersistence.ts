@@ -8,6 +8,7 @@ import { rebuildScene } from '../kernel/rebuild';
 import { bootKernel } from '../kernel/client';
 import { getSetting, loadProject, setSetting } from '../persistence/db';
 import { queueProjectSave } from '../persistence/saveQueue';
+import { whenOfflineCacheReady } from '../pwa/updates';
 
 let hydration: Promise<void> | null = null;
 
@@ -36,7 +37,9 @@ export function useHydrateProject(): void {
 
 export function useKernelBoot(): void {
   useEffect(() => {
-    void bootKernel();
+    // Waiting for the worker keeps the first kernel download inside the offline
+    // cache; the promise resolves at once in development.
+    void whenOfflineCacheReady().then(() => bootKernel());
   }, []);
 }
 

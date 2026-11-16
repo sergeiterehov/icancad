@@ -2,7 +2,7 @@
 
 Browser CAD for 3D printing. The long-term goal is a Figma-like parametric modeler with a linear feature history, OpenCascade (OCCT) B-rep geometry and Blender mesh import.
 
-**Current status: M0 (foundation).** The app shell, i18n, document model with undo/redo, IndexedDB autosave, `.icad` project files and the OCCT kernel pipeline are implemented. The only modeling feature so far is a box primitive used to validate the pipeline end to end.
+**Current status: M4 (modeling tool set).** The app shell, i18n, project/model document layer with undo/redo, IndexedDB autosave, `.icad` project files and the OCCT kernel pipeline are implemented. Modeling covers seven primitives, mesh import (STL/OBJ/PLY/GLB), a constrained sketcher, extrude/revolve with add/subtract/intersect, fillet/chamfer, shell/cavity, arrays, sections and STL export. The production build installs as a PWA and works offline once the kernel has been loaded. Persistent topological naming (M5) and mesh → solid conversion are still ahead; the feature backlog lives in [MEMO.md](MEMO.md).
 
 ## Quick start
 
@@ -21,6 +21,7 @@ Open http://127.0.0.1:5173/, wait for the kernel status to become **Ready**, the
 | --- | --- |
 | `corepack pnpm dev` | Vite dev server with the kernel worker |
 | `corepack pnpm build` | Typecheck and production build (copies OCCT WASM) |
+| `corepack pnpm preview` | Serve the production build, including the service worker |
 | `corepack pnpm typecheck` | TypeScript check for every workspace package |
 | `corepack pnpm test` | Vitest unit/integration tests (document model, sketch helpers, OCCT in Node, project files, i18n parity) |
 | `corepack pnpm lint` | ESLint flat config |
@@ -34,12 +35,12 @@ React UI (panels, inspector, timeline)      Three.js WebGL2 viewport
 Zustand stores · command/undo · i18next
             │ typed RPC + transferables
             ▼
-Kernel worker pool                          Sketch solver worker
-OCCT WASM · shapes · tessellation           planegcs WASM (M2)
+Kernel worker                               Sketch solver worker
+OCCT WASM · shapes · tessellation           planegcs WASM
             │
             ▼
 IO / mesh worker
-STL/OBJ/PLY/GLB parsing; voxel remesh and decimation arrive in M3
+STL/OBJ/PLY/GLB parsing; voxel remesh and decimation are still ahead
 ```
 
 - **Kernel is authoritative.** Main thread never owns `TopoDS_Shape`; it receives typed arrays only.
@@ -56,10 +57,28 @@ STL/OBJ/PLY/GLB parsing; voxel remesh and decimation arrive in M3
 apps/web/                 Vite + React app, viewport, stores, i18n, persistence
 packages/model/           Project/super-object/feature types, zod schemas, commands, history validation
 packages/kernel/          OCCT bindings, engine, worker runtime, typed protocol, Node tests
-packages/sketch/          Sketch entity tessellation and helpers (solver arrives in M2)
+packages/sketch/          Sketch entity tessellation and helpers; the planegcs solver runs in apps/web/src/sketch
 scripts/copy-occt.mjs     Copies the OCCT WASM asset into the web app
 docs/adr/                 Architecture decision records
 ```
+
+## Progressive web app
+
+The production build is installable and offline-capable. [vite-plugin-pwa](https://vite-pwa-org.netlify.app/) generates `manifest.webmanifest`, the PNG icon set and a Workbox service worker; the app registers the worker itself in [apps/web/src/pwa/updates.ts](apps/web/src/pwa/updates.ts), because a reload has to save the open project first.
+
+- **Install** — browsers that offer an install prompt show *Install app* in the project menu. iOS has no prompt API; its install tags live in [apps/web/index.html](apps/web/index.html), and the same menu item explains *Share → Add to Home Screen*. The manifest icon paths are relative, so the build installs both at a domain root and under the GitHub Pages project path.
+- **Offline** — the shell is precached during install: entry chunk, CSS, the three workers, the planegcs WASM and the icons. The 63 MB OCCT binary is not part of the install; the kernel caches it on first use under a content-hashed URL (`occt/opencascade.wasm.wasm?v=<sha256>`), so later starts need no network, a new OCCT build reaches the app, and an unchanged one is never downloaded twice. IndexedDB already holds the projects, so a reload without a network loses nothing.
+- **Updates** — a new build waits instead of replacing the running one. The toast's *Reload* button, or *Update ICanCAD* in the project menu, flushes the project to IndexedDB and then activates the waiting worker. The page also asks for a new deployment every hour, since a modeling session outlives many deploys.
+- **Theme colour** — the browser's window chrome follows the app theme through the `theme-color` meta tag.
+
+The worker exists only in a production build: the dev server rewrites modules on every edit, and a cache in front of it would serve stale code. To try the PWA:
+
+```sh
+corepack pnpm build
+corepack pnpm preview
+```
+
+Open http://127.0.0.1:4173/, let the kernel reach **Ready**, then switch the browser offline (DevTools → Network → Offline) and reload: the app must start and the kernel must load from the cache.
 
 ## Deployment
 
@@ -71,14 +90,14 @@ The production build is a static site in `apps/web/dist`; it includes the OCCT W
 
 The workflow takes the site path from `actions/configure-pages`, so a project site is served from `https://<owner>.github.io/<repo>/` without editing the config: `VITE_BASE` is set to that base path and [apps/web/vite.config.ts](apps/web/vite.config.ts) uses it as Vite's `base`. A local `pnpm build` keeps the domain root (`/`); pass `VITE_BASE=/icancad/` to reproduce the Pages build.
 
-Pages serves the static files as they are: `.wasm` arrives with `application/wasm` and the JS chunks are content-hashed. `apps/web/public/occt/opencascade.wasm.wasm` keeps its name across builds, so a redeploy revalidates the 63 MB download; a CDN in front of Pages would be the next step if that matters.
+Pages serves the static files as they are: `.wasm` arrives with `application/wasm` and the JS chunks are content-hashed. `apps/web/public/occt/opencascade.wasm.wasm` keeps its name across builds, but the app requests it under a content hash, and the service worker keeps that response: a redeploy only downloads the 63 MB again when the binary itself changed.
 
 ### Any other static host
 
 Serve `apps/web/dist` with:
 
 - `Content-Type: application/wasm` for `.wasm`;
-- long-lived immutable caching for `/occt/opencascade.wasm.wasm`;
+- long-lived immutable caching for `/occt/opencascade.wasm.wasm` (the `?v=` query is a content hash, so an update changes the URL);
 - `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` (required for a future multi-threaded WASM build and harmless now).
 
 Vite dev server already sets the COOP/COEP headers.
@@ -86,7 +105,8 @@ Vite dev server already sets the COOP/COEP headers.
 ## Third-party licenses
 
 - OpenCascade.js / OCCT — LGPL-2.1 (with OCCT exception). The WASM is shipped as a separate, unmodified artifact.
-- planegcs (future) — LGPL-2.0-or-later.
+- planegcs — LGPL-2.0-or-later.
 - Three.js — MIT.
+- Workbox — MIT. Its runtime is bundled into the generated service worker.
 
-See `docs/adr/0001-foundation.md` for the decisions behind this foundation and the session plan for the full M0–M6 roadmap.
+See [docs/adr/0001-foundation.md](docs/adr/0001-foundation.md) for the foundation decisions and [MEMO.md](MEMO.md) for the feature backlog.
