@@ -1,0 +1,28 @@
+# icancad.com is served from this directory as a static site. GitHub Pages
+# ignores the file; Apache and LiteSpeed read it and supply what README's
+# static-host checklist asks for.
+
+<IfModule mod_mime.c>
+  AddType application/wasm .wasm
+</IfModule>
+
+# Only content-hashed files may be cached forever: Vite names every asset after
+# its content, and the kernel URL carries the hash of the wasm in ?v=.
+<IfModule mod_setenvif.c>
+  SetEnvIf Request_URI "^/assets/" long_lived
+  SetEnvIf Request_URI "^/occt/" long_lived
+</IfModule>
+
+<IfModule mod_headers.c>
+  # A multi-threaded WASM build needs a cross-origin isolated page. The kernel
+  # is single-threaded today, so the headers only keep the host ready.
+  Header always set Cross-Origin-Opener-Policy "same-origin"
+  Header always set Cross-Origin-Embedder-Policy "require-corp"
+
+  Header set Cache-Control "public, max-age=31536000, immutable" env=long_lived
+
+  # The shell and the worker must notice a deployment on the next visit.
+  <FilesMatch "^(index\.html|sw\.js|registerSW\.js|workbox-.*\.js|manifest\.webmanifest)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>

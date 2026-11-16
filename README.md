@@ -92,15 +92,22 @@ The workflow takes the site path from `actions/configure-pages`, so a project si
 
 Pages serves the static files as they are: `.wasm` arrives with `application/wasm` and the JS chunks are content-hashed. `apps/web/public/occt/opencascade.wasm.wasm` keeps its name across builds, but the app requests it under a content hash, and the service worker keeps that response: a redeploy only downloads the 63 MB again when the binary itself changed.
 
+### icancad.com
+
+`.github/workflows/deploy-site.yml` builds the site for the domain root (`VITE_BASE=/`) and uploads `apps/web/dist` to `/www/icancad.com` over SFTP on every push to `main` and on a manual run. The repository secrets `FTP_HOST`, `FTP_USERNAME` and `FTP_PASSWORD` hold the account; despite their names, the workflow speaks SFTP on port 22. The upload uses `lftp mirror --reverse --delete`, so only new and changed files travel, and files the build no longer contains are removed from the host.
+
+[apps/web/public/.htaccess](apps/web/public/.htaccess) travels with the build and gives an Apache or LiteSpeed host the headers listed below. GitHub Pages ignores it. Both deployments are independent: a failure of one leaves the other published.
+
 ### Any other static host
 
 Serve `apps/web/dist` with:
 
 - `Content-Type: application/wasm` for `.wasm`;
-- long-lived immutable caching for `/occt/opencascade.wasm.wasm` (the `?v=` query is a content hash, so an update changes the URL);
+- long-lived immutable caching for `/assets/` and `/occt/opencascade.wasm.wasm` (asset names carry their content hash, and the kernel URL gets a `?v=` hash, so an update changes the URL);
+- `no-cache` for `index.html`, the service worker and the web manifest, so an update is noticed;
 - `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` (required for a future multi-threaded WASM build and harmless now).
 
-Vite dev server already sets the COOP/COEP headers.
+On Apache and LiteSpeed, [apps/web/public/.htaccess](apps/web/public/.htaccess) already carries these rules. Vite dev server already sets the COOP/COEP headers.
 
 ## Third-party licenses
 

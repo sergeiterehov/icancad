@@ -1,0 +1,82 @@
+name: Deploy to icancad.com
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# The upload only reads the repository; the host is reached with the FTP_*
+# secrets, which are handed to the upload step alone.
+permissions:
+  contents: read
+
+# One upload at a time: the host serves files while they are being replaced, so
+# two mirrors must not interleave. A newer push supersedes a run in flight.
+concurrency:
+  group: icancad.com
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # corepack fetches the pnpm version pinned in package.json; never wait for
+      # a confirmation prompt on a fresh runner.
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: 0
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # The repo pins pnpm in package.json, so corepack provisions the same
+      # version the scripts expect instead of a floating one from the image.
+      - name: Enable the pinned pnpm
+        run: corepack enable
+
+      - name: Read the pnpm store path
+        id: pnpm-store
+        run: echo "path=$(corepack pnpm store path 2>/dev/null)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v6
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: corepack pnpm install --frozen-lockfile
+
+      # icancad.com serves the app from its root, so the build keeps the
+      # default base. The prebuild step copies the OCCT wasm into public/ and
+      # so into dist/, and public/.htaccess travels with it.
+      - name: Build the site
+        run: corepack pnpm build
+        env:
+          VITE_BASE: /
+
+      - name: Install lftp
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends lftp
+
+      # mirror -R sends only new and changed files and removes what the build no
+      # longer contains. --upload-older covers hosts that cannot preserve file
+      # times, where a fresh local file can otherwise look older than the remote
+      # copy and be skipped. The target has no trailing slash: lftp would append
+      # the source directory name to it.
+      - name: Upload the build to /www/icancad.com
+        env:
+          FTP_HOST: ${{ secrets.FTP_HOST }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          LFTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+        run: |
+          lftp -c "
+          set sftp:auto-confirm yes
+          set net:max-retries 3
+          set net:timeout 30
+          open --env-password -u '$FTP_USERNAME' 'sftp://$FTP_HOST:22'
+          mirror --reverse --delete --upload-older --parallel=4 --verbose=1 apps/web/dist/ /www/icancad.com
+          "
