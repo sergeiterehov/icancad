@@ -5,6 +5,8 @@ import type {
   BoxParams,
   EdgeTreatmentParams,
   EdgeTreatmentResult,
+  FaceCentreParams,
+  FaceCentreResult,
   HealthResult,
   KernelErrorCode,
   KernelStatusEvent,
@@ -56,6 +58,32 @@ export class KernelOpError extends Error {
 
 /** Coarse spatial bucket for matching the same topological edge seen from two faces. */
 const EDGE_BUCKET_SCALE = 100;
+
+/** How thin a face has to be at its own normal to count as flat, in mm. */
+const FACE_FLAT_TOLERANCE = 1e-3;
+
+/**
+ * A unit vector lying in the plane with the given normal, taken from the world
+ * axes so that the same face is always measured along the same two directions.
+ */
+function perpendicularTo(normal: readonly [number, number, number]): [number, number, number] {
+  const axes: Array<[number, number, number]> = [
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+  ];
+  const aligned = (axis: [number, number, number]) =>
+    Math.abs(axis[0] * normal[0] + axis[1] * normal[1] + axis[2] * normal[2]);
+  let base = axes[0]!;
+  for (const axis of axes) if (aligned(axis) < aligned(base)) base = axis;
+  const cross: [number, number, number] = [
+    base[1] * normal[2] - base[2] * normal[1],
+    base[2] * normal[0] - base[0] * normal[2],
+    base[0] * normal[1] - base[1] * normal[0],
+  ];
+  const length = Math.hypot(...cross);
+  return [cross[0] / length, cross[1] / length, cross[2] / length];
+}
 
 function edgeBucketKey(points: readonly number[]): string {
   let minX = Infinity;
@@ -1104,6 +1132,101 @@ export class KernelEngine {
     const shape = this.copyAt(params.sourceShapeId, params.matrix);
     this.shapes.set(params.shapeId, shape);
     return { shapeId: params.shapeId, stats: this.countTopology(shape) };
+  }
+
+  /**
+   * Middle of one face, measured in the plane of that face.
+   *
+   * The middle of a face is the middle of what the face covers, not the middle
+   * of its material: a plate with a notch has half of its area on one side of
+   * the notch, and a centre of mass there would turn a pattern around nothing
+   * in particular.
+   *
+   * The measurement asks the kernel instead of the tessellation the viewport
+   * holds, because a tessellated arc falls short of its own extreme by the
+   * sagitta of its chords, and 0.05 mm is far too coarse for a centre. The box
+   * is taken over the boundary curves, which stay lines and circles even when
+   * the surface they were cut from has been re-stored as a B-spline by an
+   * offset: the extent of a closed region is the extent of its boundary.
+   */
+  faceCentre(params: FaceCentreParams): FaceCentreResult {
+    const oc = this.requireOc();
+    if (!Number.isInteger(params.faceId) || params.faceId < 0) {
+      throw new KernelOpError('INVALID_PARAMS', 'Face id must be a non-negative integer');
+    }
+    const normalLength = Math.hypot(...params.normal);
+    if (!Number.isFinite(normalLength) || normalLength <= 1e-9) {
+      throw new KernelOpError('INVALID_PARAMS', 'Face normal must be a unit vector');
+    }
+    const normal = params.normal.map((value) => value / normalLength) as [number, number, number];
+    const face = this.findFace(this.getShape(params.shapeId), params.faceId);
+    if (!face) {
+      throw new KernelOpError('INVALID_PARAMS', `Face ${params.faceId} does not exist on the body`);
+    }
+
+    // A point in the plane: the area centre of a flat face lies in it, however
+    // the surface is stored. Where it sits along the plane does not matter, and
+    // the answer is measured from the boundary anyway.
+    const props = new oc.GProp_GProps_1();
+    oc.BRepGProp.SurfaceProperties_1(face, props, false, false);
+    const centre = props.CentreOfMass();
+
+    // Two axes in the plane, taken from the world so that one face is measured
+    // the same way as the next: the frame of a stored plane is not stable.
+    const axis = perpendicularTo(normal);
+    const yAxis: [number, number, number] = [
+      normal[1] * axis[2] - normal[2] * axis[1],
+      normal[2] * axis[0] - normal[0] * axis[2],
+      normal[0] * axis[1] - normal[1] * axis[0],
+    ];
+    const frame = new oc.gp_Ax3_3(
+      new oc.gp_Pnt_3(centre.X(), centre.Y(), centre.Z()),
+      new oc.gp_Dir_4(normal[0], normal[1], normal[2]),
+      new oc.gp_Dir_4(axis[0], axis[1], axis[2]),
+    );
+    const trsf = new oc.gp_Trsf_1();
+    // The change of coordinate system reads the shape in the frame, so the
+    // arguments are the other way round from what a movement would take.
+    trsf.SetTransformation_1(new oc.gp_Ax3_1(), frame);
+
+    const box = new oc.Bnd_Box_1();
+    let measured = 0;
+    const edges = new oc.TopExp_Explorer_2(
+      face,
+      oc.TopAbs_ShapeEnum.TopAbs_EDGE,
+      oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+    );
+    while (edges.More()) {
+      const flat = new oc.BRepBuilderAPI_Transform_2(
+        oc.TopoDS.Edge_1(edges.Current()),
+        trsf,
+        true,
+      );
+      if (flat.IsDone()) {
+        oc.BRepBndLib.AddOptimal(flat.Shape(), box, false, false);
+        measured += 1;
+      }
+      edges.Next();
+    }
+    if (measured === 0 || box.IsVoid()) {
+      throw new KernelOpError('OP_FAILED', `Face ${params.faceId} has no boundary to measure`);
+    }
+    // A face is flat when its own box is thinner than a micron. Asking the
+    // surface for its type would refuse the flat faces of an offset body, which
+    // carry B-spline surfaces that lie exactly in a plane.
+    if (box.GetZmax() - box.GetZmin() > FACE_FLAT_TOLERANCE) {
+      throw new KernelOpError('FACE_NOT_PLANAR', `Face ${params.faceId} is not flat`);
+    }
+
+    const u = (box.GetXmin() + box.GetXmax()) / 2;
+    const v = (box.GetYmin() + box.GetYmax()) / 2;
+    return {
+      origin: [
+        centre.X() + u * axis[0] + v * yAxis[0],
+        centre.Y() + u * axis[1] + v * yAxis[1],
+        centre.Z() + u * axis[2] + v * yAxis[2],
+      ],
+    };
   }
 
   /** A copy of a shape at a row-major 3x4 affine. */

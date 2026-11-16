@@ -14,10 +14,46 @@ export interface OcctTransformation {
   Value(row: number, column: number): number;
 }
 
+/** A `gp_Dir`: a unit vector with the three coordinates read one by one. */
+export interface OcctDirection3 {
+  X(): number;
+  Y(): number;
+  Z(): number;
+}
+
+/** A `gp_Ax3`: a point and three perpendicular directions, the frame of a plane. */
+export interface OcctAxis3 {
+  Location(): OcctPoint;
+  Direction(): OcctDirection3;
+  XDirection(): OcctDirection3;
+  YDirection(): OcctDirection3;
+}
+
+/** A `gp_Pln`: the plane a flat face lies in. */
+export interface OcctPlane {
+  Position(): OcctAxis3;
+}
+
+/** A `Bnd_Box`: the axis-aligned box around a shape. */
+export interface OcctBoundingBox {
+  GetXmin(): number;
+  GetXmax(): number;
+  GetYmin(): number;
+  GetYmax(): number;
+  GetZmin(): number;
+  GetZmax(): number;
+  IsVoid(): boolean;
+}
+
 /** A `gp_Trsf`: a placement the shape makers accept. */
 export interface OcctTransformation3 {
   SetRotation_1(axis: unknown, angle: number): void;
   SetTranslation_1(vector: unknown): void;
+  /**
+   * Movement that brings `from` onto `to`. The change of coordinate system is
+   * the one that measures a shape in `from` as if it sat in `to`.
+   */
+  SetTransformation_1(from: OcctAxis3, to: OcctAxis3): void;
   /** Row-major 3x4 affine: a11 a12 a13 a14 a21 a22 a23 a24 a31 a32 a33 a34. */
   SetValues(
     a11: number,
@@ -238,7 +274,23 @@ export interface OcctBindings {
   GeomAbs_SurfaceType: {
     GeomAbs_Plane: unknown;
   };
-  BRepAdaptor_Surface_2: new (face: OcctShape, restriction: boolean) => { GetType(): unknown };
+  BRepAdaptor_Surface_2: new (face: OcctShape, restriction: boolean) => {
+    GetType(): unknown;
+    Plane(): OcctPlane;
+  };
+  /** The frame the standard XY plane sits in, so a face can be measured flat. */
+  gp_Ax3_1: new () => OcctAxis3;
+  gp_Ax3_3: new (point: OcctPoint3, direction: unknown, xDirection: unknown) => OcctAxis3;
+  Bnd_Box_1: new () => OcctBoundingBox;
+  BRepBndLib: {
+    /** Box of the exact curves and surfaces, not of a tessellation. */
+    AddOptimal(
+      shape: OcctShape,
+      box: OcctBoundingBox,
+      useTriangulation: boolean,
+      useShapeTolerance: boolean,
+    ): void;
+  };
   TopoDS: {
     Face_1(shape: OcctShape): OcctShape;
     Edge_1(shape: OcctShape): OcctShape;
@@ -257,6 +309,12 @@ export interface OcctBindings {
       shape: OcctShape,
       props: { Mass(): number },
       onlyClosed: boolean,
+      skipShared: boolean,
+      useTriangulation: boolean,
+    ): void;
+    SurfaceProperties_1(
+      shape: OcctShape,
+      props: { Mass(): number },
       skipShared: boolean,
       useTriangulation: boolean,
     ): void;

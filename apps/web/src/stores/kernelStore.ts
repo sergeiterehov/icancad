@@ -26,6 +26,8 @@ export interface PreviewBodyMark {
   color: string;
   /** Tessellation of the body before the operation; 3D picking uses it. */
   baseMesh?: TessellationResult;
+  /** Shape the body had before the operation, which `baseMesh` came from. */
+  baseShapeId?: string;
   /**
    * Draw `baseMesh` instead of the result, so an added part is represented only
    * by its translucent ghost while the original body keeps its exact look.
@@ -104,7 +106,12 @@ interface KernelState {
   sceneVersion: number;
   shapeStats: Record<string, ShapeStats>;
   meshStats: Record<string, MeshStats>;
-  shapeIds: string[];
+  /**
+   * Kernel shape each body is drawn from. The viewport picks against a mesh, so
+   * anything it needs measured exactly — the middle of a face, say — has to be
+   * asked of the shape the mesh came from.
+   */
+  bodyShapes: Record<string, string>;
   featureErrors: Record<string, string>;
   /** Errors of individual body targets, keyed by operation then body. */
   featureBodyErrors: Record<string, Record<string, string>>;
@@ -133,7 +140,7 @@ interface KernelState {
     meshes: Record<string, TessellationResult>,
     shapeStats: Record<string, ShapeStats>,
     meshStats: Record<string, MeshStats>,
-    shapeIds: string[],
+    bodyShapes: Record<string, string>,
     featureErrors: Record<string, string>,
     featureBodyErrors: Record<string, Record<string, string>>,
     featureObjectErrors: Record<string, Record<string, string>>,
@@ -173,7 +180,7 @@ export const useKernelStore = create<KernelState>((set) => ({
   sceneVersion: 0,
   shapeStats: {},
   meshStats: {},
-  shapeIds: [],
+  bodyShapes: {},
   featureErrors: {},
   featureBodyErrors: {},
   featureObjectErrors: {},
@@ -220,7 +227,7 @@ export const useKernelStore = create<KernelState>((set) => ({
     meshes,
     shapeStats,
     meshStats,
-    shapeIds,
+    bodyShapes,
     featureErrors,
     featureBodyErrors,
     featureObjectErrors,
@@ -235,7 +242,7 @@ export const useKernelStore = create<KernelState>((set) => ({
       sceneVersion: state.sceneVersion + 1,
       shapeStats,
       meshStats,
-      shapeIds,
+      bodyShapes,
       featureErrors,
       featureBodyErrors,
       featureObjectErrors,
@@ -265,7 +272,7 @@ export const useKernelStore = create<KernelState>((set) => ({
       sceneVersion: state.sceneVersion + 1,
       shapeStats: {},
       meshStats: {},
-      shapeIds: [],
+      bodyShapes: {},
       featureErrors: {},
       featureBodyErrors: {},
       featureObjectErrors: {},

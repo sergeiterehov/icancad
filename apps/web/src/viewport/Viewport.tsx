@@ -67,6 +67,7 @@ import { resolveEdgeRef } from '../kernel/edgeLookup';
 import { edgeTreatmentEdgeRef, edgeTreatmentFaceRef } from '../quick/edgeTreatment';
 import { outwardNormal } from '../quick/geometry';
 import { sketchRegionPlane } from '../sketch/regionPlane';
+import { faceCentre } from '../kernel/faceCentre';
 import { shellFaceRef } from '../quick/shell';
 import { findBoundExtrude, quickTargetFromSelection } from '../quick/target';
 import { bodyEdgeAxisRef } from '../sketch/revolveAxis';
@@ -431,7 +432,7 @@ export function Viewport() {
     const controller = new SceneController(
       canvas,
       container,
-      (pick, additive) => {
+      async (pick, additive) => {
         const ui = useUiStore.getState();
         if (ui.activeSketchId) {
           // Projecting is the only sketch tool that reaches into the 3D scene.
@@ -662,11 +663,20 @@ export function Viewport() {
             ui.showToast('errors.FACE_NOT_PLANAR', 'error');
             return;
           }
+          // The centre is the middle of the face's extent, and only the exact
+          // geometry knows where that is: the mesh falls short of an arc's
+          // extreme by the sagitta of its chords.
+          const centre =
+            (await faceCentre(
+              mark?.baseShapeId ?? kernelState.bodyShapes[pick.bodyId],
+              Number(pick.faceId),
+              face.normal,
+            )) ?? face.centroid;
           store.setArrayAxisFace(picker.featureId, picker.index, {
             kind: 'face',
             bodyId: pick.bodyId,
             faceId: pick.faceId,
-            origin: face.centroid,
+            origin: centre,
             normal: face.normal,
           });
           ui.setPickingArrayFace(null);

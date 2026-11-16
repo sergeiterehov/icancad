@@ -625,7 +625,7 @@ async function runRebuild(
       scene.meshes,
       shapeStats,
       scene.meshStats,
-      [...scene.bodyShapes.values()],
+      Object.fromEntries(scene.bodyShapes),
       scene.featureErrors,
       scene.featureBodyErrors,
       scene.featureObjectErrors,
@@ -716,6 +716,9 @@ function buildPreview(
       kind: 'modified',
       ...describe(bodyId),
       baseMesh: before,
+      // The mesh a pick lands on is the one before the operation, so its shape
+      // is the one to measure when the operation has moved the body.
+      ...(base.bodyShapes.get(bodyId) ? { baseShapeId: base.bodyShapes.get(bodyId)! } : {}),
       ...(keepsBodySolid ||
       feature.type === 'edge-treatment' ||
       (feature.type === 'shell' && feature.direction === 'inward')
@@ -735,6 +738,7 @@ function buildPreview(
       kind: 'removed',
       ...describe(bodyId),
       ...(baseMesh ? { baseMesh } : {}),
+      ...(base.bodyShapes.get(bodyId) ? { baseShapeId: base.bodyShapes.get(bodyId)! } : {}),
     });
   }
 

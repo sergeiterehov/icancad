@@ -91,6 +91,11 @@ export function startKernelWorker(options: KernelWorkerOptions = {}): void {
           postSuccess(scope, request.id, engine.transformShape(request.params));
           break;
         }
+        case 'face-centre': {
+          await engine.init();
+          postSuccess(scope, request.id, engine.faceCentre(request.params));
+          break;
+        }
         case 'tessellate': {
           await engine.init();
           const result = engine.tessellate(request.shapeId, request.quality);

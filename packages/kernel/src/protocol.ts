@@ -304,6 +304,27 @@ export interface TransformShapeParams {
   matrix: number[];
 }
 
+/** Asks where the middle of one face of a body is. */
+export interface FaceCentreParams {
+  shapeId: string;
+  faceId: number;
+  /**
+   * Normal of the face, which fixes the plane to measure the face in. The
+   * caller knows it from what it drew; the surface of the face may no longer say
+   * it, because an offset re-stores a plane as a B-spline.
+   */
+  normal: Vec3;
+}
+
+export interface FaceCentreResult {
+  /**
+   * Middle of the face's extent in its own plane. Not the centre of mass: a
+   * face with a notch or a hole has its mass centre off to one side, while a
+   * turn around the face has to look centred.
+   */
+  origin: Vec3;
+}
+
 export type KernelStatusPhase = 'loading-occt' | 'ready' | 'error';
 
 export interface KernelStatusEvent {
@@ -339,6 +360,7 @@ export type KernelRequestPayload =
   | { type: 'edge-treatment'; params: EdgeTreatmentParams }
   | { type: 'shell'; params: ShellParams }
   | { type: 'transform-shape'; params: TransformShapeParams }
+  | { type: 'face-centre'; params: FaceCentreParams }
   | { type: 'tessellate'; shapeId: string; quality?: TessellationQuality }
   | { type: 'topology'; shapeId: string }
   | { type: 'dispose'; shapeId: string };

@@ -1422,4 +1422,117 @@ describe('OCCT kernel engine', () => {
     expect(engine.dispose('box-1')).toBe(false);
     expect(engine.shapeCount).toBe(0);
   });
+
+  it('centres a face on the middle of its extent, not on its material', () => {
+    // A square plate with a corner notched out: the material sits in the
+    // remaining L, so its centre of mass is at 13.57 in both axes, while the
+    // middle of the face — where a turn around it belongs — is at 20.
+    engine.makeBox({ shapeId: 'notch-plate', dx: 40, dy: 40, dz: 5 });
+    engine.makeBox({ shapeId: 'notch-tool', dx: 30, dy: 30, dz: 10, at: [10, 10, -2] });
+    engine.booleanShape({
+      shapeId: 'notched',
+      baseShapeId: 'notch-plate',
+      toolShapeId: 'notch-tool',
+      op: 'cut',
+    });
+    const mesh = engine.tessellate('notched');
+    const faceId = faceFacing(mesh, [0, 0, 1]);
+    const { origin } = engine.faceCentre({
+      shapeId: 'notched',
+      faceId,
+      normal: faceNormals(mesh).get(faceId)!,
+    });
+    expect(origin[0]).toBeCloseTo(20, 9);
+    expect(origin[1]).toBeCloseTo(20, 9);
+    expect(origin[2]).toBeCloseTo(5, 9);
+  });
+
+  it('centres a flat face whose surface an offset re-stored as a spline', () => {
+    // Hollowing a body turns its flat faces into B-spline surfaces that still
+    // lie exactly in a plane, so asking a face for its surface type would refuse
+    // the very faces of a shelled part. The boundary curves stay lines and
+    // circles, and they are what the extent is measured from.
+    engine.makeBox({ shapeId: 'offset-box', dx: 40, dy: 20, dz: 10 });
+    engine.shell({
+      shapeId: 'offset-shell',
+      sourceShapeId: 'offset-box',
+      removeFaceIds: [],
+      thickness: 2,
+      offset: 0,
+      direction: 'inward',
+    });
+    const mesh = engine.tessellate('offset-shell');
+    // The outer top face is the largest one facing up; the cavity's own top face
+    // is smaller and sits lower.
+    const faceId = faceFacing(mesh, [0, 0, 1]);
+    const { origin } = engine.faceCentre({
+      shapeId: 'offset-shell',
+      faceId,
+      normal: faceNormals(mesh).get(faceId)!,
+    });
+    expect(origin[0]).toBeCloseTo(20, 6);
+    expect(origin[1]).toBeCloseTo(10, 6);
+    expect(origin[2]).toBeCloseTo(10, 6);
+  });
+
+  it('reaches the exact extreme of an arc when it centres a face', () => {
+    // A disc with a slice cut off: the face is a circular segment whose
+    // bounding box runs from -10 to 3 in x, so its middle is -3.5. A
+    // tessellated arc stops short of its own extreme by the sagitta of its
+    // chords, which is what this cannot afford.
+    engine.makePrimitive({ shapeId: 'slice-disc', kind: 'cylinder', radius: 10, height: 5 });
+    engine.makeBox({ shapeId: 'slice-tool', dx: 20, dy: 40, dz: 20, at: [3, -20, -5] });
+    engine.booleanShape({
+      shapeId: 'sliced',
+      baseShapeId: 'slice-disc',
+      toolShapeId: 'slice-tool',
+      op: 'cut',
+    });
+    const mesh = engine.tessellate('sliced');
+    const faceId = faceFacing(mesh, [0, 0, 1]);
+    const { origin } = engine.faceCentre({
+      shapeId: 'sliced',
+      faceId,
+      normal: faceNormals(mesh).get(faceId)!,
+    });
+    expect(origin[0]).toBeCloseTo(-3.5, 6);
+    // The segment is still symmetric across the x axis, and its top and bottom
+    // are the middle of the arc, far from any chord end.
+    expect(Math.abs(origin[1])).toBeLessThan(1e-9);
+    expect(origin[2]).toBeCloseTo(5, 6);
+  });
+
+  it('measures a slanted face in the axes of its own plane', () => {
+    engine.makeBox({ shapeId: 'slanted-box', dx: 40, dy: 40, dz: 5 });
+    const angle = Math.PI / 6;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const matrix = [cos, 0, sin, 0, 0, 1, 0, 0, -sin, 0, cos, 0];
+    engine.transformShape({ shapeId: 'slanted', sourceShapeId: 'slanted-box', matrix });
+    const mesh = engine.tessellate('slanted');
+    const faceId = faceFacing(mesh, [sin, 0, cos]);
+    const { origin } = engine.faceCentre({
+      shapeId: 'slanted',
+      faceId,
+      normal: faceNormals(mesh).get(faceId)!,
+    });
+    // The middle of the face follows the solid, so the placement carries it.
+    const expected = [20 * cos + 5 * sin, 20, 5 * cos - 20 * sin];
+    for (const [index, value] of expected.entries()) {
+      expect(origin[index]).toBeCloseTo(value, 9);
+    }
+  });
+
+  it('refuses to centre a face that is not flat', () => {
+    engine.makePrimitive({ shapeId: 'round-body', kind: 'cylinder', radius: 10, height: 5 });
+    const mesh = engine.tessellate('round-body');
+    const side = faceFacing(mesh, [1, 0, 0]);
+    expect(() =>
+      engine.faceCentre({
+        shapeId: 'round-body',
+        faceId: side,
+        normal: faceNormals(mesh).get(side)!,
+      }),
+    ).toThrow(KernelOpError);
+  });
 });
