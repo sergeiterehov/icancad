@@ -146,9 +146,9 @@ export function ArraySection({ feature }: { feature: ArrayFeature }) {
     setPickingPath,
   ]);
 
-  // The volume the array repeats is measured once the picking ends, so the
-  // copies appear without touching a setting. Picking itself stays cheap: the
-  // selection changes are just a list, not a stamp.
+  // The copies are drawn as soon as there is something to repeat, but ending
+  // the picking asks for one evaluation of its own, so a list that was just
+  // filled in shows its copies without touching a setting.
   const wasPicking = useRef(Boolean(pickingBodies ?? pickingOperations));
   useEffect(() => {
     const picking = Boolean(pickingBodies ?? pickingOperations);
@@ -162,9 +162,7 @@ export function ArraySection({ feature }: { feature: ArrayFeature }) {
   }, [pickingBodies, pickingOperations]);
 
   useEffect(() => {
-    const anyPicking = Boolean(
-      pickingBodies ?? pickingOperations ?? pickingFace ?? pickingPath,
-    );
+    const anyPicking = Boolean(pickingBodies ?? pickingOperations ?? pickingFace ?? pickingPath);
     if (!anyPicking) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
@@ -296,10 +294,8 @@ export function ArraySection({ feature }: { feature: ArrayFeature }) {
             // it turns around that face's normal, through the centre of the
             // face.
             const rotationAxis = direction.kind === 'rotation' ? direction.axis : null;
-            const worldAxis =
-              rotationAxis?.kind === 'world' ? rotationAxis.axis : null;
-            const faceAxis =
-              rotationAxis && rotationAxis.kind !== 'world' ? rotationAxis : null;
+            const worldAxis = rotationAxis?.kind === 'world' ? rotationAxis.axis : null;
+            const faceAxis = rotationAxis && rotationAxis.kind !== 'world' ? rotationAxis : null;
             const tilt = direction.kind === 'linear' ? (direction.angle ?? 0) : 0;
             const axisIndex =
               direction.kind === 'rotation'

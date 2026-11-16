@@ -17,6 +17,7 @@ import type { MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { arrayInputFromSelection } from '../quick/array';
 import { edgeTreatmentTargetFromSelection } from '../quick/edgeTreatment';
+import { extrudeInputFromSelection } from '../quick/extrude';
 import { shellInputFromSelection } from '../quick/shell';
 import { sketchPlaneFromSelection } from '../sketch/facePlane';
 import { useDocumentStore } from '../stores/documentStore';
@@ -27,26 +28,6 @@ import { IconButton } from './Controls';
 import { EdgeToolIcon } from './edgeIcons';
 import { ShellIcon, SketchIcon } from './featureIcons';
 import { SectionTool } from './SectionTool';
-
-// Extrude works on a whole sketch or on the faces selected inside one sketch.
-function extrudeInput(
-  selection: ReturnType<typeof useDocumentStore.getState>['selection'],
-  project: ReturnType<typeof useDocumentStore.getState>['project'],
-): { sketchId: string; regions: string[] } | null {
-  if (selection.length === 0) return null;
-  if (selection.every((item) => item.kind === 'sketch')) {
-    return selection.length === 1 ? { sketchId: selection[0]!.id, regions: [] } : null;
-  }
-  if (selection.every((item) => item.kind === 'face')) {
-    const [sketchId] = selection[0]!.id.split('#');
-    if (!sketchId) return null;
-    if (selection.some((item) => item.id.split('#')[0] !== sketchId)) return null;
-    const regions = selection.map((item) => item.id.split('#')[1] ?? '').filter(Boolean);
-    return regions.length > 0 ? { sketchId, regions } : null;
-  }
-  void project;
-  return null;
-}
 
 export function ToolRail() {
   const { t } = useTranslation();
@@ -60,9 +41,6 @@ export function ToolRail() {
   const addShell = useDocumentStore((state) => state.addShell);
   const addArray = useDocumentStore((state) => state.addArray);
   const addPrimitive = useDocumentStore((state) => state.addPrimitive);
-  const project = useDocumentStore((state) => state.project);
-  const selection = useDocumentStore((state) => state.selection);
-  const sketchSelection = extrudeInput(selection, project);
   const openMenu = useContextMenuStore((state) => state.open);
 
   const openSketchMenu = (event: MouseEvent<HTMLButtonElement>) => {
@@ -211,7 +189,15 @@ export function ToolRail() {
       <IconButton
         label={t('tools.extrude')}
         tooltip={t('tools.extrude')}
-        onClick={() => addExtrude(t('features.extrude'), sketchSelection ?? undefined)}
+        onClick={() => {
+          const store = useDocumentStore.getState();
+          const input = extrudeInputFromSelection(
+            activeModel(store.project),
+            store.selection,
+            useKernelStore.getState().meshes,
+          );
+          addExtrude(t('features.extrude'), input ?? undefined);
+        }}
       >
         <Box size={17} />
       </IconButton>
@@ -222,8 +208,8 @@ export function ToolRail() {
         onClick={() => {
           const store = useDocumentStore.getState();
           const input = arrayInputFromSelection(activeModel(store.project), store.selection);
-          // The new array arms its own picker: what it repeats is the question
-          // it opens with.
+          // A picked body or operation is what the array repeats, so it opens
+          // configured; only an empty one has to ask for its input.
           addArray(t('features.array'), input ?? undefined);
         }}
       >

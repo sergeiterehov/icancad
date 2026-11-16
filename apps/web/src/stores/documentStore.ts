@@ -48,6 +48,7 @@ import { create } from 'zustand';
 import { i18n } from '../i18n';
 import { MAX_ARRAY_ANGLE, MAX_ARRAY_COPIES } from '../kernel/arrayPlacement';
 import { defaultPrimitiveFeature } from '../primitive/params';
+import { arraySourceOperation } from '../quick/array';
 import { useKernelStore, isModelRebuilding } from './kernelStore';
 import { useUiStore } from './uiStore';
 
@@ -120,7 +121,7 @@ interface DocumentState {
   addPrimitiveBox: (name: string) => void;
   addSketch: (name: string, plane: 'XY' | 'XZ' | 'YZ') => string | null;
   addSketchOnFace: (name: string) => string | null;
-  addExtrude: (name: string, input?: ExtrudeInput) => string | null;
+  addExtrude: (name: string, input?: ExtrudeStart) => string | null;
   addEdgeTreatment: (name: string, input?: EdgeTreatmentInput) => string | null;
   addShell: (name: string, input?: ShellInput) => string | null;
   addArray: (name: string, input?: ArrayInput) => string | null;
@@ -208,6 +209,19 @@ export interface ExtrudeInput {
   sketchId: string;
   /** Empty means the whole sketch; otherwise the picked faces. */
   regions: string[];
+}
+
+/**
+ * What an extrude starts from when the tool is opened on a selection: a whole
+ * sketch, regions of one, faces of bodies, or both at once (ADR 0009). A sketch
+ * is named by its id; a face carries the pose it had when it was picked.
+ */
+export interface ExtrudeStart {
+  sketchId?: string;
+  /** Empty means the whole sketch; otherwise the picked faces. */
+  regions?: string[];
+  /** Faces of solid bodies used as the profile. */
+  faceRefs?: BodyFaceRef[];
 }
 
 /** Edges and faces an edge treatment starts with. */
@@ -1040,30 +1054,37 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   addExtrude: (name, input) => {
     get().endFeatureEdit();
     const project = get().project;
-    if (input) {
+    const sketchId = input?.sketchId;
+    if (sketchId) {
       const sketch = activeModel(project).features.find(
         (candidate): candidate is SketchFeature =>
-          candidate.id === input.sketchId && candidate.type === 'sketch',
+          candidate.id === sketchId && candidate.type === 'sketch',
       );
       if (!sketch) return null;
     }
     const featureId = createId('feat');
     const hasBodies = activeModel(project).bodies.length > 0;
     const regions = input?.regions ?? [];
+    const faceRefs = input?.faceRefs ?? [];
     const feature: ExtrudeFeature = {
       id: featureId,
       name,
       suppressed: false,
       type: 'extrude',
       method: 'extrude',
-      ...(input ? { sketchId: input.sketchId } : {}),
+      ...(sketchId ? { sketchId } : {}),
       regions,
-      faceRefs: [],
-      objectOrder: input
-        ? regions.length > 0
-          ? regions.map((regionId) => sketchFaceKey(input.sketchId, regionId))
-          : [`s:${input.sketchId}#*`]
-        : [],
+      faceRefs,
+      // Sketch profiles come first, then faces: the names of the bodies follow
+      // the order the user picked inside each kind.
+      objectOrder: [
+        ...(sketchId
+          ? regions.length > 0
+            ? regions.map((regionId) => sketchFaceKey(sketchId, regionId))
+            : [`s:${sketchId}#*`]
+          : []),
+        ...faceRefs.map((ref) => bodyFaceKey(ref.bodyId, ref.faceId)),
+      ],
       end: 'blind',
       distance: 10,
       reversed: false,
@@ -1268,7 +1289,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   // The array starts from the current selection: picked bodies, or picked
-  // operations whose created bodies are repeated.
+  // operations whose result is repeated.
   addArray: (name, input) => {
     get().endFeatureEdit();
     const featureId = createId('feat');
@@ -1289,11 +1310,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     };
     if (!get().apply(...addFeatureCommands(activeModel(get().project), feature))) return null;
     selectFeatureForEditing(featureId, set);
-    // A new array opens asking for what it repeats: the picker is part of
-    // creating the operation, not of editing it later.
-    const ui = useUiStore.getState();
-    if (target === 'geometry') ui.setPickingArrayOperations(featureId);
-    else ui.setPickingArrayBodies(featureId);
+    // An array that already knows what it repeats is ready to be configured,
+    // exactly like a shell opened on picked bodies. Only an empty one has to
+    // ask, and the question is part of creating it, not of editing it later.
+    if (!input) {
+      const ui = useUiStore.getState();
+      if (target === 'geometry') ui.setPickingArrayOperations(featureId);
+      else ui.setPickingArrayBodies(featureId);
+    }
     return featureId;
   },
 
@@ -1323,11 +1347,6 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   toggleArrayOperation: (featureId, operationId) => {
-    // Every operation that builds or changes a body can be repeated: the
-    // rebuild replays what it did, so this only has to reject operations with
-    // no solid result at all.
-    // An array cannot repeat itself, and it cannot depend on an operation that
-    // comes after it in the history.
     if (operationId === featureId) return;
     const model = activeModel(get().project);
     const arrayIndex = model.features.findIndex((candidate) => candidate.id === featureId);
@@ -1348,13 +1367,11 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     if (arrayIndex >= 0 && operationIndex >= arrayIndex) return;
     const operation = model.features[operationIndex];
     if (!operation) return;
-    if (
-      operation.type === 'sketch' ||
-      operation.type === 'import-mesh' ||
-      operation.type === 'delete-body'
-    ) {
-      return;
-    }
+    // Every operation that builds or changes a body can be repeated: the
+    // rebuild replays what it did, so only operations with no solid result at
+    // all are rejected. An array cannot repeat itself, and it cannot depend on
+    // an operation that comes after it in the history.
+    if (!arraySourceOperation(operation)) return;
     replaceArrayFeature(
       featureId,
       (feature) => {

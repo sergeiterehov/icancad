@@ -357,10 +357,7 @@ function cloneState(state: RebuildState): RebuildState {
       ]),
     ),
     featureCreatedShapes: new Map(
-      [...state.featureCreatedShapes].map(([featureId, shapes]) => [
-        featureId,
-        new Map(shapes),
-      ]),
+      [...state.featureCreatedShapes].map(([featureId, shapes]) => [featureId, new Map(shapes)]),
     ),
     projectionLost: cloneLists(state.projectionLost),
     featureErrors: { ...state.featureErrors },
@@ -1324,7 +1321,10 @@ async function applyExtrude(
   // An array of this operation repeats these tools at its own placements. The
   // source already built them, so it only has to say what it applied and where.
   state.featureTools.set(feature.id, {
-    parts: feature.op === 'add' && explicitTargets ? toolParts.map((part) => part.shapeId) : [toolShapeId],
+    parts:
+      feature.op === 'add' && explicitTargets
+        ? toolParts.map((part) => part.shapeId)
+        : [toolShapeId],
     op: feature.op,
     targets: [...targets],
     disjointCheck: feature.op === 'add' && explicitTargets,
@@ -1803,7 +1803,6 @@ function arrayDirectionMatrices(direction: ArrayDirection, state: RebuildState):
   return directionMatrices(direction, placementContext(state));
 }
 
-
 /**
  * Repeats the picked bodies, or the bodies the picked operations made. Every
  * copy is a body of its own; the seed stays where it is. Directions nest: the
@@ -2262,10 +2261,7 @@ function keepArrayStamp(featureId: string | null): void {
 }
 
 /** What the stamp was measured from: the picked sources and their shapes. */
-function arrayStampKey(
-  feature: ArrayFeature,
-  sources: readonly ArrayFeatureSource[],
-): string {
+function arrayStampKey(feature: ArrayFeature, sources: readonly ArrayFeatureSource[]): string {
   return JSON.stringify({
     target: feature.target,
     bodyIds: feature.bodyIds,
@@ -2300,14 +2296,17 @@ async function previewArray(
 ): Promise<void> {
   const ghost = context.ghost;
   if (!ghost) return;
-  // The selection is still being made: there is nothing worth measuring yet,
-  // and the next evaluation once picking ends will do it.
-  const ui = useUiStore.getState();
-  if (ui.pickingArrayOperations === feature.id || ui.pickingArrayBodies === feature.id) return;
+  // The copies appear as soon as there is something to repeat, even while the
+  // list is still being filled: a picked operation that contributed nothing is
+  // a question in progress, not a failure, so it turns red only once the
+  // picking ends.
+  const picking =
+    useUiStore.getState().pickingArrayOperations === feature.id ||
+    useUiStore.getState().pickingArrayBodies === feature.id;
   const stamp = await arrayStamp(feature, state, context, sources);
   if (!stamp) return;
   if (stamp.stamps.length === 0) {
-    state.featureErrors[feature.id] = 'NO_TARGET_BODY';
+    if (!picking) state.featureErrors[feature.id] = 'NO_TARGET_BODY';
     return;
   }
   for (const copy of arrayCopyGhosts(feature, stamp.stamps, placements)) {
@@ -2323,9 +2322,12 @@ function arrayCopyGhosts(
   stamps: readonly ArrayStamp[],
   placements: ReadonlyArray<{ matrix: Matrix3x4 }>,
 ): Array<{ id: string; kind: ArrayStamp['kind']; mesh: TessellationResult; matrix: Matrix3x4 }> {
-  const copies: Array<
-    { id: string; kind: ArrayStamp['kind']; mesh: TessellationResult; matrix: Matrix3x4 }
-  > = [];
+  const copies: Array<{
+    id: string;
+    kind: ArrayStamp['kind'];
+    mesh: TessellationResult;
+    matrix: Matrix3x4;
+  }> = [];
   for (const [stampIndex, stamp] of stamps.entries()) {
     for (const [placementIndex, placement] of placements.entries()) {
       copies.push({
