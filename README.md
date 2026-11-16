@@ -94,7 +94,7 @@ Pages serves the static files as they are: `.wasm` arrives with `application/was
 
 ### icancad.com
 
-`.github/workflows/deploy-site.yml` builds the site for the domain root (`VITE_BASE=/`) and uploads `apps/web/dist` to `/www/icancad.com` over FTP on every push to `main` and on a manual run. The repository secrets `FTP_HOST`, `FTP_USERNAME` and `FTP_PASSWORD` hold the account; the workflow reads the password from the `LFTP_PASSWORD` environment variable, so it never appears in a command line or a log. The upload uses `lftp mirror --reverse --delete`, so only new and changed files travel, and files the build no longer contains are removed from the host.
+`.github/workflows/deploy-site.yml` builds the site for the domain root (`VITE_BASE=/`) and mirrors `apps/web/dist` over FTP on every push to `main` and on a manual run. The repository secrets `FTP_HOST`, `FTP_USERNAME` and `FTP_PASSWORD` hold the account; the workflow reads the password from the `LFTP_PASSWORD` environment variable, so it never appears in a command line or a log. The FTP account is chrooted to the directory the domain serves, so the build is uploaded to the account root (`/`); a manual run can name another directory. The upload uses `lftp mirror --reverse --delete`, so only new and changed files travel, and files the build no longer contains are removed from the host. The run ends by asking the domain for the uploaded build, so a site root that does not match the account fails the workflow instead of passing quietly.
 
 [apps/web/public/.htaccess](apps/web/public/.htaccess) travels with the build and gives an Apache or LiteSpeed host the headers listed below. GitHub Pages ignores it. Both deployments are independent: a failure of one leaves the other published.
 

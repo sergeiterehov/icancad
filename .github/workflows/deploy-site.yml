@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       remote_dir:
-        description: Directory on the host that the domain serves from
+        description: Directory on the host the site is mirrored into
         required: false
-        default: /www/icancad.com
+        default: /
 
 # The upload only reads the repository; the host is reached with the FTP_*
 # secrets, which are handed to the upload step alone.
@@ -29,9 +29,9 @@ jobs:
       # corepack fetches the pnpm version pinned in package.json; never wait for
       # a confirmation prompt on a fresh runner.
       COREPACK_ENABLE_DOWNLOAD_PROMPT: 0
-      # A manual run can point at another directory without an edit; a push
-      # keeps the one the domain serves from.
-      REMOTE_DIR: ${{ inputs.remote_dir || '/www/icancad.com' }}
+      # The account is chrooted to the directory the domain serves, so the site
+      # starts at its root. A manual run can name another directory instead.
+      REMOTE_DIR: ${{ inputs.remote_dir || '/' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -92,17 +92,6 @@ jobs:
             echo "SITE_PASSWORD=$password"
           } >> "$GITHUB_ENV"
 
-      # --delete is what keeps the chunks of an older build off the host, so a
-      # mistyped directory would empty something else: the mirror only accepts a
-      # path below the account root.
-      - name: Refuse to mirror into the account root
-        run: |
-          depth=$(awk -F/ '{print NF-1}' <<< "$REMOTE_DIR")
-          if [ "$depth" -lt 2 ]; then
-            echo "::error::refusing to mirror into $REMOTE_DIR"
-            exit 1
-          fi
-
       # mirror -R sends only new and changed files and removes what the build no
       # longer contains. --upload-older covers hosts that cannot preserve file
       # times, where a fresh local file can otherwise look older than the remote
@@ -115,14 +104,15 @@ jobs:
           # The password reaches lftp through LFTP_PASSWORD, so it never appears
           # in the command line or in an error message. The listing asks for
           # hidden files so that .htaccess is compared like any other file, and
-          # the target directory is made first: a login that fails stops here,
-          # before 63 MB of build tries to follow it.
+          # the target directory is made first (quietly, as the root needs no
+          # making): a login that fails stops here, before 63 MB of build tries
+          # to follow it.
           lftp -c "
           set ftp:list-options -a
           set net:max-retries 3
           set net:timeout 30
           open --env-password -u '$SITE_USER' 'ftp://$SITE_HOST:21'
-          mkdir -p $REMOTE_DIR
+          mkdir -p -f $REMOTE_DIR
           mirror --reverse --delete --upload-older --parallel=4 --verbose=1 apps/web/dist/ $REMOTE_DIR
           "
 
@@ -151,5 +141,4 @@ jobs:
           open --env-password -u '$SITE_USER' 'ftp://$SITE_HOST:21'
           pwd
           cls -1 /
-          cls -1 /www
           " || true
