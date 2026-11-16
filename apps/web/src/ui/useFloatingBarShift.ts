@@ -81,8 +81,8 @@ export function useFloatingBarShift(
   /** The shell is up: before that the bars and the docks are not in the DOM. */
   active: boolean,
 ): void {
-  const leftDock = useUiStore((state) => state.leftDockOpen);
-  const rightDock = useUiStore((state) => state.rightDockOpen);
+  const leftDock = useUiStore((state) => state.leftDockShown);
+  const rightDock = useUiStore((state) => state.rightDockShown);
   // The corner is measured while it is whole, and the numbers outlive the
   // effects that come and go with the panels: once part of it is hidden, it can
   // no longer say how wide it was.

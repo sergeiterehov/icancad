@@ -199,6 +199,21 @@ const OUTLINE_TRIANGLE_LIMIT = 250_000;
 // millimetre keeps such faces whole.
 const SECTION_CLIP_BIAS = 0.01;
 
+/**
+ * The pose a model opens with when nothing about it is known yet: an isometric
+ * look at the origin, far enough out to hold a model of any size until the fit
+ * that follows the build puts the camera where the model is.
+ */
+const DEFAULT_CAMERA_DISTANCE = 200;
+const DEFAULT_CAMERA_AZIMUTH = -Math.PI / 4;
+const DEFAULT_CAMERA_POLAR = Math.PI / 3;
+
+/** A colour of the world axes, as the vertex colours of a line expect it. */
+function axisColor(hex: string): number[] {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return [((value >> 16) & 255) / 255, ((value >> 8) & 255) / 255, (value & 255) / 255];
+}
+
 export interface SceneBody {
   id: string;
   kind: 'solid' | 'mesh';
@@ -400,6 +415,12 @@ export class SceneController {
   private readonly bodies = new Map<string, BodyEntry>();
   private readonly resizeObserver: ResizeObserver;
   private grid: THREE.GridHelper;
+  /** World axes: a view aid of the 3D view, drawn on request. */
+  private axes: THREE.LineSegments;
+  private showAxes = false;
+  private showGrid = true;
+  /** The diagonal line of a section cap; without it the cap keeps its colour. */
+  private sectionHatch = true;
   private readonly sectionScene = new THREE.Scene();
   /** Transparent annotations drawn after the section caps. */
   private readonly overlayScene = new THREE.Scene();
@@ -498,7 +519,7 @@ export class SceneController {
   private disposed = false;
 
   private target = new THREE.Vector3(0, 0, 0);
-  private distance = 200;
+  private distance = DEFAULT_CAMERA_DISTANCE;
   /** Tilt of the horizon about the view direction; zero for a turntable. */
   private roll = 0;
   /**
@@ -513,8 +534,8 @@ export class SceneController {
   private pinch: { centre: { x: number; y: number }; spread: number } | null = null;
   /** A second finger joined, so what is left of the gesture only pans and pinches. */
   private multiTouch = false;
-  private azimuth = -Math.PI / 4;
-  private polar = Math.PI / 3;
+  private azimuth = DEFAULT_CAMERA_AZIMUTH;
+  private polar = DEFAULT_CAMERA_POLAR;
   private theme: Theme = 'dark';
   private edgeColor = 0x0d1015;
   private width = 1;
@@ -665,6 +686,8 @@ export class SceneController {
 
     this.grid = this.createGrid();
     this.scene.add(this.grid);
+    this.axes = this.createAxes();
+    this.scene.add(this.axes);
     // Transparent annotations render after the section caps, so hatching never
     // hides a delta, a sketch face or a face tint.
     this.ghostGroup.renderOrder = RenderOrder.delta;
@@ -999,7 +1022,10 @@ export class SceneController {
         ? handle.fixedLengthPx * worldPerPixel
         : handle.value === 0
           ? HANDLE_IDLE_PX * worldPerPixel
-          : Math.max(Math.abs(handle.value) - (handle.endGapPx ?? 0) * worldPerPixel, 18 * worldPerPixel);
+          : Math.max(
+              Math.abs(handle.value) - (handle.endGapPx ?? 0) * worldPerPixel,
+              18 * worldPerPixel,
+            );
     const tip = origin.clone().addScaledVector(arrowDirection, length);
     const coneHeight = Math.min(12 * worldPerPixel, length * 0.7);
     const base = tip.clone().addScaledVector(arrowDirection, -coneHeight);
@@ -1379,8 +1405,10 @@ export class SceneController {
       ring.push(point.x, point.y, point.z);
     }
     const guideGeometry = new THREE.BufferGeometry().setFromPoints(
-      Array.from({ length: ring.length / 3 }, (_, index) =>
-        new THREE.Vector3(ring[index * 3]!, ring[index * 3 + 1]!, ring[index * 3 + 2]!),
+      Array.from(
+        { length: ring.length / 3 },
+        (_, index) =>
+          new THREE.Vector3(ring[index * 3]!, ring[index * 3 + 1]!, ring[index * 3 + 2]!),
       ),
     );
     const guideMaterial = new THREE.LineDashedMaterial({
@@ -1407,10 +1435,7 @@ export class SceneController {
     const tangent = new THREE.Vector3().crossVectors(axis, radial);
     if (tangent.lengthSq() < 1e-12) tangent.copy(new THREE.Vector3(...arc.reference));
     tangent.normalize();
-    const turn = new THREE.Quaternion().setFromUnitVectors(
-      new THREE.Vector3(0, 1, 0),
-      tangent,
-    );
+    const turn = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), tangent);
     const tipHeight = Math.max(0.002, 7.5 * (handle.thickness ?? 1) * worldPerPixel);
     const tipRadius = Math.max(0.001, 3.2 * (handle.thickness ?? 1) * worldPerPixel);
     const dotMaterial = new THREE.MeshBasicMaterial({
@@ -1617,7 +1642,8 @@ export class SceneController {
       const closest = closestOnSegment([local.x, local.y], a, b);
       const span = (lengths[index] ?? 0) - (lengths[index - 1] ?? 0);
       const total = Math.hypot(b[0] - a[0], b[1] - a[1]);
-      const t = total > 1e-6 ? Math.hypot(closest.point[0] - a[0], closest.point[1] - a[1]) / total : 0;
+      const t =
+        total > 1e-6 ? Math.hypot(closest.point[0] - a[0], closest.point[1] - a[1]) / total : 0;
       const along = (lengths[index - 1] ?? 0) + span * t;
       if (!best || closest.distance < best.distance) best = { distance: closest.distance, along };
       previousScreen = screen;
@@ -2379,8 +2405,13 @@ export class SceneController {
     this.grid.geometry.dispose();
     (this.grid.material as THREE.Material).dispose();
     this.grid = this.createGrid();
-    this.grid.visible = !this.sketchData.some((sketch) => sketch.active);
     this.scene.add(this.grid);
+    this.scene.remove(this.axes);
+    this.axes.geometry.dispose();
+    (this.axes.material as THREE.Material).dispose();
+    this.axes = this.createAxes();
+    this.scene.add(this.axes);
+    this.applyWorldAid();
     if (this.sectionPlanes.length > 0) this.rebuildSection();
     if (this.sketchData.length > 0) this.setSketches(this.sketchData);
     if (this.handleData.length > 0) this.updateHandles();
@@ -2690,9 +2721,9 @@ export class SceneController {
     this.hoveredSketchId = null;
     this.disposeSketchEntries();
     const editingSketch = sketches.some((sketch) => sketch.active);
-    // The sketch draws its own plane-aligned grid; the world grid would only
-    // duplicate it at a different orientation while editing.
-    this.grid.visible = !editingSketch;
+    // The sketch draws its own plane-aligned grid and its own axes; the world
+    // ones would only duplicate it at a different orientation while editing.
+    this.applyWorldAid();
     for (const sketch of sketches) {
       const group = new THREE.Group();
       group.renderOrder = RenderOrder.sketch;
@@ -2881,6 +2912,28 @@ export class SceneController {
       polar: state.polar,
       roll: state.roll ?? 0,
     });
+  }
+
+  /**
+   * True while the camera is on its way between two poses. The pose it passes
+   * through is not a view: only where it comes to rest is looked at again.
+   */
+  isCameraSettling(): boolean {
+    return this.transition !== null;
+  }
+
+  /**
+   * The pose a model opens with before it has a view of its own. Opening one the
+   * first time starts here and is fitted once its build has finished.
+   */
+  defaultCameraPose(): ViewportCamera {
+    return {
+      target: [0, 0, 0],
+      distance: DEFAULT_CAMERA_DISTANCE,
+      azimuth: DEFAULT_CAMERA_AZIMUTH,
+      polar: DEFAULT_CAMERA_POLAR,
+      roll: 0,
+    };
   }
 
   alignSketch(frame: SketchFrame, entities: readonly SketchEntity[] = []): void {
@@ -3478,7 +3531,9 @@ export class SceneController {
           uniforms: {
             uPixelRatio: { value: this.renderer.getPixelRatio() },
             uSpacing: { value: HATCH_SPACING_PX },
-            uHatch: { value: 1 },
+            // Without the hatch the cap keeps its colour: a section is then read
+            // as a flat face rather than as cut material.
+            uHatch: { value: this.sectionHatch ? 1 : 0 },
             uFill: { value: fill },
             uLine: { value: line },
           },
@@ -3577,6 +3632,8 @@ export class SceneController {
     this.pointTexture.dispose();
     this.grid.geometry.dispose();
     (this.grid.material as THREE.Material).dispose();
+    this.axes.geometry.dispose();
+    (this.axes.material as THREE.Material).dispose();
     this.renderer.dispose();
   }
 
@@ -3591,6 +3648,88 @@ export class SceneController {
     material.opacity = 0.9;
     grid.renderOrder = RenderOrder.grid;
     return grid;
+  }
+
+  /**
+   * The world axes: a ray along each of the three directions from the origin,
+   * coloured the way the nav cube names them. They are a view aid like the grid,
+   * so they rest with it and leave the sketch, which draws its own axes.
+   */
+  private createAxes(): THREE.LineSegments {
+    const length = 60;
+    const positions = new Float32Array([
+      0,
+      0,
+      0,
+      length,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      length,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      length,
+    ]);
+    const colors = new Float32Array([
+      ...axisColor('#d48282'),
+      ...axisColor('#d48282'),
+      ...axisColor('#82b482'),
+      ...axisColor('#82b482'),
+      ...axisColor('#84a4e4'),
+      ...axisColor('#84a4e4'),
+    ]);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    const material = new THREE.LineBasicMaterial({
+      vertexColors: true,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.9,
+    });
+    const axes = new THREE.LineSegments(geometry, material);
+    axes.renderOrder = RenderOrder.grid;
+    return axes;
+  }
+
+  /**
+   * What the view draws besides the model. The world grid and the axes are a
+   * working aid of the 3D view and never reach the sketch editor; the hatch is
+   * the diagonal line of a section cap, which without it keeps its colour alone.
+   */
+  setViewElements(elements: { axes: boolean; grid: boolean; hatching: boolean }): void {
+    this.showAxes = elements.axes;
+    this.showGrid = elements.grid;
+    this.applyWorldAid();
+    if (this.sectionHatch !== elements.hatching) {
+      this.sectionHatch = elements.hatching;
+      this.applySectionHatch();
+    }
+  }
+
+  /** The grid and the axes belong to the free 3D view, not to a sketch. */
+  private applyWorldAid(): void {
+    const editing = this.sketchData.some((sketch) => sketch.active);
+    this.grid.visible = this.showGrid && !editing;
+    this.axes.visible = this.showAxes && !editing;
+  }
+
+  private applySectionHatch(): void {
+    for (const entry of this.sectionEntries) {
+      for (const material of entry.materials) {
+        if (material instanceof THREE.ShaderMaterial) {
+          material.uniforms.uHatch!.value = this.sectionHatch ? 1 : 0;
+        }
+      }
+    }
+    this.invalidate();
   }
 
   /**
@@ -4799,7 +4938,11 @@ export class SceneController {
     const pick = this.pickSceneAt(clientX, clientY, true, false, true, true);
     const key = pick ? pickKey(pick) : '';
     const previous = this.geometryHover;
-    if (previous && previous.key === key && Math.hypot(clientX - previous.x, clientY - previous.y) < 3) {
+    if (
+      previous &&
+      previous.key === key &&
+      Math.hypot(clientX - previous.x, clientY - previous.y) < 3
+    ) {
       return;
     }
     if (!previous && !pick) return;

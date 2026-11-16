@@ -550,16 +550,8 @@ const sectionPlane = z.object({
 });
 
 const viewState = z.object({
-  // The view the model was last looked at from; every model has its own.
-  camera: z
-    .object({
-      target: vec3,
-      distance: z.number().positive(),
-      azimuth: z.number(),
-      polar: z.number(),
-      roll: z.number().optional(),
-    })
-    .nullable(),
+  // The camera is deliberately absent: a view belongs to the app that shows the
+  // model, not to the model. Documents that still carry one lose it here.
   sectionPlanes: z.array(sectionPlane),
 });
 

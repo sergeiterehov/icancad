@@ -13,6 +13,12 @@ import {
   isInputPreference,
   type InputPreference,
 } from '../viewport/inputProfile';
+import {
+  DEFAULT_VIEW_ELEMENTS,
+  viewElementsFrom,
+  type ViewElement,
+  type ViewElements,
+} from '../viewport/viewElements';
 
 export interface DeleteRequest {
   /** Operations the user asked to delete, without their dependents. */
@@ -53,6 +59,13 @@ interface UiState {
   /** Panels a side of the workspace shows; an open one stays until it is closed. */
   leftDockOpen: boolean;
   rightDockOpen: boolean;
+  /**
+   * Whether the panel is on screen right now, which is not the same wish: a
+   * panel unfolds for its subject too. The layout follows this, so a bar keeps
+   * clear of a panel that was opened by a selected operation.
+   */
+  leftDockShown: boolean;
+  rightDockShown: boolean;
   /** Panels stop at their content instead of running the full height. */
   compactPanels: boolean;
   /** Pointer and wheel bindings the camera follows. */
@@ -61,6 +74,9 @@ interface UiState {
   /** How a drag turns the view: a level turntable or a free trackball. */
   orbitStyle: OrbitStyle;
   setOrbitStyle: (style: OrbitStyle) => void;
+  /** What the 3D view draws besides the model; a view setting, not the project. */
+  viewElements: ViewElements;
+  setViewElement: (element: ViewElement, shown: boolean) => void;
   /** Which gestures the device needs: the user's choice or the detected device. */
   inputPreference: InputPreference;
   setInputPreference: (preference: InputPreference) => void;
@@ -68,6 +84,8 @@ interface UiState {
   modelListExpanded: boolean;
   setLeftDockOpen: (open: boolean) => void;
   setRightDockOpen: (open: boolean) => void;
+  setLeftDockShown: (shown: boolean) => void;
+  setRightDockShown: (shown: boolean) => void;
   setCompactPanels: (compact: boolean) => void;
   setModelListExpanded: (expanded: boolean) => void;
   requestProjectDelete: (request: ProjectDeleteRequest) => void;
@@ -194,6 +212,17 @@ const COMPACT_PANELS_KEY = 'icancad.compactPanels';
 const CAMERA_SCHEME_KEY = 'icancad.cameraScheme';
 const INPUT_PREFERENCE_KEY = 'icancad.input';
 const ORBIT_STYLE_KEY = 'icancad.orbit';
+const VIEW_ELEMENTS_KEY = 'icancad.viewElements';
+
+function loadViewElements(): ViewElements {
+  try {
+    return viewElementsFrom(JSON.parse(localStorage.getItem(VIEW_ELEMENTS_KEY) ?? 'null'));
+  } catch {
+    // localStorage can be unavailable in private mode, and a broken entry is
+    // the same as none: the defaults say what a view shows.
+  }
+  return { ...DEFAULT_VIEW_ELEMENTS };
+}
 
 function loadSketchMagnet(): boolean {
   try {
@@ -261,6 +290,8 @@ export const useUiStore = create<UiState>((set) => ({
   modelDeleteRequest: null,
   leftDockOpen: true,
   rightDockOpen: true,
+  leftDockShown: true,
+  rightDockShown: true,
   compactPanels: loadCompactPanels(),
   cameraScheme: loadCameraScheme(),
   setCameraScheme: (cameraScheme) => {
@@ -289,9 +320,24 @@ export const useUiStore = create<UiState>((set) => ({
     }
     set({ orbitStyle });
   },
+  viewElements: loadViewElements(),
+  setViewElement: (element, shown) =>
+    set((state) => {
+      const viewElements = { ...state.viewElements, [element]: shown };
+      try {
+        localStorage.setItem(VIEW_ELEMENTS_KEY, JSON.stringify(viewElements));
+      } catch {
+        // A preference that cannot be stored still applies to this session.
+      }
+      return { viewElements };
+    }),
   modelListExpanded: false,
   setLeftDockOpen: (leftDockOpen) => set({ leftDockOpen }),
   setRightDockOpen: (rightDockOpen) => set({ rightDockOpen }),
+  setLeftDockShown: (leftDockShown) =>
+    set((state) => (state.leftDockShown === leftDockShown ? state : { leftDockShown })),
+  setRightDockShown: (rightDockShown) =>
+    set((state) => (state.rightDockShown === rightDockShown ? state : { rightDockShown })),
   setCompactPanels: (compactPanels) => {
     try {
       localStorage.setItem(COMPACT_PANELS_KEY, String(compactPanels));
@@ -343,7 +389,8 @@ export const useUiStore = create<UiState>((set) => ({
   setPickingEdges: (pickingEdges) => set(onlyPicker('pickingEdges', pickingEdges)),
   setPickingShellBodies: (pickingShellBodies) =>
     set(onlyPicker('pickingShellBodies', pickingShellBodies)),
-  setPickingShellFaces: (pickingShellFaces) => set(onlyPicker('pickingShellFaces', pickingShellFaces)),
+  setPickingShellFaces: (pickingShellFaces) =>
+    set(onlyPicker('pickingShellFaces', pickingShellFaces)),
   setPickingExtrudeBodies: (pickingExtrudeBodies) =>
     set(onlyPicker('pickingExtrudeBodies', pickingExtrudeBodies)),
   setPickingSketchPlane: (pickingSketchPlane) =>

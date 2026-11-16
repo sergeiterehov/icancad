@@ -333,6 +333,15 @@
     "remove": "Remove plane",
     "offset": "Offset"
   },
+  "elements": {
+    "title": "Visible elements",
+    "axes": "Axes",
+    "axesHint": "World axes; the sketch editor has its own",
+    "grid": "Grid",
+    "gridHint": "World grid; the sketch editor draws its own, on the sketch plane",
+    "hatching": "Section hatching",
+    "hatchingHint": "Without hatching a section is drawn in one colour"
+  },
   "sketch": {
     "title": "Sketch",
     "planeXY": "XY plane",

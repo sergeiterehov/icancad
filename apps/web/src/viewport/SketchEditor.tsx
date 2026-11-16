@@ -247,7 +247,7 @@ export function SketchEditor() {
   // The view before the first sketch is remembered across sketch switches and
   // restored once editing finishes. The frame is only aligned after the
   // rebuild at the sketch's timeline position has finished.
-  const cameraBeforeSketch = useRef<ViewportCamera | null>(null);
+  const cameraBeforeSketch = useRef<{ modelId: string; pose: ViewportCamera } | null>(null);
   const editedSketch = useRef<string | null>(null);
   const alignedFrame = useRef('');
 
@@ -355,7 +355,13 @@ export function SketchEditor() {
   // frame changes only re-align the camera.
   useEffect(() => {
     if (!activeSketchId || !activeSketchReady) return;
-    cameraBeforeSketch.current ??= getViewport()?.getCameraState() ?? null;
+    if (!cameraBeforeSketch.current) {
+      const pose = getViewport()?.getCameraState();
+      // The model is remembered with the pose: a view belongs to a model, and a
+      // switch to another one is not the exit that gives it back.
+      const modelId = useDocumentStore.getState().project.activeSuperObjectId;
+      if (pose) cameraBeforeSketch.current = { modelId, pose };
+    }
     // While the sketch is open the inspector shows the operation being edited:
     // its placement, composition and constraints.
     editedSketch.current = activeSketchId;
@@ -374,7 +380,11 @@ export function SketchEditor() {
     if (activeSketchId) return;
     const saved = cameraBeforeSketch.current;
     cameraBeforeSketch.current = null;
-    if (saved) getViewport()?.setCameraState(saved);
+    // The reserved view returns to the model it was taken from. A sketch left by
+    // switching models gives nothing back: the new model opens at its own view.
+    if (saved && saved.modelId === useDocumentStore.getState().project.activeSuperObjectId) {
+      getViewport()?.setCameraState(saved.pose);
+    }
     // Finishing hands the inspector back to the finished sketch object.
     const finished = editedSketch.current;
     editedSketch.current = null;

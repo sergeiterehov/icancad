@@ -39,8 +39,10 @@ export default function App() {
 
   const hydrated = useDocumentStore((state) => state.hydrated);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
-  const leftDockOpen = useUiStore((state) => state.leftDockOpen);
-  const rightDockOpen = useUiStore((state) => state.rightDockOpen);
+  // What is on screen, not what the user asked for: a panel unfolds for its
+  // subject too, and the bars and the cube keep clear of it either way.
+  const leftDockShown = useUiStore((state) => state.leftDockShown);
+  const rightDockShown = useUiStore((state) => state.rightDockShown);
   const compactPanels = useUiStore((state) => state.compactPanels);
   // The inspector carries the parameters of the operation on screen, so that
   // operation is its subject: while there is one, its own unfolded state rules
@@ -66,8 +68,8 @@ export default function App() {
     <div className="app-shell">
       <div
         className="workspace"
-        data-left-dock={leftDockOpen ? 'open' : 'closed'}
-        data-right-dock={rightDockOpen ? 'open' : 'closed'}
+        data-left-dock={leftDockShown ? 'open' : 'closed'}
+        data-right-dock={rightDockShown ? 'open' : 'closed'}
         data-compact-panels={compactPanels ? 'true' : 'false'}
       >
         {hydrated ? (

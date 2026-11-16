@@ -576,17 +576,12 @@ export interface SectionPlane {
   inverted?: boolean;
 }
 
-export interface CameraState {
-  target: Vec3;
-  distance: number;
-  azimuth: number;
-  polar: number;
-  /** Tilt of the horizon in a trackball view; absent means level. */
-  roll?: number;
-}
-
+/**
+ * What a model remembers about looking at it. The camera is not part of it: the
+ * view is the app's, not the document's, so a project opened anywhere starts
+ * from the default pose and is fitted to its content.
+ */
 export interface ViewState {
-  camera: CameraState | null;
   sectionPlanes: SectionPlane[];
 }
 

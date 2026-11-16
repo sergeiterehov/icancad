@@ -21,8 +21,9 @@ function pixels(style: CSSStyleDeclaration, name: string): number {
  * it at the screen edge, and a panel that misses the cube's row changes nothing.
  */
 export function useNavCubeLift(nav: RefObject<HTMLDivElement | null>): void {
-  // Opening the inspector moves the cube left, which changes what it meets.
-  const rightDock = useUiStore((state) => state.rightDockOpen);
+  // The inspector is on screen, which includes the moment it unfolds for the
+  // operation the user selected: the cube has to give way then as well.
+  const rightDock = useUiStore((state) => state.rightDockShown);
 
   useEffect(() => {
     const element = nav.current;

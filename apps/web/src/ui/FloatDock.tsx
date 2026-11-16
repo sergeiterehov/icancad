@@ -51,6 +51,9 @@ export function FloatDock({
   const setOpen = useUiStore((state) =>
     side === 'left' ? state.setLeftDockOpen : state.setRightDockOpen,
   );
+  const setShown = useUiStore((state) =>
+    side === 'left' ? state.setLeftDockShown : state.setRightDockShown,
+  );
   // Set the moment the user works the panel, so the start-up tuck below leaves it
   // alone from then on.
   const touched = useRef(false);
@@ -69,6 +72,12 @@ export function FloatDock({
 
   const held = pinned !== null;
   const shown = held ? subjectOpen : open;
+  // The rest of the layout follows what is on screen, not what the user asked
+  // for: a panel unfolded by its subject takes the same room as one unfolded by
+  // hand, and the bars and the cube keep clear of it either way.
+  useEffect(() => {
+    setShown(shown);
+  }, [setShown, shown]);
 
   const show = useCallback(() => {
     touched.current = true;

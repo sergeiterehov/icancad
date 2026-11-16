@@ -98,12 +98,28 @@ export function lastPointerType(): string {
   return lastPointer;
 }
 
+/**
+ * Marks the document with the hand in use: `finger` for a touch screen, `cursor`
+ * for anything that can hover. Styles read it, so a row action is revealed by a
+ * cursor and simply present for a finger — the same split the behaviour makes.
+ */
+export function notePointerHand(pointerType: string): void {
+  if (typeof document === 'undefined') return;
+  const hand = isTouchPointer(pointerType) ? 'finger' : 'cursor';
+  const root = document.documentElement;
+  if (root.dataset.pointer !== hand) root.dataset.pointer = hand;
+}
+
 /** Keeps {@link lastPointerType} current; returns the function that stops it. */
 export function installPointerWatch(target: Document = document): () => void {
   const watch = (event: Event) => {
     const pointerType = (event as PointerEvent).pointerType;
-    if (pointerType) notePointerType(pointerType);
+    if (!pointerType) return;
+    notePointerType(pointerType);
+    notePointerHand(pointerType);
   };
+  // Before the first press the platform says: a tablet starts out as a finger.
+  notePointerHand(primaryInputProfile() === 'touch' ? 'touch' : lastPointer);
   target.addEventListener('pointerdown', watch, true);
   return () => target.removeEventListener('pointerdown', watch, true);
 }

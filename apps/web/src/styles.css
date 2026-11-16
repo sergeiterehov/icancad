@@ -872,10 +872,19 @@ button:disabled {
   opacity: 0.5;
 }
 
-/* The eye belongs to its row and is always on screen: a finger has no hover to
-   reveal it with, and hiding the object is how the row is used. */
+/* The eye belongs to its row. A cursor reveals it by resting on the row; a
+   finger has no hover, so on a touch screen it is on screen all the time — the
+   document says which hand is in use (`installPointerWatch`). */
 .tree-row .tree-eye {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.tree-row:hover .tree-eye,
+.tree-row:focus-within .tree-eye,
+html[data-pointer='finger'] .tree-row .tree-eye {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .tree-icon {
@@ -1289,7 +1298,6 @@ button:disabled {
 .form-error-title {
   font-weight: 600;
 }
-
 
 .link-button {
   border: none;
@@ -2088,12 +2096,20 @@ button.selection-item[data-active='true'][data-error='true'] {
   flex: 0 0 auto;
 }
 
-/* The remove action is part of its row, not a reward for hovering: a finger has
-   no hover to reveal it with. */
+/* The remove action is part of its row: a cursor reveals it by resting on the
+   row, and a finger keeps it on screen. */
 .selection-item .icon-btn {
   width: 20px;
   height: 20px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.selection-item:hover .icon-btn,
+.selection-item:focus-within .icon-btn,
+html[data-pointer='finger'] .selection-item .icon-btn {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .sketch-entity-row {

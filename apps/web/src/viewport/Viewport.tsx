@@ -1,6 +1,6 @@
 import type { TessellationResult } from '@icancad/kernel';
-import { House, ScanBox, ScanSquare, SlidersHorizontal } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { House, Eye, Rotate3d, ScanBox, ScanSquare } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { retryKernel } from '../kernel/client';
 import {
@@ -55,6 +55,15 @@ import { GeometryTooltip } from '../ui/GeometryTooltip';
 import { Tooltip } from '../ui/Tooltip';
 import { CAMERA_SCHEMES, ORBIT_STYLES, cameraScheme } from './cameraControls';
 import { INPUT_PREFERENCES, primaryInputProfile, resolvedPointerKind } from './inputProfile';
+import {
+  cameraOf,
+  loadCameraBook,
+  saveCameraBook,
+  withCamera,
+  type CameraBook,
+  type CameraHome,
+} from './modelCameras';
+import { VIEW_ELEMENTS } from './viewElements';
 import { NavCube, type NavFace } from './NavCube';
 import { useNavCubeLift } from './useNavCubeLift';
 import {
@@ -83,7 +92,7 @@ import {
   resolveSketchProjections,
   type ProjectionPick,
 } from '../sketch/projection';
-import { getViewport, registerViewport, type ScenePick, type ViewportCamera } from './handle';
+import { getViewport, registerViewport, type ScenePick } from './handle';
 
 const AXIS_HINTS: Record<string, { text: string; color: string }> = {
   right: { text: '+X', color: '#d48282' },
@@ -145,6 +154,9 @@ function chipLabel(drag: OperationHandleDrag, translate: (key: never) => string)
   return '';
 }
 
+/** How long the view must rest before its camera is written down. */
+const CAMERA_SAVE_DELAY_MS = 400;
+
 export function Viewport() {
   const { t, i18n } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -158,20 +170,61 @@ export function Viewport() {
   /** Bodies the scene has already shown; a body coming back is not new. */
   const seenBodyIds = useRef(new Set<string>());
   const activeModelId = useDocumentStore((state) => state.project.activeSuperObjectId);
-  // Null on the first render, so the stored view of the open model is restored.
+  // A model id names a model inside its project only: the pair names one camera.
+  const projectId = useDocumentStore((state) => state.project.id);
+  // Null on the first render, so the open model is taken as an arrival.
   const lastModelId = useRef<string | null>(null);
-  /** Latest camera pose, written to the model once the gesture settles. */
-  const cameraRef = useRef<ViewportCamera | null>(null);
-  const cameraTimer = useRef<number | null>(null);
-  /** A switch already chose the view: the new model's bodies must not refit it. */
-  const skipFit = useRef(false);
-  const skipFitTimer = useRef<number | null>(null);
-  useEffect(
-    () => () => {
-      if (skipFitTimer.current !== null) window.clearTimeout(skipFitTimer.current);
-    },
-    [],
-  );
+  /**
+   * The model already arrived on this controller. A remount builds a new one, and
+   * a fresh scene has seen no model yet: the arrival belongs to the instance.
+   */
+  const arrivedIn = useRef<SceneController | null>(null);
+  /**
+   * The first bodies of a model ask for a fit, but a build delivers them one at a
+   * time: the camera waits until the kernel has finished, or it frames a corner
+   * of what is still coming.
+   */
+  const fitPending = useRef(false);
+  /**
+   * The camera of every model, kept by the app rather than by the project: a view
+   * belongs to the machine it was set on, so it does not travel in the document.
+   */
+  const cameraBook = useRef<CameraBook>(loadCameraBook());
+  /** The model on screen, and so the model the viewport's camera belongs to. */
+  const cameraHome = useRef<CameraHome | null>(null);
+  const cameraSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The arriving model opened at a camera it was left with, so it needs no fit. */
+  const restoredPose = useRef(false);
+  const rebuilding = useKernelStore((state) => isModelRebuilding(state));
+  const viewElements = useUiStore((state) => state.viewElements);
+  useEffect(() => {
+    controllerRef.current?.setViewElements(viewElements);
+  }, [viewElements]);
+
+  /**
+   * Writes down the camera the viewport holds now, for the model it belongs to.
+   * A gesture moves the camera frame by frame, so the write waits for the view to
+   * come to rest instead of running on every step of a turn.
+   */
+  const writeCamera = useCallback(() => {
+    cameraSaveTimer.current = null;
+    const controller = controllerRef.current;
+    const home = cameraHome.current;
+    if (!controller || !home) return;
+    // A sketch is drawn from a pose of its own, which the editor gives back on the
+    // way out: it is not the view the model is kept at.
+    if (useUiStore.getState().activeSketchId) return;
+    // A camera on its way between two poses passes through poses nobody chose;
+    // the step that ends the move brings the next write.
+    if (controller.isCameraSettling()) return;
+    cameraBook.current = withCamera(cameraBook.current, home, controller.getCameraState());
+    saveCameraBook(cameraBook.current);
+  }, []);
+
+  const noteCamera = useCallback(() => {
+    if (cameraSaveTimer.current !== null) clearTimeout(cameraSaveTimer.current);
+    cameraSaveTimer.current = setTimeout(writeCamera, CAMERA_SAVE_DELAY_MS);
+  }, [writeCamera]);
 
   const project = useViewModel();
   const documentProject = useDocumentStore((state) => state.project);
@@ -783,17 +836,7 @@ export function Viewport() {
           navCubeCanvasRef.current.dataset.polar = String(polar);
           navCubeCanvasRef.current.dataset.distance = String(distance);
         }
-        // Every model keeps the view it was last looked from. The write is
-        // debounced, so orbiting does not touch the document on every frame.
-        cameraRef.current = controllerRef.current?.getCameraState() ?? null;
-        if (cameraTimer.current !== null) return;
-        cameraTimer.current = window.setTimeout(() => {
-          cameraTimer.current = null;
-          const pose = cameraRef.current;
-          if (!pose) return;
-          const store = useDocumentStore.getState();
-          store.setModelCamera(store.project.activeSuperObjectId, pose);
-        }, 700);
+        noteCamera();
       },
       // A double click on a face opens the operation that produced it: the
       // shape a body currently has comes from the operation that last built it,
@@ -914,6 +957,8 @@ export function Viewport() {
     );
     controllerRef.current = controller;
     controller.setTheme(useThemeStore.getState().theme);
+    // The view settings outlive the controller, so the scene starts with them.
+    controller.setViewElements(useUiStore.getState().viewElements);
 
     // The nav cube menu both drives the view and chooses how the pointer drives
     // it. It is rebuilt on every opening and after a change, so the ticks follow
@@ -977,7 +1022,7 @@ export function Viewport() {
         {
           id: 'camera-controls',
           label: labels('nav.controls'),
-          icon: <SlidersHorizontal size={14} />,
+          icon: <Rotate3d size={14} />,
           submenu: [
             ...CAMERA_SCHEMES.map((option) => ({
               id: `camera-scheme-${option.id}`,
@@ -995,7 +1040,11 @@ export function Viewport() {
             { id: 'orbit-heading', heading: labels('nav.rotation') },
             ...ORBIT_STYLES.map((style) => ({
               id: `orbit-${style}`,
-              label: labels((style === 'trackball' ? 'nav.rotationTrackball' : 'nav.rotationTurntable') as never),
+              label: labels(
+                (style === 'trackball'
+                  ? 'nav.rotationTrackball'
+                  : 'nav.rotationTurntable') as never,
+              ),
               tooltip: labels(
                 (style === 'trackball'
                   ? 'nav.rotationTrackballHint'
@@ -1030,6 +1079,25 @@ export function Viewport() {
               },
             })),
           ],
+        },
+        {
+          id: 'view-elements',
+          label: labels('elements.title'),
+          icon: <Eye size={14} />,
+          // A tick list of what the view draws besides the model. The settings
+          // are the user's, kept outside the project.
+          submenu: VIEW_ELEMENTS.map((option) => ({
+            id: `element-${option.id}`,
+            label: labels(option.label as never),
+            tooltip: labels(option.hint as never),
+            checked: useUiStore.getState().viewElements[option.id],
+            keepOpen: true,
+            onSelect: () => {
+              const ui = useUiStore.getState();
+              ui.setViewElement(option.id, !ui.viewElements[option.id]);
+              useContextMenuStore.getState().updateItems(navMenuItems());
+            },
+          })),
         },
         { id: 'views-separator', separator: true },
         ...(['front', 'back', 'left', 'right', 'top', 'bottom'] as const).map((view) => {
@@ -1074,40 +1142,51 @@ export function Viewport() {
       registerViewport(null);
       navCube.dispose();
       navCubeRef.current = null;
+      // The model on screen keeps the camera it was left with, so a reload opens
+      // where the page was closed even if the view was still settling.
+      if (cameraSaveTimer.current !== null) {
+        clearTimeout(cameraSaveTimer.current);
+        writeCamera();
+      }
       controller.dispose();
       controllerRef.current = null;
     };
-  }, []);
+  }, [noteCamera, writeCamera]);
 
   useEffect(() => {
     const controller = controllerRef.current;
     if (!controller) return;
+    // A controller built after another one — a remount, a replaced canvas — has
+    // seen nothing, so the model has to arrive there as well.
+    const replaced = arrivedIn.current !== controller;
+    if (replaced) {
+      arrivedIn.current = controller;
+      lastModelId.current = null;
+    }
 
-    // Every model is its own space, so each one keeps the view it was last
-    // looked from: the pose of the model being left is stored and the pose of
-    // the next one is restored. A model that has never been looked at is fitted
-    // to its first body.
+    // A model opens at the camera it was left with, position and direction alike:
+    // switching models moves between two remembered views. One never seen before
+    // starts at the default pose and is fitted to its content once the build has
+    // finished.
     if (lastModelId.current !== activeModelId) {
-      const previous = lastModelId.current;
-      const leaving = controller.getCameraState();
-      lastModelId.current = activeModelId;
-      const store = useDocumentStore.getState();
-      if (previous) store.setModelCamera(previous, leaving);
-      const model = store.project.superObjects.find(
-        (candidate) => candidate.id === activeModelId,
-      );
-      const pose = model?.view.camera ?? null;
-      cameraRef.current = pose;
-      if (pose) {
-        controller.setCameraState(pose);
-        skipFit.current = true;
-        if (skipFitTimer.current !== null) window.clearTimeout(skipFitTimer.current);
-        skipFitTimer.current = window.setTimeout(() => {
-          skipFit.current = false;
-        }, 1200);
-      } else {
-        skipFit.current = false;
+      // The model that is leaving hands its camera over before the next one takes
+      // the view. A replaced controller holds a pose of its own, so writing it
+      // would put the default pose in place of what the previous one had.
+      if (cameraSaveTimer.current !== null) {
+        clearTimeout(cameraSaveTimer.current);
+        cameraSaveTimer.current = null;
       }
+      if (!replaced) writeCamera();
+      cameraHome.current = { projectId, modelId: activeModelId };
+      lastModelId.current = activeModelId;
+      const remembered = cameraOf(cameraBook.current, cameraHome.current);
+      controller.setCameraState(remembered ?? controller.defaultCameraPose());
+      restoredPose.current = Boolean(remembered);
+      // The new model's bodies are all new bodies: the fit waits for its own
+      // build, not for the model that was open a moment ago.
+      previousCount.current = 0;
+      seenBodyIds.current.clear();
+      fitPending.current = false;
     }
 
     const marks = new Map((preview?.bodies ?? []).map((mark) => [mark.id, mark]));
@@ -1182,10 +1261,16 @@ export function Viewport() {
     // before entering the sketch (the same goes for rolling the timeline).
     const unseenBody = sceneBodies.some((body) => !seenBodyIds.current.has(body.id));
     for (const body of sceneBodies) seenBodyIds.current.add(body.id);
-    if (skipFit.current) {
-      if (sceneBodies.length > 0) skipFit.current = false;
-    } else if (!activeSketchId && previousCount.current === 0 && unseenBody) {
-      controller.fit();
+    if (!activeSketchId && previousCount.current === 0 && unseenBody) {
+      // A model that opened at a remembered camera is framed already; only a
+      // first opening, which starts at the default pose, is fitted. The arrival
+      // is consumed here, so bodies that come later are new ones again.
+      if (!restoredPose.current) {
+        // The camera is fitted below, once the build that produced these bodies
+        // has finished: fitting the first of them frames a corner of the model.
+        fitPending.current = true;
+      }
+      restoredPose.current = false;
     }
     previousCount.current = sceneBodies.length;
   }, [
@@ -1196,9 +1281,25 @@ export function Viewport() {
     preview,
     primitiveDelta,
     project,
+    projectId,
     selection,
     featureBodyErrors,
+    writeCamera,
   ]);
+
+  // The fit a model asks for on arrival. It runs when the kernel is idle again,
+  // so the whole build is in the scene before the camera measures it. It is
+  // checked after every render: the bodies that ask for it arrive with their own
+  // updates, and a dependency list here would wait for one of its own entries.
+  useEffect(() => {
+    if (!fitPending.current || rebuilding) return;
+    if (activeSketchId) {
+      fitPending.current = false;
+      return;
+    }
+    fitPending.current = false;
+    controllerRef.current?.fit();
+  });
 
   // Which bodies are open for detail picking, and which sketch shows regions.
   useEffect(() => {
@@ -1434,9 +1535,7 @@ export function Viewport() {
         // axis can be the plane of a sketch region, and the fill has to sit
         // above the body face it lies on for the pick to reach it.
         const facesPicking =
-          Boolean(pickingExtrude) ||
-          Boolean(pickingArrayFace) ||
-          feature.id === selectedSketchId;
+          Boolean(pickingExtrude) || Boolean(pickingArrayFace) || feature.id === selectedSketchId;
         const operationSelected = selection.some(
           (item) => item.kind === 'feature' && item.id === feature.id,
         );

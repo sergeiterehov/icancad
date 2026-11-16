@@ -47,7 +47,6 @@ export function createModel(name = 'Model'): Model {
     bodies: [],
     metadata: {},
     view: {
-      camera: null,
       sectionPlanes: [],
     },
     historyEnd: null,

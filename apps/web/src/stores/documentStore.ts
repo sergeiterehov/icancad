@@ -41,7 +41,6 @@ import {
   type ArrayFeature,
   type ArrayPath,
   type ArrayRotationAxis,
-  type CameraState,
 } from '@icancad/model';
 import { sketchTopology } from '@icancad/sketch';
 import { useMemo } from 'react';
@@ -129,11 +128,7 @@ interface DocumentState {
   toggleArrayOperation: (featureId: string, operationId: string) => void;
   addArrayDirection: (featureId: string) => void;
   removeArrayDirection: (featureId: string, index: number) => void;
-  setArrayDirectionKind: (
-    featureId: string,
-    index: number,
-    kind: ArrayDirection['kind'],
-  ) => void;
+  setArrayDirectionKind: (featureId: string, index: number, kind: ArrayDirection['kind']) => void;
   setArrayCount: (featureId: string, index: number, count: number) => void;
   setArraySpacing: (featureId: string, index: number, spacing: number) => void;
   setArrayAngle: (featureId: string, index: number, angle: number) => void;
@@ -184,11 +179,6 @@ interface DocumentState {
   setConstructionVisible: (sketchId: string, visible: boolean) => void;
   addImportedMesh: (name: string, featureId: string, format: MeshFormat) => void;
   setSectionPlanes: (planes: SectionPlane[]) => void;
-  /**
-   * Remembers the view a model was last looked from. A camera is not an edit:
-   * it never enters the history, and every model keeps its own.
-   */
-  setModelCamera: (modelId: string, camera: CameraState | null) => void;
   /** Asks what to do with the operations that depend on the removed ones. */
   removeFeatures: (featureIds: string[]) => void;
   confirmRemoveFeature: (featureIds: string[]) => void;
@@ -252,37 +242,17 @@ function withOrderKey(order: readonly string[] | undefined, key: string, add: bo
   return current.includes(key) ? [...current] : [...current, key];
 }
 
-/** Whether two camera poses are close enough to be the same view. */
-function sameCamera(a: CameraState | null, b: CameraState | null): boolean {
-  if (!a || !b) return a === b;
-  const close = (left: number, right: number) => Math.abs(left - right) < 1e-4;
-  return (
-    close(a.target[0], b.target[0]) &&
-    close(a.target[1], b.target[1]) &&
-    close(a.target[2], b.target[2]) &&
-    close(a.distance, b.distance) &&
-    close(a.azimuth, b.azimuth) &&
-    close(a.polar, b.polar) &&
-    close(a.roll ?? 0, b.roll ?? 0)
-  );
-}
-
 const HISTORY_LIMIT = 100;
 
 /**
  * Content of a document without the parts that are bookkeeping rather than an
- * edit: the save timestamp, the active super-object and the camera the user
- * happens to look from.
+ * edit: the save timestamp and the active super-object.
  */
 function projectContent(project: Project): string {
   return JSON.stringify({
     ...project,
     updatedAt: '',
     activeSuperObjectId: '',
-    superObjects: project.superObjects.map((superObject) => ({
-      ...superObject,
-      view: { ...superObject.view, camera: null },
-    })),
   });
 }
 
@@ -315,10 +285,7 @@ function findArrayFeature(model: Model, featureId: string): ArrayFeature | undef
 }
 
 /** A new direction starts at the step a user is most likely to want. */
-function defaultArrayDirection(
-  kind: ArrayDirection['kind'],
-  count = 3,
-): ArrayDirection {
+function defaultArrayDirection(kind: ArrayDirection['kind'], count = 3): ArrayDirection {
   switch (kind) {
     case 'linear':
       return { kind, direction: [1, 0, 0], spacing: 10, count };
@@ -604,14 +571,14 @@ function keepActiveModel(project: Project, activeId: string): Project {
 function openPicker(ui: ReturnType<typeof useUiStore.getState>): boolean {
   return Boolean(
     ui.pickingExtrude ??
-      ui.pickingExtrudeBodies ??
-      ui.pickingEdges ??
-      ui.pickingShellBodies ??
-      ui.pickingShellFaces ??
-      ui.pickingSketchPlane ??
-      ui.pickingSectionFace ??
-      ui.pickingArrayBodies ??
-      ui.pickingArrayOperations,
+    ui.pickingExtrudeBodies ??
+    ui.pickingEdges ??
+    ui.pickingShellBodies ??
+    ui.pickingShellFaces ??
+    ui.pickingSketchPlane ??
+    ui.pickingSectionFace ??
+    ui.pickingArrayBodies ??
+    ui.pickingArrayOperations,
   );
 }
 
@@ -1745,23 +1712,6 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     // its operation is open hides again when the user asks for it.
     const shown = objectVisible(modelForView(state.project, state.editingFeatureId), objectId);
     get().apply({ type: 'metadata/patch', objectId, patch: { visible: !shown } });
-  },
-
-  setModelCamera: (modelId, camera) => {
-    const project = get().project;
-    const model = project.superObjects.find((candidate) => candidate.id === modelId);
-    if (!model) return;
-    if (sameCamera(model.view.camera, camera)) return;
-    set({
-      project: touch({
-        ...project,
-        superObjects: project.superObjects.map((candidate) =>
-          candidate.id === modelId
-            ? { ...candidate, view: { ...candidate.view, camera } }
-            : candidate,
-        ),
-      }),
-    });
   },
 
   setSectionPlanes: (planes) => {
