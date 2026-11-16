@@ -78,6 +78,8 @@
     "projectionLost": "Projected geometry lost its source — the last known position is shown"
   },
   "inspector": {
+    "group": "Group",
+    "groupContents": "Contents",
     "project": "Project",
     "selection": "Selection",
     "properties": "Properties",
@@ -142,6 +144,9 @@
     "model": "Model"
   },
   "timeline": {
+    "group": "Group",
+    "leaveGroup": "Leave the group",
+    "operationCount": "{{count}} operations",
     "blockedByError": "Cannot move past the failed operation",
     "empty": "No operations yet",
     "errorHint": "Cannot complete this operation because of an error",
@@ -278,6 +283,9 @@
     "clear": "Clear"
   },
   "context": {
+    "group": "Group",
+    "ungroup": "Ungroup",
+    "deleteGroup": "Delete group",
     "edit": "Edit",
     "deleteOperation": "Delete operation",
     "deleteObject": "Delete object",

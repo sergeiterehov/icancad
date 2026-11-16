@@ -203,11 +203,12 @@ describe('project model', () => {
 
   it('migrates a flat version 2 project into one model', () => {
     const project = parseProject(legacyFile([boxFeature()]));
-    expect(project.schemaVersion).toBe(3);
+    expect(project.schemaVersion).toBe(4);
     expect(project.superObjects).toHaveLength(1);
     expect(activeModel(project).name).toBe('Model');
     expect(activeModel(project).features.map((feature) => feature.id)).toEqual(['feat_box']);
-    // The migrated project is a normal version 3 document that accepts edits.
+    expect(activeModel(project).groups).toEqual([]);
+    // The migrated project is a normal current document that accepts edits.
     const edited = applyCommand(project, { type: 'body/add', body: bodyFor('feat_box') });
     expect(activeModel(edited).bodies).toHaveLength(1);
   });

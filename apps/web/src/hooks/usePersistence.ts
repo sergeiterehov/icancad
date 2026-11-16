@@ -1,5 +1,5 @@
 import { activeModel, createProject, parseProject } from '@icancad/model';
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { i18n } from '../i18n';
 import { useDocumentStore } from '../stores/documentStore';
@@ -73,6 +73,13 @@ export function useRebuildScene(): void {
   const activeModelId = useDocumentStore((state) => state.project.activeSuperObjectId);
   const features = useDocumentStore((state) => activeModel(state.project).features);
   const bodies = useDocumentStore((state) => activeModel(state.project).bodies);
+  // Folders are a view of the strip, not a build step (ADR 0032): grouping,
+  // ungrouping and moving between folders must not reach the kernel, so the
+  // rebuild follows what the operations say, not which folder shows them.
+  const buildKey = useMemo(
+    () => JSON.stringify(features, (key, value) => (key === 'groupId' ? undefined : value)),
+    [features],
+  );
   const historyEnd = useDocumentStore((state) => activeModel(state.project).historyEnd);
   // Selecting an operation previews it on top of the rolled-back state, so the
   // rebuild also has to follow the operation being edited.
@@ -89,5 +96,5 @@ export function useRebuildScene(): void {
       ).catch(() => undefined);
     }, 50);
     return () => clearTimeout(timer);
-  }, [activeModelId, features, bodies, historyEnd, editingFeatureId, hydrated, kernelStatus, t]);
+  }, [activeModelId, buildKey, bodies, historyEnd, editingFeatureId, hydrated, kernelStatus, t]);
 }

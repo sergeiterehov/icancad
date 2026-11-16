@@ -5,12 +5,14 @@ import {
   bodiesInHistory,
   defaultRevolve,
   featureBodyId,
+  groupFeatureIds,
   objectName,
   objectShowConstruction,
   objectVisible,
   resolveBody,
   sketchObjectId,
   solidBodiesInHistory,
+  timelineNodes,
   type Feature,
   type PrimitiveFeature,
   type SketchEntity,
@@ -27,6 +29,7 @@ import {
   ChartPie,
   ChevronsUpDown,
   Circle,
+  Folder,
   Torus,
   Eye,
   EyeOff,
@@ -81,7 +84,14 @@ import {
 import { formatNumber } from './format';
 import { useContextMenuStore } from './ContextMenu';
 import { ChamferIcon, FilletIcon } from './edgeIcons';
-import { ExtrudeOpIcon, PointIcon, ShellIcon, SketchEntityIcon, SketchIcon } from './featureIcons';
+import {
+  ExtrudeOpIcon,
+  FeatureIcon,
+  PointIcon,
+  ShellIcon,
+  SketchEntityIcon,
+  SketchIcon,
+} from './featureIcons';
 import { PickableSection, type PickableRow } from './PickableSection';
 import { ArraySection } from './ArraySection';
 import {
@@ -115,7 +125,6 @@ function sketchEntityLabel(t: (key: string) => string, entity: SketchEntity): st
       return t('sketch.entityBezier');
   }
 }
-
 
 function sketchEntityMeta(entity: SketchEntity, locale: string): string {
   switch (entity.type) {
@@ -219,7 +228,7 @@ function featureTypeLabel(t: (key: string) => string, feature: Feature): string 
 
 interface ResolvedItem {
   key: string;
-  kind: 'body' | 'mesh' | 'feature' | 'sketch';
+  kind: 'body' | 'mesh' | 'feature' | 'group' | 'sketch';
   name: string;
   bodyId: string | null;
 }
@@ -426,6 +435,7 @@ export function Inspector() {
   const renameProject = useDocumentStore((state) => state.renameProject);
   const select = useDocumentStore((state) => state.select);
   const selectMany = useDocumentStore((state) => state.selectMany);
+  const renameGroup = useDocumentStore((state) => state.renameGroup);
   const setExtrudeOp = useDocumentStore((state) => state.setExtrudeOp);
   const setExtrudeInput = useDocumentStore((state) => state.setExtrudeInput);
   const toggleExtrudeFace = useDocumentStore((state) => state.toggleExtrudeFace);
@@ -473,6 +483,15 @@ export function Inspector() {
   const sketchFrames = useKernelStore((state) => state.sketchFrames);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
   const setActiveSketch = useUiStore((state) => state.setActiveSketch);
+  const setTimelineGroup = useUiStore((state) => state.setTimelineGroup);
+
+  const selectedGroup =
+    selection.length === 1 && selection[0]?.kind === 'group'
+      ? project.groups.find((group) => group.id === selection[0]?.id)
+      : undefined;
+  // The contents of a folder are its own level: the same items the strip shows
+  // once the folder is opened, read-only here.
+  const groupContents = selectedGroup ? timelineNodes(project, selectedGroup.id) : [];
 
   const feature =
     selection.length === 1 && selection[0]?.kind === 'feature'
@@ -644,7 +663,7 @@ export function Inspector() {
         edgeAxis.kind === 'body-edge'
           ? objectName(project, edgeAxis.bodyId, 'Body')
           : (project.features.find((candidate) => candidate.id === edgeAxis.sketchId)?.name ??
-            edgeAxis.sketchId),
+              edgeAxis.sketchId),
         edgeAxis.kind === 'body-edge'
           ? bodyEdgeNumber(meshes[edgeAxis.bodyId], edgeAxis.edgeId)
           : null,
@@ -1150,6 +1169,19 @@ export function Inspector() {
                 ]
               : [];
           }
+          if (item.kind === 'group') {
+            const match = project.groups.find((candidate) => candidate.id === item.id);
+            return match
+              ? [
+                  {
+                    key: `group:${match.id}`,
+                    kind: 'group' as const,
+                    name: match.name,
+                    bodyId: null,
+                  },
+                ]
+              : [];
+          }
           return [];
         })
       : [];
@@ -1181,13 +1213,15 @@ export function Inspector() {
       ? `${t('inspector.selection')} · ${resolved.length}`
       : sketchObject
         ? t('inspector.sketch')
-        : feature
-          ? featureTypeLabel((key) => t(key as never), feature)
-          : body
-            ? body.kind === 'mesh'
-              ? t('inspector.mesh')
-              : t('inspector.body')
-            : t('inspector.project');
+        : selectedGroup
+          ? t('inspector.group')
+          : feature
+            ? featureTypeLabel((key) => t(key as never), feature)
+            : body
+              ? body.kind === 'mesh'
+                ? t('inspector.mesh')
+                : t('inspector.body')
+              : t('inspector.project');
   const visibility = sketchObject
     ? {
         visible: objectVisible(project, sketchObjectId(sketchObject.id)),
@@ -1238,7 +1272,13 @@ export function Inspector() {
                 {resolved.map((item) => (
                   <div key={item.key} className="selection-item">
                     <span className="tree-icon">
-                      {item.kind === 'mesh' ? <PawPrint size={14} /> : <Box size={14} />}
+                      {item.kind === 'mesh' ? (
+                        <PawPrint size={14} />
+                      ) : item.kind === 'group' ? (
+                        <Folder size={14} />
+                      ) : (
+                        <Box size={14} />
+                      )}
                     </span>
                     <span className="tree-name">{item.name}</span>
                     <span className="tree-meta">
@@ -1248,7 +1288,9 @@ export function Inspector() {
                           ? t('inspector.body')
                           : item.kind === 'sketch'
                             ? t('inspector.sketch')
-                            : t('inspector.operation')}
+                            : item.kind === 'group'
+                              ? t('inspector.group')
+                              : t('inspector.operation')}
                     </span>
                   </div>
                 ))}
@@ -1367,6 +1409,56 @@ export function Inspector() {
                 )}
               />
             )}
+          </>
+        ) : selectedGroup ? (
+          <>
+            <div className="inspector-field">
+              <TextField
+                label={t('inspector.name')}
+                value={selectedGroup.name}
+                onCommit={(name) => renameGroup(selectedGroup.id, name)}
+              />
+            </div>
+            <PanelSection title={t('inspector.groupContents')} count={groupContents.length} divided>
+              <div className="selection-list">
+                {groupContents.map((node) => (
+                  <button
+                    key={node.id}
+                    type="button"
+                    className="selection-item"
+                    onDoubleClick={() => {
+                      if (node.kind === 'group') {
+                        setTimelineGroup(node.id);
+                        return;
+                      }
+                      // The operation lives in the folder being inspected: open
+                      // that folder and select it, so the strip shows what the
+                      // panel was talking about.
+                      setTimelineGroup(node.feature.groupId ?? null);
+                      select({ kind: 'feature', id: node.feature.id });
+                    }}
+                  >
+                    <span className="tree-icon">
+                      {node.kind === 'group' ? (
+                        <Folder size={14} />
+                      ) : (
+                        <FeatureIcon feature={node.feature} size={14} />
+                      )}
+                    </span>
+                    <span className="tree-name">
+                      {node.kind === 'group' ? node.group.name : node.feature.name}
+                    </span>
+                    <span className="tree-meta">
+                      {node.kind === 'group'
+                        ? t('timeline.operationCount', {
+                            count: groupFeatureIds(project, node.id).length,
+                          })
+                        : t('inspector.operation')}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </PanelSection>
           </>
         ) : feature ? (
           <>

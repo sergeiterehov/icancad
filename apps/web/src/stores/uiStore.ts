@@ -150,6 +150,8 @@ interface UiState {
    */
   hoveredFeature: { featureId: string; x: number; y: number } | null;
   sketchProblemConstraintIds: string[];
+  /** Folder the operations strip is inside; null is the top level (ADR 0032). */
+  timelineGroupId: string | null;
   sketchMagnetEnabled: boolean;
   sketchTool: SketchTool;
   /** Bumped whenever a tool is chosen, so re-clicking it restarts its draft. */
@@ -167,6 +169,7 @@ interface UiState {
   setPickingArrayOperations: (featureId: string | null) => void;
   setPickingArrayFace: (picker: ArrayDirectionPicker | null) => void;
   setPickingArrayPath: (picker: ArrayDirectionPicker | null) => void;
+  setTimelineGroup: (groupId: string | null) => void;
   /** Leaves whichever picker is open; every operation shares one. */
   endPicking: () => void;
   startSketchPlanePicking: (featureId: string, enterEdit: boolean) => void;
@@ -414,6 +417,7 @@ export const useUiStore = create<UiState>((set) => ({
   sketchHoverIds: [],
   hoveredFeature: null,
   sketchProblemConstraintIds: [],
+  timelineGroupId: null,
   sketchMagnetEnabled: loadSketchMagnet(),
   sketchTool: 'select',
   sketchToolNonce: 0,
@@ -451,6 +455,7 @@ export const useUiStore = create<UiState>((set) => ({
       sketchPlanePickThenEdit: enterEdit ? sketchPlanePickThenEdit : null,
     }),
   endPicking: () => set({ ...clearedPickers(), sketchPlanePickThenEdit: null }),
+  setTimelineGroup: (timelineGroupId) => set({ timelineGroupId }),
   cancelDelete: () => set({ deleteRequest: null }),
   setActiveSketch: (activeSketchId) =>
     set({

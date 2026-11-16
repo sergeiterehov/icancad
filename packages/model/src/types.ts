@@ -29,6 +29,8 @@ export interface FeatureBase {
   id: string;
   name: string;
   suppressed: boolean;
+  /** Folder the operation is shown in; the field is absent at the top level. */
+  groupId?: string;
 }
 
 export type PrimitiveKind =
@@ -599,13 +601,25 @@ export interface Model {
   metadata: Record<string, ObjectMetadata>;
   view: ViewState;
   historyEnd: string | null;
+  /** Folders of the timeline; they never change the build order. */
+  groups: FeatureGroup[];
+}
+
+/**
+ * A folder of the operations strip (ADR 0032). It holds no order of its own:
+ * its place and its contents follow the order of the operations it owns.
+ */
+export interface FeatureGroup {
+  id: string;
+  name: string;
+  parentId: string | null;
 }
 
 /** The project's top level: models now, assemblies later. */
 export type SuperObject = Model;
 
 export interface Project {
-  schemaVersion: 3;
+  schemaVersion: 4;
   id: string;
   name: string;
   units: 'mm';

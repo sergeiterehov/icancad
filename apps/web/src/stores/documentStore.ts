@@ -13,9 +13,11 @@ import {
   objectVisible,
   sketchObjectId,
   featureBodyId,
+  insertionPoint,
   historyInsertIndex,
   isFeatureInHistory,
   isMeshObject,
+  nextGroupName,
   nextModelName,
   touch,
   updateActiveModel,
@@ -26,6 +28,7 @@ import {
   type EdgeTreatmentFeature,
   type EdgeTreatmentKind,
   type Feature,
+  type FeatureGroup,
   type ImportMeshFeature,
   type MeshFormat,
   type Model,
@@ -53,7 +56,7 @@ import { useKernelStore, isModelRebuilding } from './kernelStore';
 import { useUiStore } from './uiStore';
 
 export type SelectionKind =
-  'body' | 'mesh' | 'feature' | 'sketch' | 'face' | 'sketch-edge' | 'body-face' | 'edge';
+  'body' | 'mesh' | 'feature' | 'group' | 'sketch' | 'face' | 'sketch-edge' | 'body-face' | 'edge';
 
 export interface SelectionItem {
   kind: SelectionKind;
@@ -186,6 +189,11 @@ interface DocumentState {
   confirmRemoveFeature: (featureIds: string[]) => void;
   /** The dialog's "without links" choice: only these operations go away. */
   removeFeaturesOnly: (featureIds: string[]) => void;
+  /** Wraps the timeline items into a new folder and selects it. */
+  createGroup: (items: SelectionItem[]) => void;
+  renameGroup: (groupId: string, name: string) => void;
+  /** Expands the folder's contents onto the level that held it. */
+  ungroupGroup: (groupId: string) => void;
   deleteBody: (bodyId: string, name: string) => void;
   /** Deletes the selected objects: bodies become delete operations. */
   deleteObjects: (targets: SelectionItem[]) => void;
@@ -273,13 +281,31 @@ function projectContent(project: Project): string {
 
 // An operation created while the timeline cursor sits in the middle of the list
 // belongs at that position, and the cursor moves onto it so everything after it
-// stays rolled back until the user moves forward again.
+// stays rolled back until the user moves forward again. It also belongs to the
+// folder the cursor is in, so the strip keeps one item where it showed one.
 function addFeatureCommands(model: Model, feature: Feature): Command[] {
-  const commands: Command[] = [{ type: 'feature/add', feature, index: historyInsertIndex(model) }];
+  const point = insertionPoint(
+    model,
+    historyInsertIndex(model),
+    useUiStore.getState().timelineGroupId,
+  );
+  const placed =
+    feature.groupId === undefined && point.groupId !== null
+      ? { ...feature, groupId: point.groupId }
+      : feature;
+  const commands: Command[] = [{ type: 'feature/add', feature: placed, index: point.index }];
   if (model.historyEnd !== null) {
     commands.push({ type: 'history/set-end', featureId: feature.id });
   }
   return commands;
+}
+
+/** Level a timeline item belongs to; the root has no folder id. */
+function timelineItemParent(model: Model, item: SelectionItem): string | null {
+  if (item.kind === 'group') {
+    return model.groups.find((group) => group.id === item.id)?.parentId ?? null;
+  }
+  return model.features.find((feature) => feature.id === item.id)?.groupId ?? null;
 }
 
 // Body numbers are kept in the metadata of every body ever created, so a new
@@ -358,6 +384,8 @@ function exists(model: Model, item: SelectionItem, editingFeatureId: string | nu
     }
     case 'feature':
       return item.id === editingFeatureId || isFeatureInHistory(model, item.id);
+    case 'group':
+      return model.groups.some((group) => group.id === item.id);
     case 'sketch':
       return model.features.some(
         (feature) =>
@@ -841,6 +869,8 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   hydrate: (project) => {
+    // The folder belongs to the model that was open; another one starts at the top.
+    useUiStore.getState().setTimelineGroup(null);
     set({
       project,
       past: [],
@@ -1859,6 +1889,35 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     useUiStore.getState().cancelDelete();
     useUiStore.getState().showToast('toast.featureDeleted');
   },
+  createGroup: (items) => {
+    const state = get();
+    const model = activeModel(state.project);
+    const featureIds = items.filter((item) => item.kind === 'feature').map((item) => item.id);
+    const childGroupIds = items.filter((item) => item.kind === 'group').map((item) => item.id);
+    if (featureIds.length + childGroupIds.length < 2) return;
+    const first = items[0];
+    const group: FeatureGroup = {
+      id: createId('group'),
+      name: nextGroupName(model, i18n.t('timeline.group')),
+      parentId: first ? timelineItemParent(model, first) : null,
+    };
+    if (!get().apply({ type: 'group/create', group, featureIds, childGroupIds })) return;
+    const selection: SelectionItem[] = [{ kind: 'group', id: group.id }];
+    set({ selection, ...editModeFor(state, get().project, selection) });
+  },
+
+  renameGroup: (groupId, name) => {
+    get().apply({ type: 'group/rename', groupId, name });
+  },
+
+  ungroupGroup: (groupId) => {
+    const group = activeModel(get().project).groups.find((candidate) => candidate.id === groupId);
+    if (!group) return;
+    if (!get().apply({ type: 'group/dissolve', groupId })) return;
+    const ui = useUiStore.getState();
+    if (ui.timelineGroupId === groupId) ui.setTimelineGroup(group.parentId);
+  },
+
   // Deleting an object is itself an operation: the body disappears from this
   // point in the timeline while its creating operation stays editable.
   deleteBody: (bodyId, name) => {
@@ -2011,6 +2070,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     const ui = useUiStore.getState();
     ui.endPicking();
     ui.setActiveSketch(null);
+    ui.setTimelineGroup(null);
     useKernelStore.getState().clearScene();
     set({ selection: [], editingFeatureId: null, freshFeatureId: null, applyGesture: null });
     return model.id;
@@ -2023,6 +2083,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     const ui = useUiStore.getState();
     ui.endPicking();
     ui.setActiveSketch(null);
+    ui.setTimelineGroup(null);
     useKernelStore.getState().clearScene();
     const cleanup = closeFreshEdit(state, state.project);
     set({
@@ -2065,6 +2126,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     const ui = useUiStore.getState();
     ui.endPicking();
     ui.setActiveSketch(null);
+    ui.setTimelineGroup(null);
     useKernelStore.getState().clearScene();
     set({ selection: [], editingFeatureId: null, freshFeatureId: null, applyGesture: null });
   },

@@ -44,17 +44,19 @@ export default function App() {
   const leftDockShown = useUiStore((state) => state.leftDockShown);
   const rightDockShown = useUiStore((state) => state.rightDockShown);
   const compactPanels = useUiStore((state) => state.compactPanels);
-  // The inspector carries the parameters of the operation on screen, so that
-  // operation is its subject: while there is one, its own unfolded state rules
+  // The inspector carries the parameters of whatever the timeline selected, so
+  // that item is its subject: while there is one, its own unfolded state rules
   // over the panel's, and the panel's own state waits underneath for the moment
-  // the subject is gone. The tree is left to itself: it is a map of the model,
+  // the subject is gone. A folder is such a subject too — it has a name and a
+  // contents list to show. The tree is left to itself: it is a map of the model,
   // not a form, so nothing unfolds it but the user. The sketch editor owns the
   // workspace instead and gives the inspector back its own state.
   const editingFeatureId = useDocumentStore((state) => state.editingFeatureId);
-  const selectedFeatureId = useDocumentStore(
-    (state) => state.selection.find((item) => item.kind === 'feature')?.id ?? null,
+  const selectedTimelineItemId = useDocumentStore(
+    (state) =>
+      state.selection.find((item) => item.kind === 'feature' || item.kind === 'group')?.id ?? null,
   );
-  const subjectOperation = activeSketchId === null ? (editingFeatureId ?? selectedFeatureId) : null;
+  const subjectItem = activeSketchId === null ? (editingFeatureId ?? selectedTimelineItemId) : null;
   // A click carries no pointer type of its own, so the press before it is what
   // says whether a finger or a mouse asked for the selection.
   useEffect(() => installPointerWatch(), []);
@@ -85,7 +87,7 @@ export default function App() {
               side="right"
               label={t('panels.inspector')}
               testId="right"
-              subject={subjectOperation}
+              subject={subjectItem}
             >
               <SectionPanel />
               <Inspector />

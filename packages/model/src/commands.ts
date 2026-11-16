@@ -1,9 +1,11 @@
+import { groupFeatureIds, groupPath, groupRanges, pruneEmptyGroups } from './groups';
 import { historyErrors, type HistoryIssue } from './history';
 import { activeModel, touch, updateActiveModel } from './project';
 import {
   HISTORY_START,
   type BodyRef,
   type Feature,
+  type FeatureGroup,
   type Model,
   type ObjectMetadata,
   type Project,
@@ -22,6 +24,14 @@ export type ModelCommand =
     }
   | { type: 'feature/reorder'; featureId: string; toIndex: number }
   | { type: 'feature/toggle-suppressed'; featureId: string }
+  | {
+      type: 'group/create';
+      group: FeatureGroup;
+      featureIds: string[];
+      childGroupIds: string[];
+    }
+  | { type: 'group/rename'; groupId: string; name: string }
+  | { type: 'group/dissolve'; groupId: string }
   | { type: 'body/add'; body: BodyRef }
   | { type: 'metadata/patch'; objectId: string; patch: ObjectMetadata }
   | { type: 'body/remove'; bodyId: string }
@@ -39,6 +49,7 @@ export type Command = ModelCommand | ProjectCommand;
 
 export type CommandErrorCode =
   | 'UNKNOWN_FEATURE'
+  | 'UNKNOWN_GROUP'
   | 'UNKNOWN_BODY'
   | 'UNKNOWN_MODEL'
   | 'DUPLICATE_ID'
@@ -64,6 +75,9 @@ function isModelCommand(command: Command): command is ModelCommand {
     case 'feature/remove':
     case 'feature/reorder':
     case 'feature/toggle-suppressed':
+    case 'group/create':
+    case 'group/rename':
+    case 'group/dissolve':
     case 'body/add':
     case 'metadata/patch':
     case 'body/remove':
@@ -89,6 +103,94 @@ function replaceFeature(
     throw new CommandError('UNKNOWN_FEATURE', `Unknown feature: ${featureId}`);
   }
   return { ...model, features };
+}
+
+function findGroup(model: Model, groupId: string): FeatureGroup {
+  const group = model.groups.find((candidate) => candidate.id === groupId);
+  if (!group) throw new CommandError('UNKNOWN_GROUP', `Unknown group: ${groupId}`);
+  return group;
+}
+
+function moveToGroup(feature: Feature, groupId: string | null): Feature {
+  return groupId === null ? { ...feature, groupId: undefined } : { ...feature, groupId };
+}
+
+/**
+ * Wraps a run of neighbouring entries of one level into a new folder. The
+ * entries may be operations or folders, which is what nests a folder in a
+ * folder; either way they must already be neighbours, so the strip keeps
+ * showing one item where it showed several.
+ */
+function createGroup(
+  model: Model,
+  command: { group: FeatureGroup; featureIds: string[]; childGroupIds: string[] },
+): Model {
+  const group = command.group;
+  if (model.groups.some((candidate) => candidate.id === group.id)) {
+    throw new CommandError('DUPLICATE_ID', `Duplicate group id: ${group.id}`);
+  }
+  const name = group.name.trim();
+  if (!name) throw new CommandError('INVALID_VALUE', 'Group name cannot be empty');
+  const parentId = group.parentId;
+  if (parentId !== null) {
+    findGroup(model, parentId);
+    const ancestors = new Set(groupPath(model, parentId).map((candidate) => candidate.id));
+    for (const childId of command.childGroupIds) {
+      if (ancestors.has(childId)) {
+        throw new CommandError('INVALID_VALUE', 'A group cannot be nested in its own child');
+      }
+    }
+  }
+  const featureIds = [...new Set(command.featureIds)];
+  const childGroupIds = [...new Set(command.childGroupIds)];
+  if (featureIds.length + childGroupIds.length < 2) {
+    throw new CommandError('INVALID_VALUE', 'A group needs at least two neighbours');
+  }
+  const ranges = groupRanges(model);
+  const spans: { start: number; end: number }[] = [];
+  for (const featureId of featureIds) {
+    const index = model.features.findIndex((candidate) => candidate.id === featureId);
+    if (index < 0) {
+      throw new CommandError('UNKNOWN_FEATURE', `Unknown feature: ${featureId}`);
+    }
+    if ((model.features[index]?.groupId ?? null) !== parentId) {
+      throw new CommandError('INVALID_VALUE', 'The operations are not on the same level');
+    }
+    spans.push({ start: index, end: index });
+  }
+  for (const childId of childGroupIds) {
+    const child = findGroup(model, childId);
+    if (child.parentId !== parentId) {
+      throw new CommandError('INVALID_VALUE', 'The groups are not on the same level');
+    }
+    const range = ranges.get(childId);
+    if (!range || groupFeatureIds(model, childId).length === 0) {
+      throw new CommandError('INVALID_VALUE', 'An empty group cannot be grouped again');
+    }
+    spans.push(range);
+  }
+  spans.sort((left, right) => left.start - right.start);
+  let expected = spans[0]?.start ?? -1;
+  for (const span of spans) {
+    if (span.start !== expected) {
+      throw new CommandError('INVALID_VALUE', 'A group only holds neighbouring items');
+    }
+    expected = span.end + 1;
+  }
+  const movedFeatures = new Set(featureIds);
+  const movedGroups = new Set(childGroupIds);
+  return {
+    ...model,
+    features: model.features.map((feature) =>
+      movedFeatures.has(feature.id) ? moveToGroup(feature, group.id) : feature,
+    ),
+    groups: [
+      ...model.groups.map((candidate) =>
+        movedGroups.has(candidate.id) ? { ...candidate, parentId: group.id } : candidate,
+      ),
+      { ...group, name },
+    ],
+  };
 }
 
 function applyModelCommand(model: Model, command: ModelCommand): Model {
@@ -122,12 +224,12 @@ function applyModelCommand(model: Model, command: ModelCommand): Model {
             ? (model.features[index - 1]?.id ?? HISTORY_START)
             : HISTORY_START
           : model.historyEnd;
-      return {
+      return pruneEmptyGroups({
         ...model,
         features: model.features.filter((candidate) => candidate.id !== command.featureId),
         bodies: model.bodies.filter((body) => body.createdBy !== command.featureId),
         historyEnd,
-      };
+      });
     }
     case 'feature/reorder': {
       const index = model.features.findIndex((feature) => feature.id === command.featureId);
@@ -150,6 +252,35 @@ function applyModelCommand(model: Model, command: ModelCommand): Model {
         ...feature,
         suppressed: !feature.suppressed,
       }));
+    }
+    case 'group/create': {
+      return createGroup(model, command);
+    }
+    case 'group/rename': {
+      const group = findGroup(model, command.groupId);
+      const name = command.name.trim();
+      if (!name) throw new CommandError('INVALID_VALUE', 'Group name cannot be empty');
+      return {
+        ...model,
+        groups: model.groups.map((candidate) =>
+          candidate.id === group.id ? { ...candidate, name } : candidate,
+        ),
+      };
+    }
+    case 'group/dissolve': {
+      const group = findGroup(model, command.groupId);
+      const parentId = group.parentId;
+      return {
+        ...model,
+        features: model.features.map((feature) =>
+          feature.groupId === group.id ? moveToGroup(feature, parentId) : feature,
+        ),
+        groups: model.groups
+          .filter((candidate) => candidate.id !== group.id)
+          .map((candidate) =>
+            candidate.parentId === group.id ? { ...candidate, parentId } : candidate,
+          ),
+      };
     }
     case 'body/add': {
       if (model.bodies.some((body) => body.id === command.body.id)) {

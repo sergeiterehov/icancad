@@ -2,6 +2,7 @@ import clsx from 'clsx';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { isTouchPointer } from '../viewport/inputProfile';
+import { rearmWarm, tooltipDelay, WARM_MS } from './tooltipTiming';
 
 interface TooltipProps {
   content: ReactNode;
@@ -15,16 +16,11 @@ interface Position {
   left: number;
 }
 
-/** How long reading one tooltip skips the wait for the next one. */
-const WARM_MS = 1600;
-/** Delay used while the reader is moving between tooltips. */
-const WARM_DELAY = 80;
-
 // Shared by every tooltip: once one has opened, the next ones follow at once, so
 // a strip of tooltips can be read without waiting out the delay each time.
 let warmUntil = 0;
 
-export function Tooltip({ content, delay = 1500, className, children }: TooltipProps) {
+export function Tooltip({ content, delay = 1000, className, children }: TooltipProps) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<Position | null>(null);
   const anchor = useRef<HTMLSpanElement>(null);
@@ -41,15 +37,16 @@ export function Tooltip({ content, delay = 1500, className, children }: TooltipP
   const hide = useCallback(() => {
     clearTimer();
     // Reading a tooltip keeps the next one warm: the wait only comes back after
-    // a pause, not between neighbours.
-    if (warmUntil > 0) warmUntil = Date.now() + WARM_MS;
+    // a pause, not between neighbours. A window that has already passed stays
+    // passed, so moving the pointer off a control cannot revive it.
+    warmUntil = rearmWarm(warmUntil, Date.now());
     setOpen(false);
     setPosition(null);
   }, [clearTimer]);
 
   const show = useCallback(() => {
     clearTimer();
-    const wait = Date.now() < warmUntil ? WARM_DELAY : delay;
+    const wait = tooltipDelay(delay, warmUntil, Date.now());
     timer.current = window.setTimeout(() => {
       warmUntil = Date.now() + WARM_MS;
       setOpen(true);

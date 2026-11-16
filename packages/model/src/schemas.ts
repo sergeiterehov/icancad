@@ -1,8 +1,12 @@
 import { z } from 'zod';
+import { pruneEmptyGroups } from './groups';
 import { createId } from './ids';
 import type { Project } from './types';
 
-export const PROJECT_SCHEMA_VERSION = 3;
+export const PROJECT_SCHEMA_VERSION = 4;
+
+/** Models without timeline folders: a valid document, just one version behind. */
+const GROUP_LESS_SCHEMA_VERSION = 3;
 
 /** Projects written before super-objects kept the model at the top level. */
 const LEGACY_SCHEMA_VERSION = 2;
@@ -19,6 +23,7 @@ const featureBase = {
   id: z.string().min(1),
   name: z.string().min(1),
   suppressed: z.boolean().default(false),
+  groupId: z.string().min(1).optional(),
 };
 
 const primitiveBase = {
@@ -555,6 +560,12 @@ const viewState = z.object({
   sectionPlanes: z.array(sectionPlane),
 });
 
+const featureGroup = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  parentId: z.string().min(1).nullable(),
+});
+
 const modelSchema = z.object({
   type: z.literal('model'),
   id: z.string().min(1),
@@ -564,6 +575,7 @@ const modelSchema = z.object({
   metadata: z.record(z.string(), objectMetadata),
   view: viewState,
   historyEnd: z.string().nullable(),
+  groups: z.array(featureGroup).default([]),
 });
 
 // A union so assembly can join without another schema version bump.
@@ -613,6 +625,7 @@ function migrateLegacyProject(
     metadata: legacy.metadata,
     view: legacy.view,
     historyEnd: legacy.historyEnd,
+    groups: [],
   };
   return {
     schemaVersion: PROJECT_SCHEMA_VERSION,
@@ -660,6 +673,10 @@ export function parseProject(input: unknown, options: ParseProjectOptions = {}):
       });
     }
     candidate = migrateLegacyProject(legacy.data, options.modelName ?? 'Model');
+  } else if (version === GROUP_LESS_SCHEMA_VERSION) {
+    // Folders arrived with version 4; every other field reads the same, and the
+    // model schema fills the empty list in.
+    candidate = { ...(input as Record<string, unknown>), schemaVersion: PROJECT_SCHEMA_VERSION };
   } else if (version !== PROJECT_SCHEMA_VERSION) {
     throw new ProjectFileError(
       'UNSUPPORTED_SCHEMA_VERSION',
@@ -685,14 +702,16 @@ export function parseProject(input: unknown, options: ParseProjectOptions = {}):
   );
   return {
     ...project,
-    superObjects: project.superObjects.map((superObject) => ({
-      ...superObject,
-      features: superObject.features.map(normalizeFeature),
-      bodies: superObject.bodies.map((body) => ({
-        ...body,
-        kind: importedFeatureIds.has(body.createdBy) ? 'mesh' : (body.kind ?? 'solid'),
-      })),
-    })),
+    superObjects: project.superObjects.map((superObject) =>
+      pruneEmptyGroups({
+        ...superObject,
+        features: superObject.features.map(normalizeFeature),
+        bodies: superObject.bodies.map((body) => ({
+          ...body,
+          kind: importedFeatureIds.has(body.createdBy) ? 'mesh' : (body.kind ?? 'solid'),
+        })),
+      }),
+    ),
   };
 }
 

@@ -50,6 +50,7 @@ export function createModel(name = 'Model'): Model {
       sectionPlanes: [],
     },
     historyEnd: null,
+    groups: [],
   };
 }
 

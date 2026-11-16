@@ -1,3 +1,4 @@
+import { groupFeatureIds, groupRanges } from './groups';
 import { resolveBody, type BodyObject } from './project';
 import { HISTORY_START, type Feature, type Model } from './types';
 
@@ -8,7 +9,10 @@ export type HistoryIssueCode =
   | 'UNKNOWN_BODY'
   | 'ORPHAN_BODY'
   | 'SUPPRESSED_DEPENDENCY'
-  | 'MISSING_HISTORY_END';
+  | 'MISSING_HISTORY_END'
+  | 'UNKNOWN_GROUP'
+  | 'GROUP_CYCLE'
+  | 'GROUP_NOT_CONTIGUOUS';
 
 export interface HistoryIssue {
   code: HistoryIssueCode;
@@ -178,6 +182,8 @@ export function validateHistory(project: Model): HistoryIssue[] {
     });
   }
 
+  issues.push(...groupIssues(project));
+
   for (const body of project.bodies) {
     if (!featureIndices.has(body.createdBy)) {
       issues.push({
@@ -250,6 +256,60 @@ export function validateHistory(project: Model): HistoryIssue[] {
     }
   }
 
+  return issues;
+}
+
+/**
+ * Folders are a place in the strip, not a build step: these checks only keep
+ * the strip readable. A missing folder is treated as the top level when the
+ * timeline is drawn, so a broken project stays editable until the user fixes
+ * or removes the reference.
+ */
+function groupIssues(model: Model): HistoryIssue[] {
+  const issues: HistoryIssue[] = [];
+  const byId = new Map(model.groups.map((group) => [group.id, group]));
+  for (const group of model.groups) {
+    const seen = new Set<string>([group.id]);
+    let parent = group.parentId;
+    while (parent !== null) {
+      if (!byId.has(parent)) {
+        issues.push({
+          code: 'UNKNOWN_GROUP',
+          severity: 'error',
+          message: `Group ${group.id} is nested in unknown group ${parent}`,
+        });
+        break;
+      }
+      if (seen.has(parent)) {
+        issues.push({
+          code: 'GROUP_CYCLE',
+          severity: 'error',
+          message: `Group ${group.id} is nested in itself`,
+        });
+        break;
+      }
+      seen.add(parent);
+      parent = byId.get(parent)?.parentId ?? null;
+    }
+  }
+  for (const feature of model.features) {
+    if (feature.groupId !== undefined && !byId.has(feature.groupId)) {
+      issues.push({
+        code: 'UNKNOWN_GROUP',
+        severity: 'error',
+        message: `Feature ${feature.id} is in unknown group ${feature.groupId}`,
+        featureId: feature.id,
+      });
+    }
+  }
+  for (const [groupId, range] of groupRanges(model)) {
+    if (range.end - range.start + 1 === groupFeatureIds(model, groupId).length) continue;
+    issues.push({
+      code: 'GROUP_NOT_CONTIGUOUS',
+      severity: 'error',
+      message: `Group ${groupId} is not a run of neighbouring operations`,
+    });
+  }
   return issues;
 }
 
