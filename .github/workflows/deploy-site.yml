@@ -73,10 +73,25 @@ jobs:
           FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
           LFTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
         run: |
+          # A secret pasted with a trailing line break is sent as an extra empty
+          # line, and the server reads the login as an empty password, so the
+          # line breaks are dropped before lftp sees them.
+          host="${FTP_HOST//[[:space:]]/}"
+          user="${FTP_USERNAME//[[:space:]]/}"
+          password="$LFTP_PASSWORD"
+          while [ "${password%[$'\r\n']}" != "$password" ]; do
+            password="${password%[$'\r\n']}"
+          done
+          export LFTP_PASSWORD="$password"
+
+          # ssh is asked for a password only: an offered key that is not there
+          # would spend authentication attempts the server may count, and a
+          # single prompt makes a rejected password fail instead of retrying.
           lftp -c "
           set sftp:auto-confirm yes
+          set sftp:connect-program 'ssh -a -x -o StrictHostKeyChecking=accept-new -o NumberOfPasswordPrompts=1 -o PreferredAuthentications=password,keyboard-interactive'
           set net:max-retries 3
           set net:timeout 30
-          open --env-password -u '$FTP_USERNAME' 'sftp://$FTP_HOST:22'
+          open --env-password -u '$user' 'sftp://$host:22'
           mirror --reverse --delete --upload-older --parallel=4 --verbose=1 apps/web/dist/ /www/icancad.com
           "
