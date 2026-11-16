@@ -62,6 +62,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends lftp
 
+      # The mirror waits minutes on a host it cannot reach and then reports only
+      # "max-retries exceeded", so ssh first asks the host which methods it
+      # accepts. BatchMode keeps the step from waiting for a password it lacks,
+      # and a server that does not offer one fails here rather than in mirror.
+      - name: Check the host answers over ssh
+        env:
+          FTP_HOST: ${{ secrets.FTP_HOST }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+        run: |
+          host="${FTP_HOST//[[:space:]]/}"
+          user="${FTP_USERNAME//[[:space:]]/}"
+          report=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+                       -o ConnectTimeout=20 -p 22 "$user@$host" true 2>&1 || true)
+          methods=$(printf '%s\n' "$report" | sed -n 's/.*Permission denied (\([^)]*\)).*/\1/p')
+          if [ -z "$methods" ]; then
+            printf '%s\n' "$report" | tail -3
+            echo "::error::ssh could not reach $host:22"
+            exit 1
+          elif ! printf '%s' "$methods" | grep -q password; then
+            echo "::error::$host:22 offers no password authentication ($methods)"
+            exit 1
+          else
+            echo "$host:22 accepts a password ($methods)"
+          fi
+
       # mirror -R sends only new and changed files and removes what the build no
       # longer contains. --upload-older covers hosts that cannot preserve file
       # times, where a fresh local file can otherwise look older than the remote
@@ -96,25 +121,4 @@ jobs:
           set net:timeout 30
           open --env-password -u '$user' 'sftp://$host:22'
           mirror --reverse --delete --upload-older --parallel=4 --verbose=1 apps/web/dist/ /www/icancad.com
-          "
-
-      # The mirror reports a rejected password and an unreachable host alike, so
-      # ssh first asks the server which methods it accepts and says so in the
-      # log. BatchMode keeps the step from waiting for a password it lacks.
-      - name: Check the host answers over ssh
-        if: failure()
-        env:
-          FTP_HOST: ${{ secrets.FTP_HOST }}
-          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
-        run: |
-          host="${FTP_HOST//[[:space:]]/}"
-          user="${FTP_USERNAME//[[:space:]]/}"
-          report=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-                       -o ConnectTimeout=20 -p 22 "$user@$host" true 2>&1 || true)
-          printf '%s\n' "$report" | tail -5
-          methods=$(printf '%s\n' "$report" | sed -n 's/.*Permission denied (\([^)]*\)).*/\1/p')
-          if [ -z "$methods" ]; then
-            echo "::error::ssh could not reach $host:22"
-          elif ! printf '%s' "$methods" | grep -q password; then
-            echo "::error::$host:22 offers no password authentication ($methods)"
-          fi
+          " 
