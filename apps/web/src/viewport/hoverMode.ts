@@ -16,3 +16,12 @@ export function hoverTargetOf(
   if (state.geometryMode || state.openedBodyIds.has(bodyId)) return 'geometry';
   return 'object';
 }
+
+/**
+ * The pointer previews what a click would take. An open sketch owns the pointer
+ * for its own tools, except the projection tool: it reaches into the 3D scene,
+ * so the body edge or face a click would project has to light up.
+ */
+export function geometryHoverEnabled(sketchActive: boolean, projecting: boolean): boolean {
+  return projecting || !sketchActive;
+}

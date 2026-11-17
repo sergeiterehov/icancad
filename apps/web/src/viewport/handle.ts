@@ -26,6 +26,8 @@ export interface SceneSketch {
   selectionKeys: string[];
   dimmedEntityIds: string[];
   frozenEntityIds: string[];
+  /** Geometry of conflicting or redundant constraints; drawn as a warning. */
+  problemEntityIds: string[];
   /** Entities projected from 3D geometry; they are drawn in violet. */
   projectedEntityIds: string[];
   /** Projected entities whose source is gone; they use the snapshot in orange. */

@@ -18,6 +18,9 @@ export const SKETCH_TOOL_SHORTCUTS: Partial<Record<SketchTool, string>> = {
   bezier: 'B',
 };
 
+/** Toggles construction on the selected geometry, like the tool rail button. */
+export const SKETCH_CONSTRUCTION_SHORTCUT = 'G';
+
 /**
  * The letter a keyboard event stands for. The physical key is used first so the
  * shortcuts keep working on a non-Latin layout, where `event.key` is Cyrillic.

@@ -239,6 +239,7 @@ const sketchConstraint = z.object({
   value: param(z.number()).optional(),
   x: z.number().optional(),
   y: z.number().optional(),
+  side: z.number().optional(),
 });
 
 const sketchPlaneRef = z.union([

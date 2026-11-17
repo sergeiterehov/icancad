@@ -213,6 +213,12 @@ export interface SketchConstraint {
   value?: ParamValue;
   x?: number;
   y?: number;
+  /**
+   * The side a distance was created on: `1` or `-1`. It keeps a point from
+   * crossing to the other side of a line or a circle when the referenced
+   * geometry is rebuilt elsewhere.
+   */
+  side?: number;
 }
 
 export interface SketchFrame {

@@ -15,6 +15,21 @@ import {
 } from '@icancad/sketch';
 import { useUiStore } from '../stores/uiStore';
 import { solveSketch } from './client';
+import {
+  axisCrossingOnCurve,
+  axisDistance,
+  axisSide,
+  canonicalLine,
+  curveCurveGap,
+  curveSide,
+  isCurveRef,
+  isLineRef,
+  isPointRef,
+  lineSide,
+  pointCurveDistance,
+  refPointOf,
+  type DistanceAxis,
+} from './distance';
 import { projectionEntityIds } from './projection';
 import { constraintsForSolve, sketchHasFormulaError } from './resolvedConstraints';
 
@@ -42,6 +57,91 @@ export function constraintsGeometryIds(constraints: Iterable<SketchConstraint>):
     for (const ref of constraint.refs) ids.add(ref.entityId);
   }
   return [...ids];
+}
+
+/** Constraint types whose value is a number the user edits. */
+const NUMERIC_TYPES: ReadonlySet<ConstraintType> = new Set([
+  'distance',
+  'horizontal-distance',
+  'vertical-distance',
+  'angle',
+  'radius',
+  'diameter',
+]);
+
+export function isNumericConstraintType(type: ConstraintType): boolean {
+  return NUMERIC_TYPES.has(type);
+}
+
+/**
+ * Types whose references carry no order. `angle` and `symmetric` keep their
+ * order: the first line of an angle and the center of a symmetry are roles.
+ */
+const UNORDERED_TYPES: ReadonlySet<ConstraintType> = new Set([
+  'coincident',
+  'horizontal',
+  'vertical',
+  'parallel',
+  'perpendicular',
+  'tangent',
+  'equal',
+  'distance',
+  'horizontal-distance',
+  'vertical-distance',
+  'point-on-line',
+  'point-on-circle',
+  'point-on-ellipse',
+  'fix',
+]);
+
+function normalizedRef(ref: SketchConstraintRef, entities?: Map<string, SketchEntity>): string {
+  const entity = entities?.get(ref.entityId);
+  const index = ref.pointIndex ?? (entity?.type === 'point' ? 0 : undefined);
+  return index === undefined ? ref.entityId : `${ref.entityId}#${index}`;
+}
+
+/**
+ * A key that names the meaning of a constraint rather than the object. Two
+ * constraints with the same key say the same thing, so the second one is a
+ * duplicate even if its reference order or value differs.
+ */
+export function constraintKey(
+  constraint: SketchConstraint,
+  entities?: Map<string, SketchEntity>,
+): string {
+  const refs = constraint.refs.map((ref) => normalizedRef(ref, entities));
+  // Symmetry mirrors the first two references about the last one. The mirrored
+  // pair has no order, but the center or the mirror line does.
+  if (constraint.type === 'symmetric' && refs.length === 3 && entities) {
+    const lineIndex = constraint.refs.findIndex(
+      (ref) => ref.pointIndex === undefined && entities?.get(ref.entityId)?.type === 'line',
+    );
+    if (lineIndex >= 0) {
+      const line = refs[lineIndex]!;
+      const pair = refs.filter((_, index) => index !== lineIndex).sort();
+      return `symmetric|${[...pair, line].join(',')}`;
+    }
+    return `symmetric|${[...refs.slice(0, 2).sort(), refs[2]!].join(',')}`;
+  }
+  if (UNORDERED_TYPES.has(constraint.type)) refs.sort();
+  return `${constraint.type}|${refs.join(',')}`;
+}
+
+/** The constraints that say something the sketch does not already say. */
+export function uniqueConstraints(
+  constraints: readonly SketchConstraint[],
+  existing: readonly SketchConstraint[],
+  entities?: Map<string, SketchEntity>,
+): SketchConstraint[] {
+  const seen = new Set(existing.map((constraint) => constraintKey(constraint, entities)));
+  const added: SketchConstraint[] = [];
+  for (const constraint of constraints) {
+    const key = constraintKey(constraint, entities);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    added.push(constraint);
+  }
+  return added;
 }
 
 /** Ids of the constraints that refer to any of the given geometry. */
@@ -218,7 +318,7 @@ export function buildConstraintActions(
       // the dimension measures it from the start of the first line.
       const [first, second] = selectedEntities as [Line, Line];
       if (isParallelWithin(first, second, PARALLEL_TOLERANCE_DEGREES)) {
-        const gap = pointToLineDistance([first.x1, first.y1], second);
+        const gap = pointToLineDistance(canonicalLine(first).start, second);
         if (gap !== undefined) push('distance', entityRefs, gap);
       }
     }
@@ -232,6 +332,13 @@ export function buildConstraintActions(
   }
   if (onlyCurves && ownRefs.length === refs.length && refs.length >= 2) {
     push('equal', entityRefs);
+    if (refs.length === 2) {
+      // The nearest distance between the curves covers the outer gap, the
+      // radial gap of concentric circles and the inner gap of nested ones;
+      // intersecting curves measure zero.
+      const gap = curveCurveGap(selectedEntities[0]!, selectedEntities[1]!);
+      if (gap) push('distance', entityRefs, gap.distance);
+    }
   }
   const tangentTarget = selectedEntities[0];
   if (
@@ -247,17 +354,46 @@ export function buildConstraintActions(
     if (target?.type === 'line') push('point-on-line', refs);
     if (target?.type === 'circle' || target?.type === 'arc') push('point-on-circle', refs);
     if (target?.type === 'ellipse') push('point-on-ellipse', refs);
-    if (target?.type === 'line' && pointRefs.length === 1) {
-      const point = refPoint(pointRefs[0]!, entities);
-      const gap = point ? pointToLineDistance(point, target) : undefined;
-      if (gap !== undefined) push('distance', [pointRefs[0]!, entityRefs[0]!], gap);
+    if (target && pointRefs.length === 1) {
+      const pointRef = pointRefs[0]!;
+      const targetRef = entityRefs[0]!;
+      const point = refPoint(pointRef, entities);
+      const gap =
+        target.type === 'line'
+          ? point
+            ? pointToLineDistance(point, target)
+            : undefined
+          : point
+            ? pointCurveDistance(point, target)
+            : undefined;
+      if (gap !== undefined) push('distance', [pointRef, targetRef], gap);
+      if (point && (target.type === 'line' || target.type === 'circle' || target.type === 'arc')) {
+        const axes: Array<[ConstraintType, DistanceAxis]> = [
+          ['horizontal-distance', 0],
+          ['vertical-distance', 1],
+        ];
+        for (const [type, axis] of axes) {
+          const crossing = axisCrossingOnCurve(target, point, axis);
+          if (crossing) push(type, [pointRef, targetRef], axisDistance(point, crossing, axis));
+        }
+      }
     }
   }
   if (refs.length === 3 && entityRefs.length === 1 && pointRefs.length === 2) {
     if (selectedEntities[0]?.type === 'line') push('symmetric', refs);
   }
   if (refs.length === 3 && pointRefs.length === 3) push('symmetric', refs);
-  return actions;
+  // An action that would create only constraints the sketch already has is not
+  // offered at all: a second equal or a second length is not a new relation. A
+  // group action survives while at least one of its pairs is missing.
+  const known = new Set(
+    feature.constraints.map((constraint) => constraintKey(constraint, entities)),
+  );
+  return actions.filter((action) =>
+    constraintsForAction(action, entities).some(
+      (constraint) => !known.has(constraintKey(constraint, entities)),
+    ),
+  );
 }
 
 function chainPairs(
@@ -267,6 +403,51 @@ function chainPairs(
   return first === undefined
     ? []
     : refs.slice(1).map((ref): [SketchConstraintRef, SketchConstraintRef] => [first, ref]);
+}
+
+/**
+ * The side a distance is created on, captured before the solver runs. The
+ * mapping turns it into a signed constraint so a rebuilt line cannot make the
+ * point jump to the other side.
+ */
+function actionSide(
+  type: ConstraintType,
+  refs: readonly SketchConstraintRef[],
+  entities: Map<string, SketchEntity>,
+): number | undefined {
+  if (type !== 'distance' && type !== 'horizontal-distance' && type !== 'vertical-distance') {
+    return undefined;
+  }
+  const resolved = refs.map((ref) => ({ ref, entity: entities.get(ref.entityId) }));
+  const pointEntry = resolved.find((entry) => isPointRef(entry.ref, entry.entity));
+  const point = pointEntry ? refPointOf(pointEntry.ref, pointEntry.entity) : null;
+  const lines = resolved.filter((entry) => isLineRef(entry.ref, entry.entity));
+  const curves = resolved.filter((entry) => isCurveRef(entry.ref, entry.entity));
+
+  if (!point) {
+    if (type === 'distance' && lines.length === 2) {
+      const first = lines[0]!.entity as Extract<SketchEntity, { type: 'line' }>;
+      const second = lines[1]!.entity as Extract<SketchEntity, { type: 'line' }>;
+      return lineSide(canonicalLine(first).start, second) || undefined;
+    }
+    return undefined;
+  }
+
+  if (type === 'distance') {
+    if (lines.length === 1) {
+      return (
+        lineSide(point, lines[0]!.entity as Extract<SketchEntity, { type: 'line' }>) || undefined
+      );
+    }
+    if (curves.length === 1) return curveSide(point, curves[0]!.entity!) || undefined;
+    return undefined;
+  }
+
+  const axis: DistanceAxis = type === 'vertical-distance' ? 1 : 0;
+  const target = lines[0]?.entity ?? curves[0]?.entity;
+  if (!target) return undefined;
+  const crossing = axisCrossingOnCurve(target, point, axis);
+  return crossing ? axisSide(point, crossing, axis) || undefined : undefined;
 }
 
 /**
@@ -283,7 +464,13 @@ export function constraintsForAction(
     type: ConstraintType,
     refs: SketchConstraintRef[],
     value?: number,
-  ): SketchConstraint => ({ id: createId('con'), type, refs, value });
+  ): SketchConstraint => ({
+    id: createId('con'),
+    type,
+    refs,
+    value,
+    side: actionSide(type, refs, entities),
+  });
 
   if (action.type !== 'fix') {
     switch (action.type) {
@@ -380,22 +567,42 @@ async function solveWithConstraints(
   return { ...feature, constraints, entities: result.entities };
 }
 
+export interface ConstraintApplication {
+  feature: SketchFeature;
+  /** A newly created numeric constraint, opened for editing right away. */
+  editConstraintId: string | null;
+}
+
 export function applyConstraintAction(
   feature: SketchFeature,
   action: ConstraintAction,
-): Promise<SketchFeature> {
+): Promise<ConstraintApplication> {
   const entities = sketchEntityIndex(feature.entities);
-  const constraints = constraintsForAction(action, entities);
-  if (constraints.length === 0) return Promise.reject(new ConstraintSolveError('failed'));
+  const expanded = constraintsForAction(action, entities);
+  if (expanded.length === 0) return Promise.reject(new ConstraintSolveError('failed'));
+  const constraints = uniqueConstraints(expanded, feature.constraints, entities);
+  if (constraints.length === 0) {
+    // The sketch already says all of this; adding a second copy would only
+    // over-constrain it.
+    return Promise.resolve({ feature, editConstraintId: null });
+  }
   const authored = [...feature.constraints, ...constraints];
+  const editConstraintId =
+    isNumericConstraintType(action.type) && constraints.length === 1 ? constraints[0]!.id : null;
   // The solver has no numbers to work with while a formula is broken. The new
   // constraint still belongs to the sketch, so it waits for the fix with the
   // rest of the authored constraints untouched.
   if (sketchHasFormulaError(feature.id)) {
-    return Promise.resolve({ ...feature, constraints: authored });
+    return Promise.resolve({
+      feature: { ...feature, constraints: authored },
+      editConstraintId,
+    });
   }
   return solveWithConstraints(feature, [...constraintsForSolve(feature), ...constraints]).then(
-    (next) => ({ ...next, constraints: authored }),
+    (next) => ({
+      feature: { ...next, constraints: authored },
+      editConstraintId,
+    }),
   );
 }
 
@@ -452,34 +659,45 @@ function almostEqual(first: number, second: number): boolean {
   );
 }
 
+function resolvedRefs(
+  refs: readonly SketchConstraintRef[],
+  entities: Map<string, SketchEntity>,
+): Array<{ ref: SketchConstraintRef; entity: SketchEntity | undefined }> {
+  return refs.map((ref) => ({ ref, entity: entities.get(ref.entityId) }));
+}
+
 function distanceMeasurement(
   constraint: SketchConstraint,
   entities: Map<string, SketchEntity>,
 ): number | undefined {
   const refs = constraint.refs;
-  const first = refs[0] ? entities.get(refs[0].entityId) : undefined;
   if (refs.length === 1) {
-    return first?.type === 'line'
-      ? Math.hypot(first.x2 - first.x1, first.y2 - first.y1)
-      : undefined;
+    const line = entities.get(refs[0]!.entityId);
+    return line?.type === 'line' ? Math.hypot(line.x2 - line.x1, line.y2 - line.y1) : undefined;
   }
   if (refs.length !== 2) return undefined;
-  const second = refs[1] ? entities.get(refs[1].entityId) : undefined;
-  const firstPoint = refPoint(refs[0]!, entities);
-  const secondPoint = refPoint(refs[1]!, entities);
-  const firstIsPoint = first?.type === 'point' || refs[0]!.pointIndex !== undefined;
-  const secondIsPoint = second?.type === 'point' || refs[1]!.pointIndex !== undefined;
-  if (firstIsPoint && secondIsPoint && firstPoint && secondPoint) {
-    return Math.hypot(secondPoint[0] - firstPoint[0], secondPoint[1] - firstPoint[1]);
+  const resolved = resolvedRefs(refs, entities);
+  const points = resolved
+    .filter((entry) => isPointRef(entry.ref, entry.entity))
+    .map((entry) => refPointOf(entry.ref, entry.entity))
+    .filter((point): point is Point2 => point !== null);
+  const lines = resolved.filter((entry) => isLineRef(entry.ref, entry.entity));
+  const curves = resolved.filter((entry) => isCurveRef(entry.ref, entry.entity));
+  if (points.length === 2) {
+    return Math.hypot(points[1]![0] - points[0]![0], points[1]![1] - points[0]![1]);
   }
-  if (firstIsPoint && firstPoint && second?.type === 'line') {
-    return pointToLineDistance(firstPoint, second);
+  if (points.length === 1 && lines.length === 1) {
+    return pointToLineDistance(points[0]!, lines[0]!.entity as Line);
   }
-  if (secondIsPoint && secondPoint && first?.type === 'line') {
-    return pointToLineDistance(secondPoint, first);
+  if (lines.length === 2) {
+    const first = lines[0]!.entity as Line;
+    return pointToLineDistance(canonicalLine(first).start, lines[1]!.entity as Line);
   }
-  if (first?.type === 'line' && second?.type === 'line' && firstPoint) {
-    return pointToLineDistance(firstPoint, second);
+  if (points.length === 1 && curves.length === 1) {
+    return pointCurveDistance(points[0]!, curves[0]!.entity!);
+  }
+  if (curves.length === 2) {
+    return curveCurveGap(curves[0]!.entity!, curves[1]!.entity!)?.distance;
   }
   return undefined;
 }
@@ -487,13 +705,22 @@ function distanceMeasurement(
 function axisDistanceMeasurement(
   constraint: SketchConstraint,
   entities: Map<string, SketchEntity>,
-  axis: 0 | 1,
+  axis: DistanceAxis,
 ): number | undefined {
   if (constraint.refs.length !== 2) return undefined;
-  const [firstRef, secondRef] = constraint.refs;
-  const first = firstRef ? refPoint(firstRef, entities) : null;
-  const second = secondRef ? refPoint(secondRef, entities) : null;
-  return first && second ? Math.abs(second[axis] - first[axis]) : undefined;
+  const resolved = resolvedRefs(constraint.refs, entities);
+  const points = resolved
+    .filter((entry) => isPointRef(entry.ref, entry.entity))
+    .map((entry) => refPointOf(entry.ref, entry.entity))
+    .filter((point): point is Point2 => point !== null);
+  if (points.length === 2) return axisDistance(points[0]!, points[1]!, axis);
+  if (points.length !== 1) return undefined;
+  const target =
+    resolved.find((entry) => isLineRef(entry.ref, entry.entity))?.entity ??
+    resolved.find((entry) => isCurveRef(entry.ref, entry.entity))?.entity;
+  if (!target) return undefined;
+  const crossing = axisCrossingOnCurve(target, points[0]!, axis);
+  return crossing ? axisDistance(points[0]!, crossing, axis) : undefined;
 }
 
 /**

@@ -20,6 +20,7 @@ import {
 } from '@icancad/model';
 import { faceFrame, sketchTopology } from '@icancad/sketch';
 import { constraintsGeometryIds } from '../sketch/constraintModel';
+import { problemGeometryIds } from '../sketch/problems';
 import { sketchHasFormulaError } from '../sketch/resolvedConstraints';
 import {
   computeSketchFrame,
@@ -274,6 +275,7 @@ export function Viewport() {
   const sketchSectionEnabled = useUiStore((state) => state.sketchSectionEnabled);
   const sketchConstraintIds = useUiStore((state) => state.sketchConstraintIds);
   const sketchFrozenEntityIds = useUiStore((state) => state.sketchFrozenEntityIds);
+  const sketchProblemConstraintIds = useUiStore((state) => state.sketchProblemConstraintIds);
   const sketchAutoHighlightIds = useUiStore((state) => state.sketchAutoHighlightIds);
   const sketchHoverIds = useUiStore((state) => state.sketchHoverIds);
   const sketchSelectionIds = useUiStore((state) => state.sketchSelectionIds);
@@ -1521,13 +1523,13 @@ export function Viewport() {
           (objectVisible(project, sketchObjectId(feature.id)) || feature.id === activeSketchId),
       )
       .map((feature) => {
-        const frame =
-          feature.id === activeSketchId && activeSketchReady
-            ? computeSketchFrame(
-                resolvedFeatureFor(feature) ?? feature,
-                feature.plane.type === 'face' ? meshes[feature.plane.bodyId ?? ''] : undefined,
-              )
-            : sketchFrameOf(resolvedFeatureFor(feature) ?? feature, sketchFrames[feature.id]);
+        // The frozen frame from the rebuild at the sketch's place in the
+        // history. A live face frame would follow the sketch's own cut and move
+        // the sketch while it is being edited.
+        const frame = sketchFrameOf(
+          resolvedFeatureFor(feature) ?? feature,
+          sketchFrames[feature.id],
+        );
         // Projected geometry follows the bodies as the rebuild sees them; the
         // stored entities are the snapshot used when a link is gone.
         const resolved = resolveSketchProjections(feature, frame, (bodyId) => meshes[bodyId]);
@@ -1569,6 +1571,10 @@ export function Viewport() {
           selectionKeys: feature.id === activeSketchId ? sketchSelectionIds : selectedEdgeKeys,
           dimmedEntityIds: dimmed,
           frozenEntityIds: feature.id === activeSketchId ? sketchFrozenEntityIds : [],
+          problemEntityIds:
+            feature.id === activeSketchId
+              ? problemGeometryIds(feature, sketchProblemConstraintIds)
+              : [],
           projectedEntityIds: [...projectionEntityIds(feature)],
           lostEntityIds: resolved.lostEntityIds,
           highlightIds: [
@@ -1595,6 +1601,7 @@ export function Viewport() {
     sketchSelectionIds,
     sketchConstraintIds,
     sketchFrozenEntityIds,
+    sketchProblemConstraintIds,
     sketchAutoHighlightIds,
     sketchHoverIds,
     pickingExtrude,

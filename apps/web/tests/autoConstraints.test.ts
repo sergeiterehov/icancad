@@ -10,7 +10,7 @@ const snap = (
 ): SketchSnap => ({ point: [0, 0], pointSnap: target, curveSnap: curve, midpointSnap: midpoint });
 
 const free = (value: SketchSnap): SketchSnapInput => ({ snap: value, mode: 'free' });
-const curveOnly = (value: SketchSnap): SketchSnapInput => ({ snap: value, mode: 'curve-only' });
+const tangentMode = (value: SketchSnap): SketchSnapInput => ({ snap: value, mode: 'tangent' });
 const none: SketchSnapInput = { snap: null, mode: 'none' };
 
 const line: SketchEntity = {
@@ -75,7 +75,7 @@ describe('automatic constraints', () => {
     expect(result.highlightIds).toContain('other');
   });
 
-  it('creates tangency for circle radius snaps and nothing else', () => {
+  it('creates tangency for a circle radius curve snap', () => {
     const circle: SketchEntity = {
       id: 'circle',
       type: 'circle',
@@ -86,7 +86,7 @@ describe('automatic constraints', () => {
     };
     const tangent = autoConstraintsForEntity(circle, [
       free(snap({ entityId: 'p', pointIndex: 0, point: [0, 0] })),
-      curveOnly(snap(null, { entityId: 'line', type: 'line', point: [5, 0] })),
+      tangentMode(snap(null, { entityId: 'line', type: 'line', point: [5, 0] })),
     ]);
     expect(tangent.constraints.map((constraint) => constraint.type)).toEqual([
       'coincident',
@@ -95,12 +95,12 @@ describe('automatic constraints', () => {
 
     const ignored = autoConstraintsForEntity(circle, [
       none,
-      curveOnly(snap(null, { entityId: 'ellipse', type: 'ellipse', point: [5, 0] })),
+      tangentMode(snap(null, { entityId: 'ellipse', type: 'ellipse', point: [5, 0] })),
     ]);
     expect(ignored.constraints).toHaveLength(0);
   });
 
-  it('ignores point snaps in curve-only mode', () => {
+  it('puts a snapped circle radius point on the circle', () => {
     const circle: SketchEntity = {
       id: 'circle',
       type: 'circle',
@@ -111,9 +111,12 @@ describe('automatic constraints', () => {
     };
     const result = autoConstraintsForEntity(circle, [
       none,
-      curveOnly(snap({ entityId: 'p', pointIndex: 0, point: [5, 0] })),
+      tangentMode(snap({ entityId: 'p', pointIndex: 0, point: [5, 0] })),
     ]);
-    expect(result.constraints).toHaveLength(0);
+    expect(result.snapConstraints[0]).toMatchObject({
+      type: 'point-on-circle',
+      refs: [{ entityId: 'p', pointIndex: 0 }, { entityId: 'circle' }],
+    });
   });
 
   it('adds horizontal or vertical constraints near the axes', () => {

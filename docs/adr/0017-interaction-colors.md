@@ -21,6 +21,8 @@ selection accent is.
 | Where hover applies | Only while selecting in the sketch editor. A tool that creates geometry keeps its magnet feedback and shows no selection hover.                                                                                                   |
 | 3D edges            | Selected edges use the selection purple and hovered edges the hover blue, opaque, 1 px thicker than the body edge.                                                                                                                |
 | Edge hover depth    | Edges rank above faces only where they are visible. An edge hidden behind a face is never the hover, and a hovered edge is drawn depth-tested, lifted a few pixels towards the viewer so its own surface cannot notch the line.   |
+| Problem geometry    | Geometry of conflicting or redundant constraints is orange, the same warning family the constraint list uses. It takes the place of the ordinary sketch blue: selection, hover, magnet highlight, frozen and projected colours still win over it. |
+| Projecting          | The projection tool is the one sketch tool that reaches into the 3D scene, so the pointer previews the body edge or face a click would project.                                                                                                                                                         |
 | Picking order       | Hover mirrors picking: stored sketch geometry is chosen before the axes or the origin lying under it.                                                                                                                             |
 
 ## Consequences

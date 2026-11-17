@@ -57,7 +57,7 @@ import { OUTLINE_CREASE_RADIANS, outlineSegments } from './bodyOutline';
 import { bodyElements } from '../sketch/projection';
 import { RenderOrder, solidDepthBias } from './renderOrder';
 import { firstUnclippedHit, sectionCrossings } from './sectionPick';
-import { hoverTargetOf } from './hoverMode';
+import { geometryHoverEnabled, hoverTargetOf } from './hoverMode';
 import { handleDragValue } from '../quick/handleDrag';
 import { outwardNormal, pointInMesh } from '../quick/geometry';
 import type { SelectionHit } from './selectionPick';
@@ -2593,9 +2593,6 @@ export class SceneController {
       // An axis has no ends to snap to; only its line is meaningful.
       if (isSketchAxisId(entity.id)) continue;
       this.sketchControlPoints(entity).forEach((candidate, index) => {
-        // The circle rim handle is derived from center and radius, so it is not
-        // a solver primitive that a coincidence can reference.
-        if (entity.type === 'circle' && index === 1) return;
         const candidateDistance = Math.hypot(point[0] - candidate[0], point[1] - candidate[1]);
         if (candidateDistance <= bestPoint) {
           bestPoint = candidateDistance;
@@ -2714,6 +2711,11 @@ export class SceneController {
     return this.theme === 'dark' ? 0xf59e0b : 0xb45309;
   }
 
+  /** Geometry of conflicting or redundant constraints warns without failing. */
+  private sketchProblemColor(): number {
+    return this.theme === 'dark' ? 0xf97316 : 0xc2410c;
+  }
+
   /** A broken formula owns the colour of every line and point in the sketch. */
   private sketchErrorColor(): number {
     return this.theme === 'dark' ? 0xef4444 : 0xdc2626;
@@ -2736,6 +2738,7 @@ export class SceneController {
       const selected = new Set(sketch.selectionKeys.filter((key) => !key.includes('#')));
       const dimmed = new Set(sketch.dimmedEntityIds);
       const frozen = new Set(sketch.frozenEntityIds);
+      const problem = new Set(sketch.problemEntityIds);
       const projected = new Set(sketch.projectedEntityIds);
       const lost = new Set(sketch.lostEntityIds);
       const highlighted = new Set(sketch.highlightIds.filter((key) => !key.includes('#')));
@@ -2789,6 +2792,7 @@ export class SceneController {
           selectedPoints.get(entity.id) ?? new Set<number>(),
           dimmed.has(entity.id),
           frozen.has(entity.id),
+          problem.has(entity.id),
           projected.has(entity.id) && sketch.active,
           lost.has(entity.id) && sketch.active,
           highlighted.has(entity.id),
@@ -3229,6 +3233,7 @@ export class SceneController {
     selectedPoints: ReadonlySet<number>,
     dimmed: boolean,
     frozen: boolean,
+    problem: boolean,
     projected: boolean,
     lost: boolean,
     highlighted: boolean,
@@ -3240,6 +3245,8 @@ export class SceneController {
     tint: number | null,
     onTop: boolean,
   ): void {
+    // A problem replaces the ordinary blue. Every explicit state above it
+    // (selection, hover, magnet highlight, frozen, projection) still wins.
     const color = error
       ? this.sketchErrorColor()
       : selected
@@ -3256,7 +3263,9 @@ export class SceneController {
                   ? this.sketchFrozenLineColor()
                   : entity.construction
                     ? this.sketchConstructionColor()
-                    : (tint ?? this.sketchColor());
+                    : problem
+                      ? this.sketchProblemColor()
+                      : (tint ?? this.sketchColor());
     // Sketches that are not being edited are drawn thinner so they cannot be
     // mistaken for the sketch in progress.
     const width = selected ? 3 : hovered ? 3 : highlighted ? 3 : background ? 1 : 2;
@@ -3296,7 +3305,9 @@ export class SceneController {
                   ? this.sketchProjectionColor()
                   : frozen
                     ? this.sketchFrozenPointColor()
-                    : this.sketchPointColor();
+                    : problem
+                      ? this.sketchProblemColor()
+                      : this.sketchPointColor();
       const pointSize = selectedPoint ? 6 : pointHovered ? 5 : pointHighlighted ? 6 : 4;
       const geometry = new THREE.BufferGeometry().setFromPoints([this.sketchWorld(frame, point)]);
       const points = new THREE.Points(
@@ -4227,7 +4238,10 @@ export class SceneController {
           const pick = this.pickSceneAt(
             event.clientX,
             event.clientY,
-            this.faceHighlights.picking && !vertexPicking,
+            // Faces stay on the table while projecting: `pickSceneAt` tries a
+            // vertex first, then an edge, and falls back to the face under the
+            // pointer, which is what a click on a plain face has to project.
+            this.faceHighlights.picking,
             this.faceHighlights.bodyFacesOnly,
             // Projecting aims at the solid, never at the sketch face pickers.
             projecting || vertexPicking,
@@ -4923,7 +4937,10 @@ export class SceneController {
    * being edited: the sketch tools draw their own preview there.
    */
   private get hoverEnabled(): boolean {
-    return !this.sketchData.some((sketch) => sketch.active);
+    return geometryHoverEnabled(
+      this.sketchData.some((sketch) => sketch.active),
+      this.faceHighlights.projecting,
+    );
   }
 
   private scheduleHover(clientX: number, clientY: number): void {

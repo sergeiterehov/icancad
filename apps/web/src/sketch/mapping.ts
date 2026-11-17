@@ -17,6 +17,17 @@ import {
   withFundamentalEntities,
   type Point2,
 } from '@icancad/sketch';
+import {
+  axisCrossingOnCurve,
+  canonicalLine,
+  closestPointOnEntity,
+  curveCurveGap,
+  isCurveRef,
+  isLineRef,
+  isPointRef,
+  refPointOf,
+  type DistanceAxis,
+} from './distance';
 import type { SolverPin } from './protocol';
 
 const pointId = (entityId: string, index: number): string => `${entityId}~p${index}`;
@@ -49,12 +60,6 @@ function pointRefIds(ref: SketchConstraintRef, entity: SketchEntity | undefined)
   if (entity?.type === 'point') return [entity.id];
   if (!entity) return [];
   return entityControlPoints(entity).map((_, index) => pointId(entity.id, index));
-}
-
-function refPoint(ref: SketchConstraintRef, entity: SketchEntity | undefined): Point2 | null {
-  if (!entity) return null;
-  if (entity.type === 'point') return [entity.x, entity.y];
-  return entityControlPoints(entity)[ref.pointIndex ?? 0] ?? null;
 }
 
 export interface SolverPrimitives {
@@ -273,43 +278,25 @@ export function buildSolverPrimitives(
   }
 
   for (const constraint of constraints) {
+    const signed = signedDistancePrimitives(constraint, entityMap);
+    if (signed) {
+      primitives.push(...signed);
+      continue;
+    }
+    if (constraint.type === 'distance') {
+      const shaped = curveDistancePrimitives(constraint, entityMap);
+      if (shaped) {
+        primitives.push(...shaped);
+        continue;
+      }
+    }
     if (
       (constraint.type === 'horizontal-distance' || constraint.type === 'vertical-distance') &&
       constraint.refs.length === 2
     ) {
-      const first = refPoint(constraint.refs[0]!, entityMap.get(constraint.refs[0]!.entityId));
-      const second = refPoint(constraint.refs[1]!, entityMap.get(constraint.refs[1]!.entityId));
-      const p1 = pointRefId(constraint.refs[0]!, entityMap.get(constraint.refs[0]!.entityId));
-      const p2 = pointRefId(constraint.refs[1]!, entityMap.get(constraint.refs[1]!.entityId));
-      if (first && second && p1 && p2) {
-        const horizontal = constraint.type === 'horizontal-distance';
-        const auxId = `${constraint.id}~aux`;
-        primitives.push({
-          id: auxId,
-          type: 'point',
-          x: horizontal ? second[0] : first[0],
-          y: horizontal ? first[1] : second[1],
-          fixed: false,
-        } as SketchPrimitive);
-        primitives.push({
-          id: `${constraint.id}~align1`,
-          type: horizontal ? 'horizontal_pp' : 'vertical_pp',
-          p1_id: p1,
-          p2_id: auxId,
-        } as Constraint);
-        primitives.push({
-          id: `${constraint.id}~align2`,
-          type: horizontal ? 'vertical_pp' : 'horizontal_pp',
-          p1_id: auxId,
-          p2_id: p2,
-        } as Constraint);
-        primitives.push({
-          id: constraint.id,
-          type: 'p2p_distance',
-          p1_id: p1,
-          p2_id: auxId,
-          distance: valueOf(constraint.value),
-        } as Constraint);
+      const aligned = axisDistancePrimitives(constraint, entityMap);
+      if (aligned) {
+        primitives.push(...aligned);
         continue;
       }
     }
@@ -322,6 +309,390 @@ export function buildSolverPrimitives(
 
 function valueOf(value: ParamValue | undefined): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function resolvedConstraintRefs(
+  constraint: SketchConstraint,
+  entityMap: Map<string, SketchEntity>,
+): Array<{ ref: SketchConstraint['refs'][number]; entity: SketchEntity | undefined }> {
+  return constraint.refs.map((ref) => ({ ref, entity: entityMap.get(ref.entityId) }));
+}
+
+function resolvedPointId(
+  ref: SketchConstraint['refs'][number],
+  entity: SketchEntity | undefined,
+): string | null {
+  return pointRefId(ref, entity);
+}
+
+function onCurveConstraint(id: string, entity: SketchEntity, pointId: string): Constraint {
+  switch (entity.type) {
+    case 'line':
+      return { id, type: 'point_on_line_pl', p_id: pointId, l_id: entity.id } as Constraint;
+    case 'circle':
+      return { id, type: 'point_on_circle', p_id: pointId, c_id: entity.id } as Constraint;
+    case 'arc':
+      return { id, type: 'point_on_arc', p_id: pointId, a_id: entity.id } as Constraint;
+    case 'ellipse':
+      return { id, type: 'point_on_ellipse', p_id: pointId, e_id: entity.id } as Constraint;
+    default:
+      return { id, type: 'point_on_line_pl', p_id: pointId, l_id: entity.id } as Constraint;
+  }
+}
+
+function projectToLine(point: Point2, line: Extract<SketchEntity, { type: 'line' }>): Point2 {
+  const dx = line.x2 - line.x1;
+  const dy = line.y2 - line.y1;
+  const length2 = dx * dx + dy * dy;
+  if (length2 === 0) return [line.x1, line.y1];
+  const t = ((point[0] - line.x1) * dx + (point[1] - line.y1) * dy) / length2;
+  return [line.x1 + dx * t, line.y1 + dy * t];
+}
+
+/**
+ * A point-to-line or point-to-circle distance that remembers its side. The
+ * unsigned planegcs primitives would happily let the point jump across the
+ * line; an auxiliary foot and a signed angle keep it where it was created.
+ */
+function signedDistancePrimitives(
+  constraint: SketchConstraint,
+  entityMap: Map<string, SketchEntity>,
+): SketchPrimitive[] | null {
+  if (constraint.type !== 'distance' || constraint.side === undefined) return null;
+  if (constraint.refs.length !== 2) return null;
+  const resolved = resolvedConstraintRefs(constraint, entityMap);
+  const points = resolved.filter((entry) => isPointRef(entry.ref, entry.entity));
+  const lines = resolved.filter((entry) => isLineRef(entry.ref, entry.entity));
+  const curves = resolved.filter((entry) => isCurveRef(entry.ref, entry.entity));
+  const value = valueOf(constraint.value);
+
+  if (points.length === 1 && lines.length === 1) {
+    const pointRef = points[0]!;
+    const lineRef = lines[0]!;
+    const point = refPointOf(pointRef.ref, pointRef.entity);
+    const pointId = resolvedPointId(pointRef.ref, pointRef.entity);
+    const line = lineRef.entity as Extract<SketchEntity, { type: 'line' }>;
+    if (!point || !pointId) return null;
+    return signedPointLine(constraint, pointId, point, line, value);
+  }
+
+  if (lines.length === 2) {
+    const first = lines[0]!.entity as Extract<SketchEntity, { type: 'line' }>;
+    const second = lines[1]!.entity as Extract<SketchEntity, { type: 'line' }>;
+    return signedPointLine(constraint, pointId(first.id, 0), [first.x1, first.y1], second, value);
+  }
+
+  if (points.length === 1 && curves.length === 1) {
+    const curve = curves[0]!.entity;
+    if (curve?.type !== 'circle' && curve?.type !== 'arc') return null;
+    const point = refPointOf(points[0]!.ref, points[0]!.entity);
+    const pointPrimitiveId = resolvedPointId(points[0]!.ref, points[0]!.entity);
+    if (!point || !pointPrimitiveId) return null;
+    const center: Point2 = [curve.cx, curve.cy];
+    const dx = point[0] - center[0];
+    const dy = point[1] - center[1];
+    const radial = Math.hypot(dx, dy);
+    if (radial < 1e-9) return null;
+    const contact: Point2 = [
+      center[0] + (dx / radial) * curve.r,
+      center[1] + (dy / radial) * curve.r,
+    ];
+    const contactId = `${constraint.id}~contact`;
+    const radialId = `${constraint.id}~radial`;
+    const normalId = `${constraint.id}~normal`;
+    return [
+      {
+        id: contactId,
+        type: 'point',
+        x: contact[0],
+        y: contact[1],
+        fixed: false,
+      } as SketchPrimitive,
+      {
+        id: radialId,
+        type: 'line',
+        p1_id: pointId(curve.id, 0),
+        p2_id: contactId,
+      } as SketchPrimitive,
+      {
+        id: normalId,
+        type: 'line',
+        p1_id: contactId,
+        p2_id: pointPrimitiveId,
+      } as SketchPrimitive,
+      onCurveConstraint(`${constraint.id}~on`, curve, contactId),
+      {
+        id: constraint.id,
+        type: 'p2p_distance',
+        p1_id: pointPrimitiveId,
+        p2_id: contactId,
+        distance: value,
+      } as Constraint,
+      {
+        id: `${constraint.id}~side`,
+        type: 'l2l_angle_ll',
+        l1_id: radialId,
+        l2_id: normalId,
+        angle: (constraint.side ?? 1) > 0 ? 0 : Math.PI,
+      } as Constraint,
+    ];
+  }
+  return null;
+}
+
+function signedPointLine(
+  constraint: SketchConstraint,
+  pointPrimitiveId: string,
+  point: Point2,
+  line: Extract<SketchEntity, { type: 'line' }>,
+  value: number,
+): SketchPrimitive[] {
+  const foot = projectToLine(point, line);
+  const footId = `${constraint.id}~foot`;
+  const normalId = `${constraint.id}~normal`;
+  // The stored side is relative to the canonical direction, so a projection
+  // that comes back with its endpoints swapped keeps the same physical side.
+  const flip = canonicalLine(line).flipped ? -1 : 1;
+  const angle = (constraint.side ?? 1) * flip * (Math.PI / 2);
+  return [
+    { id: footId, type: 'point', x: foot[0], y: foot[1], fixed: false } as SketchPrimitive,
+    { id: normalId, type: 'line', p1_id: footId, p2_id: pointPrimitiveId } as SketchPrimitive,
+    {
+      id: `${constraint.id}~on`,
+      type: 'point_on_line_pl',
+      p_id: footId,
+      l_id: line.id,
+    } as Constraint,
+    {
+      id: constraint.id,
+      type: 'p2p_distance',
+      p1_id: footId,
+      p2_id: pointPrimitiveId,
+      distance: value,
+    } as Constraint,
+    {
+      id: `${constraint.id}~side`,
+      type: 'l2l_angle_ll',
+      l1_id: line.id,
+      l2_id: normalId,
+      angle,
+    } as Constraint,
+  ];
+}
+
+/** Point-to-curve and curve-to-curve distances that need an auxiliary point. */
+function curveDistancePrimitives(
+  constraint: SketchConstraint,
+  entityMap: Map<string, SketchEntity>,
+): SketchPrimitive[] | null {
+  if (constraint.refs.length !== 2) return null;
+  const resolved = resolvedConstraintRefs(constraint, entityMap);
+  const curveEntries = resolved.filter((entry) => isCurveRef(entry.ref, entry.entity));
+  const value = valueOf(constraint.value);
+
+  if (curveEntries.length === 2) {
+    const first = curveEntries[0]!.entity!;
+    const second = curveEntries[1]!.entity!;
+    if (
+      (first.type === 'circle' || first.type === 'arc') &&
+      (second.type === 'circle' || second.type === 'arc')
+    ) {
+      const centers = Math.hypot(second.cx - first.cx, second.cy - first.cy);
+      // The native primitive is exact for a positive outer gap. Nested,
+      // concentric and intersecting pairs have no positive outer gap, so they
+      // go through contact points: the distance between the nearest points is
+      // the radial or inner gap, or zero when the curves cross.
+      if (centers > first.r + second.r + 1e-9) {
+        return [
+          {
+            id: constraint.id,
+            type: 'c2cdistance',
+            c1_id: first.id,
+            c2_id: second.id,
+            dist: value,
+          } as Constraint,
+        ];
+      }
+    }
+    const contact = curveCurveGap(first, second);
+    if (!contact) return null;
+    const firstId = `${constraint.id}~contact1`;
+    const secondId = `${constraint.id}~contact2`;
+    return [
+      {
+        id: firstId,
+        type: 'point',
+        x: contact.first[0],
+        y: contact.first[1],
+        fixed: false,
+      } as SketchPrimitive,
+      {
+        id: secondId,
+        type: 'point',
+        x: contact.second[0],
+        y: contact.second[1],
+        fixed: false,
+      } as SketchPrimitive,
+      onCurveConstraint(`${constraint.id}~on1`, first, firstId),
+      onCurveConstraint(`${constraint.id}~on2`, second, secondId),
+      {
+        id: constraint.id,
+        type: 'p2p_distance',
+        p1_id: firstId,
+        p2_id: secondId,
+        distance: value,
+      } as Constraint,
+    ];
+  }
+
+  const pointEntry = resolved.find((entry) => isPointRef(entry.ref, entry.entity));
+  const curveEntry = curveEntries[0];
+  if (!pointEntry || !curveEntry) return null;
+  const curve = curveEntry.entity!;
+  const point = refPointOf(pointEntry.ref, pointEntry.entity);
+  const pointId = resolvedPointId(pointEntry.ref, pointEntry.entity);
+  if (!point || !pointId) return null;
+  if (curve.type === 'circle' || curve.type === 'arc') {
+    return [
+      {
+        id: constraint.id,
+        type: 'p2cdistance',
+        p_id: pointId,
+        c_id: curve.id,
+        distance: value,
+      } as Constraint,
+    ];
+  }
+  const closest = closestPointOnEntity(curve, point);
+  if (!closest) return null;
+  const contactId = `${constraint.id}~contact`;
+  return [
+    {
+      id: contactId,
+      type: 'point',
+      x: closest.point[0],
+      y: closest.point[1],
+      fixed: false,
+    } as SketchPrimitive,
+    onCurveConstraint(`${constraint.id}~on`, curve, contactId),
+    {
+      id: constraint.id,
+      type: 'p2p_distance',
+      p1_id: pointId,
+      p2_id: contactId,
+      distance: value,
+    } as Constraint,
+  ];
+}
+
+/** Horizontal/vertical distance, including the axis crossing of a line or a curve. */
+function axisDistancePrimitives(
+  constraint: SketchConstraint,
+  entityMap: Map<string, SketchEntity>,
+): SketchPrimitive[] | null {
+  const resolved = resolvedConstraintRefs(constraint, entityMap);
+  const pointEntries = resolved.filter((entry) => isPointRef(entry.ref, entry.entity));
+  const points = pointEntries
+    .map((entry) => refPointOf(entry.ref, entry.entity))
+    .filter((point): point is Point2 => point !== null);
+  const ids = pointEntries
+    .map((entry) => resolvedPointId(entry.ref, entry.entity))
+    .filter((id): id is string => id !== null);
+  const horizontal = constraint.type === 'horizontal-distance';
+  const value = valueOf(constraint.value);
+
+  if (points.length === 2 && ids.length === 2) {
+    const [first, second] = points as [Point2, Point2];
+    const [p1, p2] = ids as [string, string];
+    const auxId = `${constraint.id}~aux`;
+    return [
+      {
+        id: auxId,
+        type: 'point',
+        x: horizontal ? second[0] : first[0],
+        y: horizontal ? first[1] : second[1],
+        fixed: false,
+      } as SketchPrimitive,
+      {
+        id: `${constraint.id}~align1`,
+        type: horizontal ? 'horizontal_pp' : 'vertical_pp',
+        p1_id: p1,
+        p2_id: auxId,
+      } as Constraint,
+      {
+        id: `${constraint.id}~align2`,
+        type: horizontal ? 'vertical_pp' : 'horizontal_pp',
+        p1_id: auxId,
+        p2_id: p2,
+      } as Constraint,
+      {
+        id: constraint.id,
+        type: 'p2p_distance',
+        p1_id: p1,
+        p2_id: auxId,
+        distance: value,
+      } as Constraint,
+    ];
+  }
+
+  if (points.length !== 1 || ids.length !== 1) return null;
+  const point = points[0]!;
+  const pointId = ids[0]!;
+  const target =
+    resolved.find((entry) => isLineRef(entry.ref, entry.entity))?.entity ??
+    resolved.find((entry) => isCurveRef(entry.ref, entry.entity))?.entity;
+  if (!target) return null;
+  const axis: DistanceAxis = horizontal ? 0 : 1;
+  const crossing = axisCrossingOnCurve(target, point, axis);
+  if (!crossing) return null;
+  const auxId = `${constraint.id}~aux`;
+  const primitives: SketchPrimitive[] = [
+    {
+      id: auxId,
+      type: 'point',
+      x: crossing[0],
+      y: crossing[1],
+      fixed: false,
+    } as SketchPrimitive,
+    onCurveConstraint(`${constraint.id}~on`, target, auxId),
+  ];
+  if (constraint.side !== undefined) {
+    const lineId = `${constraint.id}~axis`;
+    primitives.push(
+      { id: lineId, type: 'line', p1_id: auxId, p2_id: pointId } as SketchPrimitive,
+      {
+        id: constraint.id,
+        type: 'p2p_distance',
+        p1_id: auxId,
+        p2_id: pointId,
+        distance: value,
+      } as Constraint,
+      {
+        id: `${constraint.id}~side`,
+        type: 'l2l_angle_ll',
+        l1_id: horizontal ? SKETCH_X_AXIS_ID : SKETCH_Y_AXIS_ID,
+        l2_id: lineId,
+        angle: (constraint.side ?? 1) > 0 ? 0 : Math.PI,
+      } as Constraint,
+    );
+    return primitives;
+  }
+  primitives.push(
+    {
+      id: `${constraint.id}~align`,
+      type: horizontal ? 'horizontal_pp' : 'vertical_pp',
+      p1_id: pointId,
+      p2_id: auxId,
+    } as Constraint,
+    {
+      id: constraint.id,
+      type: 'p2p_distance',
+      p1_id: pointId,
+      p2_id: auxId,
+      distance: value,
+    } as Constraint,
+  );
+  return primitives;
 }
 
 function mapConstraint(
@@ -408,18 +779,21 @@ function mapConstraint(
         if (firstPoint && second?.type === 'line') return p2l(firstPoint, second.id);
         if (secondPoint && first?.type === 'line') return p2l(secondPoint, first.id);
         if (first?.type === 'line' && second?.type === 'line') {
-          return p2l(pointId(first.id, 0), second.id);
+          const canonical = canonicalLine(first);
+          return p2l(pointId(first.id, canonical.flipped ? 1 : 0), second.id);
         }
       }
-      const line = entity(0);
-      if (line?.type === 'line') {
-        return {
-          id,
-          type: 'p2p_distance',
-          p1_id: pointId(line.id, 0),
-          p2_id: pointId(line.id, 1),
-          distance: value,
-        } as Constraint;
+      if (refs.length === 1) {
+        const line = entity(0);
+        if (line?.type === 'line') {
+          return {
+            id,
+            type: 'p2p_distance',
+            p1_id: pointId(line.id, 0),
+            p2_id: pointId(line.id, 1),
+            distance: value,
+          } as Constraint;
+        }
       }
       return null;
     }

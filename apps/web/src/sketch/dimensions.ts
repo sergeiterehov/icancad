@@ -7,6 +7,17 @@ import type {
 } from '@icancad/model';
 import { sketchEntityIndex, tessellateEntity, type Point2 } from '@icancad/sketch';
 import { constraintEntityIds, refPoint } from './constraintModel';
+import {
+  axisCrossingOnCurve,
+  canonicalLine,
+  closestPointOnEntity,
+  curveCurveGap,
+  isCurveRef,
+  isLineRef,
+  isPointRef,
+  refPointOf,
+  type DistanceAxis,
+} from './distance';
 import { measureInfo } from './measure';
 
 export type NumericConstraintType =
@@ -60,11 +71,6 @@ function lineIntersection(
 
 type SketchLine = Extract<SketchEntity, { type: 'line' }>;
 
-/** Whether a reference designates a point rather than the whole entity. */
-function refIsPoint(ref: SketchConstraint['refs'][number], entity: SketchEntity | undefined) {
-  return ref.pointIndex !== undefined || entity?.type === 'point';
-}
-
 /** The point of the line closest to `point`. */
 function footOnLine(point: Point2, line: SketchLine): Point2 | null {
   const dx = line.x2 - line.x1;
@@ -81,40 +87,75 @@ function perpendicularAnchor(point: Point2, line: SketchLine): Point2 | null {
   return foot ? mid(point, foot) : null;
 }
 
-/** Where a distance between a point and a line, or between two lines, sits. */
-function distanceAgainstLine(
+function resolvedRefs(constraint: SketchConstraint, entities: Map<string, SketchEntity>) {
+  return constraint.refs.map((ref) => ({ ref, entity: entities.get(ref.entityId) }));
+}
+
+/** Where a distance sits: on the shortest segment between the two targets. */
+function distanceAnchor(
   constraint: SketchConstraint,
   entities: Map<string, SketchEntity>,
 ): Point2 | null {
   if (constraint.type !== 'distance' || constraint.refs.length !== 2) return null;
-  const [firstRef, secondRef] = constraint.refs as [
-    SketchConstraint['refs'][number],
-    SketchConstraint['refs'][number],
-  ];
-  const first = entities.get(firstRef.entityId);
-  const second = entities.get(secondRef.entityId);
-  const firstIsPoint = refIsPoint(firstRef, first);
-  const secondIsPoint = refIsPoint(secondRef, second);
-  if (firstIsPoint && !secondIsPoint && second?.type === 'line') {
-    const point = refPoint(firstRef, entities);
-    return point ? perpendicularAnchor(point, second) : null;
+  const resolved = resolvedRefs(constraint, entities);
+  const points = resolved
+    .filter((entry) => isPointRef(entry.ref, entry.entity))
+    .map((entry) => refPointOf(entry.ref, entry.entity))
+    .filter((point): point is Point2 => point !== null);
+  const lines = resolved.filter((entry) => isLineRef(entry.ref, entry.entity));
+  const curves = resolved.filter((entry) => isCurveRef(entry.ref, entry.entity));
+  if (points.length === 1 && lines.length === 1) {
+    return perpendicularAnchor(points[0]!, lines[0]!.entity as SketchLine);
   }
-  if (secondIsPoint && !firstIsPoint && first?.type === 'line') {
-    const point = refPoint(secondRef, entities);
-    return point ? perpendicularAnchor(point, first) : null;
+  if (lines.length === 2) {
+    const first = lines[0]!.entity as SketchLine;
+    return perpendicularAnchor(canonicalLine(first).start, lines[1]!.entity as SketchLine);
   }
-  if (!firstIsPoint && !secondIsPoint && first?.type === 'line' && second?.type === 'line') {
-    return perpendicularAnchor([first.x1, first.y1], second);
+  if (points.length === 1 && curves.length === 1) {
+    const closest = closestPointOnEntity(curves[0]!.entity!, points[0]!);
+    return closest ? mid(points[0]!, closest.point) : null;
+  }
+  if (curves.length === 2) {
+    const gap = curveCurveGap(curves[0]!.entity!, curves[1]!.entity!);
+    return gap ? mid(gap.first, gap.second) : null;
   }
   return null;
+}
+
+/** Where a horizontal or vertical distance to a line or a curve sits. */
+function axisAnchor(
+  constraint: SketchConstraint,
+  entities: Map<string, SketchEntity>,
+  axis: DistanceAxis,
+): Point2 | null {
+  if (constraint.refs.length !== 2) return null;
+  const resolved = resolvedRefs(constraint, entities);
+  const points = resolved
+    .filter((entry) => isPointRef(entry.ref, entry.entity))
+    .map((entry) => refPointOf(entry.ref, entry.entity))
+    .filter((point): point is Point2 => point !== null);
+  if (points.length !== 1) return null;
+  const target =
+    resolved.find((entry) => isLineRef(entry.ref, entry.entity))?.entity ??
+    resolved.find((entry) => isCurveRef(entry.ref, entry.entity))?.entity;
+  if (!target) return null;
+  const crossing = axisCrossingOnCurve(target, points[0]!, axis);
+  return crossing ? mid(points[0]!, crossing) : null;
 }
 
 function anchorPoint(
   constraint: SketchConstraint,
   entities: Map<string, SketchEntity>,
 ): Point2 | null {
-  const againstLine = distanceAgainstLine(constraint, entities);
-  if (againstLine) return againstLine;
+  if (constraint.type === 'distance') {
+    const anchored = distanceAnchor(constraint, entities);
+    if (anchored) return anchored;
+  }
+  if (constraint.type === 'horizontal-distance' || constraint.type === 'vertical-distance') {
+    const axis: DistanceAxis = constraint.type === 'horizontal-distance' ? 0 : 1;
+    const anchored = axisAnchor(constraint, entities, axis);
+    if (anchored) return anchored;
+  }
   if (
     constraint.type === 'distance' ||
     constraint.type === 'horizontal-distance' ||

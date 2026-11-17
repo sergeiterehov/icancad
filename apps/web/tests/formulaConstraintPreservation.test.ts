@@ -71,7 +71,7 @@ describe('constraint actions with formulas', () => {
     const feature = sketch();
     resolveSketch(feature);
 
-    const next = await applyConstraintAction(feature, {
+    const { feature: next } = await applyConstraintAction(feature, {
       key: 'horizontal',
       type: 'horizontal',
       refs: [{ entityId: 'line' }],
@@ -93,7 +93,7 @@ describe('constraint actions with formulas', () => {
       revision: 2,
     });
 
-    const next = await applyConstraintAction(feature, {
+    const { feature: next } = await applyConstraintAction(feature, {
       key: 'horizontal',
       type: 'horizontal',
       refs: [{ entityId: 'line' }],

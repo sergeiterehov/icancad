@@ -132,6 +132,88 @@ describe('dimension annotations', () => {
     expect(annotations[0]?.point).toEqual([10, 3]);
   });
 
+  it('anchors a point-to-circle distance halfway to the curve', () => {
+    const circle: SketchEntity = {
+      id: 'circle',
+      type: 'circle',
+      construction: false,
+      cx: 0,
+      cy: 0,
+      r: 3,
+    };
+    const target: SketchEntity = { id: 'p', type: 'point', construction: false, x: 10, y: 0 };
+    const annotations = dimensionAnnotations(
+      sketch(
+        [circle, target],
+        [
+          {
+            id: 'to-circle',
+            type: 'distance',
+            refs: [{ entityId: 'p', pointIndex: 0 }, { entityId: 'circle' }],
+            value: 7,
+          },
+        ],
+      ),
+      'en',
+    );
+    expect(annotations[0]?.point[0]).toBeCloseTo(6.5, 1);
+    expect(annotations[0]?.point[1]).toBeCloseTo(0, 6);
+  });
+
+  it('anchors a circle-to-circle distance between the nearest rims', () => {
+    const first: SketchEntity = {
+      id: 'c1',
+      type: 'circle',
+      construction: false,
+      cx: 0,
+      cy: 0,
+      r: 2,
+    };
+    const second: SketchEntity = {
+      id: 'c2',
+      type: 'circle',
+      construction: false,
+      cx: 10,
+      cy: 0,
+      r: 3,
+    };
+    const annotations = dimensionAnnotations(
+      sketch(
+        [first, second],
+        [
+          {
+            id: 'gap',
+            type: 'distance',
+            refs: [{ entityId: 'c1' }, { entityId: 'c2' }],
+            value: 5,
+          },
+        ],
+      ),
+      'en',
+    );
+    expect(annotations[0]?.point[0]).toBeCloseTo(4.5, 6);
+    expect(annotations[0]?.point[1]).toBeCloseTo(0, 6);
+  });
+
+  it('anchors an axis distance halfway to the crossing point', () => {
+    const target: SketchEntity = { id: 'p', type: 'point', construction: false, x: 4, y: 3 };
+    const annotations = dimensionAnnotations(
+      sketch(
+        [line, target],
+        [
+          {
+            id: 'vertical',
+            type: 'vertical-distance',
+            refs: [{ entityId: 'p', pointIndex: 0 }, { entityId: 'line' }],
+            value: 3,
+          },
+        ],
+      ),
+      'en',
+    );
+    expect(annotations[0]?.point).toEqual([4, 1.5]);
+  });
+
   it('places arc radius and diameter annotations at the arc center', () => {
     const arc: SketchEntity = {
       id: 'arc',

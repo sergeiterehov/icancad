@@ -60,8 +60,15 @@ scope.onmessage = (event) => {
       gcs.apply_solution();
       const solved = gcs.sketch_index.get_primitives();
       const entities = applySolverSolution(request.entities, solved);
-      const conflicting = gcs.get_gcs_conflicting_constraints();
-      const redundant = gcs.get_gcs_redundant_constraints();
+      // Auxiliary primitives carry the id of the authored constraint they
+      // serve; the UI knows constraints, so report the authored id.
+      const normalize = (ids: string[]) => [
+        ...new Set(
+          ids.map((id) => request.constraints.find((c) => id.startsWith(`${c.id}~`))?.id ?? id),
+        ),
+      ];
+      const conflicting = normalize(gcs.get_gcs_conflicting_constraints());
+      const redundant = normalize(gcs.get_gcs_redundant_constraints());
       const dof = gcs.gcs.dof();
       const frozen = request.diagnose
         ? diagnoseFrozenEntities(gcs, entities, request.constraints, dof, request.derived)

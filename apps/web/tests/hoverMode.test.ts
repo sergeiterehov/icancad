@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hoverTargetOf } from '../src/viewport/hoverMode';
+import { geometryHoverEnabled, hoverTargetOf } from '../src/viewport/hoverMode';
 
 const opened = new Set(['body-1']);
 const state = { geometryMode: false, openedBodyIds: opened };
@@ -32,5 +32,19 @@ describe('hoverTargetOf', () => {
   it('shows nothing over empty space', () => {
     expect(hoverTargetOf(state, null)).toBe('none');
     expect(hoverTargetOf({ geometryMode: true, openedBodyIds: opened }, null)).toBe('none');
+  });
+});
+
+describe('geometryHoverEnabled', () => {
+  it('previews geometry outside a sketch', () => {
+    expect(geometryHoverEnabled(false, false)).toBe(true);
+  });
+
+  it('lets an open sketch own the pointer', () => {
+    expect(geometryHoverEnabled(true, false)).toBe(false);
+  });
+
+  it('previews the body geometry a projection click would take', () => {
+    expect(geometryHoverEnabled(true, true)).toBe(true);
   });
 });

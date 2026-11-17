@@ -256,8 +256,11 @@ export function SketchAnnotations() {
   useEffect(() => {
     if (!dimensionEditId) return;
     const annotation = annotations.find((candidate) => candidate.id === dimensionEditId);
+    // A constraint just created is requested before the next frame places its
+    // label; keep the request until the annotation exists instead of dropping it.
+    if (!annotation) return;
     setDimensionEdit(null);
-    if (annotation) beginEdit(annotation);
+    beginEdit(annotation);
   }, [dimensionEditId, annotations, setDimensionEdit]);
 
   const removeConstraint = (id: string) => {
@@ -400,11 +403,17 @@ export function SketchAnnotations() {
                 className="sketch-annotation-input"
                 value={draft}
                 inputMode="decimal"
+                autoFocus
                 onChange={(event) => {
                   step.current = wheelStep(event.target.value);
                   setDraft(event.target.value);
                 }}
                 onFocus={(event) => {
+                  // A freshly created dimension opens before its label has a
+                  // measured position, so the input mounts later than the
+                  // request; autoFocus lands there, and the whole value is
+                  // selected so typing replaces it.
+                  event.currentTarget.select();
                   event.currentTarget.scrollLeft = 0;
                 }}
                 onPointerDown={(event) => event.stopPropagation()}

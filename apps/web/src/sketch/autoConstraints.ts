@@ -29,29 +29,32 @@ function snapConstraint(
   const { snap, mode } = input;
   if (!snap || mode === 'none') return null;
   const ref: SketchConstraintRef = { entityId: entity.id, pointIndex };
+  const targetPointRef = snap.pointSnap
+    ? {
+        entityId: snap.pointSnap.entityId,
+        pointIndex: snap.pointSnap.pointIndex,
+      }
+    : null;
 
-  if (mode === 'curve-only') {
-    if (entity.type !== 'circle' && entity.type !== 'arc') return null;
-    const target = snap.curveSnap;
-    if (!target) return null;
-    if (target.type === 'line' || target.type === 'circle' || target.type === 'arc') {
+  if (snap.pointSnap && targetPointRef) {
+    // A circle's rim handle is the radius, always drawn level with the centre.
+    // A point the user aims at lies on the circle at its own angle, so it is
+    // the point that is constrained onto the circle, not the handle.
+    if (entity.type === 'circle' && pointIndex === 1) {
       return {
         id: createId('con'),
-        type: 'tangent',
-        refs: [{ entityId: entity.id }, { entityId: target.entityId }],
+        type: 'point-on-circle',
+        refs: [targetPointRef, { entityId: entity.id }],
       };
     }
-    return null;
-  }
-
-  if (snap.pointSnap) {
     return {
       id: createId('con'),
       type: 'coincident',
-      refs: [ref, { entityId: snap.pointSnap.entityId, pointIndex: snap.pointSnap.pointIndex }],
+      refs: [ref, targetPointRef],
     };
   }
-  if (snap.midpointSnap) {
+
+  if (mode === 'free' && snap.midpointSnap) {
     return {
       id: createId('con'),
       type: 'symmetric',
@@ -62,7 +65,20 @@ function snapConstraint(
       ],
     };
   }
+
   if (!snap.curveSnap) return null;
+  if (mode === 'tangent') {
+    if (entity.type !== 'circle' && entity.type !== 'arc') return null;
+    const target = snap.curveSnap;
+    if (target.type === 'line' || target.type === 'circle' || target.type === 'arc') {
+      return {
+        id: createId('con'),
+        type: 'tangent',
+        refs: [{ entityId: entity.id }, { entityId: target.entityId }],
+      };
+    }
+    return null;
+  }
   const type = CURVE_POINT_CONSTRAINTS[snap.curveSnap.type];
   if (!type) return null;
   return {
@@ -79,7 +95,7 @@ export function snapHighlightIds(snap: SketchSnap | null): string[] {
   return snap.curveSnap ? [snap.curveSnap.entityId] : [];
 }
 
-function axisOrientation(
+export function axisOrientation(
   line: Extract<SketchEntity, { type: 'line' }>,
 ): 'horizontal' | 'vertical' | null {
   const angle = Math.abs(Math.atan2(line.y2 - line.y1, line.x2 - line.x1));

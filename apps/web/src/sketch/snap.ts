@@ -25,7 +25,11 @@ export interface SketchSnap {
   midpointSnap: SketchMidpointSnap | null;
 }
 
-export type SketchSnapMode = 'free' | 'curve-only' | 'none';
+/**
+ * Which targets a step of a tool may snap to. `tangent` keeps the point targets
+ * for coincidence but turns a curve target into tangency.
+ */
+export type SketchSnapMode = 'free' | 'tangent' | 'none';
 
 export interface SketchSnapInput {
   snap: SketchSnap | null;

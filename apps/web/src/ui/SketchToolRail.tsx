@@ -8,7 +8,12 @@ import {
   diagnoseSketch,
   removeSketchEntities,
 } from '../sketch/constraintModel';
-import { SKETCH_TOOL_SHORTCUTS, type SketchTool } from '../sketch/tool';
+import { constructionSelection, toggleConstruction } from '../sketch/construction';
+import {
+  SKETCH_CONSTRUCTION_SHORTCUT,
+  SKETCH_TOOL_SHORTCUTS,
+  type SketchTool,
+} from '../sketch/tool';
 import { useApplyConstraintAction } from '../sketch/useConstraintActions';
 import { useDocumentStore, useViewModel } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
@@ -68,24 +73,14 @@ export function SketchToolRail() {
   const entitySelection = selectionIds.filter(
     (key) => !key.includes('#') && !isFundamentalEntityId(key),
   );
-  const constructionEntities =
-    feature?.entities.filter((entity) => entitySelection.includes(entity.id)) ?? [];
+  const constructionEntities = feature ? constructionSelection(feature, selectionIds) : [];
   const constructionActive =
     constructionEntities.length > 0 && constructionEntities.every((entity) => entity.construction);
 
-  const toggleConstruction = () => {
-    if (!feature || constructionEntities.length === 0) return;
-    const ids = new Set(constructionEntities.map((entity) => entity.id));
-    const nextConstruction = !constructionActive;
-    apply({
-      type: 'feature/replace',
-      feature: {
-        ...feature,
-        entities: feature.entities.map((entity) =>
-          ids.has(entity.id) ? { ...entity, construction: nextConstruction } : entity,
-        ),
-      },
-    });
+  const toggleSelectedConstruction = () => {
+    if (!feature) return;
+    const next = toggleConstruction(feature, selectionIds);
+    if (next) apply({ type: 'feature/replace', feature: next });
   };
 
   const openConstraints = (event: MouseEvent<HTMLButtonElement>) => {
@@ -136,9 +131,10 @@ export function SketchToolRail() {
 
       <IconButton
         label={t('tools.construction')}
+        tooltip={`${t('tools.construction')} (${SKETCH_CONSTRUCTION_SHORTCUT})`}
         active={constructionActive}
         disabled={constructionEntities.length === 0}
-        onClick={toggleConstruction}
+        onClick={toggleSelectedConstruction}
       >
         <LineStyle size={17} />
       </IconButton>
