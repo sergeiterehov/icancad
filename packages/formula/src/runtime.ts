@@ -18,7 +18,7 @@ interface PyodideModule {
 }
 
 export interface FormulaWorkerOptions {
-  /** Directory the pyodide.mjs and its assets are served from, with a trailing slash. */
+  /** Directory the pyodide.js and its assets are served from, with a trailing slash. */
   pyodideUrl: string;
 }
 
@@ -47,7 +47,7 @@ export function startFormulaWorker(options: FormulaWorkerOptions): void {
     loading = (async () => {
       post({ type: 'status', phase: 'loading-python' });
       const module = (await import(
-        /* @vite-ignore */ `${options.pyodideUrl}pyodide.mjs`
+        /* @vite-ignore */ `${options.pyodideUrl}pyodide.js`
       )) as PyodideModule;
       const pyodide = await module.loadPyodide({ indexURL: options.pyodideUrl });
       pyodide.runPython(PYTHON_SOURCE);
