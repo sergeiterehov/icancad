@@ -45,3 +45,11 @@ to relearn the mouse.
 - Adding a scheme is a row in the table: the renderer asks the table which
   gesture starts what and never reads a modifier for the camera itself.
 - Tests can select a scheme through `localStorage` instead of dragging buttons.
+
+## Amendments
+
+- The orbit pivot is the surface under the pointer. If that ray misses, the centre
+  of the frame is tried before falling back to the pointer ray at the target depth.
+- A two-finger scroll orbit keeps the pivot it took when the gesture began until the
+  scroll goes quiet, so a face that slides over the cursor cannot take the turn over
+  mid-gesture.

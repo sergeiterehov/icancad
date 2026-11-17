@@ -120,9 +120,15 @@ export function useFormulaResolution(): void {
 
   // The resolved model is the document with formulas replaced, so a literal
   // edit has to reach it too: the key covers the model itself, not only the
-  // sources the engine evaluates.
+  // sources the engine evaluates. Folders are a view of the strip and never a
+  // formula or build input (ADR 0032), so their membership and names are
+  // dropped: grouping must not restart evaluation or the kernel.
   const inputKey = useMemo(
-    () => JSON.stringify({ model, variables, expressions }),
+    () =>
+      JSON.stringify(
+        { model: { ...model, groups: undefined }, variables, expressions },
+        (key, value) => (key === 'groupId' ? undefined : value),
+      ),
     [model, variables, expressions],
   );
   // What the engine actually reads. Literal edits and sketch geometry change

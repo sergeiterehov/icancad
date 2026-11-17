@@ -4,6 +4,7 @@ import {
   parseProjectFile,
   projectFileName,
   serializeProjectFile,
+  stlFileName,
 } from '../src/persistence/projectFile';
 import { modelOf } from './modelFixture';
 
@@ -58,6 +59,13 @@ describe('project file', () => {
     expect(projectFileName('My Part #1')).toBe('my-part-1.icad');
     expect(projectFileName('Мой проект')).toBe('мой-проект.icad');
     expect(projectFileName('***')).toBe('project.icad');
+  });
+
+  it('names an STL after the project and the active model', () => {
+    expect(stlFileName('My Part #1', 'Cube')).toBe('my-part-1 - cube.stl');
+    expect(stlFileName('Мой проект', 'Модель')).toBe('мой-проект - модель.stl');
+    expect(stlFileName('***', '***')).toBe('project - model.stl');
+    expect(stlFileName('My Part #1')).toBe('my-part-1.stl');
   });
 });
 

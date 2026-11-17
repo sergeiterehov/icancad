@@ -1,5 +1,6 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { matchesNarrowLayout } from '../hooks/useNarrowLayout';
 import { useUiStore } from '../stores/uiStore';
 import { lastPointerType, primaryInputProfile } from '../viewport/inputProfile';
 import { useContextMenuStore } from './ContextMenu';
@@ -108,6 +109,9 @@ export function FloatDock({
   // a collapse set before the first frame of the panel would have nothing to
   // animate from — it would simply not be there.
   useEffect(() => {
+    // A narrow screen starts with both docks away and has no room for the
+    // show-then-tuck invitation; opening one is the user's own move.
+    if (matchesNarrowLayout()) return;
     let timer: number | null = null;
     let inner = 0;
     const outer = window.requestAnimationFrame(() => {

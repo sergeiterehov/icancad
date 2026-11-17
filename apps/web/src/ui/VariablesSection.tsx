@@ -65,13 +65,7 @@ const NAME_PROBLEMS = {
 } as const;
 
 /** Variables of the project or of one model, edited in place. */
-export function VariablesSection({
-  modelId,
-  embedded = false,
-}: {
-  modelId?: string;
-  embedded?: boolean;
-}) {
+export function VariablesSection({ modelId }: { modelId?: string }) {
   const { t } = useTranslation();
   const project = useDocumentStore((state) => state.project);
   const apply = useDocumentStore((state) => state.apply);
@@ -150,8 +144,7 @@ export function VariablesSection({
     <PanelSection
       title={t('formula.variables')}
       count={variables.length}
-      divided={!embedded}
-      className={embedded ? 'variables-section-embedded' : undefined}
+      divided
       action={
         <IconButton label={t('formula.variableAdd')} className="tiny" onClick={add}>
           <Plus size={14} />

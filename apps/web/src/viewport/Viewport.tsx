@@ -6,6 +6,7 @@ import { retryKernel } from '../kernel/client';
 import {
   activeFeatureIds,
   activeModel,
+  BODY_COLORS,
   bodiesInHistory,
   objectColor,
   objectShowConstruction,
@@ -90,7 +91,8 @@ import { bodyEdgeAxisRef } from '../sketch/revolveAxis';
 import { formatNumber } from '../ui/format';
 import { SceneController, type SceneBody } from './SceneController';
 import { featureOfHit, featureOfPick } from './featurePick';
-import { resolveSelectionHit } from './selectionPick';
+import { isKeylessPointer } from './inputProfile';
+import { emptyTapClearsSelection, resolveSelectionHit } from './selectionPick';
 import { SketchAnnotations } from './SketchAnnotations';
 import { SketchEditor } from './SketchEditor';
 import {
@@ -203,11 +205,23 @@ export function Viewport() {
   const cameraSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** The arriving model opened at a camera it was left with, so it needs no fit. */
   const restoredPose = useRef(false);
+  /** Whether the model on screen had a remembered pose when it opened. */
+  const modelHasSavedPose = useRef(false);
+  /** True until the model's first build has published a finished scene. */
+  const firstBuildPending = useRef(true);
+  /** Scene counter the model started from, so a previous scene cannot finish it. */
+  const modelSceneStart = useRef(0);
   const rebuilding = useKernelStore((state) => isModelRebuilding(state));
+  const longOperation = useKernelStore((state) => state.longOperation);
+  const interimSceneVersion = useKernelStore((state) => state.interimSceneVersion);
+  const sceneVersion = useKernelStore((state) => state.sceneVersion);
   const viewElements = useUiStore((state) => state.viewElements);
   useEffect(() => {
     controllerRef.current?.setViewElements(viewElements);
   }, [viewElements]);
+  useEffect(() => {
+    controllerRef.current?.setLongOperation(longOperation);
+  }, [longOperation]);
 
   /**
    * Writes down the camera the viewport holds now, for the model it belongs to.
@@ -856,7 +870,7 @@ export function Viewport() {
       // A double click on a face opens the operation that produced it: the
       // shape a body currently has comes from the operation that last built it,
       // and a sketch face comes from the sketch operation itself.
-      (pick) => {
+      (pick, pointerType) => {
         const ui = useUiStore.getState();
         // Selection controls own the mouse while they are active.
         if (
@@ -871,6 +885,12 @@ export function Viewport() {
         }
         if (isModelRebuilding(useKernelStore.getState())) return;
         const store = useDocumentStore.getState();
+        // A second tap on empty space is the only way a finger drops a set it
+        // built: two or more picked objects are too easy to lose otherwise.
+        if (!pick) {
+          if (isKeylessPointer(pointerType)) store.select(null);
+          return;
+        }
         const project = activeModel(store.project);
         const kernel = useKernelStore.getState();
         const featureId =
@@ -891,7 +911,7 @@ export function Viewport() {
       {
         // Normal selection: the first click selects an object, the next one
         // drills into the face or edge under the cursor.
-        onSelectPick: (hit, additive) => {
+        onSelectPick: (hit, additive, pointerType) => {
           if (useUiStore.getState().activeSketchId) return;
           const store = useDocumentStore.getState();
           const ui = useUiStore.getState();
@@ -907,7 +927,7 @@ export function Viewport() {
           }
           const resolution = resolveSelectionHit(hit, store.selection, { additive });
           if (!resolution) {
-            store.select(null);
+            if (emptyTapClearsSelection(store.selection, pointerType)) store.select(null);
             return;
           }
           store.select(resolution.item, { additive: resolution.additive });
@@ -1198,6 +1218,9 @@ export function Viewport() {
       const remembered = cameraOf(cameraBook.current, cameraHome.current);
       controller.setCameraState(remembered ?? controller.defaultCameraPose());
       restoredPose.current = Boolean(remembered);
+      modelHasSavedPose.current = Boolean(remembered);
+      firstBuildPending.current = true;
+      modelSceneStart.current = useKernelStore.getState().sceneVersion;
       // The new model's bodies are all new bodies: the fit waits for its own
       // build, not for the model that was open a moment ago.
       previousCount.current = 0;
@@ -1232,6 +1255,26 @@ export function Viewport() {
             }
           : {}),
       });
+    }
+    // A long operation publishes bodies the document has not recorded yet:
+    // `syncCreatedBodies` waits for the finished build, so the interim scene
+    // draws them here. Interaction stays blocked while the rebuild runs.
+    if (longOperation) {
+      const documented = new Set(bodies.map((body) => body.id));
+      let order = sceneBodies.length;
+      for (const [id, mesh] of Object.entries(meshes)) {
+        if (documented.has(id)) continue;
+        sceneBodies.push({
+          id,
+          kind: 'solid',
+          mesh,
+          color: BODY_COLORS[order % BODY_COLORS.length] ?? '#6ea8fe',
+          visible: true,
+          order,
+          interactive: false,
+        });
+        order += 1;
+      }
     }
     // Bodies the edited operation will create are shown translucent and cannot
     // be picked: they are not part of the document yet. They come last, where
@@ -1300,6 +1343,7 @@ export function Viewport() {
     projectId,
     selection,
     featureBodyErrors,
+    longOperation,
     writeCamera,
   ]);
 
@@ -1307,8 +1351,26 @@ export function Viewport() {
   // so the whole build is in the scene before the camera measures it. It is
   // checked after every render: the bodies that ask for it arrive with their own
   // updates, and a dependency list here would wait for one of its own entries.
+  // A long rebuild swaps bodies under the skeleton, and each swap is framed the
+  // same way, unless the model opened at a camera the user already chose.
   useEffect(() => {
-    if (!fitPending.current || rebuilding) return;
+    if (rebuilding) return;
+    if (sceneVersion > modelSceneStart.current) firstBuildPending.current = false;
+  }, [rebuilding, sceneVersion]);
+
+  useEffect(() => {
+    if (
+      interimSceneVersion === 0 ||
+      modelHasSavedPose.current ||
+      !firstBuildPending.current
+    ) {
+      return;
+    }
+    fitPending.current = true;
+  }, [interimSceneVersion]);
+
+  useEffect(() => {
+    if (!fitPending.current || (rebuilding && !longOperation)) return;
     if (activeSketchId) {
       fitPending.current = false;
       return;

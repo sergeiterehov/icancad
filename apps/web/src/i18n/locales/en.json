@@ -25,6 +25,12 @@
     "exportProject": "Project",
     "exportStl": "STL",
     "exportStlSelected": "STL, {{count}} selected",
+    "stlQualityTitle": "Export STL",
+    "stlQuality": "Mesh quality",
+    "stlQualityText": "Choose how finely the model is tessellated before the file is written.",
+    "qualityDraft": "Draft",
+    "qualityStandard": "Standard",
+    "qualityFine": "Fine",
     "undo": "Undo",
     "redo": "Redo",
     "theme": "Color theme",
@@ -206,6 +212,7 @@
     "invalidProject": "Could not open project file",
     "meshImported": "Mesh imported",
     "stlExported": "STL exported",
+    "stlExportFailed": "Could not export STL",
     "importFailed": "Could not import mesh",
     "pickAfterRebuild": "Selection will be available after the model finishes recalculating",
     "noGeometry": "Nothing to export",
@@ -307,7 +314,11 @@
     "color": "Colour",
     "rename": "Rename",
     "deleteSelected": "Delete {{count}} objects",
-    "deleteOperations": "Delete {{count}} operations"
+    "deleteOperations": "Delete {{count}} operations",
+    "select": "Select",
+    "deselect": "Deselect",
+    "addToGroup": "Add to “{{name}}”",
+    "removeFromGroup": "Remove from group"
   },
   "nav": {
     "cube": "Orientation cube",

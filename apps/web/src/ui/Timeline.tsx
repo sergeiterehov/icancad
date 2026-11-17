@@ -15,6 +15,8 @@ import {
   EyeOff,
   Folder,
   FolderMinus,
+  FolderPlus,
+  MousePointer2,
   Pencil,
   SquareChevronsRight,
   Trash2,
@@ -27,7 +29,7 @@ import { useKernelStore } from '../stores/kernelStore';
 import { isDirectlySelected, selectedFeatureIds } from '../stores/selection';
 import { canEditSketch } from '../sketch/sectionPlane';
 import { rebuildFrom } from '../kernel/rebuild';
-import { showContextMenu } from './ContextMenu';
+import { showContextMenu, type ContextMenuItem } from './ContextMenu';
 import { FeatureIcon } from './featureIcons';
 import { RenameInput } from './RenameInput';
 import { KernelStatus } from './KernelStatus';
@@ -35,7 +37,15 @@ import { Tooltip } from './Tooltip';
 import { translate } from './translate';
 import { timelineCaretMark, type TimelineCaretMark } from './timelineCaret';
 import { chipOpensSketch, chipSelects } from './operationStrip';
-import { groupableRun, holdingGroup, levelCaretPosition, menuEntryTargets } from './timelineGroups';
+import {
+  adjacentGroups,
+  atLevelEdge,
+  groupableRun,
+  holdingGroup,
+  levelCaretPosition,
+  menuEntryTargets,
+  menuRun,
+} from './timelineGroups';
 import { useListSelection } from './useListSelection';
 
 function RollbackCaret({
@@ -86,6 +96,9 @@ export function Timeline() {
   const setHistoryEnd = useDocumentStore((state) => state.setHistoryEnd);
   const removeFeatures = useDocumentStore((state) => state.removeFeatures);
   const createGroup = useDocumentStore((state) => state.createGroup);
+  const addToGroup = useDocumentStore((state) => state.addToGroup);
+  const detachFromGroup = useDocumentStore((state) => state.detachFromGroup);
+  const toggleSelection = useDocumentStore((state) => state.toggleSelection);
   const ungroupGroup = useDocumentStore((state) => state.ungroupGroup);
   const renameGroup = useDocumentStore((state) => state.renameGroup);
   const setObjectsVisible = useDocumentStore((state) => state.setObjectsVisible);
@@ -265,6 +278,50 @@ export function Timeline() {
     ),
   ];
 
+  const nodeNames = new Map(
+    nodes.map((node) => [node.id, node.kind === 'group' ? node.group.name : node.feature.name]),
+  );
+
+  /**
+   * Selection and folder moves that both kinds of timeline entry share. The
+   * run is the clicked item or the contiguous selection it belongs to; a gap
+   * in the selection leaves only the clicked item movable.
+   */
+  const moveMenuItems = (clickedId: string, targets: readonly string[]): ContextMenuItem[] => {
+    const run = menuRun(nodes, selection, clickedId);
+    const targetItems = groupItems(targets);
+    const allSelected = targetItems.every((item) =>
+      selection.some((candidate) => candidate.kind === item.kind && candidate.id === item.id),
+    );
+    const items: ContextMenuItem[] = [
+      {
+        id: 'select',
+        label: allSelected ? t('context.deselect') : t('context.select'),
+        icon: <MousePointer2 size={14} />,
+        onSelect: () => toggleSelection(targetItems),
+      },
+      { id: 'select-separator', separator: true },
+    ];
+    for (const adjacentId of adjacentGroups(nodes, run)) {
+      const name = nodeNames.get(adjacentId) ?? '';
+      items.push({
+        id: `add-to-${adjacentId}`,
+        label: t('context.addToGroup', { name }),
+        icon: <FolderPlus size={14} />,
+        onSelect: () => addToGroup(adjacentId, groupItems(run)),
+      });
+    }
+    if (groupId !== null && atLevelEdge(nodes, run)) {
+      items.push({
+        id: 'detach-group',
+        label: t('context.removeFromGroup'),
+        icon: <FolderMinus size={14} />,
+        onSelect: () => detachFromGroup(groupId, groupItems(run)),
+      });
+    }
+    return items;
+  };
+
   const groupTooltip = (node: GroupNode, error: boolean, warning: boolean) => (
     <span className="timeline-tooltip">
       <span className="timeline-tooltip-name">{node.group.name}</span>
@@ -363,6 +420,7 @@ export function Timeline() {
                             const deleteTargets = deleteTargetsOf(targets);
                             const run = groupableRun(nodes, selection, node.id);
                             showContextMenu(event, [
+                              ...moveMenuItems(node.id, targets),
                               ...(run
                                 ? [
                                     {
@@ -455,6 +513,7 @@ export function Timeline() {
                             ? objectVisible(project, sketchObject)
                             : true;
                           showContextMenu(event, [
+                            ...moveMenuItems(feature.id, targets),
                             // A sketch is the one operation with a mode of its own:
                             // its menu offers that mode, and that is what tells it
                             // apart from a plain click on the chip, which only

@@ -12,6 +12,8 @@ export const RenderOrder = {
   grid: -1,
   /** Opaque solid bodies. */
   solid: 0,
+  /** The busy wave over a body, above its surface but below its edges. */
+  bodyWave: 0.5,
   /** Body outlines, drawn after the faces so depth ties go to the line. */
   bodyEdge: 1,
   /** Section caps and their hatching, over the exposed cut face. */
@@ -27,8 +29,8 @@ export const RenderOrder = {
   faceOverlay: 7,
   /** Sketch curves and their annotations. */
   sketch: 18,
-  /** The sketch grid, just above its curves. */
-  sketchGrid: 19,
+  /** The sketch grid, below its curves but above its fills. */
+  sketchGrid: 17,
   /** Highlighted body edges and sketch preview lines. */
   annotation: 22,
   sketchDraft: 23,

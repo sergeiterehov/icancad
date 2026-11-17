@@ -218,6 +218,96 @@ describe('group commands', () => {
   });
 });
 
+describe('group add and detach', () => {
+  const addTo = (
+    project: Project,
+    groupId: string,
+    featureIds: string[],
+    childGroupIds: string[] = [],
+  ) =>
+    applyCommand(project, {
+      type: 'group/add',
+      groupId,
+      featureIds,
+      childGroupIds,
+    });
+
+  const detach = (
+    project: Project,
+    groupId: string,
+    featureIds: string[],
+    childGroupIds: string[] = [],
+  ) =>
+    applyCommand(project, {
+      type: 'group/detach',
+      groupId,
+      featureIds,
+      childGroupIds,
+    });
+
+  it('adds the run right after a folder to it', () => {
+    const project = projectWith(
+      [box('a', 'g1'), box('b', 'g1'), box('c'), box('d')],
+      [group('g1')],
+    );
+    const next = addTo(project, 'g1', ['c']);
+    expect(ids(next)).toEqual(['g1', 'd']);
+    expect(ids(next, 'g1')).toEqual(['a', 'b', 'c']);
+  });
+
+  it('adds the run right before a folder to it', () => {
+    const project = projectWith([box('a'), box('b', 'g1'), box('c', 'g1')], [group('g1')]);
+    const next = addTo(project, 'g1', ['a']);
+    expect(ids(next)).toEqual(['g1']);
+    expect(ids(next, 'g1')).toEqual(['a', 'b', 'c']);
+  });
+
+  it('adds a neighbouring folder, nesting it', () => {
+    const project = projectWith(
+      [box('a', 'g1'), box('b', 'g2'), box('c', 'g2'), box('d')],
+      [group('g1'), group('g2')],
+    );
+    const next = addTo(project, 'g1', [], ['g2']);
+    expect(ids(next)).toEqual(['g1', 'd']);
+    expect(ids(next, 'g1')).toEqual(['a', 'g2']);
+  });
+
+  it('refuses a run that does not touch the folder', () => {
+    const project = projectWith(
+      [box('a', 'g1'), box('b', 'g1'), box('c'), box('d'), box('e')],
+      [group('g1')],
+    );
+    expect(() => addTo(project, 'g1', ['e'])).toThrow(/neighbouring/);
+  });
+
+  it('detaches the edge run to the level above', () => {
+    const project = projectWith(
+      [box('a', 'g1'), box('b', 'g1'), box('c'), box('d', 'g2')],
+      [group('g1'), group('g2', 'g1')],
+    );
+    const first = detach(project, 'g1', ['a']);
+    expect(activeModel(first).features[0]?.groupId).toBeUndefined();
+    expect(ids(first)).toEqual(['a', 'g1', 'c']);
+    expect(ids(first, 'g1')).toEqual(['b', 'g2']);
+
+    const last = detach(project, 'g1', [], ['g2']);
+    expect(ids(last)).toEqual(['g1', 'c', 'g2']);
+    expect(ids(last, 'g1')).toEqual(['a', 'b']);
+  });
+
+  it('refuses to detach from the middle of a folder', () => {
+    const project = projectWith([box('a', 'g1'), box('b', 'g1'), box('c', 'g1')], [group('g1')]);
+    expect(() => detach(project, 'g1', ['b'])).toThrow(/edge/);
+  });
+
+  it('drops a folder that loses its last operation', () => {
+    const project = projectWith([box('a', 'g1'), box('b')], [group('g1')]);
+    const next = detach(project, 'g1', ['a']);
+    expect(activeModel(next).groups).toEqual([]);
+    expect(ids(next)).toEqual(['a', 'b']);
+  });
+});
+
 describe('group validation', () => {
   const codes = (project: Project) =>
     validateHistory(activeModel(project)).map((entry) => entry.code);

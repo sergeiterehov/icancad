@@ -489,6 +489,17 @@ button:disabled {
 
 /* A healthy kernel needs nothing from the user, so it keeps the muted colour of
    a quiet control; only a failure is allowed to call attention (ADR 0030). */
+.timeline-status[data-state='ready'] .kernel-indicator {
+  color: var(--text-faint);
+  opacity: 0.62;
+}
+
+.timeline-status[data-state='ready'] .kernel-indicator:hover,
+.timeline-status[data-state='ready'] .kernel-indicator[aria-expanded='true'] {
+  color: var(--text);
+  opacity: 1;
+}
+
 .timeline-status[data-state='error'] .kernel-indicator {
   color: var(--danger);
 }
@@ -993,6 +1004,16 @@ html[data-pointer='finger'] .tree-row .tree-eye {
 .input:focus {
   border-color: var(--accent);
   outline: none;
+}
+
+/* iOS zooms the page when a field with a smaller font receives the caret. A
+   finger-only device gets 16px fields, which keeps the layout and kills the
+   zoom; a mouse or a trackpad keeps the compact sizes. */
+@media (pointer: coarse) {
+  input:not([type='checkbox']):not([type='radio']),
+  textarea {
+    font-size: 16px;
+  }
 }
 
 .input-wrap {
@@ -3587,14 +3608,6 @@ html[data-pointer='finger'] .selection-item .icon-btn {
 
 /* A model's variables sit directly under its name field: they keep the
    inspector's side inset without drawing a section rule of their own. */
-.panel-section.variables-section-embedded {
-  padding: 0 8px;
-}
-
-.panel-section.variables-section-embedded:has(+ .panel-section-divided) {
-  padding-bottom: 12px;
-}
-
 /* Project variables: a compact list, since formulas are the reason it exists. */
 .variables-list {
   display: flex;

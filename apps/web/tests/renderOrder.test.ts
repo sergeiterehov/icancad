@@ -4,6 +4,7 @@ import { RenderOrder, solidDepthBias } from '../src/viewport/renderOrder';
 describe('render order', () => {
   it('keeps the base model behind every annotation', () => {
     const annotations = [
+      RenderOrder.bodyWave,
       RenderOrder.bodyEdge,
       RenderOrder.section,
       RenderOrder.sketchFace,
@@ -15,6 +16,21 @@ describe('render order', () => {
       RenderOrder.handle,
     ];
     for (const order of annotations) expect(order).toBeGreaterThan(RenderOrder.solid);
+  });
+
+  it('puts the grid below every other layer and edges above body faces', () => {
+    for (const order of Object.values(RenderOrder)) {
+      if (order === RenderOrder.grid) continue;
+      expect(order).toBeGreaterThan(RenderOrder.grid);
+    }
+    expect(RenderOrder.bodyEdge).toBeGreaterThan(RenderOrder.solid);
+    expect(RenderOrder.bodyWave).toBeGreaterThan(RenderOrder.solid);
+    expect(RenderOrder.bodyEdge).toBeGreaterThan(RenderOrder.bodyWave);
+  });
+
+  it('keeps the sketch grid below the sketch curves', () => {
+    expect(RenderOrder.sketchGrid).toBeLessThan(RenderOrder.sketch);
+    expect(RenderOrder.sketchGrid).toBeGreaterThan(RenderOrder.sketchFace);
   });
 
   it('draws operation deltas over section hatching and face tints', () => {

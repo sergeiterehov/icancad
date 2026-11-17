@@ -47,3 +47,14 @@ folder cannot own a cursor of its own.
   visible on the level above, so the folder is lit instead.
 - Organising the strip costs no kernel work: a folder is saved with the project
   and drawn from the flat list, and the geometry kernel never hears about it.
+
+## Amendments
+
+- `group/add` takes a neighbouring run into an existing folder, and `group/detach`
+  moves a run at the folder's first or last place back to the level above. Both
+  refuse a gap and anything that would split the folder's run.
+- The operation and folder menus offer a flat "Add to «X»" for every neighbouring
+  folder and "Remove from group" when the clicked run sits at the folder's edge.
+  After adding, the selection clears.
+- The same menus offer "Select" / "Deselect", which toggles every target of the
+  menu, so a finger can build a multi-selection without a modifier key.

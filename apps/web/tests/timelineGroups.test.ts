@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  adjacentGroups,
+  atLevelEdge,
   groupableRun,
   holdingGroup,
   levelCaretPosition,
   menuEntryTargets,
+  menuRun,
   type LevelNode,
 } from '../src/ui/timelineGroups';
 import type { SelectionItem } from '../src/stores/documentStore';
@@ -79,6 +82,34 @@ describe('grouping a run', () => {
 
   it('ignores items that belong to another level', () => {
     expect(groupableRun(nodes, selected('a', 'b', 'other'), 'b')).toEqual(['a', 'b']);
+  });
+});
+
+describe('moving a run near folders', () => {
+  it('offers the folder right before and right after the run', () => {
+    const level: LevelNode[] = [
+      { id: 'g1', kind: 'group', start: 0, end: 1 },
+      feature('c', 2),
+      { id: 'g2', kind: 'group', start: 3, end: 4 },
+    ];
+    expect(adjacentGroups(level, ['c'])).toEqual(['g1', 'g2']);
+    expect(adjacentGroups(level, ['g1'])).toEqual([]);
+    expect(adjacentGroups(level, ['c', 'g2'])).toEqual(['g1']);
+  });
+
+  it('uses the clicked run, or just the clicked item when the selection has gaps', () => {
+    expect(menuRun(nodes, selected('b', 'g1'), 'g1')).toEqual(['b', 'g1']);
+    expect(menuRun(nodes, selected('a', 'g1'), 'g1')).toEqual(['g1']);
+    expect(menuRun(nodes, selected('a'), 'e')).toEqual(['e']);
+  });
+
+  it('lets only the edge of a folder leave it', () => {
+    const level: LevelNode[] = [feature('a', 0), feature('b', 1), feature('c', 2)];
+    expect(atLevelEdge(level, ['a'])).toBe(true);
+    expect(atLevelEdge(level, ['c'])).toBe(true);
+    expect(atLevelEdge(level, ['b'])).toBe(false);
+    expect(atLevelEdge(level, ['a', 'b'])).toBe(true);
+    expect(atLevelEdge(level, ['a', 'c'])).toBe(false);
   });
 });
 

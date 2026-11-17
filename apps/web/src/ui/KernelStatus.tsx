@@ -1,5 +1,5 @@
 import { bodiesInHistory, solidBodiesInHistory, type Feature } from '@icancad/model';
-import { Check, TriangleAlert, X } from 'lucide-react';
+import { ThumbsUp, TriangleAlert, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
@@ -177,7 +177,7 @@ export function KernelStatus() {
           ) : busy ? (
             <span className="spinner indicator-spinner" />
           ) : (
-            <Check size={16} />
+            <ThumbsUp size={16} />
           )}
         </button>
       </Tooltip>

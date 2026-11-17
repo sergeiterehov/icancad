@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNarrowLayout } from './hooks/useNarrowLayout';
 import { useShortcuts } from './hooks/useShortcuts';
 import { useFormulaResolution } from './hooks/useFormulaResolution';
 import { useApplyTheme } from './hooks/useTheme';
@@ -46,6 +47,8 @@ export default function App() {
   const leftDockShown = useUiStore((state) => state.leftDockShown);
   const rightDockShown = useUiStore((state) => state.rightDockShown);
   const compactPanels = useUiStore((state) => state.compactPanels);
+  const narrow = useNarrowLayout();
+  const pinnedPanels = useUiStore((state) => state.pinnedPanels);
   // The inspector carries the parameters of whatever the timeline selected, so
   // that item is its subject: while there is one, its own unfolded state rules
   // over the panel's, and the panel's own state waits underneath for the moment
@@ -58,7 +61,17 @@ export default function App() {
     (state) =>
       state.selection.find((item) => item.kind === 'feature' || item.kind === 'group')?.id ?? null,
   );
-  const subjectItem = activeSketchId === null ? (editingFeatureId ?? selectedTimelineItemId) : null;
+  const subjectItem =
+    narrow || activeSketchId !== null ? null : (editingFeatureId ?? selectedTimelineItemId);
+  // A screen that cannot show both docks side by side starts with them closed,
+  // and a rotation into that width puts them away again: the model keeps the
+  // screen and the panels return when the hand asks for them.
+  useEffect(() => {
+    if (!narrow || pinnedPanels) return;
+    const ui = useUiStore.getState();
+    ui.setLeftDockOpen(false);
+    ui.setRightDockOpen(false);
+  }, [narrow, pinnedPanels]);
   // A click carries no pointer type of its own, so the press before it is what
   // says whether a finger or a mouse asked for the selection.
   useEffect(() => installPointerWatch(), []);
@@ -75,6 +88,7 @@ export default function App() {
         data-left-dock={leftDockShown ? 'open' : 'closed'}
         data-right-dock={rightDockShown ? 'open' : 'closed'}
         data-compact-panels={compactPanels ? 'true' : 'false'}
+        data-narrow={narrow ? 'true' : 'false'}
       >
         {hydrated ? (
           <>

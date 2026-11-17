@@ -48,3 +48,10 @@ join it later, holding other super-objects instead of features.
   stays where the user left it instead of flying to the new geometry.
 - The project name placement from ADR 0024 ("the project name input lives in the
   model dock") is superseded by the corner header described above.
+
+## Amendments
+
+- The model inspector stacks name, properties and then variables; variables are a
+  divided section, exactly like the project's variables below its properties.
+- STL export names its file after both names, `project - model.stl`, and asks for
+  draft, standard or fine tessellation before writing it.

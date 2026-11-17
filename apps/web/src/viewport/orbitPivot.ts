@@ -51,6 +51,24 @@ export function pointOnRayAtTarget(
   return origin.clone().addScaledVector(direction, depth);
 }
 
+/**
+ * The point a drag turns the view around. A hit under the pointer always wins;
+ * without one the middle of the frame is tried, so a turn begun over empty space
+ * still finds the model the user is looking at. When neither ray hits anything,
+ * the pointer's own ray at the depth of the target keeps the zoom steady.
+ */
+export function orbitPivotPoint(
+  cursorHit: THREE.Vector3 | null,
+  centerHit: THREE.Vector3 | null,
+  origin: THREE.Vector3,
+  direction: THREE.Vector3,
+  target: THREE.Vector3,
+): THREE.Vector3 {
+  if (cursorHit) return cursorHit.clone();
+  if (centerHit) return centerHit.clone();
+  return pointOnRayAtTarget(origin, direction, target);
+}
+
 /** Camera axes for a turntable angle pair, named the way three.js builds them. */
 export function viewBasis({ azimuth, polar }: OrbitAngles): THREE.Matrix4 {
   const offset = new THREE.Vector3(

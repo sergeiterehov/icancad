@@ -64,17 +64,19 @@ export function parseProjectFile(
   return { project: parseProject(document, options), assets: projectsAssets };
 }
 
-function slugify(name: string): string {
+function slugify(name: string, fallback = 'project'): string {
   const slug = name
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9\u0400-\u04ff]+/gi, '-')
     .replace(/^-+|-+$/g, '');
-  return slug || 'project';
+  return slug || fallback;
 }
 
-export function stlFileName(name: string): string {
-  return `${slugify(name)}.stl`;
+/** `project - model.stl`; the project alone when no model name is given. */
+export function stlFileName(projectName: string, modelName?: string): string {
+  if (modelName === undefined) return `${slugify(projectName)}.stl`;
+  return `${slugify(projectName)} - ${slugify(modelName, 'model')}.stl`;
 }
 
 export function projectFileName(name: string): string {

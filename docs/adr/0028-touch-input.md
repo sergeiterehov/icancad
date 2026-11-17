@@ -66,3 +66,10 @@ finger does not have to be taught.
 - Limits: the arc still needs a second gesture for its end angle, because one
   stretch cannot name three points. A finger resting on a control for half a
   second opens its menu, which a very slow tap can do by accident.
+
+## Amendments
+
+- An empty tap clears one selected object. With two or more selected, a single empty
+  tap leaves the set alone and only an empty double tap clears it.
+- Text fields on a coarse pointer use a 16 px font so iOS does not zoom the page on
+  focus, and formula-capable parameter fields ask for a text keyboard.

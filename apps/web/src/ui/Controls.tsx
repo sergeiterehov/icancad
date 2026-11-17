@@ -717,7 +717,12 @@ export function ParamField({
         <input
           ref={inputRef}
           className="dimension-input"
-          inputMode={formula ? 'text' : 'decimal'}
+          // Formulas are available in every parameter, so the on-screen keyboard
+          // must offer letters and "="; a decimal pad cannot type an expression.
+          inputMode="text"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
           aria-label={label}
           aria-invalid={error ? true : undefined}
           value={draft}

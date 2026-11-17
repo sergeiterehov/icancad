@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import {
   orbitAbout,
+  orbitPivotPoint,
   orbitRotation,
   pointOnRayAtTarget,
   type OrbitAngles,
@@ -66,6 +67,16 @@ describe('orbit about a point', () => {
 describe('pivot when nothing is under the pointer', () => {
   const origin = new THREE.Vector3(0, 0, 100);
   const direction = new THREE.Vector3(0, 0, -1);
+
+  it('prefers the cursor hit, then the frame centre, then the ray depth', () => {
+    const cursor = new THREE.Vector3(1, 2, 3);
+    const centre = new THREE.Vector3(4, 5, 6);
+    const target = new THREE.Vector3(0, 0, 0);
+    expect(orbitPivotPoint(cursor, centre, origin, direction, target)).toEqual(cursor);
+    expect(orbitPivotPoint(null, centre, origin, direction, target)).toEqual(centre);
+    const fallback = orbitPivotPoint(null, null, origin, direction, target);
+    expect(fallback.distanceTo(pointOnRayAtTarget(origin, direction, target))).toBeLessThan(1e-9);
+  });
 
   it('takes the point of the ray at the depth of the target', () => {
     const target = new THREE.Vector3(7, 0, 0);

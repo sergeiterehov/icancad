@@ -1,10 +1,11 @@
 import { activeModel, createProject, parseProject } from '@icancad/model';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { i18n } from '../i18n';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
-import { rebuildScene } from '../kernel/rebuild';
+import { rebuildInputKey } from '../kernel/buildInput';
+import { abortRebuild, rebuildScene } from '../kernel/rebuild';
 import { bootKernel } from '../kernel/client';
 import { bootFormulaEngine } from '../formula/client';
 import { useFormulaStore } from '../stores/formulaStore';
@@ -77,18 +78,9 @@ export function useAutosave(): void {
 export function useRebuildScene(): void {
   const { t } = useTranslation();
   const activeModelId = useDocumentStore((state) => state.project.activeSuperObjectId);
-  const features = useDocumentStore((state) => activeModel(state.project).features);
-  const bodies = useDocumentStore((state) => activeModel(state.project).bodies);
   const resolution = useFormulaStore((state) => state.resolution);
   const pendingKey = useFormulaStore((state) => state.pendingKey);
   const formulaStatus = useFormulaStore((state) => state.status);
-  // Folders are a view of the strip, not a build step (ADR 0032): grouping,
-  // ungrouping and moving between folders must not reach the kernel, so the
-  // rebuild follows what the operations say, not which folder shows them.
-  const buildKey = useMemo(
-    () => JSON.stringify(features, (key, value) => (key === 'groupId' ? undefined : value)),
-    [features],
-  );
   const historyEnd = useDocumentStore((state) => activeModel(state.project).historyEnd);
   // Selecting an operation previews it on top of the rolled-back state, so the
   // rebuild also has to follow the operation being edited.
@@ -96,23 +88,57 @@ export function useRebuildScene(): void {
   const hydrated = useDocumentStore((state) => state.hydrated);
   const kernelStatus = useKernelStore((state) => state.status);
   const revision = resolution?.revision ?? 0;
+  /**
+   * What the kernel actually builds. Folders are a view of the strip and are
+   * not a build step (ADR 0032), so `groupId` is dropped: grouping, ungrouping
+   * and moving between folders leave this key untouched and schedule no
+   * rebuild. Bodies are document refs the rebuild creates, not its input.
+   */
+  const buildInput = useMemo(
+    () =>
+      rebuildInputKey({
+        modelId: activeModelId,
+        model: resolution?.model ?? null,
+        historyEnd,
+        editingFeatureId,
+        expressionErrors: Object.keys(resolution?.errors ?? {}),
+        drivenSketches: [...(resolution?.drivenSketches ?? [])],
+      }),
+    [activeModelId, resolution, historyEnd, editingFeatureId],
+  );
+  const lastBuildInput = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!hydrated || kernelStatus !== 'ready' || formulaStatus !== 'ready') return;
+    // A long build belongs to the operation the user is leaving. Opening
+    // another operation drops its wave at once; the kernel may still finish
+    // the request in flight, but the rebuild checks the new epoch before it
+    // publishes anything.
+    abortRebuild();
+  }, [editingFeatureId]);
+
+  useEffect(() => {
+    if (kernelStatus !== 'ready') {
+      lastBuildInput.current = null;
+      return;
+    }
+    if (!hydrated || formulaStatus !== 'ready') return;
     if (!resolution || resolution.model.id !== activeModelId) return;
     if (pendingKey !== null) return;
+    if (lastBuildInput.current === buildInput) return;
     const timer = setTimeout(() => {
+      lastBuildInput.current = buildInput;
       void rebuildScene(resolution.model, t('status.rebuild'), {
         expressionErrors: new Set(Object.keys(resolution.errors)),
         drivenSketches: resolution.drivenSketches,
-      }).catch(() => undefined);
+      }).catch(() => {
+        // A failed or superseded build may be asked for again by a retry.
+        lastBuildInput.current = null;
+      });
     }, 50);
     return () => clearTimeout(timer);
   }, [
     activeModelId,
-    buildKey,
-    bodies,
-    historyEnd,
+    buildInput,
     editingFeatureId,
     hydrated,
     kernelStatus,

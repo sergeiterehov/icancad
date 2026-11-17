@@ -64,6 +64,51 @@ export function groupableRun(
 }
 
 /**
+ * Folders that sit right before or right after a run of entries on one level.
+ * Only such a folder can take the run without splitting its own stretch.
+ */
+export function adjacentGroups(nodes: readonly LevelNode[], runIds: readonly string[]): string[] {
+  const run = new Set(runIds);
+  const indexes = nodes
+    .map((node, index) => (run.has(node.id) ? index : -1))
+    .filter((index) => index >= 0)
+    .sort((left, right) => left - right);
+  if (indexes.length === 0) return [];
+  const groups: string[] = [];
+  const before = nodes[indexes[0]! - 1];
+  if (before?.kind === 'group' && !run.has(before.id)) groups.push(before.id);
+  const after = nodes[indexes[indexes.length - 1]! + 1];
+  if (after?.kind === 'group' && !run.has(after.id)) groups.push(after.id);
+  return groups;
+}
+
+/**
+ * The run a "Remove from group" command would move up a level: the clicked
+ * item, or the selected stretch it belongs to. Only the first or last entry of
+ * the level keeps the folder one run after it leaves.
+ */
+export function menuRun(
+  nodes: readonly LevelNode[],
+  selection: readonly SelectionItem[],
+  clickedId: string,
+): string[] {
+  return groupableRun(nodes, selection, clickedId) ?? [clickedId];
+}
+
+/** True when the run touches the first or last place of a folder's contents. */
+export function atLevelEdge(nodes: readonly LevelNode[], runIds: readonly string[]): boolean {
+  const run = new Set(runIds);
+  const indexes = nodes
+    .map((node, index) => (run.has(node.id) ? index : -1))
+    .filter((index) => index >= 0)
+    .sort((left, right) => left - right);
+  if (indexes.length === 0) return false;
+  const first = indexes[0]!;
+  const last = indexes[indexes.length - 1]!;
+  return last - first + 1 === indexes.length && (first === 0 || last === nodes.length - 1);
+}
+
+/**
  * Flat caret position a level shows for the cursor. A cursor outside the level
  * sits at its edge: after the last operation of a folder it is simply at the
  * end, before the first one it is at the start. Positions stay flat, because a

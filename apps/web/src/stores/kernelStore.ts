@@ -145,12 +145,23 @@ interface KernelState {
   tasks: KernelTask[];
   /** Caret position of the operation currently being rebuilt. */
   rebuildCursor: number | null;
+  /**
+   * A partial model is on screen because an operation is taking long. The
+   * viewport draws the busy wave while this is true, and it stays on until the
+   * whole rebuild ends once any operation crossed the threshold.
+   */
+  longOperation: boolean;
+  /** Bumped every time a partial state replaces the model on screen. */
+  interimSceneVersion: number;
   handleStatus: (event: KernelStatusEvent) => void;
   setReady: (health: HealthResult) => void;
   setError: (message: string) => void;
   setTasks: (tasks: KernelTask[]) => void;
   setRebuildCursor: (rebuildCursor: number | null) => void;
   setOperationMs: (featureId: string, ms: number) => void;
+  setLongOperation: (longOperation: boolean) => void;
+  /** Marks a partial scene as the current face of a long rebuild. */
+  markInterimScene: () => void;
   setScene: (
     meshes: Record<string, TessellationResult>,
     shapeStats: Record<string, ShapeStats>,
@@ -206,6 +217,8 @@ export const useKernelStore = create<KernelState>((set) => ({
   featureLimits: {},
   tasks: [],
   rebuildCursor: null,
+  longOperation: false,
+  interimSceneVersion: 0,
 
   handleStatus: (event) => {
     if (event.phase === 'loading-occt') {
@@ -240,6 +253,12 @@ export const useKernelStore = create<KernelState>((set) => ({
   setRebuildCursor: (rebuildCursor) => set({ rebuildCursor }),
   setOperationMs: (featureId, ms) =>
     set((state) => ({ operationMs: { ...state.operationMs, [featureId]: ms } })),
+  setLongOperation: (longOperation) => set({ longOperation }),
+  markInterimScene: () =>
+    set((state) => ({
+      longOperation: true,
+      interimSceneVersion: state.interimSceneVersion + 1,
+    })),
 
   setScene: (
     meshes,
@@ -300,6 +319,7 @@ export const useKernelStore = create<KernelState>((set) => ({
       faceOperations: {},
       featureLimits: {},
       rebuildCursor: null,
+      longOperation: false,
     })),
   clearFeatureError: (featureId) =>
     set((state) => {

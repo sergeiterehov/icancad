@@ -80,6 +80,8 @@ const liveShapes = new Set<string>();
 
 /** Smallest size worth building; below it the treatment is invisible. */
 const MIN_TREATMENT_SIZE = 0.01;
+/** An operation that runs longer than this shows the state it is building on. */
+const LONG_OPERATION_MS = 2000;
 /** How far a union reaches behind its plane to overlap the body it joins. */
 const UNION_EMBED = 0.01;
 
@@ -421,6 +423,7 @@ export function resetRebuildCache(): void {
 export function abortRebuild(): void {
   rebuildEpoch += 1;
   useKernelStore.getState().setRebuildCursor(null);
+  useKernelStore.getState().setLongOperation(false);
 }
 
 export function rebuildScene(
@@ -473,6 +476,7 @@ let rebuildFailures = 0;
  */
 function handleRebuildFailure(error: unknown): void {
   useKernelStore.getState().clearPreview();
+  useKernelStore.getState().setLongOperation(false);
   if (error instanceof KernelTaskCancelledError) return;
   const message = error instanceof Error ? error.message : String(error);
   const code = error instanceof Error ? error.name : '';
@@ -500,6 +504,31 @@ export function rebuildFrom(featureId: string): void {
   // A rebuild that is already running may store snapshots we just dropped, so
   // the start point is passed explicitly instead of relying on the cache.
   void rebuildScene(project, i18n.t('status.rebuild'), { fromIndex: index }).catch(() => undefined);
+}
+
+/**
+ * Puts a partially built model on screen while a long operation runs. It is a
+ * normal scene, only with the busy flag on: the viewport draws it and sweeps the
+ * wave over its bodies. A state without any body has nothing to show, so the
+ * skeleton keeps its place instead.
+ */
+function publishInterimState(state: RebuildState): boolean {
+  if (Object.keys(state.meshes).length === 0) return false;
+  const kernel = useKernelStore.getState();
+  kernel.setScene(
+    state.meshes,
+    aggregateStats(state),
+    state.meshStats,
+    Object.fromEntries(state.bodyShapes),
+    state.featureErrors,
+    state.featureBodyErrors,
+    state.featureObjectErrors,
+    state.sketchFrames,
+    state.projectionLost,
+    null,
+  );
+  kernel.markInterimScene();
+  return true;
 }
 
 async function runRebuild(
@@ -556,16 +585,33 @@ async function runRebuild(
       // The input shapes are what an array repeats a later modification from,
       // so they are read before the operation replaces them.
       const beforeShapes = new Map(state.bodyShapes);
+      // A long operation shows the model it is building on; when it finishes,
+      // the same swap shows its result so the step is visibly done.
+      const snapshot = cloneState(state);
+      let long = false;
+      const timer = setTimeout(() => {
+        if (epoch !== rebuildEpoch) return;
+        long = true;
+        publishInterimState(snapshot);
+      }, LONG_OPERATION_MS);
       const startedAt = performance.now();
       try {
         await evaluateFeature(feature, state, { client, epoch, project, drivenSketches });
       } finally {
-        useKernelStore.getState().setOperationMs(feature.id, performance.now() - startedAt);
+        clearTimeout(timer);
+        const took = performance.now() - startedAt;
+        // The timer may lose the race with a kernel answer that arrives just
+        // after two seconds; the operation was long either way.
+        if (took >= LONG_OPERATION_MS) long = true;
+        useKernelStore.getState().setOperationMs(feature.id, took);
       }
       if (epoch !== rebuildEpoch) return;
       if (!state.featureErrors[feature.id]) {
         captureFeatureShapes(state, feature.id, beforeShapes);
       }
+      // A failed step leaves the state before it on screen; only a step that
+      // produced a model earns the second swap.
+      if (long && !state.featureErrors[feature.id]) publishInterimState(state);
       if (state.blockedFeatureId) break;
     }
     produced.push({ index, prefix: features.slice(0, index + 1), state: cloneState(state) });
@@ -683,6 +729,9 @@ async function runRebuild(
 
   for (const checkpoint of produced) rebuildCache.store(checkpoint);
   useDocumentStore.getState().syncCreatedBodies(base.createdBodies, base.blockedFeatureId);
+  // The interim bodies stay on screen until the document owns them, so the
+  // finished scene never blinks from a synthetic body to the real one.
+  useKernelStore.getState().setLongOperation(false);
 
   disposeUnusedShapes(client);
 }

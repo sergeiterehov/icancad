@@ -1,10 +1,18 @@
 import type { SelectionItem } from '../stores/documentStore';
-import {
-  bodyEdgeId,
-  bodyFaceId,
-  parseBodyEdgeId,
-  parseBodyFaceId,
-} from '../stores/selection';
+import { bodyEdgeId, bodyFaceId, parseBodyEdgeId, parseBodyFaceId } from '../stores/selection';
+import { isKeylessPointer } from './inputProfile';
+
+/**
+ * Whether an empty tap should drop the selection. A finger that has picked one
+ * object clears it at once, but a set the user built tap by tap is easy to lose
+ * by accident, so a set of two or more asks for a second tap in the same place.
+ */
+export function emptyTapClearsSelection(
+  selection: readonly SelectionItem[],
+  pointerType: string,
+): boolean {
+  return !isKeylessPointer(pointerType) || selection.length <= 1;
+}
 
 /** What the pointer found in the viewport, richest detail first. */
 export interface SelectionHit {
@@ -79,8 +87,7 @@ export function resolveSelectionHit(
     // A body is open when the selection holds it, and every body is open once a
     // face or an edge is selected: the pointer then shows geometry everywhere,
     // so a click has to take geometry everywhere too.
-    const open =
-      selection.some((item) => bodyOfItem(item) === id) || detailsSelected(selection);
+    const open = selection.some((item) => bodyOfItem(item) === id) || detailsSelected(selection);
     if (open && kind === 'solid') {
       if (edgeId) return { item: { kind: 'edge', id: bodyEdgeId(id, edgeId) }, additive };
       if (faceId) return { item: { kind: 'body-face', id: bodyFaceId(id, faceId) }, additive };

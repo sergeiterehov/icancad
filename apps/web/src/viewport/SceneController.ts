@@ -39,7 +39,7 @@ import {
   wheelPointerKind,
   type PointerKind,
 } from './inputProfile';
-import { orbitAbout, orbitRotation, pointOnRayAtTarget } from './orbitPivot';
+import { orbitAbout, orbitPivotPoint, orbitRotation, pointOnRayAtTarget } from './orbitPivot';
 import { facesPlane, sketchTurnMode } from './sketchView';
 import { trackballOrbit } from './trackball';
 import type {
@@ -246,6 +246,8 @@ interface BodyEntry {
   mesh: THREE.Mesh;
   geometry: THREE.BufferGeometry;
   material: THREE.MeshStandardMaterial;
+  /** Additive busy wave drawn over the body while a long operation runs. */
+  wave: THREE.Mesh;
   edges: THREE.LineSegments | null;
   edgeGeometry: THREE.BufferGeometry | null;
   /** Tangency lines where a fillet blends into a face. */
@@ -265,11 +267,19 @@ interface BodyEntry {
 }
 
 const FOV_DEGREES = CAMERA_FOV_DEGREES;
+/**
+ * Extra depth bias every body surface takes so its own edge lines win the depth
+ * tie. Depth-buffer units, far below a millimetre; the row bias stays on top of
+ * it, so bodies sharing a plane keep their order.
+ */
+const BODY_SURFACE_BIAS = 1;
 const CAMERA_TRANSITION_MS = 500;
 /** How far one pixel of a camera drag turns the view, in radians. */
 const ORBIT_RADIANS_PER_PIXEL = 0.008;
 /** A two-finger scroll moves much less per pixel than a drag does. */
 const SCROLL_RADIANS_PER_PIXEL = 0.004;
+/** How long a scroll gesture keeps its first pivot after the last wheel event. */
+const SCROLL_PIVOT_IDLE_MS = 220;
 /**
  * Zoom per wheel unit. A mouse sends whole notches of about a hundred units, a
  * trackpad scrolls in single units, and a pinch comes as a few of them, so the
@@ -541,6 +551,8 @@ export class SceneController {
    * its pixel while the model swings around it. Null keeps the plain turntable.
    */
   private orbitPivot: THREE.Vector3 | null = null;
+  /** Pivot of the scroll-orbit gesture in flight, and when it goes quiet. */
+  private scrollOrbitPivot: { pivot: THREE.Vector3; expiresAt: number } | null = null;
   /** Fingers on the view, in client pixels, by pointer id. */
   private readonly fingers = new Map<number, { x: number; y: number }>();
   /** Centre and spread of the two-finger gesture, as they were one frame ago. */
@@ -553,6 +565,46 @@ export class SceneController {
   private edgeColor = 0x0d1015;
   private width = 1;
   private height = 1;
+  private waveActive = false;
+  private readonly waveUniforms = {
+    uTime: { value: 0 },
+    uStrength: { value: 0 },
+  };
+  /**
+   * A light band sweeping diagonally across the model. It is additive and kept
+   * off the depth buffer, so it reads as a shimmer over the bodies rather than
+   * as a change to their surfaces.
+   */
+  private readonly waveMaterial = new THREE.ShaderMaterial({
+    uniforms: this.waveUniforms,
+    vertexShader: `
+      varying vec3 vWaveWorld;
+      void main() {
+        vec4 world = modelMatrix * vec4(position, 1.0);
+        vWaveWorld = world.xyz;
+        gl_Position = projectionMatrix * viewMatrix * world;
+      }
+    `,
+    fragmentShader: `
+      uniform float uTime;
+      uniform float uStrength;
+      varying vec3 vWaveWorld;
+      void main() {
+        float phase = vWaveWorld.x * 0.32 + vWaveWorld.y * 0.21 - vWaveWorld.z * 0.27 - uTime * 3.0;
+        float band = smoothstep(0.55, 0.98, sin(phase)) * uStrength;
+        if (band < 0.01) discard;
+        gl_FragColor = vec4(vec3(0.62, 0.78, 1.0), band * 0.38);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    blending: THREE.AdditiveBlending,
+    side: THREE.FrontSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
 
   private dragMode: 'orbit' | 'pan' | 'handle' | null = null;
   private lastX = 0;
@@ -639,10 +691,10 @@ export class SceneController {
     ) => void,
     private readonly onCameraChange?: (azimuth: number, polar: number, distance: number) => void,
     /** A double click on a face asks for the operation that produced it. */
-    private readonly onDoublePick?: (pick: ScenePick) => void,
+    private readonly onDoublePick?: (pick: ScenePick | null, pointerType: string) => void,
     private readonly callbacks: {
       /** Normal selection: object first, then the face or edge inside it. */
-      onSelectPick?: (hit: SelectionHit | null, additive: boolean) => void;
+      onSelectPick?: (hit: SelectionHit | null, additive: boolean, pointerType: string) => void;
       /** Lifecycle of a 3D handle drag. */
       onHandleDrag?: (event: {
         id: string;
@@ -776,6 +828,24 @@ export class SceneController {
     if (sectionChanged && this.sectionPlanes.length > 0) this.rebuildSection();
     this.applyFaceHighlights();
     this.invalidate();
+  }
+
+  /**
+   * Turns the busy wave on while a long operation is building the model. A
+   * section hides part of the body without touching its geometry, so the wave
+   * steps aside there instead of glowing through the cut.
+   */
+  setLongOperation(active: boolean): void {
+    if (this.waveActive === active) return;
+    this.waveActive = active;
+    this.waveUniforms.uStrength.value = active ? 1 : 0;
+    this.applyWaveVisibility();
+    this.invalidate();
+  }
+
+  private applyWaveVisibility(): void {
+    const visible = this.waveActive && this.sectionPlanes.length === 0;
+    for (const entry of this.bodies.values()) entry.wave.visible = visible;
   }
 
   /**
@@ -2077,10 +2147,13 @@ export class SceneController {
     // Two solids that meet on a surface compute the same depth there and fight
     // for it pixel by pixel. The body listed lower in the object tree gives up
     // nothing and the ones above it step back, so the seam belongs to the object
-    // the user can point at in the panel.
-    entry.material.polygonOffset = entry.depthBias > 0;
-    entry.material.polygonOffsetFactor = entry.depthBias;
-    entry.material.polygonOffsetUnits = entry.depthBias;
+    // the user can point at in the panel. Every surface also steps back a hair
+    // from its own edge lines, so the wireframe wins the depth tie everywhere,
+    // including the body at the bottom of the tree.
+    const bias = entry.depthBias + BODY_SURFACE_BIAS;
+    entry.material.polygonOffset = true;
+    entry.material.polygonOffsetFactor = bias;
+    entry.material.polygonOffsetUnits = bias;
     entry.material.opacity = 1;
     entry.material.side = THREE.FrontSide;
     entry.material.color.set(entry.color);
@@ -2489,6 +2562,7 @@ export class SceneController {
     // camera already has. It also turns in a sketch: taking the view off the
     // plane is exactly what the cube is for there.
     this.orbitPivot = null;
+    this.scrollOrbitPivot = null;
     this.orbit(deltaX, deltaY);
   }
 
@@ -2544,21 +2618,57 @@ export class SceneController {
   }
 
   /**
-   * The point a drag turns the view around: the surface under the pointer, or
-   * the point of its ray at the depth the user is looking at when the ray hits
-   * nothing at all.
+   * The point a drag turns the view around: the surface under the pointer, then
+   * the surface in the middle of the frame, and only then the point of the
+   * pointer's ray at the depth the user is looking at.
    */
   private orbitPivotAt(clientX: number, clientY: number): THREE.Vector3 {
     const raycaster = this.pointerToRay(clientX, clientY);
+    // The centre ray is cast with the same raycaster, so the pointer ray is
+    // copied before the second call replaces it.
+    const origin = raycaster.ray.origin.clone();
+    const direction = raycaster.ray.direction.clone();
     const bodyMeshes = [...this.bodies.values()]
       .filter((entry) => entry.group.visible && entry.interactive)
       .map((entry) => entry.hitMesh);
-    const hit = firstUnclippedHit(
+    const cursorHit = firstUnclippedHit(
       raycaster.intersectObjects(bodyMeshes, false),
       this.sectionClipPlanes,
     );
-    if (hit) return hit.point.clone();
-    return pointOnRayAtTarget(raycaster.ray.origin, raycaster.ray.direction, this.target);
+    let centerHit = null;
+    if (!cursorHit) {
+      const rect = this.canvas.getBoundingClientRect();
+      const centerRay = this.pointerToRay(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      centerHit = firstUnclippedHit(
+        centerRay.intersectObjects(bodyMeshes, false),
+        this.sectionClipPlanes,
+      );
+    }
+    return orbitPivotPoint(
+      cursorHit?.point ?? null,
+      centerHit?.point ?? null,
+      origin,
+      direction,
+      this.target,
+    );
+  }
+
+  /**
+   * Pivot of an ongoing two-finger scroll orbit. A trackpad sends a stream of
+   * wheel events and no button, so the point is taken once at the start of the
+   * gesture and reused until the scroll goes quiet; otherwise the face that
+   * slides under the cursor would take the turn over mid-gesture.
+   */
+  private scrollOrbitPivotAt(clientX: number, clientY: number): THREE.Vector3 {
+    const now = performance.now();
+    const current = this.scrollOrbitPivot;
+    if (!current || now > current.expiresAt) {
+      const pivot = this.orbitPivotAt(clientX, clientY);
+      this.scrollOrbitPivot = { pivot, expiresAt: now + SCROLL_PIVOT_IDLE_MS };
+      return pivot;
+    }
+    current.expiresAt = now + SCROLL_PIVOT_IDLE_MS;
+    return current.pivot;
   }
 
   setSection(planes: SectionPlane[]): void {
@@ -2571,6 +2681,7 @@ export class SceneController {
       return clip;
     });
     this.applyClipping();
+    this.applyWaveVisibility();
     this.rebuildSection();
     this.invalidate();
   }
@@ -3757,18 +3868,24 @@ export class SceneController {
     (this.grid.material as THREE.Material).dispose();
     this.axes.geometry.dispose();
     (this.axes.material as THREE.Material).dispose();
+    this.waveMaterial.dispose();
     this.renderer.dispose();
   }
 
   private createGrid(): THREE.GridHelper {
-    const major = this.theme === 'dark' ? 0x39404d : 0xb6bec9;
-    const minor = this.theme === 'dark' ? 0x232831 : 0xd9dee6;
+    const major = this.theme === 'dark' ? 0x353b46 : 0xbcc3cd;
+    const minor = this.theme === 'dark' ? 0x20252c : 0xdbdfe7;
     const grid = new THREE.GridHelper(2000, 200, major, minor);
     grid.rotation.x = Math.PI / 2;
     const material = grid.material as THREE.LineBasicMaterial;
+    // The grid is a backdrop, not geometry: it draws in the opaque pass before
+    // the model but writes no depth, so a body always covers it — even where a
+    // line happens to lie at the very same depth. Being opaque is what lets the
+    // low render order take effect; a transparent material would be drawn after
+    // every body regardless of its slot.
     material.depthWrite = false;
-    material.transparent = true;
-    material.opacity = 0.9;
+    material.transparent = false;
+    material.opacity = 1;
     grid.renderOrder = RenderOrder.grid;
     return grid;
   }
@@ -3814,8 +3931,8 @@ export class SceneController {
     const material = new THREE.LineBasicMaterial({
       vertexColors: true,
       depthWrite: false,
-      transparent: true,
-      opacity: 0.9,
+      transparent: false,
+      opacity: 1,
     });
     const axes = new THREE.LineSegments(geometry, material);
     axes.renderOrder = RenderOrder.grid;
@@ -3880,6 +3997,10 @@ export class SceneController {
     mesh.userData.bodyId = body.id;
     const group = new THREE.Group();
     group.add(mesh);
+    const wave = new THREE.Mesh(geometry, this.waveMaterial);
+    wave.renderOrder = RenderOrder.bodyWave;
+    wave.visible = this.waveActive && this.sectionPlanes.length === 0;
+    group.add(wave);
 
     let edges: THREE.LineSegments | null = null;
     let edgeGeometry: THREE.BufferGeometry | null = null;
@@ -3915,6 +4036,7 @@ export class SceneController {
       mesh,
       geometry,
       material,
+      wave,
       edges,
       edgeGeometry,
       tangentEdges,
@@ -4106,6 +4228,7 @@ export class SceneController {
 
   private onPointerDown = (event: PointerEvent): void => {
     this.transition = null;
+    this.scrollOrbitPivot = null;
     // A press is the start of a gesture or of a selection: the tooltip of the
     // geometry under the pointer would be in the way of both.
     this.clearGeometryHover();
@@ -4325,7 +4448,7 @@ export class SceneController {
           // A face of a solid wins over a sketch lying on it: the sketch face is
           // a picker, not something the user aims at.
           const pick = this.pickSceneAt(event.clientX, event.clientY, true, false, true);
-          if (pick) this.onDoublePick?.(pick);
+          this.onDoublePick?.(pick, event.pointerType);
           return;
         }
         const additive = isAdditiveClick(event);
@@ -4352,7 +4475,11 @@ export class SceneController {
           );
           this.onPick?.(pick, additive);
         } else {
-          this.callbacks.onSelectPick(this.pickSelectionAt(event.clientX, event.clientY), additive);
+          this.callbacks.onSelectPick(
+            this.pickSelectionAt(event.clientX, event.clientY),
+            additive,
+            event.pointerType,
+          );
         }
       }
     }
@@ -5300,7 +5427,7 @@ export class SceneController {
         this.orbit(
           -event.deltaX,
           -event.deltaY,
-          this.orbitPivotAt(event.clientX, event.clientY),
+          this.scrollOrbitPivotAt(event.clientX, event.clientY),
           SCROLL_RADIANS_PER_PIXEL,
         );
       }
@@ -5364,6 +5491,10 @@ export class SceneController {
     if (this.disposed) return;
     this.animationFrame = requestAnimationFrame(this.animate);
     if (this.transition) this.stepTransition(performance.now());
+    if (this.waveActive) {
+      this.waveUniforms.uTime.value = performance.now() / 1000;
+      this.needsRender = true;
+    }
     if (!this.needsRender) return;
     this.needsRender = false;
     this.renderer.render(this.scene, this.camera);

@@ -8,6 +8,7 @@ import {
   selectedFeatureIds,
   selectedSketchDetailId,
 } from '../src/stores/selection';
+import { emptyTapClearsSelection } from '../src/viewport/selectionPick';
 
 const project = {
   bodies: [
@@ -106,5 +107,14 @@ describe('selection helpers', () => {
     const selection = [{ kind: 'feature' as const, id: 'feat-1' }];
     expect(isDirectlySelected(selection, 'feature', 'feat-1')).toBe(true);
     expect(isDirectlySelected(selection, 'body', 'body-1')).toBe(false);
+  });
+
+  it('asks a finger for a second empty tap only when several items are selected', () => {
+    const one = [{ kind: 'feature' as const, id: 'feat-1' }];
+    const two = [...one, { kind: 'feature' as const, id: 'feat-2' }];
+    expect(emptyTapClearsSelection(one, 'touch')).toBe(true);
+    expect(emptyTapClearsSelection(two, 'touch')).toBe(false);
+    expect(emptyTapClearsSelection(two, 'pen')).toBe(false);
+    expect(emptyTapClearsSelection(two, 'mouse')).toBe(true);
   });
 });

@@ -34,6 +34,18 @@ export type ModelCommand =
     }
   | { type: 'group/rename'; groupId: string; name: string }
   | { type: 'group/dissolve'; groupId: string }
+  | {
+      type: 'group/add';
+      groupId: string;
+      featureIds: string[];
+      childGroupIds: string[];
+    }
+  | {
+      type: 'group/detach';
+      groupId: string;
+      featureIds: string[];
+      childGroupIds: string[];
+    }
   | { type: 'body/add'; body: BodyRef }
   | { type: 'metadata/patch'; objectId: string; patch: ObjectMetadata }
   | { type: 'body/remove'; bodyId: string }
@@ -88,6 +100,8 @@ function isModelCommand(command: Command): command is ModelCommand {
     case 'group/create':
     case 'group/rename':
     case 'group/dissolve':
+    case 'group/add':
+    case 'group/detach':
     case 'body/add':
     case 'metadata/patch':
     case 'body/remove':
@@ -203,6 +217,134 @@ function createGroup(
   };
 }
 
+function uniqueIds(ids: readonly string[]): string[] {
+  return [...new Set(ids)];
+}
+
+/**
+ * Spans of a run of entries at one level of the strip, validated to be
+ * neighbours. `parentId` is the level that currently holds them.
+ */
+function runSpans(
+  model: Model,
+  featureIds: readonly string[],
+  childGroupIds: readonly string[],
+  parentId: string | null,
+): { start: number; end: number }[] {
+  const ranges = groupRanges(model);
+  const spans: { start: number; end: number }[] = [];
+  for (const featureId of featureIds) {
+    const index = model.features.findIndex((candidate) => candidate.id === featureId);
+    if (index < 0) {
+      throw new CommandError('UNKNOWN_FEATURE', `Unknown feature: ${featureId}`);
+    }
+    if ((model.features[index]?.groupId ?? null) !== parentId) {
+      throw new CommandError('INVALID_VALUE', 'The operations are not on the same level');
+    }
+    spans.push({ start: index, end: index });
+  }
+  for (const childId of childGroupIds) {
+    const child = findGroup(model, childId);
+    if (child.parentId !== parentId) {
+      throw new CommandError('INVALID_VALUE', 'The groups are not on the same level');
+    }
+    const range = ranges.get(childId);
+    if (!range) {
+      throw new CommandError('INVALID_VALUE', 'An empty group has nothing to move');
+    }
+    spans.push(range);
+  }
+  if (spans.length === 0) {
+    throw new CommandError('INVALID_VALUE', 'There is nothing to move');
+  }
+  spans.sort((left, right) => left.start - right.start);
+  let expected = spans[0]!.start;
+  for (const span of spans) {
+    if (span.start !== expected) {
+      throw new CommandError('INVALID_VALUE', 'A group only holds neighbouring items');
+    }
+    expected = span.end + 1;
+  }
+  return spans;
+}
+
+/** Moves a validated run of entries into another level. */
+function assignRun(
+  model: Model,
+  featureIds: readonly string[],
+  childGroupIds: readonly string[],
+  featureParentId: string | null,
+  groupParentId: string | null,
+): Model {
+  const movedFeatures = new Set(featureIds);
+  const movedGroups = new Set(childGroupIds);
+  return {
+    ...model,
+    features: model.features.map((feature) =>
+      movedFeatures.has(feature.id) ? moveToGroup(feature, featureParentId) : feature,
+    ),
+    groups: model.groups.map((candidate) =>
+      movedGroups.has(candidate.id) ? { ...candidate, parentId: groupParentId } : candidate,
+    ),
+  };
+}
+
+/**
+ * Adds a run that sits right before or right after a folder to that folder.
+ * Only a neighbouring run keeps the folder a single stretch of the strip, so
+ * the command checks the gap on both sides.
+ */
+function addToGroup(
+  model: Model,
+  command: { groupId: string; featureIds: string[]; childGroupIds: string[] },
+): Model {
+  const group = findGroup(model, command.groupId);
+  const featureIds = uniqueIds(command.featureIds);
+  const childGroupIds = uniqueIds(command.childGroupIds);
+  if (childGroupIds.includes(group.id)) {
+    throw new CommandError('INVALID_VALUE', 'A group cannot be added to itself');
+  }
+  const spans = runSpans(model, featureIds, childGroupIds, group.parentId);
+  const range = groupRanges(model).get(group.id);
+  if (!range) {
+    throw new CommandError('INVALID_VALUE', 'An empty group has nowhere to sit');
+  }
+  const first = spans[0]!;
+  const last = spans[spans.length - 1]!;
+  const before = last.end + 1 === range.start;
+  const after = range.end + 1 === first.start;
+  if (!before && !after) {
+    throw new CommandError('INVALID_VALUE', 'Only a neighbouring run can join a group');
+  }
+  return assignRun(model, featureIds, childGroupIds, group.id, group.id);
+}
+
+/**
+ * Moves a run at the first or last place of a folder out to the level above it.
+ * Anything from the middle would split the folder's run, so it stays put.
+ */
+function detachFromGroup(
+  model: Model,
+  command: { groupId: string; featureIds: string[]; childGroupIds: string[] },
+): Model {
+  const group = findGroup(model, command.groupId);
+  const featureIds = uniqueIds(command.featureIds);
+  const childGroupIds = uniqueIds(command.childGroupIds);
+  const spans = runSpans(model, featureIds, childGroupIds, group.id);
+  const range = groupRanges(model).get(group.id);
+  if (!range) {
+    throw new CommandError('INVALID_VALUE', 'An empty group has nothing to give back');
+  }
+  const first = spans[0]!;
+  const last = spans[spans.length - 1]!;
+  if (first.start !== range.start && last.end !== range.end) {
+    throw new CommandError('INVALID_VALUE', 'Only the edge of a group can leave it');
+  }
+  return pruneEmptyGroups(
+    assignRun(model, featureIds, childGroupIds, group.parentId, group.parentId),
+  );
+}
+
 function applyModelCommand(model: Model, command: ModelCommand): Model {
   switch (command.type) {
     case 'feature/add': {
@@ -291,6 +433,12 @@ function applyModelCommand(model: Model, command: ModelCommand): Model {
             candidate.parentId === group.id ? { ...candidate, parentId } : candidate,
           ),
       };
+    }
+    case 'group/add': {
+      return addToGroup(model, command);
+    }
+    case 'group/detach': {
+      return detachFromGroup(model, command);
     }
     case 'body/add': {
       if (model.bodies.some((body) => body.id === command.body.id)) {

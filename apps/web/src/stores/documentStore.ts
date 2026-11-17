@@ -117,6 +117,11 @@ interface DocumentState {
    */
   selectMany: (items: SelectionItem[], clicked: SelectionItem) => void;
   /**
+   * Adds every item to the selection, or removes them all when they are already
+   * selected. Used by the context menu so a finger can build a multi-selection.
+   */
+  toggleSelection: (items: SelectionItem[]) => void;
+  /**
    * Opens an operation for editing without touching the selection. Used by the
    * sketch editor, which owns the selection itself.
    */
@@ -188,6 +193,10 @@ interface DocumentState {
   removeFeaturesOnly: (featureIds: string[]) => void;
   /** Wraps the timeline items into a new folder and selects it. */
   createGroup: (items: SelectionItem[]) => void;
+  /** Moves a run into an existing folder that neighbours it; selection clears. */
+  addToGroup: (groupId: string, items: SelectionItem[]) => void;
+  /** Moves the edge run of a folder out to the level above it. */
+  detachFromGroup: (groupId: string, items: SelectionItem[]) => void;
   renameGroup: (groupId: string, name: string) => void;
   /** Expands the folder's contents onto the level that held it. */
   ungroupGroup: (groupId: string) => void;
@@ -961,6 +970,27 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     }
     const state = get();
     set({ selection: items, ...editModeFor(state, state.project, items) });
+  },
+
+  toggleSelection: (items) => {
+    if (items.length === 0) return;
+    // A picker owns selection while it is open; the menu must not replace it.
+    if (openPicker(useUiStore.getState())) return;
+    const state = get();
+    const key = (item: SelectionItem) => `${item.kind}:${item.id}`;
+    const keys = new Set(items.map(key));
+    const allSelected = items.every((item) =>
+      state.selection.some((candidate) => key(candidate) === key(item)),
+    );
+    const selection = allSelected
+      ? state.selection.filter((item) => !keys.has(key(item)))
+      : [
+          ...state.selection,
+          ...items.filter(
+            (item) => !state.selection.some((candidate) => key(candidate) === key(item)),
+          ),
+        ];
+    set({ selection, ...editModeFor(state, state.project, selection) });
   },
 
   beginFeatureEdit: (featureId) => {
@@ -1822,6 +1852,24 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     if (!get().apply({ type: 'group/create', group, featureIds, childGroupIds })) return;
     const selection: SelectionItem[] = [{ kind: 'group', id: group.id }];
     set({ selection, ...editModeFor(state, get().project, selection) });
+  },
+
+  addToGroup: (groupId, items) => {
+    const featureIds = items.filter((item) => item.kind === 'feature').map((item) => item.id);
+    const childGroupIds = items.filter((item) => item.kind === 'group').map((item) => item.id);
+    if (featureIds.length + childGroupIds.length === 0) return;
+    if (!get().apply({ type: 'group/add', groupId, featureIds, childGroupIds })) return;
+    // The operations left the level the user is looking at; keeping them
+    // selected would leave an invisible selection behind.
+    const state = get();
+    set({ selection: [], ...editModeFor(state, state.project, []) });
+  },
+
+  detachFromGroup: (groupId, items) => {
+    const featureIds = items.filter((item) => item.kind === 'feature').map((item) => item.id);
+    const childGroupIds = items.filter((item) => item.kind === 'group').map((item) => item.id);
+    if (featureIds.length + childGroupIds.length === 0) return;
+    get().apply({ type: 'group/detach', groupId, featureIds, childGroupIds });
   },
 
   renameGroup: (groupId, name) => {

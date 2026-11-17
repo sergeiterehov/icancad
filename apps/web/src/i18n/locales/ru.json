@@ -25,6 +25,12 @@
     "exportProject": "Проект",
     "exportStl": "STL",
     "exportStlSelected": "STL, выбрано {{count}}",
+    "stlQualityTitle": "Экспорт STL",
+    "stlQuality": "Качество сетки",
+    "stlQualityText": "Выберите, насколько подробно разбивать модель на треугольники перед записью файла.",
+    "qualityDraft": "Черновое",
+    "qualityStandard": "Стандартное",
+    "qualityFine": "Высокое",
     "undo": "Отменить",
     "redo": "Повторить",
     "theme": "Цветовая тема",
@@ -206,6 +212,7 @@
     "invalidProject": "Не удалось открыть файл проекта",
     "meshImported": "Сетка импортирована",
     "stlExported": "STL экспортирован",
+    "stlExportFailed": "Не удалось экспортировать STL",
     "importFailed": "Не удалось импортировать сетку",
     "pickAfterRebuild": "Выбор станет доступен после завершения расчёта модели",
     "noGeometry": "Нечего экспортировать",
@@ -307,7 +314,11 @@
     "color": "Цвет",
     "rename": "Переименовать",
     "deleteSelected": "Удалить выбранное ({{count}})",
-    "deleteOperations": "Удалить операции ({{count}})"
+    "deleteOperations": "Удалить операции ({{count}})",
+    "select": "Выделить",
+    "deselect": "Снять выделение",
+    "addToGroup": "Добавить в «{{name}}»",
+    "removeFromGroup": "Вынести из группы"
   },
   "nav": {
     "cube": "Куб ориентации",

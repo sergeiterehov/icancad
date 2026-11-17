@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { matchesNarrowLayout } from '../hooks/useNarrowLayout';
 import type { SketchTool } from '../sketch/tool';
 import {
   DEFAULT_CAMERA_SCHEME,
@@ -319,17 +320,20 @@ function loadOrbitStyle(): OrbitStyle {
   return DEFAULT_ORBIT_STYLE;
 }
 
+const NARROW_LAYOUT = matchesNarrowLayout();
+const INITIAL_PINNED_PANELS = loadPinnedPanels();
+
 export const useUiStore = create<UiState>((set) => ({
   toast: null,
   deleteRequest: null,
   projectDeleteRequest: null,
   modelDeleteRequest: null,
-  leftDockOpen: true,
-  rightDockOpen: true,
-  leftDockShown: true,
-  rightDockShown: true,
+  leftDockOpen: !NARROW_LAYOUT,
+  rightDockOpen: !NARROW_LAYOUT,
+  leftDockShown: !NARROW_LAYOUT || INITIAL_PINNED_PANELS,
+  rightDockShown: !NARROW_LAYOUT || INITIAL_PINNED_PANELS,
   compactPanels: loadCompactPanels(),
-  pinnedPanels: loadPinnedPanels(),
+  pinnedPanels: INITIAL_PINNED_PANELS,
   cameraScheme: loadCameraScheme(),
   setCameraScheme: (cameraScheme) => {
     try {

@@ -2093,7 +2093,6 @@ export function Inspector() {
             <div className="inspector-field">
               <TextField label={t('inspector.name')} value={project.name} onCommit={renameModel} />
             </div>
-            <VariablesSection modelId={project.id} embedded />
             <PanelSection title={t('inspector.properties')} divided>
               <StatRow label={t('inspector.features')} value={project.features.length} />
               <StatRow label={t('inspector.bodies')} value={solidBodiesInHistory(project).length} />
@@ -2103,6 +2102,7 @@ export function Inspector() {
               />
               {project.historyEnd && <p className="hint">{t('inspector.rolledBack')}</p>}
             </PanelSection>
+            <VariablesSection modelId={project.id} />
             <header className="panel-header panel-context-header">
               <span>{t('inspector.project')}</span>
             </header>

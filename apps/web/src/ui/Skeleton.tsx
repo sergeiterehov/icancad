@@ -1,3 +1,4 @@
+import { useNarrowLayout } from '../hooks/useNarrowLayout';
 import { useStartupProgress } from '../hooks/useStartupProgress';
 
 /** Ghost rows that stand in for a panel whose content is not there yet. */
@@ -56,6 +57,7 @@ export function SkeletonStage({
 /** Placeholder for the whole workspace while the project is being restored. */
 export function AppSkeleton() {
   const startup = useStartupProgress();
+  const narrow = useNarrowLayout();
   return (
     <div className="skeleton-body" data-testid="app-skeleton" aria-busy="true">
       <SkeletonStage action={startup.message} progress={startup.progress} busy={startup.busy} />
@@ -64,8 +66,10 @@ export function AppSkeleton() {
         <span className="skeleton-logo-mark" />
         <span className="skeleton-logo-name" />
       </span>
-      <SkeletonDock side="left" rows={6} />
-      <SkeletonDock side="right" rows={4} />
+      {/* A narrow screen starts with the panels closed, so its skeleton keeps
+          their space for the model instead of promising panels it will hide. */}
+      {!narrow && <SkeletonDock side="left" rows={6} />}
+      {!narrow && <SkeletonDock side="right" rows={4} />}
       <div className="skeleton-tool-pill" aria-hidden="true">
         {Array.from({ length: 4 }, (_, index) => (
           <span key={index} className="skeleton-icon" />
