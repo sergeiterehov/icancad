@@ -31,6 +31,7 @@ import {
   sketchPlaneReady,
   sketchSectionPlane,
 } from '../sketch/sectionPlane';
+import { useStartupProgress } from '../hooks/useStartupProgress';
 import { useDocumentStore, useViewModel } from '../stores/documentStore';
 import { resolvedFeatureFor, useFormulaStore } from '../stores/formulaStore';
 import { bootFormulaEngine, resetFormulaEngine } from '../formula/client';
@@ -289,7 +290,6 @@ export function Viewport() {
   const featureBodyErrors = useKernelStore((state) => state.featureBodyErrors);
   const featureErrors = useKernelStore((state) => state.featureErrors);
   const status = useKernelStore((state) => state.status);
-  const bootRatio = useKernelStore((state) => state.ratio);
   const error = useKernelStore((state) => state.error);
   const theme = useThemeStore((state) => state.theme);
   const openMenu = useContextMenuStore((state) => state.open);
@@ -1615,8 +1615,8 @@ export function Viewport() {
 
   const formulaStatus = useFormulaStore((state) => state.status);
   const formulaError = useFormulaStore((state) => state.error);
-  const showLoading = status === 'idle' || status === 'loading';
-  const showFormulaLoading = !showLoading && formulaStatus === 'loading';
+  const startup = useStartupProgress();
+  const showStartup = startup.stage !== 'ready';
   const showError = status === 'error';
 
   return (
@@ -1664,18 +1664,13 @@ export function Viewport() {
         </Tooltip>
       </div>
 
-      {/* The kernel streams its wasm, so it can report how far the download got. */}
-      {showLoading && (
+      {showStartup && (
         <SkeletonStage
-          action={t('status.kernelLoading')}
+          action={startup.message}
           testId="viewport-skeleton"
-          progress={bootRatio ?? 0}
+          progress={startup.progress}
+          busy={startup.busy}
         />
-      )}
-
-      {/* Formulas are part of the model, so Python loads with the app. */}
-      {showFormulaLoading && (
-        <SkeletonStage action={t('formula.loading')} testId="formula-skeleton" />
       )}
 
       {showError && (

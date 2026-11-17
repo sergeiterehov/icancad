@@ -168,7 +168,8 @@
     "taskRunning": "running",
     "taskQueued": "waiting",
     "cancel": "Cancel operation",
-    "openingProject": "Opening the project and restoring operation history…"
+    "openingProject": "Opening the project and restoring operation history…",
+    "preparingModel": "Preparing the model…"
   },
   "projectDelete": {
     "title": "Delete project?",
