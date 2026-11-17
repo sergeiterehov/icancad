@@ -7,6 +7,7 @@ import {
   isSketchAxisId,
   SKETCH_ORIGIN_ID,
   SKETCH_X_AXIS_ID,
+  SKETCH_Y_AXIS_ID,
   sketchPointToWorld,
   tessellateEntity,
   withFundamentalEntities,
@@ -30,6 +31,7 @@ import {
   shortestAngle,
 } from './cameraFit';
 import { cameraDragMode, cameraScheme } from './cameraControls';
+import { gridLineRange, niceGridStep, SKETCH_GRID_TARGET_PX } from './sketchGrid';
 import {
   isTouchPointer,
   noteWheelKind,
@@ -304,6 +306,16 @@ interface CameraPose {
   roll?: number;
 }
 
+interface SketchGridEntry {
+  frame: SketchFrame;
+  minor: THREE.LineSegments;
+  major: THREE.LineSegments;
+  axisX: Line2 | null;
+  axisY: Line2 | null;
+  /** Range and step currently in the buffers; a match means no rebuild. */
+  key: string;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -441,6 +453,7 @@ export class SceneController {
     hitObjects: THREE.Object3D[];
     active: boolean;
   }[] = [];
+  private activeSketchGrid: SketchGridEntry | null = null;
   private readonly facePickMeshes: THREE.Mesh[] = [];
   /** Translucent volumes that only exist in the operation preview. */
   private readonly ghostGroup = new THREE.Group();
@@ -2415,6 +2428,7 @@ export class SceneController {
     if (this.sectionPlanes.length > 0) this.rebuildSection();
     if (this.sketchData.length > 0) this.setSketches(this.sketchData);
     if (this.handleData.length > 0) this.updateHandles();
+    this.updateSketchGrid();
     this.invalidate();
   }
 
@@ -3070,6 +3084,10 @@ export class SceneController {
       if (entity.type === 'point') {
         return Math.hypot(point[0] - entity.x, point[1] - entity.y);
       }
+      // The axes are drawn and picked as infinite lines; their stored finite
+      // endpoints only describe them to the solver.
+      if (entity.id === SKETCH_X_AXIS_ID) return Math.abs(point[1]);
+      if (entity.id === SKETCH_Y_AXIS_ID) return Math.abs(point[0]);
       let distance = Number.POSITIVE_INFINITY;
       const curve = tessellateEntity(entity, 64);
       if (entity.type === 'circle' || entity.type === 'ellipse') {
@@ -3127,23 +3145,7 @@ export class SceneController {
   }
 
   private addSketchGrid(group: THREE.Group, frame: SketchFrame): void {
-    const extent = 200;
-    const step = 10;
-    const majorStep = 50;
-    const offset: Point2 = [0, 0];
-    const minor: THREE.Vector3[] = [];
-    const major: THREE.Vector3[] = [];
-    for (let value = -extent; value <= extent; value += step) {
-      const target = value % majorStep === 0 ? major : minor;
-      target.push(
-        this.sketchWorld(frame, [-extent, value], offset),
-        this.sketchWorld(frame, [extent, value], offset),
-        this.sketchWorld(frame, [value, -extent], offset),
-        this.sketchWorld(frame, [value, extent], offset),
-      );
-    }
-    const makeLines = (points: THREE.Vector3[], color: number, opacity: number) => {
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const makeLines = (color: number, opacity: number): THREE.LineSegments => {
       const material = new THREE.LineBasicMaterial({
         color,
         transparent: true,
@@ -3151,12 +3153,95 @@ export class SceneController {
         depthTest: false,
         depthWrite: false,
       });
-      const lines = new THREE.LineSegments(geometry, material);
+      const lines = new THREE.LineSegments(new THREE.BufferGeometry(), material);
       lines.renderOrder = RenderOrder.sketchGrid;
+      lines.frustumCulled = false;
       group.add(lines);
+      return lines;
     };
-    makeLines(minor, this.theme === 'dark' ? 0x5c6575 : 0x9aa4b2, 0.18);
-    makeLines(major, this.theme === 'dark' ? 0x8c97a8 : 0x6d7787, 0.38);
+    const entry: SketchGridEntry = {
+      frame,
+      minor: makeLines(this.theme === 'dark' ? 0x5c6575 : 0x9aa4b2, 0.18),
+      major: makeLines(this.theme === 'dark' ? 0x8c97a8 : 0x6d7787, 0.38),
+      axisX: null,
+      axisY: null,
+      key: '',
+    };
+    this.activeSketchGrid = entry;
+    this.updateSketchGrid();
+  }
+
+  /**
+   * The sketch grid follows the camera: its step comes from the visible scale
+   * and its lines cover the view around the target, so it reads as an endless
+   * plane instead of a fixed 200 mm patch. The line positions stay on absolute
+   * multiples of the step, so panning changes only which lines exist.
+   */
+  private updateSketchGrid(force = false): void {
+    const grid = this.activeSketchGrid;
+    if (!grid) return;
+    const halfHeight = (this.camera.top - this.camera.bottom) / 2;
+    const halfWidth = halfHeight * (this.width / Math.max(1, this.height));
+    const step = niceGridStep((1 / this.pixelsPerWorldUnit()) * SKETCH_GRID_TARGET_PX);
+    const frame = grid.frame;
+    const [ox, oy, oz] = frame.origin;
+    const [xx, xy, xz] = frame.xAxis;
+    const [yx, yy, yz] = frame.yAxis;
+    const dx = this.target.x - ox;
+    const dy = this.target.y - oy;
+    const dz = this.target.z - oz;
+    const centerU = dx * xx + dy * xy + dz * xz;
+    const centerV = dx * yx + dy * yy + dz * yz;
+    const chunk = step * 10;
+    const chunkU = Math.floor(centerU / chunk);
+    const chunkV = Math.floor(centerV / chunk);
+    // The visible span changes between two step changes too. A quarter-octave
+    // bucket rebuilds long before the old range could fall inside the view.
+    const spanBucket = Math.round(Math.log2(Math.max(halfHeight, 1e-9)) * 4);
+    const key = `${step}:${chunkU}:${chunkV}:${spanBucket}:${this.width}:${this.height}`;
+    if (!force && grid.key === key) return;
+
+    // One chunk of margin each way keeps the view covered until the target
+    // moves into the next chunk; then the lines are rebuilt at the same
+    // absolute coordinates, so nothing shifts under the pointer.
+    const extent = Math.max(halfWidth, halfHeight) * 1.4 + chunk * 1.5;
+    const minU = centerU - extent;
+    const maxU = centerU + extent;
+    const minV = centerV - extent;
+    const maxV = centerV + extent;
+    const minor: THREE.Vector3[] = [];
+    const major: THREE.Vector3[] = [];
+    const { start: startU, end: endU } = gridLineRange(centerU, extent, step);
+    const { start: startV, end: endV } = gridLineRange(centerV, extent, step);
+    for (let index = startU; index <= endU; index += 1) {
+      const u = index * step;
+      const target = index % 5 === 0 ? major : minor;
+      target.push(this.sketchWorld(frame, [u, minV]), this.sketchWorld(frame, [u, maxV]));
+    }
+    for (let index = startV; index <= endV; index += 1) {
+      const v = index * step;
+      const target = index % 5 === 0 ? major : minor;
+      target.push(this.sketchWorld(frame, [minU, v]), this.sketchWorld(frame, [maxU, v]));
+    }
+    // setFromPoints reuses the existing buffer and refuses a longer line list,
+    // so a fresh geometry is needed when the covered range grows.
+    grid.minor.geometry.dispose();
+    grid.minor.geometry = new THREE.BufferGeometry().setFromPoints(minor);
+    grid.major.geometry.dispose();
+    grid.major.geometry = new THREE.BufferGeometry().setFromPoints(major);
+    this.updateSketchAxes(grid, extent);
+    grid.key = key;
+  }
+
+  private updateSketchAxes(grid: SketchGridEntry, extent: number): void {
+    const setAxis = (line: Line2 | null, from: Point2, to: Point2) => {
+      if (!line) return;
+      const a = this.sketchWorld(grid.frame, from);
+      const b = this.sketchWorld(grid.frame, to);
+      (line.geometry as LineGeometry).setPositions([a.x, a.y, a.z, b.x, b.y, b.z]);
+    };
+    setAxis(grid.axisX, [-extent, 0], [extent, 0]);
+    setAxis(grid.axisY, [0, -extent], [0, extent]);
   }
 
   /**
@@ -3191,7 +3276,15 @@ export class SceneController {
       if (!line) continue;
       line.renderOrder = RenderOrder.sketchGrid;
       group.add(line);
+      const grid = this.activeSketchGrid;
+      if (grid) {
+        if (entity.id === SKETCH_X_AXIS_ID) grid.axisX = line;
+        else if (entity.id === SKETCH_Y_AXIS_ID) grid.axisY = line;
+      }
     }
+    // The axes were created after the grid, so their visible length is refreshed
+    // once the references exist.
+    this.updateSketchGrid(true);
 
     const originSelected = selected.has(SKETCH_ORIGIN_ID);
     const originHighlighted = highlighted.has(SKETCH_ORIGIN_ID);
@@ -3457,6 +3550,7 @@ export class SceneController {
   }
 
   private disposeSketchEntries(): void {
+    this.activeSketchGrid = null;
     for (const entry of this.sketchEntries) {
       this.overlayScene.remove(entry.group);
       this.disposeObject(entry.group);
@@ -3986,6 +4080,7 @@ export class SceneController {
     if (this.hoveredEdgeKey) this.drawHoveredEdge();
     this.updateGhostFades();
     if (this.handleData.length > 0) this.updateHandles();
+    this.updateSketchGrid();
     this.invalidate();
   }
 

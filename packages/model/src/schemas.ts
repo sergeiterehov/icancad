@@ -216,6 +216,7 @@ const constraintType = z.enum([
   'horizontal-distance',
   'vertical-distance',
   'angle',
+  'arc-length',
   'radius',
   'diameter',
   'symmetric',

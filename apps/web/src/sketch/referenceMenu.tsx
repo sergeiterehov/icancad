@@ -7,8 +7,9 @@ import {
 import { isFundamentalEntityId } from '@icancad/sketch';
 import { Ruler, Split, Trash2 } from 'lucide-react';
 import type { ContextMenuItem } from '../ui/ContextMenu';
+import { referenceIcon } from '../ui/referenceCatalog';
 import { constraintIdsForEntities } from './constraintModel';
-import { measureInfo, measuresForEntity } from './measure';
+import { measuresForEntity, referenceText } from './measure';
 
 export interface ReferenceMenuOptions {
   /** Geometry currently selected; a right-click on a member keeps the group. */
@@ -62,10 +63,12 @@ export function referenceMenuItems(
     items.push(
       { id: 'reference-heading', heading: t('sketch.showMeasures') },
       ...measures.map((measure) => {
-        const info = measureInfo(entity, measure, locale, 'mm');
+        const text = referenceText(entity, measure, locale, 'mm');
+        const Icon = referenceIcon(entity, measure);
         return {
           id: `reference-${measure}`,
-          label: info ? `${info.text}` : t(`sketch.measure_${measure}`),
+          label: text ?? t(`sketch.measure_${measure}`),
+          icon: <Icon size={14} />,
           checked: enabled.has(measure),
           onSelect: () => toggle(measure),
         } satisfies ContextMenuItem;

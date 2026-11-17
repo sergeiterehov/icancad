@@ -17,14 +17,14 @@ arc).
 
 ## Decision
 
-| Area | Decision |
-| --- | --- |
-| Families | A shortcut letter belongs to a family of constraint types. A letter may name several types only when no selection can offer two of them at once, which the constraint menu already guarantees because it lists what the selection allows. |
-| Resolution | On a key press the editor walks the family in catalog order and applies the first action `buildConstraintActions` offers for the current selection. A family with no applicable constraint is a silent no-op. |
-| Letters | `⇧C` coincident, point-on-line, point-on-circle, point-on-ellipse; `⇧D` distance, diameter; `⇧F` fix; `⇧H` horizontal; `⇧V` vertical; `⇧P` parallel; `⇧N` perpendicular; `⇧T` tangent; `⇧E` equal; `⇧S` symmetric; `⇧X` horizontal distance; `⇧Y` vertical distance; `⇧A` angle; `⇧R` radius. |
-| Radius | `radius` keeps its own letter even though `diameter` shares `⇧D`: one circle offers both, so they cannot share. |
-| Dead constraints | `concentric` and `midpoint` are removed from the model, the schema, the catalog and the locales. They were declared but never creatable and never mapped to the solver; midpoints are expressed by point symmetry instead. |
-| Guard | A test enumerates representative selections and asserts that no two constraints offered together share a letter, so a future catalog edit cannot reintroduce a clash. |
+| Area             | Decision                                                                                                                                                                                                                                                                                                       |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Families         | A shortcut letter belongs to a family of constraint types. A letter may name several types only when no selection can offer two of them at once, which the constraint menu already guarantees because it lists what the selection allows.                                                                      |
+| Resolution       | On a key press the editor walks the family in catalog order and applies the first action `buildConstraintActions` offers for the current selection. A family with no applicable constraint is a silent no-op.                                                                                                  |
+| Letters          | `⇧C` coincident, point-on-line, point-on-circle, point-on-ellipse; `⇧D` distance, diameter; `⇧F` fix; `⇧H` horizontal; `⇧V` vertical; `⇧P` parallel; `⇧N` perpendicular; `⇧T` tangent; `⇧E` equal; `⇧S` symmetric; `⇧X` horizontal distance; `⇧Y` vertical distance; `⇧A` angle; `⇧L` arc length; `⇧R` radius. |
+| Radius           | `radius` keeps its own letter even though `diameter` shares `⇧D`: one circle offers both, so they cannot share.                                                                                                                                                                                                |
+| Dead constraints | `concentric` and `midpoint` are removed from the model, the schema, the catalog and the locales. They were declared but never creatable and never mapped to the solver; midpoints are expressed by point symmetry instead.                                                                                     |
+| Guard            | A test enumerates representative selections and asserts that no two constraints offered together share a letter, so a future catalog edit cannot reintroduce a clash.                                                                                                                                          |
 
 ## Consequences
 

@@ -193,7 +193,7 @@ describe('sketch constraint shortcuts', () => {
       'point-on-ellipse',
     ]);
     expect(constraintsFromShortcut(shift('d'))).toEqual(['distance', 'diameter']);
-    expect(constraintsFromShortcut(shift('l'))).toEqual([]);
+    expect(constraintsFromShortcut(shift('l'))).toEqual(['arc-length']);
     expect(constraintsFromShortcut(key('d'))).toEqual([]);
   });
 
@@ -211,9 +211,9 @@ describe('sketch constraint shortcuts', () => {
   it('reads the physical key so a non-Latin layout still matches', () => {
     expect(sketchToolFromShortcut(key('з'))).toBeNull();
     expect(sketchToolFromShortcut({ ...key('p'), key: 'з' } as KeyboardEvent)).toBe('point');
-    expect(constraintsFromShortcut({ ...key('f'), key: 'а', shiftKey: true } as KeyboardEvent)).toEqual(
-      ['fix'],
-    );
+    expect(
+      constraintsFromShortcut({ ...key('f'), key: 'а', shiftKey: true } as KeyboardEvent),
+    ).toEqual(['fix']);
   });
 
   it('keeps the tool shortcuts distinct', () => {

@@ -193,6 +193,7 @@ export type ConstraintType =
   | 'horizontal-distance'
   | 'vertical-distance'
   | 'angle'
+  | 'arc-length'
   | 'radius'
   | 'diameter'
   | 'symmetric'

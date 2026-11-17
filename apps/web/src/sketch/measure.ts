@@ -17,7 +17,7 @@ export function measuresForEntity(entity: SketchEntity): SketchMeasure[] {
     case 'circle':
       return ['radius', 'diameter'];
     case 'arc':
-      return ['radius', 'diameter', 'angle'];
+      return ['angle', 'length', 'radius', 'diameter'];
     case 'ellipse':
       return ['rx', 'ry'];
     case 'bezier':
@@ -41,6 +41,9 @@ export function measureValue(entity: SketchEntity, measure: SketchMeasure): numb
     case 'length':
       if (entity.type === 'line') {
         return Math.hypot(entity.x2 - entity.x1, entity.y2 - entity.y1);
+      }
+      if (entity.type === 'arc') {
+        return entity.r * Math.abs(entity.endAngle - entity.startAngle);
       }
       if (entity.type === 'bezier') return polylineLength(tessellateEntity(entity, 64));
       return null;
@@ -109,7 +112,7 @@ export function liveMeasures(entity: SketchEntity): SketchMeasure[] {
     case 'circle':
       return ['radius'];
     case 'arc':
-      return ['radius', 'angle'];
+      return ['angle', 'radius'];
     case 'bezier':
       return ['length'];
     default:
@@ -131,4 +134,25 @@ export function measureInfo(
     value,
     text: formatMeasure(measure, value, locale, unit),
   };
+}
+
+/** A reference value carries no letter prefix: its icon names the measure. */
+export function formatReferenceValue(
+  measure: SketchMeasure,
+  value: number,
+  locale: string,
+  unit: string,
+): string {
+  const formatted = new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(value);
+  return measure === 'angle' ? `${formatted}°` : `${formatted} ${unit}`;
+}
+
+export function referenceText(
+  entity: SketchEntity,
+  measure: SketchMeasure,
+  locale: string,
+  unit: string,
+): string | null {
+  const info = measureInfo(entity, measure, locale, unit);
+  return info ? formatReferenceValue(measure, info.value, locale, unit) : null;
 }

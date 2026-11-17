@@ -26,9 +26,9 @@ const arc: SketchEntity = {
 describe('reference measurements', () => {
   it('lists available measures per entity type', () => {
     expect(measuresForEntity(line)).toEqual(['length', 'angle']);
-    expect(measuresForEntity(arc)).toEqual(['radius', 'diameter', 'angle']);
+    expect(measuresForEntity(arc)).toEqual(['angle', 'length', 'radius', 'diameter']);
     expect(liveMeasures(line)).toEqual(['length']);
-    expect(liveMeasures(arc)).toEqual(['radius', 'angle']);
+    expect(liveMeasures(arc)).toEqual(['angle', 'radius']);
   });
 
   it('computes line length and undirected angle', () => {
@@ -37,7 +37,8 @@ describe('reference measurements', () => {
     expect(measureValue({ ...line, x2: -30, y2: -40 }, 'angle')).toBeCloseTo(53.13, 2);
   });
 
-  it('computes arc radius, diameter and sweep', () => {
+  it('computes arc length, radius, diameter and sweep', () => {
+    expect(measureValue(arc, 'length')).toBeCloseTo((Math.PI / 2) * 10, 6);
     expect(measureValue(arc, 'radius')).toBe(10);
     expect(measureValue(arc, 'diameter')).toBe(20);
     expect(measureValue(arc, 'angle')).toBeCloseTo(90, 2);

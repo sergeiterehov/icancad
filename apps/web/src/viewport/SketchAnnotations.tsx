@@ -7,6 +7,7 @@ import {
   constraintsGeometryIds,
   ConstraintSolveError,
   diagnoseSketch,
+  removeSketchEntities,
 } from '../sketch/constraintModel';
 import { computeSketchFrame } from '../sketch/sectionPlane';
 import {
@@ -20,12 +21,14 @@ import { useKernelStore } from '../stores/kernelStore';
 import { resolvedFeatureFor, useFormulaStore } from '../stores/formulaStore';
 import { useUiStore } from '../stores/uiStore';
 import { CONSTRAINT_CATALOG } from '../ui/constraintCatalog';
+import { referenceIcon, referenceLabelKey } from '../ui/referenceCatalog';
 import { useContextMenuStore } from '../ui/ContextMenu';
 import { paramText, useWheelStep } from '../ui/Controls';
 import { formulaMessage } from '../ui/formulaMessage';
 import { formatStep, parseNumber, steppedValue, wheelStep } from '../ui/numberStep';
 import { Tooltip } from '../ui/Tooltip';
 import { getViewport } from './handle';
+import { referenceMenuItems } from '../sketch/referenceMenu';
 
 interface Position {
   baseX: number;
@@ -57,6 +60,7 @@ export function SketchAnnotations() {
   const selectionKeys = useUiStore((state) => state.sketchSelectionIds);
   const selectedConstraintIds = useUiStore((state) => state.sketchConstraintIds);
   const selectConstraint = useUiStore((state) => state.selectSketchConstraint);
+  const selectSketchConstraints = useUiStore((state) => state.selectSketchConstraints);
   const setSketchSelection = useUiStore((state) => state.setSketchSelection);
   const dimensionEditId = useUiStore((state) => state.sketchDimensionEditId);
   const setDimensionEdit = useUiStore((state) => state.setSketchDimensionEdit);
@@ -345,6 +349,44 @@ export function SketchAnnotations() {
     await applyValue(annotation, value);
   };
 
+  const openReferenceMenu = (
+    event: {
+      clientX: number;
+      clientY: number;
+      preventDefault: () => void;
+      stopPropagation: () => void;
+    },
+    reference: ReferenceAnnotation,
+  ) => {
+    if (!feature) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setSketchSelection([reference.entityId]);
+    const entityIds = selectionKeys.map((key) => key.split('#')[0]!).filter(Boolean);
+    const selection = entityIds.includes(reference.entityId) ? entityIds : [reference.entityId];
+    openMenu(
+      event.clientX,
+      event.clientY,
+      referenceMenuItems(
+        feature,
+        reference.entityId,
+        (key) => t(key as never),
+        locale,
+        (next) => apply({ type: 'feature/replace', feature: next }),
+        {
+          selectedEntityIds: selection,
+          onSelectConstraints: (ids) => selectSketchConstraints(ids),
+          onDelete: (ids) => {
+            const next = removeSketchEntities(feature, ids);
+            apply({ type: 'feature/replace', feature: next });
+            setSketchSelection([]);
+            void diagnoseSketch(next);
+          },
+        },
+      ),
+    );
+  };
+
   // Every hook runs before this point, so entering or leaving the sketch does
   // not change the number of hooks the component calls.
   if (!feature || !activeSketchReady) return null;
@@ -459,15 +501,39 @@ export function SketchAnnotations() {
       {references.map((reference: ReferenceAnnotation) => {
         const position = positions[reference.id];
         if (!position) return null;
+        const entity = feature.entities.find((candidate) => candidate.id === reference.entityId);
+        const Icon = referenceIcon(entity, reference.measure);
+        const active = selectionKeys.some((key) => key.split('#')[0] === reference.entityId);
         return (
-          <div
-            key={reference.id}
-            className="sketch-annotation sketch-reference"
-            data-testid={`sketch-reference-${reference.id}`}
-            style={{ left: position.x, top: position.y }}
-          >
-            <span>{reference.text}</span>
-          </div>
+          <Tooltip key={reference.id} content={t(referenceLabelKey(reference.measure) as never)}>
+            <div
+              className="sketch-annotation sketch-reference"
+              role="button"
+              tabIndex={0}
+              aria-label={`${reference.text}. ${t(referenceLabelKey(reference.measure) as never)}`}
+              data-active={active ? 'true' : undefined}
+              data-testid={`sketch-reference-${reference.id}`}
+              style={{ left: position.x, top: position.y }}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                setSketchSelection([reference.entityId]);
+              }}
+              onContextMenu={(event) => openReferenceMenu(event, reference)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                setSketchSelection([reference.entityId]);
+              }}
+            >
+              <span className="sketch-annotation-content">
+                <span className="sketch-annotation-icon" aria-hidden="true">
+                  <Icon size={12} />
+                </span>
+                <span>{reference.text}</span>
+              </span>
+            </div>
+          </Tooltip>
         );
       })}
     </div>

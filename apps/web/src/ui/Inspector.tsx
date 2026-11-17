@@ -99,11 +99,12 @@ import {
 } from '../sketch/constraintModel';
 import { isProjectedEntity } from '../sketch/projection';
 import { referenceMenuItems } from '../sketch/referenceMenu';
-import { measureInfo, measuresForEntity } from '../sketch/measure';
+import { measuresForEntity, referenceText } from '../sketch/measure';
 import { sketchPlaneReady, canEditSketch } from '../sketch/sectionPlane';
 import { resolveRevolveAxis } from '../sketch/revolveAxis';
 import { SketchConstraints } from './SketchConstraints';
 import { Tooltip } from './Tooltip';
+import { referenceIcon, referenceLabelKey } from './referenceCatalog';
 import { translate } from './translate';
 import { useListSelection } from './useListSelection';
 
@@ -141,18 +142,18 @@ function sketchEntityMeta(entity: SketchEntity, locale: string): string {
   }
 }
 
-function referenceSummary(feature: SketchFeature, entityId: string, locale: string): string | null {
+function referenceItems(feature: SketchFeature, entityId: string, locale: string) {
   const entity = feature.entities.find((candidate) => candidate.id === entityId);
-  if (!entity) return null;
-  const values: string[] = [];
-  for (const reference of feature.references ?? []) {
-    if (reference.entityId !== entityId) continue;
-    const info = measureInfo(entity, reference.measure, locale, 'mm');
-    if (info) values.push(info.text);
-  }
-  if (values.length === 0) return null;
-  if (measuresForEntity(entity).length === 0) return null;
-  return values.join(' · ');
+  if (!entity) return [];
+  const order = measuresForEntity(entity);
+  return [...(feature.references ?? [])]
+    .filter((reference) => reference.entityId === entityId)
+    .sort((a, b) => order.indexOf(a.measure) - order.indexOf(b.measure))
+    .flatMap((reference) => {
+      const text = referenceText(entity, reference.measure, locale, 'mm');
+      if (!text) return [];
+      return [{ measure: reference.measure, text, Icon: referenceIcon(entity, reference.measure) }];
+    });
 }
 
 function isPrimitive(feature: Feature | undefined): feature is PrimitiveFeature {
@@ -357,7 +358,24 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
                   {sketchEntityLabel((key) => t(key as never), entity)}
                 </span>
                 <span className="tree-meta">
-                  {referenceSummary(feature, entity.id, locale) ?? sketchEntityMeta(entity, locale)}
+                  {(() => {
+                    const references = referenceItems(feature, entity.id, locale);
+                    if (references.length === 0) return sketchEntityMeta(entity, locale);
+                    return (
+                      <span className="tree-references">
+                        {references.map(({ measure, text, Icon }) => (
+                          <span
+                            key={measure}
+                            className="tree-reference"
+                            title={t(referenceLabelKey(measure) as never)}
+                          >
+                            <Icon size={11} aria-hidden="true" />
+                            <span>{text}</span>
+                          </span>
+                        ))}
+                      </span>
+                    );
+                  })()}
                 </span>
                 {lost && (
                   <Tooltip

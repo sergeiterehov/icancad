@@ -13,6 +13,7 @@ import {
   MoveVertical,
   Pin,
   Radius,
+  Spline,
   Tangent,
   TriangleRight,
   TrianglesCenterlineDashedVertical,
@@ -111,6 +112,12 @@ export const CONSTRAINT_CATALOG: Record<ConstraintType, ConstraintInfo> = {
     labelKey: 'constraint.angle',
     descriptionKey: 'constraint.description.angle',
     shortcut: 'A',
+  },
+  'arc-length': {
+    icon: Spline,
+    labelKey: 'constraint.arcLength',
+    descriptionKey: 'constraint.description.arcLength',
+    shortcut: 'L',
   },
   radius: {
     icon: Radius,

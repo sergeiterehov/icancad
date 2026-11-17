@@ -2996,11 +2996,35 @@ html[data-pointer='finger'] .selection-item .icon-btn {
   border-color: var(--text-faint);
   color: var(--text-dim);
   background: transparent;
-  cursor: default;
+  cursor: pointer;
 }
 
-.sketch-reference:hover {
-  border-color: var(--text-faint);
+.sketch-reference:hover,
+.sketch-reference[data-active='true'] {
+  border-color: var(--pick);
+  color: var(--pick);
+}
+
+.sketch-reference .sketch-annotation-icon {
+  color: currentColor;
+}
+
+.tree-references {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.tree-reference {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.tree-reference svg {
+  flex: none;
+  opacity: 0.8;
 }
 
 .sketch-annotation-input {

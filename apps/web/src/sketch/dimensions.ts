@@ -18,10 +18,16 @@ import {
   refPointOf,
   type DistanceAxis,
 } from './distance';
-import { measureInfo } from './measure';
+import { referenceText } from './measure';
 
 export type NumericConstraintType =
-  'distance' | 'horizontal-distance' | 'vertical-distance' | 'angle' | 'radius' | 'diameter';
+  | 'distance'
+  | 'horizontal-distance'
+  | 'vertical-distance'
+  | 'angle'
+  | 'arc-length'
+  | 'radius'
+  | 'diameter';
 
 export interface DimensionAnnotation {
   id: string;
@@ -37,6 +43,7 @@ const NUMERIC_TYPES = new Set<SketchConstraint['type']>([
   'horizontal-distance',
   'vertical-distance',
   'angle',
+  'arc-length',
   'radius',
   'diameter',
 ]);
@@ -143,6 +150,11 @@ function axisAnchor(
   return crossing ? mid(points[0]!, crossing) : null;
 }
 
+function arcMidpoint(entity: Extract<SketchEntity, { type: 'arc' }>): Point2 {
+  const angle = entity.startAngle + (entity.endAngle - entity.startAngle) / 2;
+  return [entity.cx + Math.cos(angle) * entity.r, entity.cy + Math.sin(angle) * entity.r];
+}
+
 function anchorPoint(
   constraint: SketchConstraint,
   entities: Map<string, SketchEntity>,
@@ -168,6 +180,14 @@ function anchorPoint(
     const first = constraint.refs[0] ? refPoint(constraint.refs[0], entities) : null;
     const second = constraint.refs[1] ? refPoint(constraint.refs[1], entities) : null;
     return first && second ? mid(first, second) : null;
+  }
+  if (constraint.type === 'arc-length') {
+    const entity = entities.get(constraint.refs[0]?.entityId ?? '');
+    return entity?.type === 'arc' ? arcMidpoint(entity) : null;
+  }
+  if (constraint.type === 'angle' && constraint.refs.length === 1) {
+    const entity = entities.get(constraint.refs[0]!.entityId);
+    return entity?.type === 'arc' ? arcMidpoint(entity) : null;
   }
   if (constraint.type === 'angle') {
     const lines = constraint.refs
@@ -238,6 +258,7 @@ export interface ReferenceAnnotation {
   point: Point2;
   offset: { x: number; y: number };
   entityId: string;
+  measure: SketchMeasure;
 }
 
 const EQUIVALENT_CONSTRAINTS: Partial<Record<SketchMeasure, SketchConstraint['type']>> = {
@@ -253,6 +274,7 @@ function referenceAnchor(entity: SketchEntity, measure: SketchMeasure): Point2 |
       return entity.type === 'point' ? [entity.x, entity.y] : null;
     case 'length':
       if (entity.type === 'line') return mid([entity.x1, entity.y1], [entity.x2, entity.y2]);
+      if (entity.type === 'arc') return arcMidpoint(entity);
       if (entity.type === 'bezier') {
         const curve = tessellateEntity(entity, 32);
         return curve[Math.floor(curve.length / 2)] ?? null;
@@ -290,29 +312,42 @@ export function referenceAnnotations(
 ): ReferenceAnnotation[] {
   const entities = new Map(feature.entities.map((entity) => [entity.id, entity]));
   const annotations: ReferenceAnnotation[] = [];
-  for (const reference of feature.references ?? []) {
+  const order: SketchMeasure[] = ['angle', 'length', 'radius', 'diameter', 'x', 'y', 'rx', 'ry'];
+  const references = [...(feature.references ?? [])].sort(
+    (a, b) => order.indexOf(a.measure) - order.indexOf(b.measure),
+  );
+  for (const reference of references) {
     const entity = entities.get(reference.entityId);
     if (!entity) continue;
-    const equivalent = EQUIVALENT_CONSTRAINTS[reference.measure];
+    const equivalents: SketchConstraint['type'][] =
+      entity.type === 'arc' && reference.measure === 'length'
+        ? ['arc-length']
+        : entity.type === 'arc' && reference.measure === 'angle'
+          ? ['angle']
+          : EQUIVALENT_CONSTRAINTS[reference.measure]
+            ? [EQUIVALENT_CONSTRAINTS[reference.measure]!]
+            : [];
     if (
-      equivalent &&
-      feature.constraints.some(
-        (constraint) =>
-          constraint.type === equivalent &&
-          constraint.refs.some((ref) => ref.entityId === reference.entityId),
+      equivalents.some((equivalent) =>
+        feature.constraints.some(
+          (constraint) =>
+            constraint.type === equivalent &&
+            constraint.refs.some((ref) => ref.entityId === reference.entityId),
+        ),
       )
     ) {
       continue;
     }
-    const info = measureInfo(entity, reference.measure, locale, unit);
+    const text = referenceText(entity, reference.measure, locale, unit);
     const point = referenceAnchor(entity, reference.measure);
-    if (!info || !point) continue;
+    if (!text || !point) continue;
     annotations.push({
       id: reference.id,
-      text: info.text,
+      text,
       point,
       offset: annotationOffset({ type: 'distance' } as SketchConstraint),
       entityId: reference.entityId,
+      measure: reference.measure,
     });
   }
   return annotations;

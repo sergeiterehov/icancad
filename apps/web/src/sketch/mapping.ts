@@ -187,15 +187,20 @@ export function buildSolverPrimitives(
         const center = point(0);
         const start = point(1);
         const end = point(2);
+        // planegcs arcs always run counter-clockwise from start to end. A
+        // clockwise sketch arc is the same curve traversed the other way, so
+        // the solver sees its endpoints swapped; otherwise arc length, angle
+        // and point-on-arc would describe the complementary reflex arc.
+        const reversed = entity.endAngle < entity.startAngle;
         primitives.push({
           id: entity.id,
           type: 'arc',
           c_id: center,
           radius: entity.r,
-          start_angle: entity.startAngle,
-          end_angle: entity.endAngle,
-          start_id: start,
-          end_id: end,
+          start_angle: reversed ? entity.endAngle : entity.startAngle,
+          end_angle: reversed ? entity.startAngle : entity.endAngle,
+          start_id: reversed ? end : start,
+          end_id: reversed ? start : end,
         } as SketchPrimitive);
         primitives.push({
           id: `${entity.id}~arc`,
@@ -278,6 +283,11 @@ export function buildSolverPrimitives(
   }
 
   for (const constraint of constraints) {
+    const arcAngle = arcAnglePrimitives(constraint, entityMap);
+    if (arcAngle) {
+      primitives.push(...arcAngle);
+      continue;
+    }
     const signed = signedDistancePrimitives(constraint, entityMap);
     if (signed) {
       primitives.push(...signed);
@@ -695,6 +705,50 @@ function axisDistancePrimitives(
   return primitives;
 }
 
+/** An arc angle is the directed angle between its two radii. */
+function arcAnglePrimitives(
+  constraint: SketchConstraint,
+  entityMap: Map<string, SketchEntity>,
+): SketchPrimitive[] | null {
+  if (constraint.type !== 'angle' || constraint.refs.length !== 1) return null;
+  const arc = entityMap.get(constraint.refs[0]!.entityId);
+  if (arc?.type !== 'arc') return null;
+  const magnitude = Math.abs((valueOf(constraint.value) * Math.PI) / 180);
+  // The sketch draws the signed sweep. planegcs measures the counter-clockwise
+  // angle from the start radius, so a clockwise arc is the reflex angle there.
+  const clockwise =
+    constraint.side === -1 || (constraint.side === undefined && arc.endAngle < arc.startAngle);
+  // A full turn is the same pair of radii as a zero angle; keep the turn.
+  const angle = clockwise
+    ? magnitude >= Math.PI * 2
+      ? Math.PI * 2
+      : Math.PI * 2 - magnitude
+    : magnitude;
+  const startRadiusId = `${constraint.id}~start-radius`;
+  const endRadiusId = `${constraint.id}~end-radius`;
+  return [
+    {
+      id: startRadiusId,
+      type: 'line',
+      p1_id: pointId(arc.id, 0),
+      p2_id: pointId(arc.id, 1),
+    } as SketchPrimitive,
+    {
+      id: endRadiusId,
+      type: 'line',
+      p1_id: pointId(arc.id, 0),
+      p2_id: pointId(arc.id, 2),
+    } as SketchPrimitive,
+    {
+      id: constraint.id,
+      type: 'l2l_angle_ll',
+      l1_id: startRadiusId,
+      l2_id: endRadiusId,
+      angle,
+    } as Constraint,
+  ];
+}
+
 function mapConstraint(
   constraint: SketchConstraint,
   entityMap: Map<string, SketchEntity>,
@@ -796,6 +850,11 @@ function mapConstraint(
         }
       }
       return null;
+    }
+    case 'arc-length': {
+      const target = entity(0);
+      if (target?.type !== 'arc') return null;
+      return { id, type: 'arc_length', a_id: target.id, dist: value } as Constraint;
     }
     case 'radius':
     case 'diameter': {

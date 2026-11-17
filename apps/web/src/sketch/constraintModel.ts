@@ -65,6 +65,7 @@ const NUMERIC_TYPES: ReadonlySet<ConstraintType> = new Set([
   'horizontal-distance',
   'vertical-distance',
   'angle',
+  'arc-length',
   'radius',
   'diameter',
 ]);
@@ -88,6 +89,7 @@ const UNORDERED_TYPES: ReadonlySet<ConstraintType> = new Set([
   'distance',
   'horizontal-distance',
   'vertical-distance',
+  'arc-length',
   'point-on-line',
   'point-on-circle',
   'point-on-ellipse',
@@ -333,8 +335,16 @@ export function buildConstraintActions(
   if (entityRefs.length === 1 && refs.length === 1) {
     const target = selectedEntities[0];
     if (target?.type === 'circle' || target?.type === 'arc') {
-      push('radius', entityRefs, target.r);
-      push('diameter', entityRefs, target.r * 2);
+      if (target.type === 'arc') {
+        const sweep = Math.abs(target.endAngle - target.startAngle);
+        push('angle', entityRefs, (sweep * 180) / Math.PI);
+        push('radius', entityRefs, target.r);
+        push('diameter', entityRefs, target.r * 2);
+        push('arc-length', entityRefs, target.r * sweep);
+      } else {
+        push('radius', entityRefs, target.r);
+        push('diameter', entityRefs, target.r * 2);
+      }
     }
   }
   if (onlyCurves && ownRefs.length === refs.length && refs.length >= 2) {
@@ -422,6 +432,10 @@ function actionSide(
   refs: readonly SketchConstraintRef[],
   entities: Map<string, SketchEntity>,
 ): number | undefined {
+  if (type === 'angle' && refs.length === 1) {
+    const entity = entities.get(refs[0]!.entityId);
+    return entity?.type === 'arc' ? (entity.endAngle >= entity.startAngle ? 1 : -1) : undefined;
+  }
   if (type !== 'distance' && type !== 'horizontal-distance' && type !== 'vertical-distance') {
     return undefined;
   }
@@ -757,12 +771,24 @@ export function constraintsSatisfied(
         return measured !== undefined && almostEqual(measured, constraint.value);
       }
       case 'angle': {
+        if (constraint.refs.length === 1) {
+          const arc = map.get(constraint.refs[0]!.entityId);
+          if (arc?.type !== 'arc') return false;
+          const measured = (Math.abs(arc.endAngle - arc.startAngle) * 180) / Math.PI;
+          return almostEqual(measured, constraint.value);
+        }
         const lines = constraint.refs
           .map((ref) => map.get(ref.entityId))
           .filter((entity): entity is Line => entity?.type === 'line');
         if (lines.length !== 2) return false;
         const measured = segmentAngle(lines[0]!, lines[1]!);
         return measured !== undefined && almostEqual(measured, constraint.value);
+      }
+      case 'arc-length': {
+        const arc = map.get(constraint.refs[0]?.entityId ?? '');
+        if (arc?.type !== 'arc') return false;
+        const measured = arc.r * Math.abs(arc.endAngle - arc.startAngle);
+        return almostEqual(measured, constraint.value);
       }
       case 'radius':
       case 'diameter': {
