@@ -1,5 +1,12 @@
 import type { TessellationResult } from '@icancad/kernel';
-import type { ArrayDirection, ArrayPath, SketchFeature, SketchFrame, Vec3 } from '@icancad/model';
+import type {
+  ArrayDirection,
+  ArrayPath,
+  Resolved,
+  SketchFeature,
+  SketchFrame,
+  Vec3,
+} from '@icancad/model';
 import { sketchPointToWorld, tessellateEntity } from '@icancad/sketch';
 import {
   arrayCombinations,
@@ -42,7 +49,7 @@ export const PATH_JOIN_TOLERANCE = 1e-3;
  */
 export interface ArrayPlacementContext {
   meshes: Record<string, TessellationResult>;
-  sketches: readonly SketchFeature[];
+  sketches: readonly Resolved<SketchFeature>[];
   frames?: Record<string, SketchFrame>;
 }
 
@@ -194,9 +201,7 @@ export function clampArrayCount(count: number): number {
  */
 export function tiltAxisOf(direction: Vec3): Vec3 {
   const [x, y, z] = direction;
-  return Math.abs(z) >= Math.abs(x) && Math.abs(z) >= Math.abs(y)
-    ? [1, 0, 0]
-    : [0, 0, 1];
+  return Math.abs(z) >= Math.abs(x) && Math.abs(z) >= Math.abs(y) ? [1, 0, 0] : [0, 0, 1];
 }
 
 /** `direction` turned by `angle` degrees around the hinge of `tiltAxisOf`. */
@@ -220,7 +225,7 @@ export function tiltedDirection(direction: Vec3, angle: number): Vec3 {
 
 /** The copies of one linear direction: translations along its unit vector. */
 function linearMatrices(
-  direction: Extract<ArrayDirection, { kind: 'linear' }>,
+  direction: Extract<Resolved<ArrayDirection>, { kind: 'linear' }>,
   count: number,
 ): Matrix3x4[] {
   const unit = tiltedDirection(direction.direction, direction.angle ?? 0);
@@ -258,7 +263,7 @@ function cross(a: Vec3, b: Vec3): Vec3 {
  * the face.
  */
 export function rotationAxisOf(
-  direction: Extract<ArrayDirection, { kind: 'rotation' }>,
+  direction: Extract<Resolved<ArrayDirection>, { kind: 'rotation' }>,
 ): { origin: Vec3; direction: Vec3 } | null {
   const axis = direction.axis;
   if (axis.kind === 'world') {
@@ -275,7 +280,9 @@ export function rotationAxisOf(
  * The angle the copies of a rotation actually turn by: the span of the direction
  * is always positive, and `inverted` is what turns it the other way round.
  */
-export function rotationSpan(direction: Extract<ArrayDirection, { kind: 'rotation' }>): number {
+export function rotationSpan(
+  direction: Extract<Resolved<ArrayDirection>, { kind: 'rotation' }>,
+): number {
   const span = Math.max(0, Math.min(MAX_ARRAY_ANGLE, Math.abs(direction.angle)));
   return direction.inverted ? -span : span;
 }
@@ -286,7 +293,7 @@ export function rotationSpan(direction: Extract<ArrayDirection, { kind: 'rotatio
  * the gaps between them.
  */
 export function directionMatrices(
-  direction: ArrayDirection,
+  direction: Resolved<ArrayDirection>,
   context: ArrayPlacementContext,
 ): Matrix3x4[] {
   const count = clampArrayCount(direction.count);
@@ -339,7 +346,7 @@ export function arrayPlacementMatrices(
 
 /** Placements of the whole array, resolving every direction first. */
 export function arrayDirections(
-  directions: readonly ArrayDirection[],
+  directions: readonly Resolved<ArrayDirection>[],
   context: ArrayPlacementContext,
 ): { counts: number[]; placements: Array<{ key: string; matrix: Matrix3x4 }> } {
   const counts = directions.map((direction) => clampArrayCount(direction.count));

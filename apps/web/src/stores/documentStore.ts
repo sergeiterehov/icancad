@@ -13,12 +13,14 @@ import {
   objectVisible,
   sketchObjectId,
   featureBodyId,
+  getParameter,
   insertionPoint,
   historyInsertIndex,
   isFeatureInHistory,
   isMeshObject,
   nextGroupName,
   nextModelName,
+  setParameter,
   touch,
   updateActiveModel,
   type BodyEdgeRef,
@@ -44,12 +46,12 @@ import {
   type ArrayFeature,
   type ArrayPath,
   type ArrayRotationAxis,
+  type ParamValue,
 } from '@icancad/model';
 import { sketchTopology } from '@icancad/sketch';
 import { useMemo } from 'react';
 import { create } from 'zustand';
 import { i18n } from '../i18n';
-import { MAX_ARRAY_ANGLE, MAX_ARRAY_COPIES } from '../kernel/arrayPlacement';
 import { defaultPrimitiveFeature } from '../primitive/params';
 import { arraySourceOperation } from '../quick/array';
 import { useKernelStore, isModelRebuilding } from './kernelStore';
@@ -98,6 +100,8 @@ interface DocumentState {
   /** Ends the gesture and returns the document to where it started. */
   cancelApplyGesture: () => void;
   apply: (...commands: Command[]) => boolean;
+  /** Writes one numeric or formula parameter by its registry path. */
+  setFeatureParameter: (featureId: string, path: string, value: ParamValue) => void;
   preview: (...commands: Command[]) => void;
   /** Adds a feature without a history step, for a live handle drag. */
   previewAddFeature: (feature: Feature) => boolean;
@@ -134,12 +138,8 @@ interface DocumentState {
   addArrayDirection: (featureId: string) => void;
   removeArrayDirection: (featureId: string, index: number) => void;
   setArrayDirectionKind: (featureId: string, index: number, kind: ArrayDirection['kind']) => void;
-  setArrayCount: (featureId: string, index: number, count: number) => void;
-  setArraySpacing: (featureId: string, index: number, spacing: number) => void;
-  setArrayAngle: (featureId: string, index: number, angle: number) => void;
   setArrayAxis: (featureId: string, index: number, axis: 'x' | 'y' | 'z') => void;
   /** Tilt of a straight direction, in degrees; zero is the axis itself. */
-  setArrayTilt: (featureId: string, index: number, angle: number) => void;
   /** Turning around a picked face; null takes the world axis back. */
   setArrayAxisFace: (
     featureId: string,
@@ -150,12 +150,9 @@ interface DocumentState {
   /** Adds a curve to a path direction, or drops it when it is already there. */
   toggleArrayPath: (featureId: string, index: number, path: ArrayPath) => void;
   setShellDirection: (featureId: string, direction: ShellFeature['direction']) => void;
-  setShellThickness: (featureId: string, thickness: number) => void;
-  setShellOffset: (featureId: string, offset: number) => void;
   toggleShellBody: (featureId: string, bodyId: string) => void;
   toggleShellFace: (featureId: string, ref: BodyFaceRef) => void;
   setEdgeTreatmentKind: (featureId: string, kind: EdgeTreatmentKind) => void;
-  setEdgeTreatmentSize: (featureId: string, size: number) => void;
   toggleEdgeTreatmentFace: (featureId: string, ref: BodyFaceRef) => void;
   toggleEdgeTreatmentEdge: (featureId: string, ref: BodyEdgeRef) => void;
   setExtrudeOp: (featureId: string, op: ExtrudeFeature['op']) => void;
@@ -172,7 +169,7 @@ interface DocumentState {
   setExtrudeReversed: (featureId: string, reversed: boolean) => void;
   setExtrudeMethod: (featureId: string, method: ExtrudeFeature['method']) => void;
   setRevolveAxis: (featureId: string, axis: RevolveAxis) => void;
-  setRevolveAngles: (featureId: string, angles: { start?: number; end?: number }) => void;
+  setRevolveAngles: (featureId: string, angles: { start?: ParamValue; end?: ParamValue }) => void;
   setRevolveInverted: (featureId: string, inverted: boolean) => void;
   toggleExtrudeSketch: (featureId: string, sketchId: string) => void;
   toggleSketchVisibility: (sketchId: string) => void;
@@ -340,8 +337,6 @@ function defaultArrayDirection(kind: ArrayDirection['kind'], count = 3): ArrayDi
 
 /** Directions an array may have; each one multiplies the number of copies. */
 const MAX_ARRAY_DIRECTIONS = 3;
-/** Copies one array may make; matches the rebuild's own ceiling. */
-const MAX_ARRAY_POSITIONS = 200;
 
 /** A picked path named by what it points at, so a curve is in the list once. */
 export function pathKey(path: ArrayPath): string {
@@ -1149,6 +1144,22 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     return featureId;
   },
 
+  setFeatureParameter: (featureId, path, value) => {
+    const feature = activeModel(get().project).features.find(
+      (candidate) => candidate.id === featureId,
+    );
+    if (!feature) return;
+    const current = getParameter(feature, path);
+    if (typeof current === 'number' && typeof value === 'number' && current === value) return;
+    if (
+      typeof current === 'object' &&
+      typeof value === 'object' &&
+      current.formula === value.formula
+    )
+      return;
+    get().apply({ type: 'feature/replace', feature: setParameter(feature, path, value) });
+  },
+
   setEdgeTreatmentKind: (featureId, kind) => {
     const feature = activeModel(get().project).features.find(
       (candidate): candidate is EdgeTreatmentFeature =>
@@ -1156,16 +1167,6 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     );
     if (!feature || feature.kind === kind) return;
     get().apply({ type: 'feature/replace', feature: { ...feature, kind } });
-  },
-
-  setEdgeTreatmentSize: (featureId, size) => {
-    const feature = activeModel(get().project).features.find(
-      (candidate): candidate is EdgeTreatmentFeature =>
-        candidate.id === featureId && candidate.type === 'edge-treatment',
-    );
-    if (!feature || !Number.isFinite(size) || size <= 0) return;
-    if (feature.size === size) return;
-    get().apply({ type: 'feature/replace', feature: { ...feature, size } });
   },
 
   toggleEdgeTreatmentFace: (featureId, ref) => {
@@ -1247,26 +1248,6 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     );
     if (!feature || feature.direction === direction) return;
     get().apply({ type: 'feature/replace', feature: { ...feature, direction } });
-  },
-
-  setShellThickness: (featureId, thickness) => {
-    const feature = activeModel(get().project).features.find(
-      (candidate): candidate is ShellFeature =>
-        candidate.id === featureId && candidate.type === 'shell',
-    );
-    if (!feature || !Number.isFinite(thickness) || thickness <= 0) return;
-    if (feature.thickness === thickness) return;
-    get().apply({ type: 'feature/replace', feature: { ...feature, thickness } });
-  },
-
-  setShellOffset: (featureId, offset) => {
-    const feature = activeModel(get().project).features.find(
-      (candidate): candidate is ShellFeature =>
-        candidate.id === featureId && candidate.type === 'shell',
-    );
-    if (!feature || !Number.isFinite(offset) || offset < 0) return;
-    if ((feature.offset ?? 0) === offset) return;
-    get().apply({ type: 'feature/replace', feature: { ...feature, offset } });
   },
 
   toggleShellBody: (featureId, bodyId) => {
@@ -1440,58 +1421,11 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         const current = feature.directions[index];
         if (!current || current.kind === kind) return null;
         // Switching the kind keeps the count the user already picked.
-        return withArrayDirection(feature, index, defaultArrayDirection(kind, current.count));
-      },
-      get,
-    );
-  },
-
-  setArrayCount: (featureId, index, count) => {
-    replaceArrayFeature(
-      featureId,
-      (feature) => {
-        const current = feature.directions[index];
-        if (!current || !Number.isFinite(count)) return null;
-        // Keep the product of all directions inside the rebuild's ceiling.
-        const others = feature.directions
-          .filter((_, position) => position !== index)
-          .reduce((total, direction) => total * Math.max(1, direction.count), 1);
-        const ceiling = Math.max(
-          1,
-          Math.min(MAX_ARRAY_COPIES, Math.floor(MAX_ARRAY_POSITIONS / others)),
+        return withArrayDirection(
+          feature,
+          index,
+          defaultArrayDirection(kind, typeof current.count === 'number' ? current.count : 2),
         );
-        const next = Math.max(1, Math.min(ceiling, Math.floor(count)));
-        if (next === current.count) return null;
-        return withArrayDirection(feature, index, { ...current, count: next });
-      },
-      get,
-    );
-  },
-
-  setArraySpacing: (featureId, index, spacing) => {
-    replaceArrayFeature(
-      featureId,
-      (feature) => {
-        const current = feature.directions[index];
-        if (!current || current.kind !== 'linear') return null;
-        if (!Number.isFinite(spacing) || spacing === current.spacing) return null;
-        return withArrayDirection(feature, index, { ...current, spacing });
-      },
-      get,
-    );
-  },
-
-  setArrayAngle: (featureId, index, angle) => {
-    replaceArrayFeature(
-      featureId,
-      (feature) => {
-        const current = feature.directions[index];
-        if (!current || current.kind !== 'rotation') return null;
-        // The span of a turn is 0…360 and never signed: which way the copies
-        // go is `inverted`, so the field cannot show a minus sign.
-        const next = Math.max(0, Math.min(MAX_ARRAY_ANGLE, Math.round(Math.abs(angle) * 10) / 10));
-        if (!Number.isFinite(angle) || next === current.angle) return null;
-        return withArrayDirection(feature, index, { ...current, angle: next });
       },
       get,
     );
@@ -1515,22 +1449,6 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
           });
         }
         return null;
-      },
-      get,
-    );
-  },
-
-  setArrayTilt: (featureId, index, angle) => {
-    replaceArrayFeature(
-      featureId,
-      (feature) => {
-        const current = feature.directions[index];
-        if (!current || current.kind !== 'linear' || !Number.isFinite(angle)) return null;
-        // Past half a turn the same row comes back the other way, so the field
-        // keeps the short way round.
-        const next = Math.max(-180, Math.min(180, Math.round(angle * 10) / 10));
-        if ((current.angle ?? 0) === next) return null;
-        return withArrayDirection(feature, index, { ...current, angle: next });
       },
       get,
     );

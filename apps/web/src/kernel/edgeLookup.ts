@@ -14,6 +14,7 @@ export interface EdgeLookupContext {
 
 const DIRECTION_DOT = 0.999;
 const POSITION_TOLERANCE = 1e-3;
+const CLOSED_CENTER_TOLERANCE = 0.01;
 
 function directionOf(start: Vec3, mid: Vec3, end: Vec3): Vec3 | null {
   const length = Math.hypot(end[0] - start[0], end[1] - start[1], end[2] - start[2]);
@@ -28,11 +29,7 @@ function directionOf(start: Vec3, mid: Vec3, end: Vec3): Vec3 | null {
   // direction apart from any other closed edge.
   const chord = Math.hypot(mid[0] - start[0], mid[1] - start[1], mid[2] - start[2]);
   if (chord < 1e-9) return null;
-  return [
-    (mid[0] - start[0]) / chord,
-    (mid[1] - start[1]) / chord,
-    (mid[2] - start[2]) / chord,
-  ];
+  return [(mid[0] - start[0]) / chord, (mid[1] - start[1]) / chord, (mid[2] - start[2]) / chord];
 }
 
 function distance(a: Vec3, b: Vec3): number {
@@ -56,14 +53,62 @@ function polylineLength(points: readonly number[]): number {
  * rebuilt shape has the same traversal, so the edge is the same one at another
  * pose. Length and closure tell it apart from an edge the operation reshaped.
  */
-function sameEdgeShape(
-  edge: { points: number[]; closed: boolean },
-  ref: BodyEdgeRef,
-): boolean {
+function sameEdgeShape(edge: { points: number[]; closed: boolean }, ref: BodyEdgeRef): boolean {
   if (ref.length === undefined) return false;
   if (ref.closed !== undefined && ref.closed !== edge.closed) return false;
   const tolerance = Math.max(1e-3, ref.length * 1e-4);
   return Math.abs(polylineLength(edge.points) - ref.length) <= tolerance;
+}
+
+/** The centre of a closed edge's polyline; it does not move when the radius
+ * changes, which is what a reference to a round edge needs to survive. */
+function polylineCenter(points: readonly number[]): Vec3 {
+  let x = 0;
+  let y = 0;
+  let z = 0;
+  let count = 0;
+  for (let index = 0; index + 2 < points.length; index += 3) {
+    x += points[index]!;
+    y += points[index + 1]!;
+    z += points[index + 2]!;
+    count += 1;
+  }
+  return count === 0 ? [0, 0, 0] : [x / count, y / count, z / count];
+}
+
+function cross(a: Vec3, b: Vec3): Vec3 {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+
+function subtract(a: Vec3, b: Vec3): Vec3 {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function dot(a: Vec3, b: Vec3): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+/** The centre of the circle through the stored start, middle and end. */
+function refCenter(ref: Pick<BodyEdgeRef, 'start' | 'mid' | 'end'>): Vec3 {
+  const a = ref.start;
+  const ab = subtract(ref.mid, a);
+  const ac = subtract(ref.end, a);
+  const normal = cross(ab, ac);
+  const denominator = 2 * dot(normal, normal);
+  if (denominator < 1e-12) {
+    return [
+      (ref.start[0] + ref.mid[0] + ref.end[0]) / 3,
+      (ref.start[1] + ref.mid[1] + ref.end[1]) / 3,
+      (ref.start[2] + ref.mid[2] + ref.end[2]) / 3,
+    ];
+  }
+  const term1 = cross(normal, ab).map((value) => value * dot(ac, ac)) as Vec3;
+  const term2 = cross(ac, normal).map((value) => value * dot(ab, ab)) as Vec3;
+  return [
+    a[0] + (term1[0] + term2[0]) / denominator,
+    a[1] + (term1[1] + term2[1]) / denominator,
+    a[2] + (term1[2] + term2[2]) / denominator,
+  ];
 }
 
 /** Distance from a point to the polyline of an edge. */
@@ -85,7 +130,10 @@ function distanceToEdge(points: readonly number[], point: Vec3): number {
         ? 0
         : Math.max(
             0,
-            Math.min(1, ((point[0] - ax) * dx + (point[1] - ay) * dy + (point[2] - az) * dz) / lengthSquared),
+            Math.min(
+              1,
+              ((point[0] - ax) * dx + (point[1] - ay) * dy + (point[2] - az) * dz) / lengthSquared,
+            ),
           );
     const distance = Math.hypot(
       point[0] - (ax + dx * t),
@@ -99,9 +147,12 @@ function distanceToEdge(points: readonly number[], point: Vec3): number {
 
 /** How far an edge is from the stored pose, or null when it does not match. */
 export function edgeMatchDistance(
-  edge: { points: number[] },
-  ref: Pick<BodyEdgeRef, 'start' | 'mid' | 'end'>,
+  edge: { points: number[]; closed?: boolean },
+  ref: Pick<BodyEdgeRef, 'start' | 'mid' | 'end' | 'closed'>,
 ): number | null {
+  if (ref.closed !== undefined && edge.closed !== undefined && ref.closed !== edge.closed) {
+    return null;
+  }
   const direction = edgeDirection(edge.points);
   const refDirection = directionOf(ref.start, ref.mid, ref.end);
   if (!direction || !refDirection) return null;
@@ -113,11 +164,11 @@ export function edgeMatchDistance(
   // The middle pins the span and one of the ends pins it along the line: a
   // rebuilt edge may list its points the other way round, so either end will do.
   const pose = edgePose(edge.points);
-  const starts: Vec3[] = [pose.start, pose.end];
-  const exact =
-    distance(pose.mid, ref.mid) <= POSITION_TOLERANCE &&
-    starts.some((start) => distance(start, ref.start) <= POSITION_TOLERANCE);
-  if (exact) return distance(pose.mid, ref.mid);
+  const midDistance = distance(pose.mid, ref.mid);
+  // A curved edge shortened by a sketch change keeps its middle while both
+  // ends slide along the same curve. The middle and direction still identify
+  // the edge, even though neither stored end is on it any more.
+  if (midDistance <= POSITION_TOLERANCE) return midDistance;
 
   // The edge may have been picked on a shape where an earlier operation of the
   // same body had already trimmed it, so the stored span is only a piece of the
@@ -154,9 +205,21 @@ export function resolveEdgeRef(
     if (!mesh) continue;
     for (const edge of mesh.edges ?? []) {
       const edgeDistance = edgeMatchDistance(edge, ref);
-      if (edgeDistance === null) continue;
-      if (!best || edgeDistance < best.distance) {
-        best = { bodyId, edgeId: edge.id, distance: edgeDistance };
+      if (edgeDistance !== null) {
+        if (!best || edgeDistance < best.distance) {
+          best = { bodyId, edgeId: edge.id, distance: edgeDistance };
+        }
+        continue;
+      }
+      // A round edge keeps its centre when its radius changes, so a reference
+      // to the rim of a hole follows the hole instead of being lost.
+      if (ref.closed && edge.closed && bodyId === ref.bodyId) {
+        const centerDistance = distance(polylineCenter(edge.points), refCenter(ref));
+        if (centerDistance <= CLOSED_CENTER_TOLERANCE) {
+          if (!best || centerDistance < best.distance) {
+            best = { bodyId, edgeId: edge.id, distance: centerDistance };
+          }
+        }
       }
     }
   }

@@ -54,6 +54,27 @@ describe('planegcs mapping', () => {
     expect(point('line-1~p1')).toMatchObject({ fixed: true, x: 10, y: 5 });
   });
 
+  it('gives a circle a radius handle that a drag can pin', () => {
+    const circle: SketchEntity = { id: 'circle-1', type: 'circle', construction: false, cx: 0, cy: 0, r: 5 };
+    const { build } = primitives([circle], [], [
+      { entityId: circle.id, pointIndex: 1, axis: 'x' },
+    ]);
+    expect(build.primitives.find((primitive) => primitive.id === 'circle-1~p1')).toMatchObject({
+      type: 'point',
+      x: 5,
+      y: 0,
+    });
+    expect(
+      build.primitives.find((primitive) => primitive.id === 'circle-1~radius-handle'),
+    ).toMatchObject({ type: 'point_on_circle', p_id: 'circle-1~p1', c_id: 'circle-1' });
+    expect(
+      build.primitives.find((primitive) => primitive.id === 'circle-1~radius-axis'),
+    ).toMatchObject({ type: 'horizontal_pp', p1_id: 'circle-1~p0', p2_id: 'circle-1~p1' });
+    expect(
+      build.primitives.find((primitive) => primitive.id === 'circle-1~p1~pin-x'),
+    ).toMatchObject({ type: 'coordinate_x', p_id: 'circle-1~p1' });
+  });
+
   it('maps symmetry about the last selected point for midpoints', () => {
     const points: SketchEntity[] = [
       { id: 'p1', type: 'point', construction: false, x: 0, y: 0 },

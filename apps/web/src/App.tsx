@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShortcuts } from './hooks/useShortcuts';
+import { useFormulaResolution } from './hooks/useFormulaResolution';
 import { useApplyTheme } from './hooks/useTheme';
 import {
   useAutosave,
@@ -33,6 +34,7 @@ export default function App() {
   useHydrateProject();
   useKernelBoot();
   useAutosave();
+  useFormulaResolution();
   useRebuildScene();
   useApplyTheme();
   useShortcuts();

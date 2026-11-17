@@ -40,11 +40,12 @@ export default defineConfig({
         clientsClaim: true,
         // Workers and the sketch solver are separate files of the shell, so an
         // offline tab needs them as much as the entry chunk.
-        globPatterns: ['**/*.{js,css,html,svg,png,ico,wasm,woff,woff2}'],
+        globPatterns: ['**/*.{js,mjs,css,html,svg,png,ico,wasm,woff,woff2,zip,json}'],
         // The 63 MB kernel stays out of the install: it is cached on first use,
         // under the hashed URL above.
         globIgnores: ['occt/**'],
-        maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
+        // Pyodide ships a 9 MB wasm and a 2.5 MB stdlib archive of its own.
+        maximumFileSizeToCacheInBytes: 16 * 1024 * 1024,
         runtimeCaching: [
           {
             urlPattern: /\/occt\/opencascade\.wasm\.wasm/,

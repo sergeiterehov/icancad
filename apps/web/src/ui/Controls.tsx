@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import { isFormula, type ParamValue } from '@icancad/model';
 import { TriangleAlert, X } from 'lucide-react';
 import {
   useEffect,
@@ -10,7 +11,9 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Tooltip } from './Tooltip';
+import { formatNumber } from './format';
 import { useContextMenuStore } from './ContextMenu';
 import { formatStep, parseNumber, steppedValue, wheelStep } from './numberStep';
 import { useDocumentStore } from '../stores/documentStore';
@@ -563,6 +566,187 @@ export function DimensionField({
           ) : undefined
         }
       />
+    </Tooltip>
+  );
+}
+
+const FORMULA_PREFIX = '=';
+
+/** A draft is a formula when its leading non-space character is `=`. */
+function isFormulaDraft(draft: string): boolean {
+  return draft.trimStart().startsWith(FORMULA_PREFIX);
+}
+
+function formulaSource(draft: string): string {
+  return draft.trimStart().slice(FORMULA_PREFIX.length).trim();
+}
+
+/** The text a field shows for an authored parameter. */
+export function paramText(value: ParamValue): string {
+  return isFormula(value) ? `${FORMULA_PREFIX}${value.formula}` : String(value);
+}
+
+/**
+ * A numeric input that also takes a Python expression: `=` as the first
+ * character switches the field to a formula. The field then shows the number it
+ * computes and reveals the expression while focused.
+ */
+export function ParamField({
+  axis,
+  icon,
+  label,
+  tooltip,
+  value,
+  resolved,
+  suffix,
+  allowNegative,
+  warning,
+  error,
+  onCommit,
+}: {
+  axis?: string;
+  icon?: ReactNode;
+  label: string;
+  /** Longer explanation shown on hover; the label itself stays short. */
+  tooltip?: ReactNode;
+  /** The authored parameter: a literal or a formula. */
+  value: ParamValue;
+  /** The formula result; undefined until the engine has one. */
+  resolved?: number;
+  suffix?: string;
+  /** Positions are signed and may be zero; sizes are positive lengths. */
+  allowNegative?: boolean;
+  /** Shown as a yellow mark next to the field; the value was reduced. */
+  warning?: string;
+  /** Formula diagnostic shown in red; the field stays editable. */
+  error?: string;
+  onCommit: (value: ParamValue) => void;
+}) {
+  const { i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage ?? 'en';
+  const formula = isFormula(value);
+  const computed = resolved !== undefined && Number.isFinite(resolved) ? resolved : undefined;
+  const text = paramText(value);
+  // A driven field shows what it computes, in the accent colour; its formula
+  // appears only while the field is being edited.
+  const display = error
+    ? '—'
+    : formula
+      ? computed === undefined
+        ? '—'
+        : formatNumber(computed, locale, 2)
+      : text;
+  const [draft, setDraft] = useState(display);
+  const [focused, setFocused] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const step = useRef(wheelStep(text));
+  const latest = useRef({ draft, value, resolved, onCommit });
+  latest.current = { draft, value, resolved, onCommit };
+
+  // An unchanged authored value replaces the draft; a focused field keeps what
+  // is being typed. The text, not the object, is the identity: a parent may
+  // build `{ formula }` inline on every render.
+  useEffect(() => {
+    if (!focused) setDraft(display);
+  }, [display, focused]);
+
+  const accepts = (next: number) => Number.isFinite(next) && (allowNegative || next > 0);
+
+  const commit = () => {
+    const current = latest.current;
+    const text = current.draft.trim();
+    if (isFormulaDraft(text)) {
+      const source = formulaSource(text);
+      // An empty expression is not a formula: the saved value comes back.
+      if (!source) {
+        setDraft(paramText(current.value));
+        return;
+      }
+      if (!isFormula(current.value) || current.value.formula !== source) {
+        current.onCommit({ formula: source });
+      }
+      setDraft(`${FORMULA_PREFIX}${source}`);
+      return;
+    }
+    const parsed = parseNumber(text);
+    if (!accepts(parsed)) {
+      setDraft(paramText(current.value));
+      return;
+    }
+    if (typeof current.value !== 'number' || parsed !== current.value) current.onCommit(parsed);
+    setDraft(String(parsed));
+  };
+
+  // A formula scrolls the panel instead of stepping its value.
+  useWheelStep(
+    inputRef,
+    (direction) => {
+      const current = latest.current;
+      if (isFormulaDraft(current.draft)) return;
+      const parsed = parseNumber(current.draft);
+      if (!Number.isFinite(parsed)) return;
+      const next = steppedValue(parsed, step.current, direction);
+      if (!accepts(next)) return;
+      if (typeof current.value === 'number' && next === current.value) return;
+      current.onCommit(next);
+    },
+    !formula,
+  );
+
+  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') event.currentTarget.blur();
+    if (event.key === 'Escape') {
+      setDraft(paramText(latest.current.value));
+      event.currentTarget.blur();
+    }
+  };
+
+  return (
+    <Tooltip content={error ?? tooltip ?? label}>
+      <label
+        className={clsx('dimension-field', formula && 'is-formula', error && 'has-error')}
+        data-testid={error ? 'param-error' : undefined}
+      >
+        {icon ? (
+          <span className="dimension-axis" aria-hidden="true">
+            {icon}
+          </span>
+        ) : (
+          axis && <span className="dimension-axis">{axis}</span>
+        )}
+        <input
+          ref={inputRef}
+          className="dimension-input"
+          inputMode={formula ? 'text' : 'decimal'}
+          aria-label={label}
+          aria-invalid={error ? true : undefined}
+          value={draft}
+          onChange={(event) => {
+            step.current = wheelStep(event.target.value);
+            setDraft(event.target.value);
+          }}
+          onFocus={(event) => {
+            setFocused(true);
+            setDraft(text);
+            step.current = wheelStep(text);
+            // Focus reveals the authored value: a number or the formula.
+            const input = event.currentTarget;
+            requestAnimationFrame(() => input.setSelectionRange(0, text.length));
+          }}
+          onBlur={() => {
+            setFocused(false);
+            commit();
+          }}
+          onKeyDown={onKeyDown}
+        />
+        {suffix && <span className="dimension-unit">{suffix}</span>}
+        {warning && (
+          <span className="dimension-warning" data-testid="dimension-warning">
+            <TriangleAlert size={13} aria-hidden="true" />
+            <span className="visually-hidden">{warning}</span>
+          </span>
+        )}
+      </label>
     </Tooltip>
   );
 }

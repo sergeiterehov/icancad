@@ -11,6 +11,8 @@ export default tseslint.config(
       '**/playwright-report/**',
       '**/test-results/**',
       'packages/kernel/scripts/**',
+      // Vendored Pyodide runtime, copied in by the predev/prebuild scripts.
+      'apps/web/public/pyodide/**',
     ],
   },
   js.configs.recommended,

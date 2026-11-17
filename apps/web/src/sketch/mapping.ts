@@ -1,5 +1,10 @@
 import type { Constraint, SketchPrimitive } from '@salusoft89/planegcs';
-import type { SketchConstraint, SketchConstraintRef, SketchEntity } from '@icancad/model';
+import type {
+  ParamValue,
+  SketchConstraint,
+  SketchConstraintRef,
+  SketchEntity,
+} from '@icancad/model';
 import {
   entityControlPoints,
   fundamentalEntities,
@@ -148,12 +153,29 @@ export function buildSolverPrimitives(
       }
       case 'circle': {
         const center = point(0);
+        // The radius handle is how a circle is resized and dragged; the solver
+        // needs a real point there for a drag pin to keep it under the pointer.
+        const handle = point(1);
         primitives.push({
           id: entity.id,
           type: 'circle',
           c_id: center,
           radius: entity.r,
         } as SketchPrimitive);
+        primitives.push({
+          id: `${entity.id}~radius-handle`,
+          type: 'point_on_circle',
+          p_id: handle,
+          c_id: entity.id,
+        } as Constraint);
+        // Keep the handle level with the centre: it represents the radius, not
+        // an arbitrary angle on the circle, and adds no degree of freedom.
+        primitives.push({
+          id: `${entity.id}~radius-axis`,
+          type: 'horizontal_pp',
+          p1_id: center,
+          p2_id: handle,
+        } as Constraint);
         break;
       }
       case 'arc': {
@@ -286,7 +308,7 @@ export function buildSolverPrimitives(
           type: 'p2p_distance',
           p1_id: p1,
           p2_id: auxId,
-          distance: constraint.value ?? 0,
+          distance: valueOf(constraint.value),
         } as Constraint);
         continue;
       }
@@ -298,6 +320,10 @@ export function buildSolverPrimitives(
   return { primitives, entities: entityMap };
 }
 
+function valueOf(value: ParamValue | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
 function mapConstraint(
   constraint: SketchConstraint,
   entityMap: Map<string, SketchEntity>,
@@ -306,7 +332,7 @@ function mapConstraint(
   const refs = constraint.refs;
   const entity = (index: number) => entityMap.get(refs[index]!.entityId);
   const point = (index: number) => pointRefId(refs[index]!, entity(index));
-  const value = constraint.value ?? 0;
+  const value = valueOf(constraint.value);
   const id = constraint.id;
 
   switch (constraint.type) {
@@ -341,7 +367,7 @@ function mapConstraint(
         type: 'l2l_angle_ll',
         l1_id: refs[0]!.entityId,
         l2_id: refs[1]!.entityId,
-        angle: ((constraint.value ?? 0) * Math.PI) / 180,
+        angle: (valueOf(constraint.value) * Math.PI) / 180,
       } as Constraint;
     }
     case 'parallel':

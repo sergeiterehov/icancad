@@ -1,5 +1,5 @@
 import type { TessellationResult } from '@icancad/kernel';
-import type { PrimitiveFeature } from '@icancad/model';
+import type { PrimitiveFeature, Resolved } from '@icancad/model';
 import * as THREE from 'three';
 
 /**
@@ -7,9 +7,9 @@ import * as THREE from 'three';
  * mirrors the kernel shape closely enough for feedback and never touches the
  * kernel, so dragging a handle only regenerates this geometry.
  */
-const previewCache = new WeakMap<PrimitiveFeature, TessellationResult>();
+const previewCache = new WeakMap<Resolved<PrimitiveFeature>, TessellationResult>();
 
-export function primitivePreviewMesh(feature: PrimitiveFeature): TessellationResult {
+export function primitivePreviewMesh(feature: Resolved<PrimitiveFeature>): TessellationResult {
   const cached = previewCache.get(feature);
   if (cached) return cached;
   const geometry = buildGeometry(feature);
@@ -19,7 +19,7 @@ export function primitivePreviewMesh(feature: PrimitiveFeature): TessellationRes
   return mesh;
 }
 
-function buildGeometry(feature: PrimitiveFeature): THREE.BufferGeometry {
+function buildGeometry(feature: Resolved<PrimitiveFeature>): THREE.BufferGeometry {
   const [x, y, z] = feature.transform.translation;
   switch (feature.kind) {
     case 'box': {
@@ -87,7 +87,7 @@ function buildGeometry(feature: PrimitiveFeature): THREE.BufferGeometry {
 }
 
 function pyramidGeometry(
-  feature: Extract<PrimitiveFeature, { kind: 'pyramid' }>,
+  feature: Extract<Resolved<PrimitiveFeature>, { kind: 'pyramid' }>,
 ): THREE.BufferGeometry {
   const [x, y, z] = feature.transform.translation;
   const { sides, radius, height } = feature.params;

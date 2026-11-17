@@ -25,6 +25,7 @@ import { rebuildScene } from '../kernel/rebuild';
 import { autoConstraintsForEntity, isNearAxis, snapHighlightIds } from '../sketch/autoConstraints';
 import {
   buildConstraintActions,
+  constraintsSatisfied,
   diagnoseSketch,
   removeSketchEntities,
 } from '../sketch/constraintModel';
@@ -49,9 +50,16 @@ import {
   resolveSketchProjections,
 } from '../sketch/projection';
 import { referenceMenuItems } from '../sketch/referenceMenu';
+import { constraintsForSolve, sketchHasFormulaError } from '../sketch/resolvedConstraints';
 import type { SketchSnap, SketchSnapInput, SketchSnapMode } from '../sketch/snap';
 import type { SketchTool } from '../sketch/tool';
 import { useDocumentStore } from '../stores/documentStore';
+import {
+  expressionErrors,
+  resolvedFeatureFor,
+  resolvedModel,
+  useFormulaStore,
+} from '../stores/formulaStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { useUiStore } from '../stores/uiStore';
 import { useContextMenuStore } from '../ui/ContextMenu';
@@ -194,19 +202,54 @@ export function SketchEditor() {
     (feature): feature is SketchFeature =>
       feature.id === activeSketchId && feature.type === 'sketch',
   );
-  const frame = useMemo(
-    () =>
-      sketch
-        ? activeSketchReady
-          ? computeSketchFrame(
-              sketch,
-              sketch.plane.type === 'face' ? meshes[sketch.plane.bodyId ?? ''] : undefined,
-            )
-          : sketchFrameOf(sketch, sketchFrames[sketch.id])
-        : null,
-    [sketch, activeSketchReady, meshes, sketchFrames],
-  );
+  const formulaRevision = useFormulaStore((state) => state.resolution?.revision ?? 0);
+  const frame = useMemo(() => {
+    if (!sketch) return null;
+    const driven = resolvedFeatureFor(sketch) ?? sketch;
+    return activeSketchReady
+      ? computeSketchFrame(
+          driven,
+          driven.plane.type === 'face' ? meshes[driven.plane.bodyId ?? ''] : undefined,
+        )
+      : sketchFrameOf(driven, sketchFrames[sketch.id]);
+  }, [sketch, activeSketchReady, meshes, sketchFrames, formulaRevision]);
   const { run: runConstraintAction } = useApplyConstraintAction(sketch);
+  const drivenSketches = useFormulaStore((state) => state.resolution?.drivenSketches);
+
+  // Driven dimensions resolve to numbers, but the solver is what moves the
+  // geometry: solving here writes the solved entities back, so the editor shows
+  // the sketch the formulas describe instead of the last stored snapshot.
+  useEffect(() => {
+    if (!sketch || !activeSketchReady || !drivenSketches?.has(sketch.id)) return;
+    if (sketchHasFormulaError(sketch.id)) return;
+    const resolved = resolvedFeatureFor(sketch);
+    if (!resolved || resolved.type !== 'sketch') return;
+    // A formula that computes the value the sketch already has changes
+    // nothing; re-solving it would only expose unrelated solver limitations.
+    if (constraintsSatisfied(resolved.constraints, resolved.entities)) return;
+    let cancelled = false;
+    void solveSketch(resolved.entities, resolved.constraints, [], {
+      derived: [...projectionEntityIds(resolved)],
+    })
+      .then((result) => {
+        if (cancelled || result.conflicting.length > 0) return;
+        const state = useDocumentStore.getState();
+        const current = activeModel(state.project).features.find(
+          (candidate): candidate is SketchFeature =>
+            candidate.id === sketch.id && candidate.type === 'sketch',
+        );
+        if (!current) return;
+        if (JSON.stringify(current.entities) === JSON.stringify(result.entities)) return;
+        state.apply({
+          type: 'feature/replace',
+          feature: { ...current, entities: result.entities },
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [sketch, activeSketchReady, drivenSketches, formulaRevision]);
 
   const [draft, setDraft] = useState<DraftPoint[]>([]);
   // The ref mirrors the draft synchronously, so a tool switch can clear it
@@ -276,8 +319,13 @@ export function SketchEditor() {
     // sketch and is restored when the sketch is finished.
     useDocumentStore.getState().beginFeatureEdit(activeSketchId);
     alignedFrame.current = '';
+    if (sketchHasFormulaError(activeSketchId)) {
+      setActiveSketchReady(true);
+      return () => useDocumentStore.getState().endFeatureEdit();
+    }
     let cancelled = false;
     let unsubscribe: () => void = () => undefined;
+    let unsubscribeFormula: () => void = () => undefined;
     const startVersion = useKernelStore.getState().sceneVersion;
     if (useKernelStore.getState().status !== 'ready') {
       setActiveSketchReady(true);
@@ -285,10 +333,24 @@ export function SketchEditor() {
       // Trigger the rebuild and wait until the kernel publishes the preview of
       // this sketch. A rebuild that was already running for an older state does
       // not satisfy this condition.
-      void rebuildScene(
-        activeModel(useDocumentStore.getState().project),
-        i18n.t('status.rebuild'),
-      ).catch(() => undefined);
+      const rebuild = () => {
+        const model = resolvedModel();
+        if (!model) return false;
+        void rebuildScene(model, i18n.t('status.rebuild'), {
+          expressionErrors: expressionErrors(),
+          drivenSketches: useFormulaStore.getState().resolution?.drivenSketches,
+        }).catch(() => undefined);
+        return true;
+      };
+      if (!rebuild()) {
+        // Entering before the first resolution exists must not wedge the
+        // editor: rebuild as soon as the model is there.
+        unsubscribeFormula = useFormulaStore.subscribe((state) => {
+          if (!state.resolution?.model) return;
+          unsubscribeFormula();
+          rebuild();
+        });
+      }
       unsubscribe = useKernelStore.subscribe((state) => {
         if (state.sceneVersion > startVersion && state.preview?.featureId === activeSketchId) {
           unsubscribe();
@@ -299,9 +361,18 @@ export function SketchEditor() {
     return () => {
       cancelled = true;
       unsubscribe();
+      unsubscribeFormula();
       useDocumentStore.getState().endFeatureEdit();
     };
   }, [activeSketchId, setActiveSketchReady, i18n]);
+
+  // A formula can break while the sketch is already open. There is no preview
+  // to wait for then: keep the last solved geometry on screen and let the user
+  // fix the formula.
+  useEffect(() => {
+    if (!activeSketchId || activeSketchReady) return;
+    if (sketchHasFormulaError(activeSketchId)) setActiveSketchReady(true);
+  }, [activeSketchId, activeSketchReady, formulaRevision, setActiveSketchReady]);
 
   // Re-solve once on entry so sketches saved with a violated constraint get
   // repaired before the user starts dragging.
@@ -309,8 +380,14 @@ export function SketchEditor() {
     if (!activeSketchId) return;
     const feature = currentSketch();
     if (!feature || feature.constraints.length === 0) return;
-    void solveSketch(feature.entities, feature.constraints, [], {
-      derived: [...projectionEntityIds(feature)],
+    if (sketchHasFormulaError(feature.id)) return;
+    // A driven sketch is solved by the formula effect below with the resolved
+    // numbers; the authored feature here still holds formula objects.
+    if (useFormulaStore.getState().resolution?.drivenSketches?.has(feature.id)) return;
+    const resolved = resolvedFeatureFor(feature);
+    if (!resolved || resolved.type !== 'sketch') return;
+    void solveSketch(resolved.entities, resolved.constraints, [], {
+      derived: [...projectionEntityIds(resolved)],
     })
       .then((result) => {
         if (result.conflicting.length > 0) return;
@@ -324,7 +401,7 @@ export function SketchEditor() {
         preview({ type: 'feature/replace', feature: { ...current, entities } });
       })
       .catch(() => undefined);
-  }, [activeSketchId]);
+  }, [activeSketchId, formulaRevision]);
 
   // Projected geometry follows the bodies it was taken from. The stored
   // entities are the snapshot; as soon as the scene has a current body the
@@ -345,10 +422,10 @@ export function SketchEditor() {
       return;
     }
     const timer = setTimeout(() => {
-      if (!drag.current?.active) void diagnoseSketch(sketch);
+      if (!drag.current?.active && !sketchHasFormulaError(sketch.id)) void diagnoseSketch(sketch);
     }, 200);
     return () => clearTimeout(timer);
-  }, [activeSketchId, sketch?.constraints, sketch?.entities]);
+  }, [activeSketchId, sketch?.constraints, sketch?.entities, formulaRevision]);
 
   // The view before the first sketch is remembered across sketch switches and
   // restored once editing finishes. Preparing the editor runs once per entry;
@@ -424,7 +501,7 @@ export function SketchEditor() {
     inputs: SketchSnapInput[],
     extra: SketchConstraint[] = [],
   ) => {
-    if (!sketch) {
+    if (!sketch || sketchHasFormulaError(sketch.id)) {
       applyAutoHighlight([]);
       return;
     }
@@ -448,7 +525,7 @@ export function SketchEditor() {
       try {
         const result = await solveSketch(
           latest.entities,
-          [...latest.constraints, ...constraints],
+          [...constraintsForSolve(latest), ...constraints],
           [],
           { diagnose: true, derived: [...projectionEntityIds(latest)] },
         );
@@ -754,6 +831,12 @@ export function SketchEditor() {
       // Projected geometry is derived: it can be selected and detached, but the
       // next rebuild would overwrite whatever a drag does to it.
       if (isProjectedEntity(sketch, entity.id)) return;
+      // Geometry without degrees of freedom has nowhere to go; solving it would
+      // only let an unrelated free branch of the sketch wander.
+      if (useUiStore.getState().sketchFrozenEntityIds.includes(entity.id)) return;
+      // A sketch with a formula error keeps its last solved geometry until the
+      // formula is fixed; no solver may move it meanwhile.
+      if (sketchHasFormulaError(sketch.id)) return;
       drag.current = {
         mode: pointIndex === null ? 'entity' : 'point',
         entityId: entity.id,
@@ -784,10 +867,10 @@ export function SketchEditor() {
             (feature): feature is SketchFeature =>
               feature.id === activeDrag.original.id && feature.type === 'sketch',
           );
-          if (!current) return;
+          if (!current || sketchHasFormulaError(current.id)) return;
           const solved = await solveDrag({
             entities: dragEntities(activeDrag, point, current.entities),
-            constraints: current.constraints,
+            constraints: constraintsForSolve(current),
             pinSets: dragPinSets(activeDrag),
             derived: [...projectionEntityIds(current)],
             prefer: activeDrag.attempt,
@@ -929,6 +1012,10 @@ export function SketchEditor() {
         preview({ type: 'feature/replace', feature: activeDrag.original });
         return;
       }
+      if (sketchHasFormulaError(latest.id)) {
+        preview({ type: 'feature/replace', feature: activeDrag.original });
+        return;
+      }
       // The last pointer position may still be waiting for its solve.
       const entities = activeDrag.target
         ? dragEntities(activeDrag, activeDrag.target, latest.entities)
@@ -936,7 +1023,7 @@ export function SketchEditor() {
       activeDrag.target = null;
       void solveDrag({
         entities,
-        constraints: latest.constraints,
+        constraints: constraintsForSolve(latest),
         pinSets: dragPinSets(activeDrag),
         derived: [...projectionEntityIds(latest)],
         prefer: activeDrag.attempt,

@@ -15,6 +15,8 @@ export interface SceneSketch {
   frame: SketchFrame;
   /** Line colour of the object; the sketch being edited keeps the theme colours. */
   color?: string;
+  /** A broken formula paints the whole sketch red, over every other colour. */
+  error?: boolean;
   /** Construction geometry is a helper, so it is only drawn when asked for. */
   showConstruction?: boolean;
   entities: SketchEntity[];

@@ -10,10 +10,11 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "e2e": "playwright test",
-    "predev": "node ../../scripts/copy-occt.mjs",
-    "prebuild": "node ../../scripts/copy-occt.mjs"
+    "predev": "node ../../scripts/copy-occt.mjs && node ../../scripts/copy-pyodide.mjs",
+    "prebuild": "node ../../scripts/copy-occt.mjs && node ../../scripts/copy-pyodide.mjs"
   },
   "dependencies": {
+    "@icancad/formula": "workspace:*",
     "@icancad/io": "workspace:*",
     "@icancad/kernel": "workspace:*",
     "@icancad/model": "workspace:*",

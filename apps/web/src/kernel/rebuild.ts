@@ -10,7 +10,6 @@ import type {
 import type { Vec3 } from '@icancad/model';
 import { sketchProfiles, type ProfileRegion } from '@icancad/sketch';
 import {
-  activeModel,
   HISTORY_START,
   BODY_COLORS,
   defaultRevolve,
@@ -21,12 +20,14 @@ import {
   shellBodyId,
   type ArrayDirection,
   type ArrayFeature,
+  type Resolved,
   type BodyFaceRef,
   type EdgeTreatmentFeature,
   type ExtrudeFeature,
-  type Feature,
   type ImportMeshFeature,
-  type Model,
+  type ResolvedFeature,
+  type ResolvedModel,
+  type RevolveSpec,
   type ShellFeature,
   type SketchFeature,
   type SketchFrame,
@@ -35,9 +36,12 @@ import { computeSketchFrame, faceSketchValid } from '../sketch/sectionPlane';
 import { resolveRevolveAxis, revolveAngles } from '../sketch/revolveAxis';
 import { projectionEntityIds, resolveSketchProjections } from '../sketch/projection';
 import { projectionMoved, solveReprojectedSketch } from '../sketch/reproject';
+import { solveSketch } from '../sketch/client';
+import { constraintsSatisfied } from '../sketch/constraintModel';
 import type { MeshFormat, MeshStats, ParsedMesh } from '@icancad/io';
 import { loadAsset } from '../persistence/db';
 import { nextBodyNumber, useDocumentStore } from '../stores/documentStore';
+import { resolvedModel } from '../stores/formulaStore';
 import { useUiStore } from '../stores/uiStore';
 import {
   useKernelStore,
@@ -99,7 +103,10 @@ async function loadImportedMesh(assetId: string, format: MeshFormat): Promise<Pa
   return promise;
 }
 
-function transformImportedMesh(mesh: ParsedMesh, feature: ImportMeshFeature): TessellationResult {
+function transformImportedMesh(
+  mesh: ParsedMesh,
+  feature: Resolved<ImportMeshFeature>,
+): TessellationResult {
   const scale = feature.scale || 1;
   const [rx, ry, rz] = feature.transform.rotation;
   const [tx, ty, tz] = feature.transform.translation;
@@ -184,7 +191,7 @@ interface RebuildState {
   createdBodies: Map<string, string[]>;
   /** Sketch id -> frame frozen when that operation was evaluated. */
   sketchFrames: Record<string, SketchFrame>;
-  sketches: Map<string, SketchFeature>;
+  sketches: Map<string, Resolved<SketchFeature>>;
   /** Tools a modifying extrude applied, keyed by operation id, for arrays. */
   featureTools: Map<string, ArrayToolSource>;
   /** Bodies each operation changed in place: the shape before and after it. */
@@ -254,7 +261,9 @@ interface GhostCollector {
 interface EvalContext {
   client: ReturnType<typeof getKernelClient>;
   epoch: number;
-  project: Model;
+  project: ResolvedModel;
+  /** Sketches whose constraint values come from formulas. */
+  drivenSketches?: ReadonlySet<string>;
   ghost?: GhostCollector;
 }
 
@@ -415,9 +424,13 @@ export function abortRebuild(): void {
 }
 
 export function rebuildScene(
-  project: Model,
+  project: ResolvedModel,
   label: string,
-  options?: { fromIndex?: number },
+  options?: {
+    fromIndex?: number;
+    expressionErrors?: ReadonlySet<string>;
+    drivenSketches?: ReadonlySet<string>;
+  },
 ): Promise<void> {
   if (useKernelStore.getState().status !== 'ready') return Promise.resolve();
   // Read at enqueue time so the preview matches the project being rebuilt.
@@ -428,7 +441,14 @@ export function rebuildScene(
     label,
     run: async () => {
       try {
-        await runRebuild(project, previewFeatureId, fromIndex);
+        await runRebuild(
+          project,
+          previewFeatureId,
+          fromIndex,
+          false,
+          options?.expressionErrors,
+          options?.drivenSketches,
+        );
         rebuildFailures = 0;
       } catch (error) {
         handleRebuildFailure(error);
@@ -472,7 +492,8 @@ function handleRebuildFailure(error: unknown): void {
  * cached states captured after it.
  */
 export function rebuildFrom(featureId: string): void {
-  const project = activeModel(useDocumentStore.getState().project);
+  const project = resolvedModel();
+  if (!project) return;
   const index = project.features.findIndex((feature) => feature.id === featureId);
   if (index < 0) return;
   rebuildCacheFor(project.id).invalidateFrom(index);
@@ -482,10 +503,12 @@ export function rebuildFrom(featureId: string): void {
 }
 
 async function runRebuild(
-  project: Model,
+  project: ResolvedModel,
   previewFeatureId: string | null,
   fromIndex?: number,
   recovered = false,
+  expressionErrors?: ReadonlySet<string>,
+  drivenSketches?: ReadonlySet<string>,
 ): Promise<void> {
   const epoch = ++rebuildEpoch;
   const client = getKernelClient();
@@ -524,11 +547,16 @@ async function runRebuild(
     if (!feature) break;
     // The dashed caret sits after the operation that is being computed.
     useKernelStore.getState().setRebuildCursor(index + 1);
+    if (expressionErrors?.has(feature.id)) {
+      state.featureErrors[feature.id] = 'EXPRESSION_ERROR';
+      state.blockedFeatureId = feature.id;
+      break;
+    }
     if (!feature.suppressed) {
       // The input shapes are what an array repeats a later modification from,
       // so they are read before the operation replaces them.
       const beforeShapes = new Map(state.bodyShapes);
-      await evaluateFeature(feature, state, { client, epoch, project });
+      await evaluateFeature(feature, state, { client, epoch, project, drivenSketches });
       if (epoch !== rebuildEpoch) return;
       if (!state.featureErrors[feature.id]) {
         captureFeatureShapes(state, feature.id, beforeShapes);
@@ -550,7 +578,12 @@ async function runRebuild(
   let published = base;
   let preview: ScenePreview | null = null;
 
-  if (previewFeature && previewIndex === endIndex + 1 && !base.blockedFeatureId) {
+  if (
+    previewFeature &&
+    previewIndex === endIndex + 1 &&
+    !base.blockedFeatureId &&
+    !expressionErrors?.has(previewFeature.id)
+  ) {
     if (previewFeature.type === 'primitive') {
       // A primitive in edit mode is a delta: a cheap overlay mesh instead of a
       // kernel body, so it ignores sections and stays above the model.
@@ -669,11 +702,11 @@ function aggregateStats(state: RebuildState): Record<string, ShapeStats> {
 }
 
 function buildPreview(
-  feature: Feature,
+  feature: ResolvedFeature,
   base: RebuildState,
   after: RebuildState,
   ghost: GhostCollector,
-  project: Model,
+  project: ResolvedModel,
 ): ScenePreview {
   const bodies: PreviewBodyMark[] = [];
   let nextNumber = nextBodyNumber(project);
@@ -818,7 +851,7 @@ function disposeUnusedShapes(client: ReturnType<typeof getKernelClient>): void {
 }
 
 async function evaluateFeature(
-  feature: Feature,
+  feature: ResolvedFeature,
   state: RebuildState,
   context: EvalContext,
 ): Promise<void> {
@@ -849,6 +882,20 @@ async function evaluateFeature(
     if (projectionMoved(feature.entities, entities, new Set(projectionEntityIds(feature)))) {
       const solved = await solveReprojectedSketch(feature, entities);
       if (solved) entities = solved;
+    }
+    // A driven dimension is a number only after the formula resolves; the
+    // stored entities are the snapshot from the last solve, so the sketch is
+    // solved again with the resolved constraints.
+    if (
+      context.drivenSketches?.has(feature.id) &&
+      feature.constraints.length > 0 &&
+      !constraintsSatisfied(feature.constraints, entities)
+    ) {
+      const solved = await solveSketch(entities, feature.constraints, [], {
+        derived: [...projectionEntityIds(feature)],
+      });
+      if (solved.conflicting.length > 0) state.featureErrors[feature.id] = 'CONSTRAINT_CONFLICT';
+      else entities = solved.entities;
     }
     state.sketches.set(
       feature.id,
@@ -989,7 +1036,7 @@ function ownAllFaces(owners: Map<string, string[]>, bodyId: string, faces: numbe
 }
 
 async function applyExtrude(
-  feature: ExtrudeFeature,
+  feature: Resolved<ExtrudeFeature>,
   state: RebuildState,
   context: EvalContext,
 ): Promise<void> {
@@ -1013,7 +1060,7 @@ async function applyExtrude(
   // An operation without objects builds nothing yet, which is not an error.
   if (!feature.sketchId && faceRefs.length === 0) return;
 
-  let sketch: SketchFeature | undefined;
+  let sketch: Resolved<SketchFeature> | undefined;
   let selected: ProfileRegion[] = [];
   if (feature.sketchId) {
     sketch = sketches.get(feature.sketchId);
@@ -1031,7 +1078,8 @@ async function applyExtrude(
   const frame = sketch ? (sketchFrames[sketch.id] ?? computeSketchFrame(sketch)) : null;
   // A revolve turns its inputs around a picked line; without that line there is
   // nothing to turn them around.
-  const revolve = feature.method === 'revolve' ? (feature.revolve ?? defaultRevolve()) : undefined;
+  const revolve: Resolved<RevolveSpec> | undefined =
+    feature.method === 'revolve' ? (feature.revolve ?? defaultRevolve()) : undefined;
   const revolveAxis = revolve
     ? resolveRevolveAxis(revolve.axis, {
         meshes,
@@ -1648,12 +1696,20 @@ async function applyExtrude(
  * earlier operation still finds its edges.
  */
 async function applyEdgeTreatment(
-  feature: EdgeTreatmentFeature,
+  feature: Resolved<EdgeTreatmentFeature>,
   state: RebuildState,
   context: EvalContext,
 ): Promise<void> {
   const { client, epoch } = context;
-  const { bodyShapes, meshes, bodyStats, bodySource, faceOwners, featureBodyErrors } = state;
+  const {
+    bodyShapes,
+    meshes,
+    bodyStats,
+    bodySource,
+    faceOwners,
+    featureBodyErrors,
+    featureObjectErrors,
+  } = state;
 
   // An operation without inputs is being configured, not failing.
   if (feature.faceRefs.length === 0 && feature.edgeRefs.length === 0) return;
@@ -1662,6 +1718,11 @@ async function applyEdgeTreatment(
     const errors = featureBodyErrors[feature.id] ?? {};
     errors[bodyId] = code;
     featureBodyErrors[feature.id] = errors;
+  };
+  const markObjectError = (key: string, code: string) => {
+    const errors = featureObjectErrors[feature.id] ?? {};
+    errors[key] = code;
+    featureObjectErrors[feature.id] = errors;
   };
 
   const groups = new Map<string, { faceIds: number[]; edgeIds: string[] }>();
@@ -1676,7 +1737,10 @@ async function applyEdgeTreatment(
   for (const ref of feature.faceRefs) {
     const resolved = resolveFaceRef({ bodyShapes, meshes, bodyStats }, ref);
     if (!resolved) {
-      markBodyError(ref.bodyId, bodyShapes.has(ref.bodyId) ? 'TARGET_FAILED' : 'UNKNOWN_BODY');
+      markObjectError(
+        `face:${ref.bodyId}#${ref.faceId}`,
+        bodyShapes.has(ref.bodyId) ? 'TARGET_FAILED' : 'UNKNOWN_BODY',
+      );
       continue;
     }
     groupOf(resolved.bodyId).faceIds.push(resolved.faceId);
@@ -1684,7 +1748,10 @@ async function applyEdgeTreatment(
   for (const ref of feature.edgeRefs) {
     const resolved = resolveEdgeRef({ bodyShapes, meshes }, ref);
     if (!resolved) {
-      markBodyError(ref.bodyId, bodyShapes.has(ref.bodyId) ? 'TARGET_FAILED' : 'UNKNOWN_BODY');
+      markObjectError(
+        `edge:${ref.bodyId}#${ref.edgeId}`,
+        bodyShapes.has(ref.bodyId) ? 'TARGET_FAILED' : 'UNKNOWN_BODY',
+      );
       continue;
     }
     groupOf(resolved.bodyId).edgeIds.push(resolved.edgeId);
@@ -1722,6 +1789,8 @@ async function applyEdgeTreatment(
         },
       });
     } catch (error) {
+      // The kernel answers for the whole request, so no single edge is named:
+      // the block carries the failure and the rows stay unmarked.
       markBodyError(bodyId, kernelErrorCode(error));
       // Nothing of this operation is on the body any more, so the colours of
       // an earlier attempt would lie about what is there.
@@ -1765,8 +1834,9 @@ async function applyEdgeTreatment(
     dropFaceMarks(state, feature.id, bodyId);
   }
   const bodyErrors = Object.values(featureBodyErrors[feature.id] ?? {});
-  if (!appliedAny || bodyErrors.length > 0) {
-    state.featureErrors[feature.id] = bodyErrors[0] ?? 'TARGET_FAILED';
+  const objectErrors = Object.values(featureObjectErrors[feature.id] ?? {});
+  if (!appliedAny || bodyErrors.length > 0 || objectErrors.length > 0) {
+    state.featureErrors[feature.id] = bodyErrors[0] ?? objectErrors[0] ?? 'TARGET_FAILED';
   }
 }
 
@@ -1799,7 +1869,10 @@ function placementContext(state: RebuildState): ArrayPlacementContext {
  * cannot be resolved is an error of the whole operation: silently repeating
  * the seed would look like the array did nothing.
  */
-function arrayDirectionMatrices(direction: ArrayDirection, state: RebuildState): Matrix3x4[] {
+function arrayDirectionMatrices(
+  direction: Resolved<ArrayDirection>,
+  state: RebuildState,
+): Matrix3x4[] {
   return directionMatrices(direction, placementContext(state));
 }
 
@@ -1810,7 +1883,7 @@ function arrayDirectionMatrices(direction: ArrayDirection, state: RebuildState):
  * into a grid or bends it around an axis (ADR 0029).
  */
 async function applyArray(
-  feature: ArrayFeature,
+  feature: Resolved<ArrayFeature>,
   state: RebuildState,
   context: EvalContext,
 ): Promise<void> {
@@ -2175,7 +2248,9 @@ async function applyArray(
         for (const placement of placements) {
           const copyId = arrayBodyId(feature.id, seedId, placement.key);
           const placedId = trackShape(`tool:${feature.id}:${sourceIndex}:repeat:${placement.key}`);
-          const resultId = trackShape(`${seedId}:${feature.id}:${sourceIndex}:repeat:${placement.key}`);
+          const resultId = trackShape(
+            `${seedId}:${feature.id}:${sourceIndex}:repeat:${placement.key}`,
+          );
           try {
             const placed = await client.request<MakeBoxResult>({
               type: 'transform-shape',
@@ -2351,7 +2426,7 @@ function arrayStampKey(feature: ArrayFeature, sources: readonly ArrayFeatureSour
  * selection, so the settings answer at once.
  */
 async function previewArray(
-  feature: ArrayFeature,
+  feature: Resolved<ArrayFeature>,
   state: RebuildState,
   context: EvalContext,
   sources: readonly ArrayFeatureSource[],
@@ -2381,7 +2456,7 @@ async function previewArray(
 
 /** One volume per stamp per placement, named after both. */
 function arrayCopyGhosts(
-  feature: ArrayFeature,
+  feature: Resolved<ArrayFeature>,
   stamps: readonly ArrayStamp[],
   placements: ReadonlyArray<{ matrix: Matrix3x4 }>,
 ): Array<{ id: string; kind: ArrayStamp['kind']; mesh: TessellationResult; matrix: Matrix3x4 }> {
@@ -2413,19 +2488,21 @@ function arrayCopyGhosts(
  * hold the same meshes and sketch frames the last rebuild worked on.
  */
 export function previewArrayCopies(
-  feature: ArrayFeature,
+  feature: Resolved<ArrayFeature>,
 ): { ghosts: SceneGhost[]; origin: Vec3 } | null {
   const stamp = arrayStampCache.get(feature.id);
   if (!stamp || stamp.stamps.length === 0) return null;
   if (feature.directions.length === 0) return null;
   const kernel = useKernelStore.getState();
-  const model = activeModel(useDocumentStore.getState().project);
+  const model = resolvedModel();
+  if (!model) return null;
   let placements: Array<{ key: string; matrix: Matrix3x4 }>;
   try {
     placements = arrayDirections(feature.directions, {
       meshes: kernel.meshes,
       sketches: model.features.filter(
-        (candidate): candidate is SketchFeature => candidate.type === 'sketch',
+        (candidate): candidate is Extract<ResolvedFeature, { type: 'sketch' }> =>
+          candidate.type === 'sketch',
       ),
       frames: kernel.sketchFrames,
     }).placements;
@@ -2444,7 +2521,7 @@ export function previewArrayCopies(
 
 /** The stamp of an array, measured once and reused while the selection holds. */
 async function arrayStamp(
-  feature: ArrayFeature,
+  feature: Resolved<ArrayFeature>,
   state: RebuildState,
   context: EvalContext,
   sources: readonly ArrayFeatureSource[],
@@ -2539,7 +2616,7 @@ function stampCenter(stamps: readonly ArrayStamp[]): Vec3 {
 }
 
 async function applyShell(
-  feature: ShellFeature,
+  feature: Resolved<ShellFeature>,
   state: RebuildState,
   context: EvalContext,
 ): Promise<void> {
@@ -2743,7 +2820,7 @@ function throughAllAllowed(op: ExtrudeFeature['op']): boolean {
 }
 
 function extrudeDistances(
-  feature: ExtrudeFeature,
+  feature: Resolved<ExtrudeFeature>,
   origin: readonly [number, number, number],
   normal: readonly [number, number, number],
   meshes: Record<string, TessellationResult>,

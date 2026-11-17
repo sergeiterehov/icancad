@@ -1,6 +1,6 @@
-import type { SketchFeature } from '@icancad/model';
+import { isFormula, type SketchFeature } from '@icancad/model';
 import { AlertTriangle, MousePointer2, Trash2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   constraintEntityIds,
@@ -9,17 +9,32 @@ import {
 } from '../sketch/constraintModel';
 import { isNumericConstraint } from '../sketch/dimensions';
 import { useDocumentStore } from '../stores/documentStore';
+import { resolvedFeatureFor, useFormulaStore } from '../stores/formulaStore';
 import { useUiStore } from '../stores/uiStore';
 import { CONSTRAINT_CATALOG, constraintLabel } from './constraintCatalog';
 import { useContextMenuStore } from './ContextMenu';
 import { PanelSection } from './Controls';
 import { formatNumber } from './format';
+import { formulaMessage } from './formulaMessage';
+import { ErrorBadge } from './PickableSection';
 import { Tooltip } from './Tooltip';
 import { useListSelection } from './useListSelection';
 
-function constraintValue(constraint: SketchFeature['constraints'][number], locale: string): string {
+function constraintValue(
+  constraint: SketchFeature['constraints'][number],
+  locale: string,
+  resolved: number | undefined,
+  error?: string,
+): string {
   if (!isNumericConstraint(constraint)) return '';
-  const value = formatNumber(constraint.value ?? 0, locale, 2);
+  if (error) return '—';
+  const number = Number.isFinite(resolved)
+    ? resolved
+    : typeof constraint.value === 'number'
+      ? constraint.value
+      : undefined;
+  if (number === undefined) return '—';
+  const value = formatNumber(number, locale, 2);
   switch (constraint.type) {
     case 'angle':
       return `${value}°`;
@@ -41,9 +56,40 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
   const selectedConstraintIds = useUiStore((state) => state.sketchConstraintIds);
   const selectConstraint = useUiStore((state) => state.selectSketchConstraint);
   const selectConstraints = useUiStore((state) => state.selectSketchConstraints);
+  const setDimensionEdit = useUiStore((state) => state.setSketchDimensionEdit);
   const problemIds = useUiStore((state) => state.sketchProblemConstraintIds);
   const openMenu = useContextMenuStore((state) => state.open);
   const [onlyProblems, setOnlyProblems] = useState(false);
+  const resolution = useFormulaStore((state) => state.resolution);
+  const formulaRevision = resolution?.revision ?? 0;
+  const resolvedConstraints = useMemo(() => {
+    const resolved = resolvedFeatureFor(feature);
+    return new Map(
+      (resolved?.type === 'sketch' ? resolved.constraints : []).map((constraint) => [
+        constraint.id,
+        constraint,
+      ]),
+    );
+  }, [feature, formulaRevision]);
+
+  const constraintErrors = useMemo(() => {
+    const errors = resolution?.errors[feature.id] ?? {};
+    const found = new Map<string, string>();
+    feature.constraints.forEach((constraint, index) => {
+      const message = formulaMessage(t, errors[`constraints.${index}.value`]);
+      if (message) found.set(constraint.id, message);
+    });
+    return found;
+  }, [feature, resolution?.errors, t]);
+  const constraintErrorText = feature.constraints
+    .filter((constraint) => constraintErrors.has(constraint.id))
+    .map(
+      (constraint) =>
+        `${constraintLabel((key) => t(key as never), constraint.type)}: ${constraintErrors.get(
+          constraint.id,
+        )}`,
+    )
+    .join(' · ');
 
   const problems = new Set(problemIds);
   const hasProblems = feature.constraints.some((constraint) => problems.has(constraint.id));
@@ -88,19 +134,24 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
       count={feature.constraints.length}
       divided
       action={
-        hasProblems ? (
-          <Tooltip content={t('constraint.problemsHint')}>
-            <button
-              type="button"
-              className="panel-warning"
-              aria-label={t('constraint.problemsHint')}
-              data-active={onlyProblems ? 'true' : undefined}
-              data-testid="constraint-problems"
-              onClick={() => setOnlyProblems((current) => !current)}
-            >
-              <AlertTriangle size={14} />
-            </button>
-          </Tooltip>
+        hasProblems || constraintErrors.size > 0 ? (
+          <span className="panel-section-actions">
+            {constraintErrors.size > 0 && <ErrorBadge message={constraintErrorText} />}
+            {hasProblems && (
+              <Tooltip content={t('constraint.problemsHint')}>
+                <button
+                  type="button"
+                  className="panel-warning"
+                  aria-label={t('constraint.problemsHint')}
+                  data-active={onlyProblems ? 'true' : undefined}
+                  data-testid="constraint-problems"
+                  onClick={() => setOnlyProblems((current) => !current)}
+                >
+                  <AlertTriangle size={14} />
+                </button>
+              </Tooltip>
+            )}
+          </span>
         ) : undefined
       }
     >
@@ -115,10 +166,11 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
               (selectedEntityIds.size > 0 && !relatedByElement) ||
               (selectedConstraintIds.length > 0 && !activeConstraintIds.has(constraint.id));
             const Icon = CONSTRAINT_CATALOG[constraint.type]?.icon;
+            const constraintError = constraintErrors.get(constraint.id);
             return (
               <div
                 key={constraint.id}
-                className="constraint-row"
+                className={`constraint-row${isFormula(constraint.value) ? ' is-formula' : ''}`}
                 data-active={activeConstraintIds.has(constraint.id) ? 'true' : undefined}
                 data-dimmed={dimmed ? 'true' : undefined}
                 data-problem={problems.has(constraint.id) ? 'true' : undefined}
@@ -136,7 +188,9 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
                   // member of a multi-selection keeps it, otherwise the action
                   // applies to that constraint alone.
                   const targets = activeConstraintIds.has(constraint.id)
-                    ? feature.constraints.filter((candidate) => activeConstraintIds.has(candidate.id))
+                    ? feature.constraints.filter((candidate) =>
+                        activeConstraintIds.has(candidate.id),
+                      )
                     : [constraint];
                   const geometryIds = constraintsGeometryIds(targets);
                   openMenu(event.clientX, event.clientY, [
@@ -165,9 +219,31 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
                   {constraintLabel((key) => t(key as never), constraint.type)}
                 </span>
                 {constraint.value !== undefined && isNumericConstraint(constraint) && (
-                  <span className="constraint-value-text">
-                    {constraintValue(constraint, locale)}
-                  </span>
+                  <button
+                    type="button"
+                    className={`constraint-value-text${isFormula(constraint.value) ? ' is-formula' : ''}${
+                      constraintError ? ' is-error' : ''
+                    }`}
+                    title={t('constraint.editValue')}
+                    aria-label={`${constraintValue(
+                      constraint,
+                      locale,
+                      resolvedConstraints.get(constraint.id)?.value,
+                      constraintError,
+                    )}. ${t('constraint.editValue')}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setDimensionEdit(constraint.id);
+                    }}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  >
+                    {constraintValue(
+                      constraint,
+                      locale,
+                      resolvedConstraints.get(constraint.id)?.value,
+                      constraintError,
+                    )}
+                  </button>
                 )}
               </div>
             );

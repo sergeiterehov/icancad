@@ -27,11 +27,13 @@ import { rebuildScene } from '../kernel/rebuild';
 import { pathKey, useDocumentStore } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { useUiStore } from '../stores/uiStore';
+import { resolvedModel, useFormulaStore } from '../stores/formulaStore';
+import { useResolvedFeature } from '../hooks/useResolvedFeature';
 import {
-  DimensionField,
   IconButton,
   ObjectPickerField,
   PanelSection,
+  ParamField,
   Segmented,
   SegmentedTab,
 } from './Controls';
@@ -43,6 +45,7 @@ import {
   sketchEdgeNumber,
   sketchFaceNumber,
 } from './geometryNames';
+import { formulaMessage } from './formulaMessage';
 import { PickableSection, type PickableRow } from './PickableSection';
 import { Tooltip } from './Tooltip';
 
@@ -101,6 +104,7 @@ function directionIcon(kind: ArrayDirection['kind']) {
  */
 export function ArraySection({ feature }: { feature: ArrayFeature }) {
   const { t } = useTranslation();
+  const geometry = useResolvedFeature(feature);
   const project = useDocumentStore((state) => state.project);
   const setArrayTarget = useDocumentStore((state) => state.setArrayTarget);
   const toggleArrayBody = useDocumentStore((state) => state.toggleArrayBody);
@@ -108,11 +112,10 @@ export function ArraySection({ feature }: { feature: ArrayFeature }) {
   const addArrayDirection = useDocumentStore((state) => state.addArrayDirection);
   const removeArrayDirection = useDocumentStore((state) => state.removeArrayDirection);
   const setArrayDirectionKind = useDocumentStore((state) => state.setArrayDirectionKind);
-  const setArrayCount = useDocumentStore((state) => state.setArrayCount);
-  const setArraySpacing = useDocumentStore((state) => state.setArraySpacing);
-  const setArrayAngle = useDocumentStore((state) => state.setArrayAngle);
+  const setFeatureParameter = useDocumentStore((state) => state.setFeatureParameter);
+  const formulaErrors = useFormulaStore((state) => state.resolution?.errors ?? {});
+  const paramError = (path: string) => formulaMessage(t, formulaErrors[feature.id]?.[path]);
   const setArrayAxis = useDocumentStore((state) => state.setArrayAxis);
-  const setArrayTilt = useDocumentStore((state) => state.setArrayTilt);
   const setArrayAxisFace = useDocumentStore((state) => state.setArrayAxisFace);
   const invertArrayDirection = useDocumentStore((state) => state.invertArrayDirection);
   const toggleArrayPath = useDocumentStore((state) => state.toggleArrayPath);
@@ -153,10 +156,8 @@ export function ArraySection({ feature }: { feature: ArrayFeature }) {
   useEffect(() => {
     const picking = Boolean(pickingBodies ?? pickingOperations);
     if (wasPicking.current && !picking) {
-      void rebuildScene(
-        activeModel(useDocumentStore.getState().project),
-        i18n.t('status.rebuild'),
-      ).catch(() => undefined);
+      const model = resolvedModel();
+      if (model) void rebuildScene(model, i18n.t('status.rebuild')).catch(() => undefined);
     }
     wasPicking.current = picking;
   }, [pickingBodies, pickingOperations]);
@@ -296,7 +297,6 @@ export function ArraySection({ feature }: { feature: ArrayFeature }) {
             const rotationAxis = direction.kind === 'rotation' ? direction.axis : null;
             const worldAxis = rotationAxis?.kind === 'world' ? rotationAxis.axis : null;
             const faceAxis = rotationAxis && rotationAxis.kind !== 'world' ? rotationAxis : null;
-            const tilt = direction.kind === 'linear' ? (direction.angle ?? 0) : 0;
             const axisIndex =
               direction.kind === 'rotation'
                 ? worldAxis
@@ -371,33 +371,53 @@ export function ArraySection({ feature }: { feature: ArrayFeature }) {
                 </Segmented>
 
                 <div className="dimension-row">
-                  <DimensionField
+                  <ParamField
                     axis="N"
                     label={t('array.count')}
                     value={direction.count}
-                    onCommit={(count) => setArrayCount(feature.id, index, count)}
+                    resolved={geometry?.directions[index]?.count}
+                    error={paramError(`directions.${index}.count`)}
+                    onCommit={(value) =>
+                      setFeatureParameter(feature.id, `directions.${index}.count`, value)
+                    }
                   />
                   {direction.kind === 'linear' && (
-                    <DimensionField
+                    <ParamField
                       icon={<ArrowRight size={13} />}
                       label={t('array.spacing')}
                       suffix="mm"
                       allowNegative
                       value={direction.spacing}
-                      onCommit={(spacing) => setArraySpacing(feature.id, index, spacing)}
+                      resolved={
+                        geometry?.directions[index]?.kind === 'linear'
+                          ? geometry.directions[index].spacing
+                          : undefined
+                      }
+                      error={paramError(`directions.${index}.spacing`)}
+                      onCommit={(value) =>
+                        setFeatureParameter(feature.id, `directions.${index}.spacing`, value)
+                      }
                     />
                   )}
                   {direction.kind === 'rotation' && (
                     // The span is a number between 0 and 360: which way the
                     // copies turn is the switch next to it, never a minus sign.
-                    <DimensionField
+                    <ParamField
                       icon={<RotateCw size={13} />}
                       label={t('array.angle')}
                       tooltip={t('array.angleHint')}
                       suffix="°"
                       allowNegative={false}
-                      value={direction.angle}
-                      onCommit={(angle) => setArrayAngle(feature.id, index, angle)}
+                      value={direction.angle ?? 0}
+                      resolved={
+                        geometry?.directions[index]?.kind === 'rotation'
+                          ? geometry.directions[index].angle
+                          : undefined
+                      }
+                      error={paramError(`directions.${index}.angle`)}
+                      onCommit={(value) =>
+                        setFeatureParameter(feature.id, `directions.${index}.angle`, value)
+                      }
                     />
                   )}
                   {/* Turning the array around is turning its step around: the
@@ -457,13 +477,21 @@ export function ArraySection({ feature }: { feature: ArrayFeature }) {
                       </Segmented>
 
                       {direction.kind === 'linear' && (
-                        <DimensionField
+                        <ParamField
                           icon={<Angle size={13} />}
                           label={t('array.tilt')}
                           tooltip={t('array.tiltHint')}
                           suffix="°"
-                          value={tilt}
-                          onCommit={(next) => setArrayTilt(feature.id, index, next)}
+                          value={direction.angle ?? 0}
+                          resolved={
+                            geometry?.directions[index]?.kind === 'linear'
+                              ? (geometry.directions[index].angle ?? 0)
+                              : undefined
+                          }
+                          error={paramError(`directions.${index}.angle`)}
+                          onCommit={(value) =>
+                            setFeatureParameter(feature.id, `directions.${index}.angle`, value)
+                          }
                         />
                       )}
 

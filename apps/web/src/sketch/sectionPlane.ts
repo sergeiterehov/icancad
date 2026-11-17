@@ -1,5 +1,12 @@
 import type { TessellationResult } from '@icancad/kernel';
-import type { SectionPlane, SketchFeature, SketchFrame, Vec3 } from '@icancad/model';
+import type {
+  ParamValue,
+  Resolved,
+  SectionPlane,
+  SketchFeature,
+  SketchFrame,
+  Vec3,
+} from '@icancad/model';
 import { datumFrame, faceFrame } from '@icancad/sketch';
 import { isPlanarFace } from '../viewport/planarFace';
 
@@ -88,13 +95,20 @@ function withDirection(frame: SketchFrame, inverted: boolean | undefined): Sketc
 
 // Computed once while the sketch operation is being evaluated, then stored as
 // the sketch object's frozen frame for the rest of that rebuild.
+type SketchLike = SketchFeature | Resolved<SketchFeature>;
+
+/** The number of a resolved or authored offset; a formula alone is not one. */
+function numeric(value: ParamValue | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
 export function computeSketchFrame(
-  feature: SketchFeature,
+  feature: SketchLike,
   faceMesh?: TessellationResult,
 ): SketchFrame {
   if (feature.plane.type === 'datum') {
     return withDirection(
-      datumFrame(feature.plane.plane, feature.plane.offset),
+      datumFrame(feature.plane.plane, numeric(feature.plane.offset)),
       feature.plane.inverted,
     );
   }
@@ -102,26 +116,23 @@ export function computeSketchFrame(
   const dynamic = faceFrameFromMesh(faceMesh, faceId);
   const base = dynamic ?? feature.plane.frame ?? datumFrame('XY', 0);
   return withDirection(
-    withSketchOffset(base, feature.plane.offset ?? 0),
+    withSketchOffset(base, numeric(feature.plane.offset)),
     feature.plane.inverted,
   );
 }
 
 // The frozen frame wins; without one (before the first rebuild) fall back to
 // the frame captured when the face was picked.
-export function sketchFrameOf(
-  feature: SketchFeature,
-  frozenFrame?: SketchFrame,
-): SketchFrame {
+export function sketchFrameOf(feature: SketchLike, frozenFrame?: SketchFrame): SketchFrame {
   if (frozenFrame) return frozenFrame;
   if (feature.plane.type === 'datum') {
     return withDirection(
-      datumFrame(feature.plane.plane, feature.plane.offset),
+      datumFrame(feature.plane.plane, numeric(feature.plane.offset)),
       feature.plane.inverted,
     );
   }
   return withDirection(
-    withSketchOffset(feature.plane.frame ?? datumFrame('XY', 0), feature.plane.offset ?? 0),
+    withSketchOffset(feature.plane.frame ?? datumFrame('XY', 0), numeric(feature.plane.offset)),
     feature.plane.inverted,
   );
 }
@@ -149,7 +160,11 @@ export function canEditSketch(
   feature: SketchFeature,
   featureErrors: Record<string, string>,
 ): boolean {
-  return sketchPlaneReady(feature) && !featureErrors[feature.id];
+  const error = featureErrors[feature.id];
+  // A broken formula leaves the sketch's last solved geometry intact. Editing
+  // it and fixing the formula is exactly what the user needs to do next, so
+  // only a missing or invalid plane closes the editor.
+  return sketchPlaneReady(feature) && (!error || error === 'EXPRESSION_ERROR');
 }
 
 // The sketch plane cuts the model away in front of the camera, so the section

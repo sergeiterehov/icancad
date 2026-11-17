@@ -43,6 +43,15 @@ direction and could not be matched after a rebuild. An edge ref is therefore
 matched by its start and its middle vertex, and the direction falls back to the
 chord between them. Closed rims then resolve like any other edge.
 
+## Open edges whose span changed
+
+A sketch change can shorten an open curved edge while its middle and direction
+stay on the same curve. The stored ends then lie beyond the rebuilt edge, so an
+exact pose match fails. The resolver accepts the edge when its middle and
+direction still match, which is the same temporary pose-based naming used for
+the other cases. This is a compatibility fallback, not a stable topology id;
+Persistent naming (M5) is still the proper fix.
+
 ## Kernel
 
 `edge-treatment` takes the source shape, the kind, face ids, edge ids and a size,

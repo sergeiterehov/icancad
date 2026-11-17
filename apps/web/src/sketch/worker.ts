@@ -32,15 +32,23 @@ scope.onmessage = (event) => {
   void (async () => {
     try {
       const gcs = await getWrapper();
-      gcs.clear_data();
-      const { primitives } = buildSolverPrimitives(
-        request.entities,
-        request.constraints,
-        request.pinned,
-        request.derived,
-      );
-      gcs.push_primitives_and_params(primitives);
-      const status = gcs.solve(Algorithm.DogLeg);
+      const solveWith = (algorithm: Algorithm) => {
+        gcs.clear_data();
+        const { primitives } = buildSolverPrimitives(
+          request.entities,
+          request.constraints,
+          request.pinned,
+          request.derived,
+        );
+        gcs.push_primitives_and_params(primitives);
+        return gcs.solve(algorithm);
+      };
+      // DogLeg is the usual choice, but a solver that fails on it may still
+      // find a solution with another method. A failed attempt leaves the
+      // parameters mutated, so every attempt starts from a fresh system.
+      let status = solveWith(Algorithm.DogLeg);
+      if (status === 2 || status === 3) status = solveWith(Algorithm.LevenbergMarquardt);
+      if (status === 2 || status === 3) status = solveWith(Algorithm.BFGS);
       if (status === 2 || status === 3) {
         scope.postMessage({
           id: request.id,

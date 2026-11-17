@@ -17,6 +17,7 @@ import {
   type PrimitiveFeature,
   type SketchEntity,
   type ExtrudeFeature,
+  type ParamValue,
   type SketchFeature,
 } from '@icancad/model';
 import {
@@ -42,7 +43,7 @@ import {
   Spline,
   SquareArrowRightExit,
 } from 'lucide-react';
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   bodyFaceKey,
@@ -51,6 +52,7 @@ import {
   useViewModel,
 } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
+import { resolvedFeatureFor, useFormulaStore } from '../stores/formulaStore';
 import {
   selectedBodyFaces,
   selectedDetailBodyId,
@@ -59,19 +61,13 @@ import {
 } from '../stores/selection';
 import { findBoundExtrude, quickTargetFromSelection } from '../quick/target';
 import { bodyEdgeNumber, faceNumber, geometryName } from './geometryNames';
-import {
-  PYRAMID_MAX_SIDES,
-  PYRAMID_MIN_SIDES,
-  withPrimitiveParam,
-  type PrimitiveSizeKey,
-} from '../primitive/params';
+import { PYRAMID_MAX_SIDES, PYRAMID_MIN_SIDES, type PrimitiveSizeKey } from '../primitive/params';
 import { isPlanarFace } from '../viewport/planarFace';
 import { useUiStore } from '../stores/uiStore';
 import {
   Button,
-  DimensionField,
   IconButton,
-  NumberField,
+  ParamField,
   FormError,
   ObjectPickerField,
   PanelSection,
@@ -82,6 +78,7 @@ import {
   TextField,
 } from './Controls';
 import { formatNumber } from './format';
+import { formulaMessage } from './formulaMessage';
 import { useContextMenuStore } from './ContextMenu';
 import { ChamferIcon, FilletIcon } from './edgeIcons';
 import {
@@ -94,6 +91,7 @@ import {
 } from './featureIcons';
 import { PickableSection, type PickableRow } from './PickableSection';
 import { ArraySection } from './ArraySection';
+import { VariablesSection } from './VariablesSection';
 import {
   constraintsGeometryIds,
   diagnoseSketch,
@@ -141,33 +139,6 @@ function sketchEntityMeta(entity: SketchEntity, locale: string): string {
     case 'bezier':
       return `${entity.points.length}`;
   }
-}
-
-function SketchOffsetField({
-  label,
-  value,
-  unit,
-  onCommit,
-}: {
-  label: string;
-  value: number;
-  unit: string;
-  onCommit: (value: number) => void;
-}) {
-  return (
-    <Tooltip content={label}>
-      <NumberField
-        label={label}
-        value={value}
-        allowNegative
-        onCommit={onCommit}
-        className="sketch-offset-field"
-        inputClassName="sketch-offset-input"
-        prefix={<MoveVertical size={13} />}
-        suffix={<span className="sketch-offset-unit">{unit}</span>}
-      />
-    </Tooltip>
-  );
 }
 
 function referenceSummary(feature: SketchFeature, entityId: string, locale: string): string | null {
@@ -433,6 +404,9 @@ export function Inspector() {
   const projectUnits = useDocumentStore((state) => state.project.units);
   const apply = useDocumentStore((state) => state.apply);
   const renameProject = useDocumentStore((state) => state.renameProject);
+  const renameModel = (name: string) => {
+    apply({ type: 'model/rename', modelId: project.id, name });
+  };
   const select = useDocumentStore((state) => state.select);
   const selectMany = useDocumentStore((state) => state.selectMany);
   const renameGroup = useDocumentStore((state) => state.renameGroup);
@@ -445,14 +419,15 @@ export function Inspector() {
   const setExtrudeMethod = useDocumentStore((state) => state.setExtrudeMethod);
   const setRevolveAxis = useDocumentStore((state) => state.setRevolveAxis);
   const setRevolveAngles = useDocumentStore((state) => state.setRevolveAngles);
+  const setFeatureParameter = useDocumentStore((state) => state.setFeatureParameter);
+  const formulaErrors = useFormulaStore((state) => state.resolution?.errors ?? {});
+  const paramError = (featureId: string, path: string) =>
+    formulaMessage(t, formulaErrors[featureId]?.[path]);
   const setRevolveInverted = useDocumentStore((state) => state.setRevolveInverted);
   const setEdgeTreatmentKind = useDocumentStore((state) => state.setEdgeTreatmentKind);
-  const setEdgeTreatmentSize = useDocumentStore((state) => state.setEdgeTreatmentSize);
   const toggleEdgeTreatmentFace = useDocumentStore((state) => state.toggleEdgeTreatmentFace);
   const toggleEdgeTreatmentEdge = useDocumentStore((state) => state.toggleEdgeTreatmentEdge);
   const setShellDirection = useDocumentStore((state) => state.setShellDirection);
-  const setShellThickness = useDocumentStore((state) => state.setShellThickness);
-  const setShellOffset = useDocumentStore((state) => state.setShellOffset);
   const toggleShellBody = useDocumentStore((state) => state.toggleShellBody);
   const toggleShellFace = useDocumentStore((state) => state.toggleShellFace);
   const toggleBodyVisibility = useDocumentStore((state) => state.toggleBodyVisibility);
@@ -497,6 +472,11 @@ export function Inspector() {
     selection.length === 1 && selection[0]?.kind === 'feature'
       ? project.features.find((candidate) => candidate.id === selection[0]?.id)
       : undefined;
+  const formulaRevision = useFormulaStore((state) => state.resolution?.revision ?? 0);
+  const resolvedFeature = useMemo(
+    () => (feature ? resolvedFeatureFor(feature) : undefined),
+    [feature, formulaRevision],
+  );
   // A selected face or edge keeps its body panel open: the panel is still
   // about that object, plus the quick operation the detail offers.
   const detailBodyId = selection.length === 1 ? selectedDetailBodyId(selection[0]!) : null;
@@ -511,6 +491,7 @@ export function Inspector() {
   const detailEdge = selection.length === 1 ? selectedEdges(selection)[0] : undefined;
   const quickTarget = selection.length === 1 ? quickTargetFromSelection(project, selection) : null;
   const quickExtrude = quickTarget ? findBoundExtrude(project, quickTarget) : undefined;
+  const quickExtrudeResolved = quickExtrude ? resolvedFeatureFor(quickExtrude) : undefined;
   const detailMesh = detailBodyId ? meshes[detailBodyId] : undefined;
   const detailPlanar = Boolean(
     detailFace && detailMesh && isPlanarFace(detailMesh, Number(detailFace.faceId)),
@@ -555,10 +536,10 @@ export function Inspector() {
       ),
   });
   const sketchOffset =
-    feature?.type === 'sketch'
-      ? feature.plane.type === 'datum'
-        ? feature.plane.offset
-        : (feature.plane.offset ?? 0)
+    resolvedFeature?.type === 'sketch'
+      ? resolvedFeature.plane.type === 'datum'
+        ? resolvedFeature.plane.offset
+        : (resolvedFeature.plane.offset ?? 0)
       : 0;
   // One operation can own several bodies, so an operation shows the bounds of
   // all of them together.
@@ -655,7 +636,9 @@ export function Inspector() {
   // A revolve keeps its line between visits; an operation switched by an older
   // file may have no spec yet, so the default stands in.
   const revolve =
-    extrudeFeature?.method === 'revolve' ? (extrudeFeature.revolve ?? defaultRevolve()) : null;
+    resolvedFeature?.type === 'extrude' && resolvedFeature.method === 'revolve'
+      ? (resolvedFeature.revolve ?? defaultRevolve())
+      : null;
   const revolveSpec = revolve ?? defaultRevolve();
   const edgeAxis = revolve && revolve.axis.kind !== 'world' ? revolve.axis : undefined;
   const edgeAxisLabel = edgeAxis
@@ -679,19 +662,24 @@ export function Inspector() {
       }) !== null
     : true;
   const treatmentFeature = feature?.type === 'edge-treatment' ? feature : undefined;
+  const resolvedTreatment =
+    resolvedFeature?.type === 'edge-treatment' ? resolvedFeature : undefined;
   // The kernel reduces a size that does not fit; the inspector says so next to
   // the field instead of turning the operation into an error.
   const treatmentApplied = treatmentFeature ? featureLimits[treatmentFeature.id] : undefined;
+  const treatmentSize = resolvedTreatment?.size ?? 0;
   const treatmentWarning =
-    treatmentFeature && treatmentApplied && treatmentApplied.applied < treatmentFeature.size
+    treatmentFeature && treatmentApplied && treatmentApplied.applied < treatmentSize
       ? t('edgeTreatment.maxWarning', {
           value: formatNumber(treatmentApplied.applied, locale, 2),
         })
       : undefined;
   const shellFeature = feature?.type === 'shell' ? feature : undefined;
+  const resolvedShell = resolvedFeature?.type === 'shell' ? resolvedFeature : undefined;
   const shellApplied = shellFeature ? featureLimits[shellFeature.id] : undefined;
+  const shellThickness = resolvedShell?.thickness ?? 0;
   const shellWarning =
-    shellFeature && shellApplied && shellApplied.applied < shellFeature.thickness
+    shellFeature && shellApplied && shellApplied.applied < shellThickness
       ? t('shell.maxWarning', {
           value: formatNumber(shellApplied.applied, locale, 2),
         })
@@ -709,14 +697,15 @@ export function Inspector() {
   };
   const setExtrudeEnd = (featureId: string, end: ExtrudeFeature['end']) =>
     replaceExtrude(featureId, { end });
-  const setExtrudeDistance = (featureId: string, distance: number) =>
-    replaceExtrude(featureId, { distance });
+
   const setExtrudeSecondDirection = (
     featureId: string,
     secondDirection: ExtrudeFeature['secondDirection'],
   ) => replaceExtrude(featureId, { secondDirection });
 
   const bodyNameOf = (bodyId: string) => project.metadata[bodyId]?.name;
+  const treatmentRowError = (code: string | undefined) =>
+    code ? translate(t, `errors.${code}`, code) : undefined;
   const treatmentRows: PickableRow[] = treatmentFeature
     ? [
         ...treatmentFeature.faceRefs.map((ref, index) => ({
@@ -724,7 +713,9 @@ export function Inspector() {
           name: t('sketch.face', { index: index + 1 }),
           meta: bodyNameOf(ref.bodyId),
           icon: <Hexagon size={13} />,
-          error: featureBodyErrors[treatmentFeature.id]?.[ref.bodyId],
+          error: treatmentRowError(
+            featureObjectErrors[treatmentFeature.id]?.[`face:${ref.bodyId}#${ref.faceId}`],
+          ),
           onRemove: () => toggleEdgeTreatmentFace(treatmentFeature.id, ref),
         })),
         ...treatmentFeature.edgeRefs.map((ref, index) => ({
@@ -732,7 +723,9 @@ export function Inspector() {
           name: t('sketch.edge', { index: index + 1 }),
           meta: bodyNameOf(ref.bodyId),
           icon: <Spline size={13} />,
-          error: featureBodyErrors[treatmentFeature.id]?.[ref.bodyId],
+          error: treatmentRowError(
+            featureObjectErrors[treatmentFeature.id]?.[`edge:${ref.bodyId}#${ref.edgeId}`],
+          ),
           onRemove: () => toggleEdgeTreatmentEdge(treatmentFeature.id, ref),
         })),
       ]
@@ -909,50 +902,44 @@ export function Inspector() {
       ]
     : [];
 
-  const updatePrimitive = (primitive: PrimitiveFeature, key: PrimitiveSizeKey, value: number) => {
-    apply({ type: 'feature/replace', feature: withPrimitiveParam(primitive, key, value) });
-  };
-
-  // A box grows from its corner, so the position is the corner itself.
-  const updatePrimitivePosition = (axis: number, value: number) => {
-    if (!isPrimitive(feature)) return;
-    const translation: [number, number, number] = [...feature.transform.translation];
-    translation[axis] = value;
-    apply({
-      type: 'feature/replace',
-      feature: { ...feature, transform: { ...feature.transform, translation } },
-    });
+  const primitiveValue = (key: PrimitiveSizeKey): number => {
+    if (!resolvedFeature || resolvedFeature.type !== 'primitive') return 0;
+    return (resolvedFeature.params as Record<string, number>)[key] ?? 0;
   };
 
   // Every primitive edits the same position fields and its own sizes. The
   // diameters shown here are the stored radii doubled, so the model keeps the
   // numbers the kernel makers take.
   const primitiveSizeFields = (primitive: PrimitiveFeature) => {
-    const change = (key: PrimitiveSizeKey, value: number) => updatePrimitive(primitive, key, value);
+    const change = (key: PrimitiveSizeKey, value: ParamValue) =>
+      setFeatureParameter(primitive.id, `params.${key}`, value);
+    const field = (key: PrimitiveSizeKey) => ({
+      value: (primitive.params as Record<string, ParamValue>)[key]!,
+      resolved: primitiveValue(key),
+      error: paramError(primitive.id, `params.${key}`),
+      onCommit: (value: ParamValue) => change(key, value),
+    });
     switch (primitive.kind) {
       case 'box':
         return (
           <div className="dimension-row">
-            <DimensionField
+            <ParamField
               icon={<SquareArrowRightExit size={13} />}
               label={`${t('inspector.width')} · mm`}
               suffix="mm"
-              value={primitive.params.dx}
-              onCommit={(value) => change('dx', value)}
+              {...field('dx')}
             />
-            <DimensionField
+            <ParamField
               icon={<LayerArrowUp size={13} />}
               label={`${t('inspector.depth')} · mm`}
               suffix="mm"
-              value={primitive.params.dy}
-              onCommit={(value) => change('dy', value)}
+              {...field('dy')}
             />
-            <DimensionField
+            <ParamField
               icon={<MoveVertical size={13} />}
               label={`${t('inspector.height')} · mm`}
               suffix="mm"
-              value={primitive.params.dz}
-              onCommit={(value) => change('dz', value)}
+              {...field('dz')}
             />
           </div>
         );
@@ -960,36 +947,33 @@ export function Inspector() {
         return (
           <>
             <div className="dimension-row">
-              <DimensionField
+              <ParamField
                 icon={<Circle size={13} />}
-                label={`${t('inspector.diameter')} · mm`}
+                label={`${t('inspector.radius')} · mm`}
                 suffix="mm"
-                value={primitive.params.radius * 2}
-                onCommit={(value) => change('radius', value / 2)}
+                {...field('radius')}
               />
             </div>
             <StatRow
-              label={t('inspector.radius')}
-              value={`${formatNumber(primitive.params.radius, locale)} mm`}
+              label={t('inspector.diameter')}
+              value={`${formatNumber(primitiveValue('radius') * 2, locale)} mm`}
             />
           </>
         );
       case 'cylinder':
         return (
           <div className="dimension-row">
-            <DimensionField
+            <ParamField
               icon={<Circle size={13} />}
               label={`${t('inspector.radius')} · mm`}
               suffix="mm"
-              value={primitive.params.radius}
-              onCommit={(value) => change('radius', value)}
+              {...field('radius')}
             />
-            <DimensionField
+            <ParamField
               icon={<MoveVertical size={13} />}
               label={`${t('inspector.height')} · mm`}
               suffix="mm"
-              value={primitive.params.height}
-              onCommit={(value) => change('height', value)}
+              {...field('height')}
             />
           </div>
         );
@@ -997,27 +981,24 @@ export function Inspector() {
         return (
           <>
             <div className="dimension-row">
-              <DimensionField
+              <ParamField
                 icon={<Circle size={13} />}
                 label={`${t('inspector.bottomRadius')} · mm`}
                 suffix="mm"
-                value={primitive.params.bottomRadius}
-                onCommit={(value) => change('bottomRadius', value)}
+                {...field('bottomRadius')}
               />
-              <DimensionField
+              <ParamField
                 icon={<Circle size={13} />}
                 label={`${t('inspector.topRadius')} · mm`}
                 suffix="mm"
                 allowNegative
-                value={primitive.params.topRadius}
-                onCommit={(value) => change('topRadius', value)}
+                {...field('topRadius')}
               />
-              <DimensionField
+              <ParamField
                 icon={<MoveVertical size={13} />}
                 label={`${t('inspector.height')} · mm`}
                 suffix="mm"
-                value={primitive.params.height}
-                onCommit={(value) => change('height', value)}
+                {...field('height')}
               />
             </div>
             <p className="hint">{t('primitive.coneHint')}</p>
@@ -1027,21 +1008,27 @@ export function Inspector() {
         return (
           <>
             <div className="dimension-row">
-              <DimensionField
+              <ParamField
                 icon={<Torus size={13} />}
-                label={`${t('inspector.ringDiameter')} · mm`}
+                label={`${t('inspector.ringRadius')} · mm`}
                 suffix="mm"
-                value={primitive.params.majorRadius * 2}
-                onCommit={(value) => change('majorRadius', value / 2)}
+                {...field('majorRadius')}
               />
-              <DimensionField
+              <ParamField
                 icon={<Circle size={13} />}
-                label={`${t('inspector.tubeDiameter')} · mm`}
+                label={`${t('inspector.tubeRadius')} · mm`}
                 suffix="mm"
-                value={primitive.params.tubeRadius * 2}
-                onCommit={(value) => change('tubeRadius', value / 2)}
+                {...field('tubeRadius')}
               />
             </div>
+            <StatRow
+              label={t('inspector.ringDiameter')}
+              value={`${formatNumber(primitiveValue('majorRadius') * 2, locale)} mm`}
+            />
+            <StatRow
+              label={t('inspector.tubeDiameter')}
+              value={`${formatNumber(primitiveValue('tubeRadius') * 2, locale)} mm`}
+            />
             <p className="hint">{t('primitive.torusHint')}</p>
           </>
         );
@@ -1049,26 +1036,23 @@ export function Inspector() {
         return (
           <>
             <div className="dimension-row">
-              <DimensionField
+              <ParamField
                 axis="N"
                 label={`${t('inspector.sides')} (${PYRAMID_MIN_SIDES}–${PYRAMID_MAX_SIDES})`}
                 tooltip={t('primitive.pyramidHint')}
-                value={primitive.params.sides}
-                onCommit={(value) => change('sides', value)}
+                {...field('sides')}
               />
-              <DimensionField
+              <ParamField
                 icon={<Circle size={13} />}
                 label={`${t('inspector.baseRadius')} · mm`}
                 suffix="mm"
-                value={primitive.params.radius}
-                onCommit={(value) => change('radius', value)}
+                {...field('radius')}
               />
-              <DimensionField
+              <ParamField
                 icon={<MoveVertical size={13} />}
                 label={`${t('inspector.height')} · mm`}
                 suffix="mm"
-                value={primitive.params.height}
-                onCommit={(value) => change('height', value)}
+                {...field('height')}
               />
             </div>
           </>
@@ -1077,25 +1061,23 @@ export function Inspector() {
         return (
           <>
             <div className="dimension-row">
-              <DimensionField
+              <ParamField
                 icon={<Circle size={13} />}
                 label={`${t('inspector.radius')} · mm`}
                 suffix="mm"
-                value={primitive.params.radius}
-                onCommit={(value) => change('radius', value)}
+                {...field('radius')}
               />
-              <DimensionField
+              <ParamField
                 icon={<MoveVertical size={13} />}
                 label={`${t('inspector.height')} · mm`}
                 suffix="mm"
-                value={primitive.params.height}
-                onCommit={(value) => change('height', value)}
+                {...field('height')}
               />
             </div>
             <StatRow
               label={t('inspector.totalLength')}
               value={`${formatNumber(
-                primitive.params.height + primitive.params.radius * 2,
+                primitiveValue('height') + primitiveValue('radius') * 2,
                 locale,
               )} mm`}
             />
@@ -1221,7 +1203,7 @@ export function Inspector() {
               ? body.kind === 'mesh'
                 ? t('inspector.mesh')
                 : t('inspector.body')
-              : t('inspector.project');
+              : t('inspector.model');
   const visibility = sketchObject
     ? {
         visible: objectVisible(project, sketchObjectId(sketchObject.id)),
@@ -1487,7 +1469,11 @@ export function Inspector() {
                               type: 'feature/replace',
                               feature: {
                                 ...feature,
-                                plane: { type: 'datum', plane, offset: sketchOffset },
+                                plane: {
+                                  type: 'datum',
+                                  plane,
+                                  offset: feature.plane.offset ?? 0,
+                                },
                               },
                             })
                           }
@@ -1503,25 +1489,21 @@ export function Inspector() {
                             type: 'feature/replace',
                             feature: {
                               ...feature,
-                              plane: { type: 'face', offset: sketchOffset },
+                              plane: { type: 'face', offset: feature.plane.offset ?? 0 },
                             },
                           });
                         }}
                       />
                     </Segmented>
-                    <SketchOffsetField
+                    <ParamField
+                      icon={<MoveVertical size={13} />}
                       label={t('sketch.offset')}
-                      value={sketchOffset}
-                      unit="mm"
-                      onCommit={(offset) =>
-                        apply({
-                          type: 'feature/replace',
-                          feature: {
-                            ...feature,
-                            plane: { ...feature.plane, offset },
-                          },
-                        })
-                      }
+                      suffix="mm"
+                      allowNegative
+                      value={feature.plane.offset ?? 0}
+                      resolved={sketchOffset}
+                      error={paramError(feature.id, 'plane.offset')}
+                      onCommit={(value) => setFeatureParameter(feature.id, 'plane.offset', value)}
                     />
                     <IconButton
                       label={t('sketch.invert')}
@@ -1674,21 +1656,25 @@ export function Inspector() {
                         <div className="control-group">
                           <span className="field-label">{t('extrude.rotation')}</span>
                           <div className="dimension-row">
-                            <DimensionField
+                            <ParamField
                               icon={<ArrowRightFromLine size={14} />}
                               label={t('extrude.angleStart')}
                               suffix="°"
-                              value={revolveSpec.start}
+                              value={feature.revolve?.start ?? revolveSpec.start}
+                              resolved={revolveSpec.start}
+                              error={paramError(feature.id, 'revolve.start')}
                               allowNegative
-                              onCommit={(start) => setRevolveAngles(feature.id, { start })}
+                              onCommit={(value) => setRevolveAngles(feature.id, { start: value })}
                             />
-                            <DimensionField
+                            <ParamField
                               icon={<ArrowRightToLine size={14} />}
                               label={t('extrude.angleEnd')}
                               suffix="°"
-                              value={revolveSpec.end}
+                              value={feature.revolve?.end ?? revolveSpec.end}
+                              resolved={revolveSpec.end}
+                              error={paramError(feature.id, 'revolve.end')}
                               allowNegative
-                              onCommit={(end) => setRevolveAngles(feature.id, { end })}
+                              onCommit={(value) => setRevolveAngles(feature.id, { end: value })}
                             />
                             <span className="dimension-toggle">
                               <IconButton
@@ -1713,12 +1699,20 @@ export function Inspector() {
                         )}
                         <div className="dimension-row">
                           {feature.end !== 'through-all' && (
-                            <DimensionField
+                            <ParamField
                               axis="↑"
                               label={t('extrude.distance')}
                               suffix="mm"
                               value={feature.distance}
-                              onCommit={(distance) => setExtrudeDistance(feature.id, distance)}
+                              resolved={
+                                resolvedFeature?.type === 'extrude'
+                                  ? resolvedFeature.distance
+                                  : undefined
+                              }
+                              error={paramError(feature.id, 'distance')}
+                              onCommit={(value) =>
+                                setFeatureParameter(feature.id, 'distance', value)
+                              }
                             />
                           )}
                           {feature.end !== 'symmetric' && (
@@ -1751,7 +1745,13 @@ export function Inspector() {
                           setExtrudeSecondDirection(
                             feature.id,
                             enabled
-                              ? { end: 'blind', distance: Math.abs(feature.distance) }
+                              ? {
+                                  end: 'blind',
+                                  distance:
+                                    resolvedFeature?.type === 'extrude'
+                                      ? Math.abs(resolvedFeature.distance)
+                                      : 0,
+                                }
                               : undefined,
                           )
                         }
@@ -1780,15 +1780,21 @@ export function Inspector() {
                         </Segmented>
                         {feature.secondDirection.end !== 'through-all' && (
                           <div className="dimension-row">
-                            <DimensionField
+                            <ParamField
                               axis="↓"
                               label={t('extrude.distance')}
                               suffix="mm"
-                              value={feature.secondDirection.distance}
-                              onCommit={(distance) =>
+                              value={feature.secondDirection?.distance ?? 0}
+                              resolved={
+                                resolvedFeature?.type === 'extrude'
+                                  ? resolvedFeature.secondDirection?.distance
+                                  : undefined
+                              }
+                              error={paramError(feature.id, 'secondDirection.distance')}
+                              onCommit={(value) =>
                                 setExtrudeSecondDirection(feature.id, {
                                   end: feature.secondDirection?.end ?? 'blind',
-                                  distance,
+                                  distance: value,
                                 })
                               }
                             />
@@ -1870,7 +1876,7 @@ export function Inspector() {
                   )}
                 >
                   <div className="dimension-row">
-                    <DimensionField
+                    <ParamField
                       icon={<MoveVertical size={13} />}
                       label={t(
                         treatmentFeature.kind === 'fillet'
@@ -1879,8 +1885,10 @@ export function Inspector() {
                       )}
                       suffix="mm"
                       value={treatmentFeature.size}
+                      resolved={treatmentSize}
+                      error={paramError(treatmentFeature.id, 'size')}
                       warning={treatmentWarning}
-                      onCommit={(size) => setEdgeTreatmentSize(treatmentFeature.id, size)}
+                      onCommit={(value) => setFeatureParameter(treatmentFeature.id, 'size', value)}
                     />
                   </div>
                 </PanelSection>
@@ -1925,22 +1933,32 @@ export function Inspector() {
 
                 <PanelSection title={t('shell.thickness')}>
                   <div className="dimension-row">
-                    <DimensionField
+                    <ParamField
                       icon={<MoveVertical size={13} />}
                       label={t('shell.thickness')}
                       suffix="mm"
                       value={shellFeature.thickness}
+                      resolved={shellThickness}
+                      error={paramError(shellFeature.id, 'thickness')}
                       warning={shellWarning}
-                      onCommit={(thickness) => setShellThickness(shellFeature.id, thickness)}
+                      onCommit={(value) => setFeatureParameter(shellFeature.id, 'thickness', value)}
                     />
                     {shellFeature.direction === 'outward' && (
-                      <DimensionField
+                      <ParamField
                         icon={<ArrowLeftRight size={13} />}
                         label={t('shell.offset')}
                         suffix="mm"
                         allowNegative
                         value={shellFeature.offset ?? 0}
-                        onCommit={(offset) => setShellOffset(shellFeature.id, Math.max(0, offset))}
+                        resolved={resolvedShell?.offset}
+                        error={paramError(shellFeature.id, 'offset')}
+                        onCommit={(value) =>
+                          setFeatureParameter(
+                            shellFeature.id,
+                            'offset',
+                            typeof value === 'number' ? Math.max(0, value) : value,
+                          )
+                        }
                       />
                     )}
                   </div>
@@ -1994,14 +2012,22 @@ export function Inspector() {
                 <PanelSection title={t('inspector.position')}>
                   <div className="dimension-row">
                     {(['X', 'Y', 'Z'] as const).map((axis, index) => (
-                      <DimensionField
+                      <ParamField
                         key={axis}
                         axis={axis}
                         allowNegative
                         label={`${t(`inspector.position${axis}` as never)} · mm`}
                         suffix="mm"
                         value={feature.transform.translation[index]!}
-                        onCommit={(value) => updatePrimitivePosition(index, value)}
+                        resolved={
+                          resolvedFeature?.type === 'primitive'
+                            ? resolvedFeature.transform.translation[index]!
+                            : undefined
+                        }
+                        error={paramError(feature.id, `transform.translation.${index}`)}
+                        onCommit={(value) =>
+                          setFeatureParameter(feature.id, `transform.translation.${index}`, value)
+                        }
                       />
                     ))}
                   </div>
@@ -2031,7 +2057,7 @@ export function Inspector() {
                   />
                   <StatRow
                     label={t('extrude.distance')}
-                    value={`${formatNumber(quickExtrude.distance, locale)} mm`}
+                    value={`${formatNumber(quickExtrudeResolved?.distance ?? 0, locale)} mm`}
                   />
                   <Button onClick={() => select({ kind: 'feature', id: quickExtrude.id })}>
                     {t('quick.editOperation')}
@@ -2047,11 +2073,10 @@ export function Inspector() {
         ) : (
           <>
             <div className="inspector-field">
-              <TextField label={t('inspector.name')} value={projectName} onCommit={renameProject} />
+              <TextField label={t('inspector.name')} value={project.name} onCommit={renameModel} />
             </div>
+            <VariablesSection modelId={project.id} embedded />
             <PanelSection title={t('inspector.properties')} divided>
-              <StatRow label={t('inspector.units')} value={projectUnits} />
-              <StatRow label={t('inspector.model')} value={project.name} />
               <StatRow label={t('inspector.features')} value={project.features.length} />
               <StatRow label={t('inspector.bodies')} value={solidBodiesInHistory(project).length} />
               <StatRow
@@ -2060,6 +2085,16 @@ export function Inspector() {
               />
               {project.historyEnd && <p className="hint">{t('inspector.rolledBack')}</p>}
             </PanelSection>
+            <header className="panel-header panel-context-header">
+              <span>{t('inspector.project')}</span>
+            </header>
+            <div className="inspector-field">
+              <TextField label={t('inspector.name')} value={projectName} onCommit={renameProject} />
+            </div>
+            <PanelSection title={t('inspector.properties')} divided>
+              <StatRow label={t('inspector.units')} value={projectUnits} />
+            </PanelSection>
+            <VariablesSection />
           </>
         )}
 
