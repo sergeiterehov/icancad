@@ -32,8 +32,6 @@ export function useStartupProgress(): StartupProgress {
   const kernelRatio = useKernelStore((state) => state.ratio);
   const sceneVersion = useKernelStore((state) => state.sceneVersion);
   const formulaStatus = useFormulaStore((state) => state.status);
-  const resolution = useFormulaStore((state) => state.resolution);
-  const pendingKey = useFormulaStore((state) => state.pendingKey);
 
   if (!hydrated) {
     return { stage: 'project', message: t('status.openingProject'), busy: true };
@@ -60,7 +58,9 @@ export function useStartupProgress(): StartupProgress {
       busy: true,
     };
   }
-  if (featureCount > 0 && (sceneVersion === 0 || !resolution || pendingKey !== null)) {
+  // Only the first scene is boot. Later formula evaluations and rebuilds must
+  // not cover the viewport again, so publishing any scene ends this stage.
+  if (featureCount > 0 && sceneVersion === 0) {
     return {
       stage: 'model',
       message: t('status.preparingModel'),
