@@ -53,8 +53,9 @@ export function measureValue(entity: SketchEntity, measure: SketchMeasure): numb
         return Math.round(degrees * 100) / 100;
       }
       if (entity.type === 'arc') {
-        let sweep = entity.endAngle - entity.startAngle;
-        while (sweep <= 0) sweep += Math.PI * 2;
+        // The arc is drawn with the signed sweep, so a clockwise arc is its
+        // short self, not the reflex complement of the same endpoints.
+        const sweep = Math.abs(entity.endAngle - entity.startAngle);
         return Math.round(((sweep * 180) / Math.PI) * 100) / 100;
       }
       return null;

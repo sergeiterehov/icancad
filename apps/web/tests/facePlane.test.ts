@@ -1,18 +1,16 @@
 import type { TessellationResult } from '@icancad/kernel';
 import { describe, expect, it } from 'vitest';
-import { computeSketchFrame, faceFrameFromMesh, sketchFrameOf } from '../src/sketch/sectionPlane';
+import {
+  computeSketchFrame,
+  faceBoundsInFrame,
+  faceFrameFromMesh,
+  sketchFrameOf,
+} from '../src/sketch/sectionPlane';
 import type { SketchFeature } from '@icancad/model';
 
 function quad(z: number): TessellationResult {
   return {
-    positions: new Float32Array([
-      -1, -1, z,
-      1, -1, z,
-      1, 1, z,
-      -1, -1, z,
-      1, 1, z,
-      -1, 1, z,
-    ]),
+    positions: new Float32Array([-1, -1, z, 1, -1, z, 1, 1, z, -1, -1, z, 1, 1, z, -1, 1, z]),
     normals: new Float32Array(18),
     indices: new Uint32Array([0, 1, 2, 3, 4, 5]),
     faceIds: new Uint32Array([0, 0]),
@@ -49,6 +47,18 @@ describe('face sketch frames', () => {
   it('finds the centre and normal from the current face tessellation', () => {
     expect(faceFrameFromMesh(quad(5), 0)?.origin).toEqual([0, 0, 5]);
     expect(faceFrameFromMesh(quad(9), 0)?.origin).toEqual([0, 0, 9]);
+  });
+
+  it('returns the bounding corners of the picked face in the sketch plane', () => {
+    const frame = sketchFrameOf(faceSketch());
+    expect(faceBoundsInFrame(quad(5), 0, frame)).toEqual([
+      [-1, -1],
+      [-1, 1],
+      [1, -1],
+      [1, 1],
+    ]);
+    expect(faceBoundsInFrame(quad(5), 1, frame)).toEqual([]);
+    expect(faceBoundsInFrame(undefined, 0, frame)).toEqual([]);
   });
 
   it('recomputes the plane even when an older frame was stored', () => {

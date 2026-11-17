@@ -7,10 +7,50 @@ import type {
   SketchFrame,
   Vec3,
 } from '@icancad/model';
-import { datumFrame, faceFrame } from '@icancad/sketch';
+import { datumFrame, faceFrame, type Point2 } from '@icancad/sketch';
 import { isPlanarFace } from '../viewport/planarFace';
 
 export const SKETCH_SECTION_ID = '__sketch-plane__';
+
+// The bounding corners of one face in its sketch plane. Framing a face sketch
+// needs them because the sketch wireframe alone is much smaller than the face.
+export function faceBoundsInFrame(
+  mesh: TessellationResult | undefined,
+  faceId: number,
+  frame: SketchFrame,
+): Point2[] {
+  if (!mesh || !Number.isInteger(faceId)) return [];
+  const { positions, indices, faceIds } = mesh;
+  const [ox, oy, oz] = frame.origin;
+  const [xx, xy, xz] = frame.xAxis;
+  const [yx, yy, yz] = frame.yAxis;
+  let minU = Infinity;
+  let maxU = -Infinity;
+  let minV = Infinity;
+  let maxV = -Infinity;
+  for (let triangle = 0; triangle < faceIds.length; triangle += 1) {
+    if (faceIds[triangle] !== faceId) continue;
+    for (let corner = 0; corner < 3; corner += 1) {
+      const index = indices[triangle * 3 + corner]!;
+      const dx = positions[index * 3]! - ox;
+      const dy = positions[index * 3 + 1]! - oy;
+      const dz = positions[index * 3 + 2]! - oz;
+      const u = dx * xx + dy * xy + dz * xz;
+      const v = dx * yx + dy * yy + dz * yz;
+      minU = Math.min(minU, u);
+      maxU = Math.max(maxU, u);
+      minV = Math.min(minV, v);
+      maxV = Math.max(maxV, v);
+    }
+  }
+  if (!Number.isFinite(minU)) return [];
+  return [
+    [minU, minV],
+    [minU, maxV],
+    [maxU, minV],
+    [maxU, maxV],
+  ];
+}
 
 // The face may have moved because an earlier operation changed, so its centre
 // and normal are derived from the current tessellation instead of the pose that

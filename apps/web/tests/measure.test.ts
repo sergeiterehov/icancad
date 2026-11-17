@@ -41,6 +41,7 @@ describe('reference measurements', () => {
     expect(measureValue(arc, 'radius')).toBe(10);
     expect(measureValue(arc, 'diameter')).toBe(20);
     expect(measureValue(arc, 'angle')).toBeCloseTo(90, 2);
+    expect(measureValue({ ...arc, endAngle: -Math.PI / 2 }, 'angle')).toBeCloseTo(90, 2);
   });
 
   it('formats values with units', () => {

@@ -1,6 +1,6 @@
 import { isFormula, type SketchFeature } from '@icancad/model';
 import { MousePointer2, Trash2 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   applyConstraintValue,
@@ -251,6 +251,16 @@ export function SketchAnnotations() {
     setDraft(text);
     selectConstraint(annotation.id);
   };
+
+  // Grow the value field with its text, capped so a long formula still fits a
+  // readable annotation instead of running across the viewport.
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    input.style.width = '0px';
+    const width = Math.min(300, Math.max(62, input.scrollWidth + 10));
+    input.style.width = `${width}px`;
+  }, [draft, editingId]);
 
   // The constraint list opens the same editor as a double click on the label.
   useEffect(() => {

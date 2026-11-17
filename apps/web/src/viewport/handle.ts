@@ -167,7 +167,11 @@ export interface ViewportHandle {
     highlight?: boolean,
     marker?: Point2 | null,
   ) => void;
-  alignSketch: (frame: SketchFrame, entities?: readonly SketchEntity[]) => void;
+  alignSketch: (
+    frame: SketchFrame,
+    entities?: readonly SketchEntity[],
+    extraPoints?: readonly Point2[],
+  ) => void;
   getCameraState: () => ViewportCamera;
   setCameraState: (state: ViewportCamera) => void;
   pickSketch: (

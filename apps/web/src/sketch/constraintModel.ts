@@ -279,7 +279,14 @@ export function buildConstraintActions(
   const onlyOwnLines = onlyLines && ownRefs.length === refs.length;
   const actions: ConstraintAction[] = [];
   const push = (type: ConstraintType, actionRefs: SketchConstraintRef[], value?: number) => {
-    actions.push({ key: `${type}-${actions.length}`, type, refs: actionRefs, value });
+    // A dimension is created from the current geometry, so its prefilled value
+    // is rounded to hundredths; the solver then adopts exactly what the user sees.
+    actions.push({
+      key: `${type}-${actions.length}`,
+      type,
+      refs: actionRefs,
+      value: value === undefined ? undefined : Math.round(value * 100) / 100,
+    });
   };
 
   if (ownRefs.length > 0) push('fix', refs);
@@ -313,7 +320,7 @@ export function buildConstraintActions(
     push('perpendicular', entityRefs);
     if (refs.length === 2) {
       const angle = lineAngle(selectedEntities, entityRefs);
-      if (angle !== undefined) push('angle', entityRefs, Math.round(angle * 100) / 100);
+      if (angle !== undefined) push('angle', entityRefs, angle);
       // The gap between two lines only has a meaning while they are parallel;
       // the dimension measures it from the start of the first line.
       const [first, second] = selectedEntities as [Line, Line];

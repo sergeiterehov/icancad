@@ -3005,6 +3005,7 @@ html[data-pointer='finger'] .selection-item .icon-btn {
 
 .sketch-annotation-input {
   width: 62px;
+  max-width: 300px;
   height: 18px;
   padding: 0 4px;
   border: 1px solid var(--accent);

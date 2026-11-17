@@ -2946,20 +2946,25 @@ export class SceneController {
     };
   }
 
-  alignSketch(frame: SketchFrame, entities: readonly SketchEntity[] = []): void {
+  alignSketch(
+    frame: SketchFrame,
+    entities: readonly SketchEntity[] = [],
+    extraPoints: readonly Point2[] = [],
+  ): void {
     const [nx, ny, nz] = frame.normal;
     const length = Math.hypot(nx, ny, nz) || 1;
     // Look straight along the sketch normal, including tilted faces. The tiny
     // clamps avoid the singular poles where the orbit basis flips.
     const azimuth = Math.atan2(ny / length, nx / length);
     const polar = clamp(Math.acos(nz / length), 0.001, Math.PI - 0.001);
-    this.transitionTo(this.sketchPose(frame, entities, azimuth, polar));
+    this.transitionTo(this.sketchPose(frame, entities, extraPoints, azimuth, polar));
   }
 
   // Frames the sketch content with a fixed margin on both sides of the viewport.
   private sketchPose(
     frame: SketchFrame,
     entities: readonly SketchEntity[],
+    extraPoints: readonly Point2[],
     azimuth: number,
     polar: number,
   ): CameraPose {
@@ -2972,18 +2977,20 @@ export class SceneController {
     let minV = Infinity;
     let maxV = -Infinity;
     const offset = new THREE.Vector3();
+    const include = (point: Point2) => {
+      const world = sketchPointToWorld(frame, point);
+      offset.set(world[0], world[1], world[2]).sub(origin);
+      const u = offset.dot(right);
+      const v = offset.dot(up);
+      minU = Math.min(minU, u);
+      maxU = Math.max(maxU, u);
+      minV = Math.min(minV, v);
+      maxV = Math.max(maxV, v);
+    };
     for (const entity of entities) {
-      for (const point of tessellateEntity(entity)) {
-        const world = sketchPointToWorld(frame, point);
-        offset.set(world[0], world[1], world[2]).sub(origin);
-        const u = offset.dot(right);
-        const v = offset.dot(up);
-        minU = Math.min(minU, u);
-        maxU = Math.max(maxU, u);
-        minV = Math.min(minV, v);
-        maxV = Math.max(maxV, v);
-      }
+      for (const point of tessellateEntity(entity)) include(point);
     }
+    for (const point of extraPoints) include(point);
     // An empty sketch keeps the current zoom and only centres on its plane.
     if (!Number.isFinite(minU)) return pose;
 

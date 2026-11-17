@@ -20,6 +20,7 @@ import {
 } from '@icancad/sketch';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { arcDraftEndAngle, arcStartAngle } from '../sketch/arcDraft';
 import { solveSketch } from '../sketch/client';
 import { rebuildScene } from '../kernel/rebuild';
 import { autoConstraintsForEntity, isNearAxis, snapHighlightIds } from '../sketch/autoConstraints';
@@ -46,7 +47,7 @@ import {
 import { useApplyConstraintAction } from '../sketch/useConstraintActions';
 import { resolveConstraintShortcut } from '../ui/constraintCatalog';
 import { isAdditiveClick } from '../ui/listSelection';
-import { canEditSketch, sketchFrameOf } from '../sketch/sectionPlane';
+import { canEditSketch, faceBoundsInFrame, sketchFrameOf } from '../sketch/sectionPlane';
 import { solveDrag } from '../sketch/dragSolve';
 import { liveMeasures, measureInfo } from '../sketch/measure';
 import { sketchPickKey } from '../sketch/pickKey';
@@ -210,6 +211,15 @@ export function SketchEditor() {
     // the sketch's own result move the whole sketch under the pointer.
     return sketchFrameOf(driven, sketchFrames[sketch.id]);
   }, [sketch, sketchFrames, formulaRevision]);
+  // A sketch placed on a face should open with the whole face visible, not
+  // just its own wireframe. The four bounding corners are enough for framing
+  // and stay cheap even on a dense mesh.
+  const faceOutline = useMemo((): Point2[] => {
+    if (!sketch || sketch.plane.type !== 'face' || !frame) return [];
+    const mesh = sketch.plane.bodyId ? meshes[sketch.plane.bodyId] : undefined;
+    const faceId = sketch.plane.topoId === undefined ? NaN : Number(sketch.plane.topoId);
+    return faceBoundsInFrame(mesh, faceId, frame);
+  }, [meshes, sketch, frame]);
   const { run: runConstraintAction } = useApplyConstraintAction(sketch);
   const drivenSketches = useFormulaStore((state) => state.resolution?.drivenSketches);
   const drag = useRef<DragState | null>(null);
@@ -257,7 +267,11 @@ export function SketchEditor() {
   // The ref mirrors the draft synchronously, so a tool switch can clear it
   // before the next click even if React has not rendered the reset yet.
   const draftRef = useRef<DraftPoint[]>([]);
+  // The third arc point is stored unwrapped, so crossing the -π branch cut
+  // continues the same sweep instead of flipping the arc.
+  const draftArcEnd = useRef<number | null>(null);
   const updateDraft = (next: DraftPoint[]) => {
+    if (next.length === 0) draftArcEnd.current = null;
     draftRef.current = next;
     setDraft(next);
   };
@@ -460,11 +474,11 @@ export function SketchEditor() {
 
   useEffect(() => {
     if (!activeSketchId || !frame || !activeSketchReady) return;
-    const key = frameKeyOf(frame);
+    const key = `${frameKeyOf(frame)}|${faceOutline.length}`;
     if (alignedFrame.current === key) return;
     alignedFrame.current = key;
-    getViewport()?.alignSketch(frame, sketch?.entities ?? []);
-  }, [activeSketchId, frame, sketch?.entities, activeSketchReady]);
+    getViewport()?.alignSketch(frame, sketch?.entities ?? [], faceOutline);
+  }, [activeSketchId, frame, faceOutline, sketch?.entities, activeSketchReady]);
 
   useEffect(() => {
     if (activeSketchId) return;
@@ -729,11 +743,23 @@ export function SketchEditor() {
       return;
     }
     if (activeTool === 'arc') {
-      if (currentDraft.length < 2) updateDraft([...currentDraft, { point, input }]);
-      else {
+      if (currentDraft.length < 2) {
+        const next = [...currentDraft, { point, input }];
+        if (next.length === 2) {
+          draftArcEnd.current = arcStartAngle(next[0]!.point, point);
+        }
+        updateDraft(next);
+      } else {
         const [origin, start] = currentDraft;
         const radius = distance(origin!.point, start!.point);
         if (radius > 0.01) {
+          const startAngle = arcStartAngle(origin!.point, start!.point);
+          const endAngle = arcDraftEndAngle(
+            origin!.point,
+            start!.point,
+            point,
+            draftArcEnd.current,
+          );
           const entity: SketchEntity = {
             id: createId('entity'),
             type: 'arc',
@@ -741,11 +767,8 @@ export function SketchEditor() {
             cx: origin!.point[0],
             cy: origin!.point[1],
             r: radius,
-            startAngle: Math.atan2(
-              start!.point[1] - origin!.point[1],
-              start!.point[0] - origin!.point[0],
-            ),
-            endAngle: Math.atan2(point[1] - origin!.point[1], point[0] - origin!.point[0]),
+            startAngle,
+            endAngle,
           };
           void commitNewEntity(entity, [origin!.input, start!.input, input]);
         }
@@ -1042,6 +1065,14 @@ export function SketchEditor() {
         magnet: magnetEnabled,
         anchor: activeTool === 'line' && draft.length === 1 ? (draft[0]?.point ?? null) : null,
       });
+      if (activeTool === 'arc' && draft.length >= 2) {
+        draftArcEnd.current = arcDraftEndAngle(
+          draft[0]!.point,
+          draft[1]!.point,
+          resolved.point,
+          draftArcEnd.current,
+        );
+      }
       setHover(resolved.point);
       setHoverSnap(resolved.input.snap);
     };
@@ -1312,8 +1343,8 @@ export function SketchEditor() {
         cx: origin[0],
         cy: origin[1],
         r: Math.max(radius, 0.01),
-        startAngle: Math.atan2(second[1] - origin[1], second[0] - origin[0]),
-        endAngle: Math.atan2(hover[1] - origin[1], hover[0] - origin[0]),
+        startAngle: arcStartAngle(origin, second),
+        endAngle: arcDraftEndAngle(origin, second, hover, draftArcEnd.current),
       };
     }
     if (tool === 'ellipse' && draft[0]) {

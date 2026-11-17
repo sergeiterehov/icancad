@@ -103,6 +103,13 @@ describe('new distance actions', () => {
     expect(action(withArc, ['p#0', 'a'], 'distance')?.value).toBeCloseTo(7);
   });
 
+  it('rounds the prefilled value of a new dimension to hundredths', () => {
+    const withPoints = sketch([point('a', 0, 0), point('b', Math.PI, Math.E)]);
+    expect(action(withPoints, ['a', 'b'], 'distance')?.value).toBe(4.15);
+    expect(action(withPoints, ['a', 'b'], 'horizontal-distance')?.value).toBe(3.14);
+    expect(action(withPoints, ['a', 'b'], 'vertical-distance')?.value).toBe(2.72);
+  });
+
   it('offers the distance between the edges of two circles', () => {
     const separate = sketch([circle('c1', 0, 0, 2), circle('c2', 10, 0, 3)]);
     expect(action(separate, ['c1', 'c2'], 'distance')?.value).toBeCloseTo(5);
