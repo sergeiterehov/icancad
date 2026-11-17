@@ -35,6 +35,22 @@ function circleEdge(center: [number, number, number], radius: number, id = EDGE)
   return { id, faceIds: [5, 8], points, closed: true };
 }
 
+/** An open arc around `center`, as a polyline with a vertex at its middle. */
+function arcEdge(
+  center: [number, number, number],
+  radius: number,
+  span: number,
+  id: string,
+): BodyEdge {
+  const points: number[] = [];
+  const segments = 8;
+  for (let index = 0; index <= segments; index += 1) {
+    const angle = -span / 2 + (index / segments) * span;
+    points.push(center[0] + Math.cos(angle) * radius, center[1] + Math.sin(angle) * radius, center[2]);
+  }
+  return { id, faceIds: [12, 24], points, closed: false };
+}
+
 function refOf(edge: BodyEdge): BodyEdgeRef {
   const [start, mid, end] = [
     [edge.points[0]!, edge.points[1]!, edge.points[2]!],
@@ -77,6 +93,23 @@ describe('resolveEdgeRef', () => {
     // The pose is gone, so only the stable id and the length can say it is the
     // same rim after the sketch circle was dragged sideways.
     expect(resolveEdgeRef(contextFor(moved), ref)).toEqual({ bodyId: BODY, edgeId: EDGE });
+  });
+
+  it('follows a round edge when only its radius changed', () => {
+    const ref = refOf(circleEdge([10, 0, 0], 2));
+    const bigger = circleEdge([10, 0, 0], 5, '99');
+
+    // The rim keeps its centre while the hole grows, so the reference is still
+    // the same rim even though its id and length changed.
+    expect(resolveEdgeRef(contextFor(bigger), ref)).toEqual({ bodyId: BODY, edgeId: '99' });
+  });
+
+  it('follows an arc whose ends moved while its middle stayed', () => {
+    const ref = refOf(arcEdge([0, 10, 0], 5, 1.2, '17'));
+    ref.mid = [5, 10, 0];
+    const shorter = arcEdge([0, 10, 0], 5, 0.6, '99');
+
+    expect(resolveEdgeRef(contextFor(shorter), ref)).toEqual({ bodyId: BODY, edgeId: '99' });
   });
 
   it('does not follow an edge that was reshaped', () => {

@@ -2714,6 +2714,11 @@ export class SceneController {
     return this.theme === 'dark' ? 0xf59e0b : 0xb45309;
   }
 
+  /** A broken formula owns the colour of every line and point in the sketch. */
+  private sketchErrorColor(): number {
+    return this.theme === 'dark' ? 0xef4444 : 0xdc2626;
+  }
+
   setSketches(sketches: SceneSketch[]): void {
     this.sketchData = sketches;
     // The groups are rebuilt below, so the hover has to be found again.
@@ -2791,6 +2796,7 @@ export class SceneController {
           hovered.has(entity.id),
           hoveredPoints.get(entity.id) ?? new Set<number>(),
           editingSketch && !sketch.active,
+          sketch.error === true,
           sketch.active ? null : tint,
           sketch.onTop,
         );
@@ -3230,24 +3236,27 @@ export class SceneController {
     hovered: boolean,
     hoveredPoints: ReadonlySet<number>,
     background: boolean,
+    error: boolean,
     tint: number | null,
     onTop: boolean,
   ): void {
-    const color = selected
-      ? this.sketchSelectedColor()
-      : hovered
-        ? this.sketchHoverColor()
-        : highlighted
-          ? this.sketchHighlightColor()
-          : lost
-            ? this.sketchLostProjectionColor()
-            : projected
-              ? this.sketchProjectionColor()
-              : frozen
-                ? this.sketchFrozenLineColor()
-                : entity.construction
-                  ? this.sketchConstructionColor()
-                  : (tint ?? this.sketchColor());
+    const color = error
+      ? this.sketchErrorColor()
+      : selected
+        ? this.sketchSelectedColor()
+        : hovered
+          ? this.sketchHoverColor()
+          : highlighted
+            ? this.sketchHighlightColor()
+            : lost
+              ? this.sketchLostProjectionColor()
+              : projected
+                ? this.sketchProjectionColor()
+                : frozen
+                  ? this.sketchFrozenLineColor()
+                  : entity.construction
+                    ? this.sketchConstructionColor()
+                    : (tint ?? this.sketchColor());
     // Sketches that are not being edited are drawn thinner so they cannot be
     // mistaken for the sketch in progress.
     const width = selected ? 3 : hovered ? 3 : highlighted ? 3 : background ? 1 : 2;
@@ -3257,7 +3266,7 @@ export class SceneController {
         frame,
         color,
         width,
-        dimmed ? 0.2 : 1,
+        dimmed && !error ? 0.2 : 1,
         entity.construction,
         !onTop,
       );
@@ -3273,19 +3282,21 @@ export class SceneController {
       const pointHighlighted = highlighted || highlightedPoints.has(index);
       const pointHovered = hovered || hoveredPoints.has(index);
       const selectedPoint = selected || selectedPoints.has(index);
-      const pointColor = selectedPoint
-        ? this.sketchSelectedColor()
-        : pointHovered
-          ? this.sketchHoverColor()
-          : pointHighlighted
-            ? this.sketchHighlightColor()
-            : lost
-              ? this.sketchLostProjectionColor()
-              : projected
-                ? this.sketchProjectionColor()
-                : frozen
-                  ? this.sketchFrozenPointColor()
-                  : this.sketchPointColor();
+      const pointColor = error
+        ? this.sketchErrorColor()
+        : selectedPoint
+          ? this.sketchSelectedColor()
+          : pointHovered
+            ? this.sketchHoverColor()
+            : pointHighlighted
+              ? this.sketchHighlightColor()
+              : lost
+                ? this.sketchLostProjectionColor()
+                : projected
+                  ? this.sketchProjectionColor()
+                  : frozen
+                    ? this.sketchFrozenPointColor()
+                    : this.sketchPointColor();
       const pointSize = selectedPoint ? 6 : pointHovered ? 5 : pointHighlighted ? 6 : 4;
       const geometry = new THREE.BufferGeometry().setFromPoints([this.sketchWorld(frame, point)]);
       const points = new THREE.Points(
@@ -3295,7 +3306,7 @@ export class SceneController {
           map: this.pointTexture,
           alphaTest: 0.5,
           transparent: true,
-          opacity: dimmed ? 0.25 : 1,
+          opacity: dimmed && !error ? 0.25 : 1,
           size: pointSize,
           sizeAttenuation: false,
           depthTest: !onTop,

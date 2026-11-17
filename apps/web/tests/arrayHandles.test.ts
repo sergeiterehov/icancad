@@ -28,6 +28,8 @@ const labels = {
   topRadius: 'Top radius',
   baseRadius: 'Base radius',
   ringDiameter: 'Ring diameter',
+  ringRadius: 'Ring radius',
+  tubeRadius: 'Tube radius',
   tubeDiameter: 'Tube diameter',
   sides: 'Sides',
   sidesTooltip: 'Sides tooltip',

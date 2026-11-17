@@ -14,11 +14,13 @@ import {
   SKETCH_COLOR,
   sketchObjectId,
   type PrimitiveFeature,
+  type Resolved,
   type SketchFeature,
   type Vec3,
 } from '@icancad/model';
 import { faceFrame, sketchTopology } from '@icancad/sketch';
 import { constraintsGeometryIds } from '../sketch/constraintModel';
+import { sketchHasFormulaError } from '../sketch/resolvedConstraints';
 import {
   computeSketchFrame,
   flipNormal,
@@ -30,6 +32,8 @@ import {
   sketchSectionPlane,
 } from '../sketch/sectionPlane';
 import { useDocumentStore, useViewModel } from '../stores/documentStore';
+import { resolvedFeatureFor, useFormulaStore } from '../stores/formulaStore';
+import { bootFormulaEngine, resetFormulaEngine } from '../formula/client';
 import { useUiStore } from '../stores/uiStore';
 import { isModelRebuilding, useKernelStore } from '../stores/kernelStore';
 import {
@@ -72,6 +76,7 @@ import {
   type OperationHandleDrag,
 } from '../quick/operationHandles';
 import { primitivePreview } from '../primitive/preview';
+import { primitiveParamsAreFinite } from '../primitive/params';
 import { resolveEdgeRef } from '../kernel/edgeLookup';
 import { edgeTreatmentEdgeRef, edgeTreatmentFaceRef } from '../quick/edgeTreatment';
 import { outwardNormal } from '../quick/geometry';
@@ -123,9 +128,10 @@ function projectPickIntoSketch(sketchId: string, pick: ScenePick | null): void {
   }
   const mesh = kernel.meshes[pick.bodyId];
   if (!mesh) return;
+  const driven = resolvedFeatureFor(feature) ?? feature;
   const frame = computeSketchFrame(
-    feature,
-    feature.plane.type === 'face' ? kernel.meshes[feature.plane.bodyId ?? ''] : undefined,
+    driven,
+    driven.plane.type === 'face' ? kernel.meshes[driven.plane.bodyId ?? ''] : undefined,
   );
   let projectionPick: ProjectionPick | null = null;
   if (pick.kind === 'body-vertex') {
@@ -227,20 +233,23 @@ export function Viewport() {
   }, [writeCamera]);
 
   const project = useViewModel();
-  const documentProject = useDocumentStore((state) => state.project);
+  const resolvedProject = useFormulaStore((state) => state.resolution?.model ?? null);
+  const formulaRevision = useFormulaStore((state) => state.resolution?.revision ?? 0);
   const editingFeatureId = useDocumentStore((state) => state.editingFeatureId);
   const editingPrimitive = useMemo(() => {
-    const feature = activeModel(documentProject).features.find(
+    const feature = resolvedProject?.features.find(
       (candidate) => candidate.id === editingFeatureId,
     );
-    return feature?.type === 'primitive' ? (feature as PrimitiveFeature) : null;
-  }, [documentProject, editingFeatureId]);
+    return feature?.type === 'primitive' ? (feature as Resolved<PrimitiveFeature>) : null;
+  }, [resolvedProject, editingFeatureId]);
   // The delta mesh is generated here, in the same render as the handles, so
   // dragging a handle moves the object and the grip in one frame.
   const primitiveDelta = useMemo(
     () =>
-      editingPrimitive ? primitivePreview(editingPrimitive, activeModel(documentProject)) : null,
-    [editingPrimitive, documentProject],
+      editingPrimitive && resolvedProject && primitiveParamsAreFinite(editingPrimitive)
+        ? primitivePreview(editingPrimitive, resolvedProject)
+        : null,
+    [editingPrimitive, resolvedProject],
   );
   const bodies = bodiesInHistory(project);
   const sectionPlanes = project.view.sectionPlanes;
@@ -365,6 +374,8 @@ export function Viewport() {
       baseRadius: t('inspector.baseRadius'),
       ringDiameter: t('inspector.ringDiameter'),
       tubeDiameter: t('inspector.tubeDiameter'),
+      ringRadius: t('inspector.ringRadius'),
+      tubeRadius: t('inspector.tubeRadius'),
       sides: t('inspector.sides'),
       sidesTooltip: t('handles.sides'),
       arraySpacing: t('array.spacing'),
@@ -380,6 +391,7 @@ export function Viewport() {
         ? []
         : operationHandles({
             project,
+            resolvedProject,
             selection,
             meshes,
             baseMeshes,
@@ -391,6 +403,7 @@ export function Viewport() {
     [
       quickBlocked,
       project,
+      resolvedProject,
       selection,
       meshes,
       baseMeshes,
@@ -437,7 +450,7 @@ export function Viewport() {
       ? sketchSectionPlane(
           activeSketch,
           computeSketchFrame(
-            activeSketch,
+            resolvedFeatureFor(activeSketch) ?? activeSketch,
             activeSketch.plane.type === 'face'
               ? meshes[activeSketch.plane.bodyId ?? '']
               : undefined,
@@ -995,7 +1008,7 @@ export function Viewport() {
                 onSelect: () =>
                   controller.alignSketch(
                     computeSketchFrame(
-                      sketchFeature,
+                      resolvedFeatureFor(sketchFeature) ?? sketchFeature,
                       sketchFeature.plane.type === 'face'
                         ? useKernelStore.getState().meshes[sketchFeature.plane.bodyId ?? '']
                         : undefined,
@@ -1500,9 +1513,10 @@ export function Viewport() {
       .filter(
         (feature): feature is SketchFeature =>
           feature.type === 'sketch' &&
-          (ids.has(feature.id) || feature.id === previewedId) &&
+          (ids.has(feature.id) || feature.id === previewedId || feature.id === activeSketchId) &&
           sketchPlaneReady(feature) &&
-          !featureErrors[feature.id] &&
+          (!featureErrors[feature.id] ||
+            (feature.id === activeSketchId && featureErrors[feature.id] === 'EXPRESSION_ERROR')) &&
           (feature.id !== activeSketchId || activeSketchReady) &&
           (objectVisible(project, sketchObjectId(feature.id)) || feature.id === activeSketchId),
       )
@@ -1510,10 +1524,10 @@ export function Viewport() {
         const frame =
           feature.id === activeSketchId && activeSketchReady
             ? computeSketchFrame(
-                feature,
+                resolvedFeatureFor(feature) ?? feature,
                 feature.plane.type === 'face' ? meshes[feature.plane.bodyId ?? ''] : undefined,
               )
-            : sketchFrameOf(feature, sketchFrames[feature.id]);
+            : sketchFrameOf(resolvedFeatureFor(feature) ?? feature, sketchFrames[feature.id]);
         // Projected geometry follows the bodies as the rebuild sees them; the
         // stored entities are the snapshot used when a link is gone.
         const resolved = resolveSketchProjections(feature, frame, (bodyId) => meshes[bodyId]);
@@ -1542,6 +1556,7 @@ export function Viewport() {
         return {
           id: feature.id,
           color: objectColor(project, sketchObjectId(feature.id), SKETCH_COLOR),
+          error: feature.id === activeSketchId && sketchHasFormulaError(feature.id),
           showConstruction: objectShowConstruction(project, sketchObjectId(feature.id)),
           faces: sketchTopology(resolved.entities).faces.map((face) => ({
             id: face.id,
@@ -1576,6 +1591,7 @@ export function Viewport() {
   }, [
     activeSketchId,
     project,
+    formulaRevision,
     sketchSelectionIds,
     sketchConstraintIds,
     sketchFrozenEntityIds,
@@ -1597,7 +1613,10 @@ export function Viewport() {
     navCubeRef.current?.setLabels(navLabels);
   }, [t]);
 
+  const formulaStatus = useFormulaStore((state) => state.status);
+  const formulaError = useFormulaStore((state) => state.error);
   const showLoading = status === 'idle' || status === 'loading';
+  const showFormulaLoading = !showLoading && formulaStatus === 'loading';
   const showError = status === 'error';
 
   return (
@@ -1654,11 +1673,33 @@ export function Viewport() {
         />
       )}
 
+      {/* Formulas are part of the model, so Python loads with the app. */}
+      {showFormulaLoading && (
+        <SkeletonStage action={t('formula.loading')} testId="formula-skeleton" />
+      )}
+
       {showError && (
         <div className="empty-card">
           <h2>{t('empty.errorTitle')}</h2>
           <p className="error">{error ?? t('errors.KERNEL_LOAD_FAILED')}</p>
           <Button variant="primary" onClick={() => void retryKernel()}>
+            {t('empty.retry')}
+          </Button>
+        </div>
+      )}
+
+      {/* Without Python no formula can resolve, so the failure is not silent. */}
+      {formulaStatus === 'error' && (
+        <div className="empty-card">
+          <h2>{t('empty.errorTitle')}</h2>
+          <p className="error">{formulaError ?? t('errors.FORMULA_LOAD_FAILED')}</p>
+          <Button
+            variant="primary"
+            onClick={() => {
+              resetFormulaEngine();
+              void bootFormulaEngine().catch(() => undefined);
+            }}
+          >
             {t('empty.retry')}
           </Button>
         </div>

@@ -4,12 +4,18 @@ import {
   type EdgeTreatmentFeature,
   type EdgeTreatmentKind,
   type ExtrudeFeature,
+  isDriven,
+  type Feature,
   type Model,
+  type Resolved,
+  type ResolvedModel,
+  type RevolveSpec,
   type SketchFeature,
   type SketchFrame,
   type Vec3,
 } from '@icancad/model';
 import type { SelectionItem } from '../stores/documentStore';
+import { resolvedFeatureFor } from '../stores/formulaStore';
 import type { SceneArcHandle } from '../viewport/handle';
 import { resolveRevolveAxis, revolveAngles } from '../sketch/revolveAxis';
 import {
@@ -97,6 +103,8 @@ export interface OperationHandle {
 
 export interface OperationHandleContext {
   project: Model;
+  /** The same model with formulas resolved; read geometry and values here. */
+  resolvedProject?: ResolvedModel | null;
   selection: readonly SelectionItem[];
   meshes: Record<string, TessellationResult>;
   /**
@@ -142,6 +150,8 @@ export interface OperationHandleContext {
     baseRadius: string;
     ringDiameter: string;
     tubeDiameter: string;
+    ringRadius: string;
+    tubeRadius: string;
     sides: string;
     sidesTooltip: string;
     /** Array step arrow, angle arc and count grip. */
@@ -160,13 +170,19 @@ export interface OperationHandleContext {
  * Handles the current document and selection offer. Each operation type adds
  * its own provider here; the viewport never builds a handle itself.
  */
+export function resolvedFeature<T extends Feature>(feature: T): Resolved<T> | undefined {
+  return resolvedFeatureFor(feature);
+}
+
 export function operationHandles(context: OperationHandleContext): OperationHandle[] {
+  // A parameter that is a formula has no handle: dragging would have to replace
+  // the expression with a number, which is not what the user is editing.
   return [
     ...extrudeHandles(context),
     ...edgeTreatmentHandles(context),
     ...primitiveHandles(context),
     ...arrayHandles(context),
-  ];
+  ].filter((handle) => handle.enabled);
 }
 
 function selectedExtrude(context: OperationHandleContext): ExtrudeFeature | undefined {
@@ -179,7 +195,7 @@ function selectedExtrude(context: OperationHandleContext): ExtrudeFeature | unde
 
 /** Geometry of the operation's own inputs, independent of face renumbering. */
 function featureGeometry(
-  feature: ExtrudeFeature,
+  feature: Resolved<ExtrudeFeature>,
   context: OperationHandleContext,
 ): QuickTargetGeometry | null {
   if (feature.faceRefs.length > 0) {
@@ -211,7 +227,7 @@ function featureGeometry(
 function extrudeHandle(
   geometry: QuickTargetGeometry,
   context: OperationHandleContext,
-  feature: ExtrudeFeature | undefined,
+  feature: Resolved<ExtrudeFeature> | undefined,
   tooltip: string,
   axis: ExtrudeHandleAxis = 'primary',
 ): OperationHandle {
@@ -232,7 +248,9 @@ function extrudeHandle(
           ? -feature.distance
           : feature.distance
       : 0,
-    enabled: true,
+    enabled: feature
+      ? !isDriven(feature, axis === 'second' ? 'secondDirection.distance' : 'distance')
+      : true,
     tooltip,
     beginDrag: () => {
       const drag = new QuickExtrudeDrag(
@@ -255,7 +273,7 @@ function extrudeHandle(
 function extrudeHandlesFor(
   geometry: QuickTargetGeometry,
   context: OperationHandleContext,
-  feature: ExtrudeFeature | undefined,
+  feature: Resolved<ExtrudeFeature> | undefined,
   tooltip: string,
 ): OperationHandle[] {
   if (!feature) return [extrudeHandle(geometry, context, undefined, tooltip)];
@@ -364,15 +382,16 @@ function gripAt(frame: RevolveArcFrame, degrees: number): Vec3 {
 
 /** The two angle handles of a revolve, or none before its axis is picked. */
 function revolveHandles(
-  feature: ExtrudeFeature,
+  feature: Resolved<ExtrudeFeature>,
   context: OperationHandleContext,
 ): OperationHandle[] {
-  const revolve = feature.revolve ?? defaultRevolve();
+  const revolve: Resolved<RevolveSpec> = feature.revolve ?? defaultRevolve();
   const axis = resolveRevolveAxis(revolve.axis, {
     meshes: context.meshes,
-    sketches: context.project.features.filter(
-      (candidate): candidate is SketchFeature => candidate.type === 'sketch',
-    ),
+    sketches: context.project.features
+      .filter((candidate): candidate is SketchFeature => candidate.type === 'sketch')
+      .map((candidate) => resolvedFeatureFor(candidate))
+      .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate)),
     frames: context.sketchFrames,
   });
   if (!axis) return [];
@@ -389,7 +408,7 @@ function revolveHandles(
       origin: grip,
       direction: tangent ?? frame.axis,
       value: degrees,
-      enabled: true,
+      enabled: !isDriven(feature, `revolve.${which}`),
       tooltip: which === 'start' ? context.labels.revolveStart : context.labels.revolveEnd,
       arc: {
         axis: frame.axis,
@@ -411,11 +430,15 @@ function revolveHandles(
 function extrudeHandles(context: OperationHandleContext): OperationHandle[] {
   // A focused operation owns its handle: dragging it changes that operation.
   const focused = selectedExtrude(context);
-  if (focused) {
-    if (focused.method === 'revolve') return revolveHandles(focused, context);
-    const geometry = featureGeometry(focused, context);
-    return geometry ? extrudeHandlesFor(geometry, context, focused, context.labels.distance) : [];
+  const focusedResolved = focused ? resolvedFeature(focused) : undefined;
+  if (focused && focusedResolved) {
+    if (focusedResolved.method === 'revolve') return revolveHandles(focusedResolved, context);
+    const geometry = featureGeometry(focusedResolved, context);
+    return geometry
+      ? extrudeHandlesFor(geometry, context, focusedResolved, context.labels.distance)
+      : [];
   }
+  if (focused) return [];
 
   // A selected face or sketch offers the operation that could be created from
   // it. If that input already belongs to an operation, its handle is offered
@@ -423,7 +446,8 @@ function extrudeHandles(context: OperationHandleContext): OperationHandle[] {
   const target = quickTargetFromSelection(context.project, context.selection);
   if (!target) return [];
   const bound = findBoundExtrude(context.project, target);
-  if (bound?.method === 'revolve') return revolveHandles(bound, context);
+  const boundResolved = bound ? resolvedFeature(bound) : undefined;
+  if (boundResolved?.method === 'revolve') return revolveHandles(boundResolved, context);
   const geometry =
     (bound && target.kind === 'body-face' ? boundBodyFaceGeometry(bound, target) : null) ??
     resolveQuickTarget({
@@ -436,7 +460,7 @@ function extrudeHandles(context: OperationHandleContext): OperationHandle[] {
   return extrudeHandlesFor(
     geometry,
     context,
-    bound,
+    boundResolved,
     bound ? context.labels.distance : context.labels.create,
   );
 }
@@ -451,7 +475,7 @@ function selectedEdgeTreatment(context: OperationHandleContext): EdgeTreatmentFe
 
 /** Geometry of an operation from its own stored refs, independent of renaming. */
 function featureTreatmentGeometry(
-  feature: EdgeTreatmentFeature,
+  feature: Resolved<EdgeTreatmentFeature>,
   context: OperationHandleContext,
 ): EdgeTreatmentGeometry | null {
   return edgeTreatmentGeometry(
@@ -468,7 +492,7 @@ function featureTreatmentGeometry(
 function treatmentHandle(
   geometry: EdgeTreatmentGeometry,
   context: OperationHandleContext,
-  feature: EdgeTreatmentFeature | undefined,
+  feature: Resolved<EdgeTreatmentFeature> | undefined,
 ): OperationHandle {
   const tooltip = !feature
     ? context.labels.edgeTreatmentTooltip
@@ -480,7 +504,7 @@ function treatmentHandle(
     origin: geometry.origin,
     direction: geometry.direction,
     value: feature ? treatmentFaceOffset(feature.kind, feature.size, geometry.wedge) : 0,
-    enabled: true,
+    enabled: feature ? !isDriven(feature, 'size') : true,
     tooltip,
     beginDrag: () => {
       const drag = new QuickEdgeTreatmentDrag(geometry, context.labels.edgeTreatment, feature?.id);
@@ -506,11 +530,13 @@ function treatmentKey(geometry: EdgeTreatmentGeometry): string {
 function edgeTreatmentHandles(context: OperationHandleContext): OperationHandle[] {
   // A focused operation owns its arrow: dragging it changes that operation.
   const focused = selectedEdgeTreatment(context);
-  if (focused) {
-    const geometry = featureTreatmentGeometry(focused, context);
+  const focusedResolved = focused ? resolvedFeature(focused) : undefined;
+  if (focused && focusedResolved) {
+    const geometry = featureTreatmentGeometry(focusedResolved, context);
     if (!geometry) return [];
-    return [treatmentHandle(geometry, context, focused)];
+    return [treatmentHandle(geometry, context, focusedResolved)];
   }
+  if (focused) return [];
 
   // A selection always offers a new operation. An existing one is opened by
   // double-clicking a face it created, which hands the operation its own arrow.

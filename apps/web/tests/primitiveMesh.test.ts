@@ -4,10 +4,10 @@ import { defaultPrimitiveFeature } from '../src/primitive/params';
 import { primitivePreviewMesh } from '../src/primitive/mesh';
 import { primitivePreview } from '../src/primitive/preview';
 import { createProject } from '@icancad/model';
-import { modelOf } from './modelFixture';
+import { resolved, resolvedModelOf } from './resolvedFixture';
 
 function mesh(kind: PrimitiveFeature['kind']) {
-  return primitivePreviewMesh(defaultPrimitiveFeature(kind, kind, kind));
+  return primitivePreviewMesh(resolved(defaultPrimitiveFeature(kind, kind, kind)));
 }
 
 describe('primitive delta meshes', () => {
@@ -58,7 +58,7 @@ describe('primitive delta meshes', () => {
 
   it('marks the primitive delta as a ghost-only body', () => {
     const feature = defaultPrimitiveFeature('box', 'Cube', 'box');
-    const preview = primitivePreview(feature, modelOf(createProject()));
+    const preview = primitivePreview(resolved(feature), resolvedModelOf(createProject()));
     expect(preview.featureId).toBe('box');
     expect(preview.bodies).toHaveLength(1);
     expect(preview.bodies[0]).toMatchObject({ kind: 'added', ghostOnly: true, name: 'Cube' });

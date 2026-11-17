@@ -1,18 +1,28 @@
-import { activeModel, type PrimitiveFeature, type Project, type Vec3 } from '@icancad/model';
+import {
+  activeModel,
+  isDriven,
+  type ParamVec3,
+  type PrimitiveFeature,
+  type Project,
+  type Resolved,
+  type Vec3,
+} from '@icancad/model';
 import { useDocumentStore } from '../stores/documentStore';
 import {
   PYRAMID_MAX_SIDES,
   PYRAMID_MIN_SIDES,
   primitiveGizmoOrigin,
   primitiveParamValue,
+  primitiveParamsAreFinite,
   withPrimitiveParam,
   type PrimitiveSizeKey,
 } from '../primitive/params';
 import { snapLength } from './handleDrag';
-import type {
-  OperationHandle,
-  OperationHandleContext,
-  OperationHandleDrag,
+import {
+  resolvedFeature,
+  type OperationHandle,
+  type OperationHandleContext,
+  type OperationHandleDrag,
 } from './operationHandles';
 
 const AXIS_DIRECTIONS: Record<'x' | 'y' | 'z', Vec3> = {
@@ -32,7 +42,6 @@ type PrimitiveDragTarget =
       kind: 'size';
       key: PrimitiveSizeKey;
       paramScale: number;
-      displayScale: number;
       label: string;
     };
 
@@ -44,8 +53,6 @@ interface PrimitiveSizeSpec {
   drawValue: number;
   /** Stored parameter is the dragged value multiplied by this. */
   paramScale: number;
-  /** Shown value is the parameter multiplied by this (diameters show 2). */
-  displayScale: number;
   tooltip: string;
 }
 
@@ -58,7 +65,7 @@ function selectedPrimitive(context: OperationHandleContext): PrimitiveFeature | 
 }
 
 function primitiveSizeSpecs(
-  feature: PrimitiveFeature,
+  feature: Resolved<PrimitiveFeature>,
   labels: OperationHandleContext['labels'],
 ): PrimitiveSizeSpec[] {
   const [x, y, z] = feature.transform.translation;
@@ -71,7 +78,6 @@ function primitiveSizeSpecs(
           direction: AXIS_DIRECTIONS.x,
           drawValue: feature.params.dx,
           paramScale: 1,
-          displayScale: 1,
           tooltip: labels.width,
         },
         {
@@ -80,7 +86,6 @@ function primitiveSizeSpecs(
           direction: AXIS_DIRECTIONS.y,
           drawValue: feature.params.dy,
           paramScale: 1,
-          displayScale: 1,
           tooltip: labels.depth,
         },
         {
@@ -89,7 +94,6 @@ function primitiveSizeSpecs(
           direction: AXIS_DIRECTIONS.z,
           drawValue: feature.params.dz,
           paramScale: 1,
-          displayScale: 1,
           tooltip: labels.height,
         },
       ];
@@ -99,10 +103,9 @@ function primitiveSizeSpecs(
           key: 'radius',
           origin: [x - feature.params.radius, y, z],
           direction: AXIS_DIRECTIONS.x,
-          drawValue: feature.params.radius * 2,
-          paramScale: 0.5,
-          displayScale: 2,
-          tooltip: labels.diameter,
+          drawValue: feature.params.radius,
+          paramScale: 1,
+          tooltip: labels.radius,
         },
       ];
     case 'cylinder':
@@ -113,7 +116,6 @@ function primitiveSizeSpecs(
           direction: AXIS_DIRECTIONS.x,
           drawValue: feature.params.radius,
           paramScale: 1,
-          displayScale: 1,
           tooltip: labels.radius,
         },
         {
@@ -122,7 +124,6 @@ function primitiveSizeSpecs(
           direction: AXIS_DIRECTIONS.z,
           drawValue: feature.params.height,
           paramScale: 1,
-          displayScale: 1,
           tooltip: labels.height,
         },
       ];
@@ -134,7 +135,6 @@ function primitiveSizeSpecs(
           direction: AXIS_DIRECTIONS.x,
           drawValue: feature.params.bottomRadius,
           paramScale: 1,
-          displayScale: 1,
           tooltip: labels.bottomRadius,
         },
         {
@@ -143,7 +143,6 @@ function primitiveSizeSpecs(
           direction: AXIS_DIRECTIONS.z,
           drawValue: feature.params.height,
           paramScale: 1,
-          displayScale: 1,
           tooltip: labels.height,
         },
         {
@@ -152,7 +151,6 @@ function primitiveSizeSpecs(
           direction: AXIS_DIRECTIONS.x,
           drawValue: feature.params.topRadius,
           paramScale: 1,
-          displayScale: 1,
           tooltip: labels.topRadius,
         },
       ];
@@ -162,19 +160,17 @@ function primitiveSizeSpecs(
           key: 'majorRadius',
           origin: [x - feature.params.majorRadius, y, z],
           direction: AXIS_DIRECTIONS.x,
-          drawValue: feature.params.majorRadius * 2,
-          paramScale: 0.5,
-          displayScale: 2,
-          tooltip: labels.ringDiameter,
+          drawValue: feature.params.majorRadius,
+          paramScale: 1,
+          tooltip: labels.ringRadius,
         },
         {
           key: 'tubeRadius',
           origin: [x + feature.params.majorRadius, y, z - feature.params.tubeRadius],
           direction: AXIS_DIRECTIONS.z,
-          drawValue: feature.params.tubeRadius * 2,
-          paramScale: 0.5,
-          displayScale: 2,
-          tooltip: labels.tubeDiameter,
+          drawValue: feature.params.tubeRadius,
+          paramScale: 1,
+          tooltip: labels.tubeRadius,
         },
       ];
     case 'pyramid': {
@@ -188,7 +184,6 @@ function primitiveSizeSpecs(
           direction: [Math.cos(radiusAngle), Math.sin(radiusAngle), 0],
           drawValue: feature.params.radius,
           paramScale: 1,
-          displayScale: 1,
           tooltip: labels.baseRadius,
         },
         {
@@ -197,7 +192,6 @@ function primitiveSizeSpecs(
           direction: AXIS_DIRECTIONS.z,
           drawValue: feature.params.height,
           paramScale: 1,
-          displayScale: 1,
           tooltip: labels.height,
         },
       ];
@@ -210,7 +204,6 @@ function primitiveSizeSpecs(
           direction: AXIS_DIRECTIONS.x,
           drawValue: feature.params.radius,
           paramScale: 1,
-          displayScale: 1,
           tooltip: labels.radius,
         },
         {
@@ -219,7 +212,6 @@ function primitiveSizeSpecs(
           direction: AXIS_DIRECTIONS.z,
           drawValue: feature.params.height,
           paramScale: 1,
-          displayScale: 1,
           tooltip: labels.height,
         },
       ];
@@ -229,26 +221,30 @@ function primitiveSizeSpecs(
 /** Handles of one selected primitive: a move gizmo plus its size arrows. */
 export function primitiveHandles(context: OperationHandleContext): OperationHandle[] {
   const feature = selectedPrimitive(context);
-  if (!feature) return [];
-  const origin = primitiveGizmoOrigin(feature);
-  const handles: OperationHandle[] = primitiveSizeSpecs(feature, context.labels).map((spec) => ({
+  const geometry = feature ? resolvedFeature(feature) : undefined;
+  if (!feature || !geometry || !primitiveParamsAreFinite(geometry)) return [];
+  const origin = primitiveGizmoOrigin(geometry);
+  const handles: OperationHandle[] = primitiveSizeSpecs(geometry, context.labels).map((spec) => ({
     id: `primitive:${feature.id}:${spec.key}`,
     origin: spec.origin,
     direction: spec.direction,
     value: spec.drawValue,
-    enabled: true,
+    enabled: !isDriven(feature, `params.${spec.key}`),
     thickness: 1.2,
     tooltip: spec.tooltip,
     shaft: 'dashed',
     tipOnly: true,
     beginDrag: () => {
-      const drag = new PrimitiveDrag(feature.id, {
-        kind: 'size',
-        key: spec.key,
-        paramScale: spec.paramScale,
-        displayScale: spec.displayScale,
-        label: spec.tooltip,
-      });
+      const drag = new PrimitiveDrag(
+        feature.id,
+        {
+          kind: 'size',
+          key: spec.key,
+          paramScale: spec.paramScale,
+          label: spec.tooltip,
+        },
+        geometry,
+      );
       drag.start();
       return drag;
     },
@@ -261,17 +257,21 @@ export function primitiveHandles(context: OperationHandleContext): OperationHand
       origin,
       direction: AXIS_DIRECTIONS[axis],
       value: 0,
-      enabled: true,
+      enabled: !isDriven(feature, `transform.translation.${index}`),
       thickness: 1,
       axis,
       fixedLengthPx: MOVE_ARROW_PX,
       tooltip: axisLabels[index]!,
       beginDrag: () => {
-        const drag = new PrimitiveDrag(feature.id, {
-          kind: 'position-axis',
-          axis: index as 0 | 1 | 2,
-          label: `${context.labels.moveLabel} ${axis.toUpperCase()}`,
-        });
+        const drag = new PrimitiveDrag(
+          feature.id,
+          {
+            kind: 'position-axis',
+            axis: index as 0 | 1 | 2,
+            label: `${context.labels.moveLabel} ${axis.toUpperCase()}`,
+          },
+          geometry,
+        );
         drag.start();
         return drag;
       },
@@ -283,61 +283,77 @@ export function primitiveHandles(context: OperationHandleContext): OperationHand
     origin,
     direction: AXIS_DIRECTIONS.z,
     value: 0,
-    enabled: true,
     kind: 'move',
     tooltip: context.labels.move,
+    enabled: !(
+      isDriven(feature, 'transform.translation.0') ||
+      isDriven(feature, 'transform.translation.1') ||
+      isDriven(feature, 'transform.translation.2')
+    ),
     beginDrag: () => {
-      const drag = new PrimitiveDrag(feature.id, {
-        kind: 'position-plane',
-        label: context.labels.moveLabel,
-      });
+      const drag = new PrimitiveDrag(
+        feature.id,
+        {
+          kind: 'position-plane',
+          label: context.labels.moveLabel,
+        },
+        geometry,
+      );
       drag.start();
       return drag;
     },
   });
 
-  if (feature.kind === 'pyramid') {
-    const sides = feature.params.sides;
+  if (geometry.kind === 'pyramid') {
+    const sides = geometry.params.sides;
     handles.push({
       id: `primitive:${feature.id}:sides`,
-      origin: feature.transform.translation,
+      origin: geometry.transform.translation,
       direction: AXIS_DIRECTIONS.x,
       value: 180 / sides,
-      enabled: true,
+      enabled: !isDriven(feature, 'params.sides'),
       thickness: 1,
       tooltip: context.labels.sidesTooltip,
       orbit: {
         axis: AXIS_DIRECTIONS.z,
-        center: feature.transform.translation,
+        center: geometry.transform.translation,
         reference: AXIS_DIRECTIONS.x,
         angle: Math.PI / sides,
-        radius: feature.params.radius,
+        radius: geometry.params.radius,
       },
       beginDrag: () => {
-        const drag = new PrimitiveDrag(feature.id, {
-          kind: 'sides',
-          label: context.labels.sides,
-        });
+        const drag = new PrimitiveDrag(
+          feature.id,
+          {
+            kind: 'sides',
+            label: context.labels.sides,
+          },
+          geometry,
+        );
         drag.start();
         return drag;
       },
     });
   }
 
-  return handles;
+  return handles.filter((handle) => handle.enabled);
 }
 
 /** One handle gesture: a size change or a translation, as a single undo step. */
 class PrimitiveDrag implements OperationHandleDrag {
   private before: Project | null = null;
   private original: PrimitiveFeature | null = null;
+  private resolved: Resolved<PrimitiveFeature>;
   private changed = false;
   private currentValue = 0;
 
   constructor(
     private readonly featureId: string,
     private readonly target: PrimitiveDragTarget,
-  ) {}
+    resolved: Resolved<PrimitiveFeature>,
+  ) {
+    this.resolved = resolved;
+  }
 
   get op(): null {
     return null;
@@ -367,12 +383,13 @@ class PrimitiveDrag implements OperationHandleDrag {
         candidate.id === this.featureId && candidate.type === 'primitive',
     );
     this.original = feature ?? null;
+    this.resolved = feature ? (resolvedFeature(feature) ?? this.resolved) : this.resolved;
     this.changed = false;
     this.currentValue =
-      feature && this.target.kind === 'size'
-        ? snapLength(primitiveParamValue(feature, this.target.key) * this.target.displayScale)
-        : feature && this.target.kind === 'sides' && feature.kind === 'pyramid'
-          ? feature.params.sides
+      this.target.kind === 'size'
+        ? snapLength(primitiveParamValue(this.resolved, this.target.key))
+        : this.target.kind === 'sides' && this.resolved.kind === 'pyramid'
+          ? this.resolved.params.sides
           : 0;
   }
 
@@ -386,8 +403,12 @@ class PrimitiveDrag implements OperationHandleDrag {
     if (!feature) return;
 
     if (this.target.kind === 'position-axis') {
-      const translation: Vec3 = [...this.original.transform.translation];
-      translation[this.target.axis] = snapLength(translation[this.target.axis] + value);
+      const axis = this.target.axis;
+      const translation: ParamVec3 = [0, 1, 2].map((index) =>
+        index === axis
+          ? snapLength(this.resolved.transform.translation[axis] + value)
+          : feature.transform.translation[index]!,
+      ) as ParamVec3;
       state.preview({
         type: 'feature/replace',
         feature: { ...feature, transform: { ...feature.transform, translation } },
@@ -395,12 +416,10 @@ class PrimitiveDrag implements OperationHandleDrag {
       this.currentValue = snapLength(Math.abs(value));
     } else if (this.target.kind === 'position-plane') {
       if (!move) return;
-      const base = this.original.transform.translation;
-      const translation: Vec3 = [
-        snapLength(base[0] + move[0]),
-        snapLength(base[1] + move[1]),
-        snapLength(base[2] + move[2]),
-      ];
+      const base = this.resolved.transform.translation;
+      const translation: ParamVec3 = [0, 1, 2].map((axis) =>
+        snapLength(base[axis]! + move[axis]!),
+      ) as ParamVec3;
       state.preview({
         type: 'feature/replace',
         feature: { ...feature, transform: { ...feature.transform, translation } },
@@ -420,7 +439,7 @@ class PrimitiveDrag implements OperationHandleDrag {
       );
       const next = withPrimitiveParam(feature, 'sides', sides);
       state.preview({ type: 'feature/replace', feature: next });
-      this.currentValue = primitiveParamValue(next, 'sides');
+      this.currentValue = sides;
     } else {
       const next = withPrimitiveParam(
         feature,
@@ -428,9 +447,7 @@ class PrimitiveDrag implements OperationHandleDrag {
         snapLength(value) * this.target.paramScale,
       );
       state.preview({ type: 'feature/replace', feature: next });
-      this.currentValue = snapLength(
-        primitiveParamValue(next, this.target.key) * this.target.displayScale,
-      );
+      this.currentValue = snapLength(value * this.target.paramScale);
     }
     this.changed = true;
   }

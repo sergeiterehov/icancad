@@ -58,6 +58,12 @@ export function PickableSection({
   divided?: boolean;
 }) {
   const actionLabel = picking ? finishLabel : pickLabel;
+  // One error mark next to the pencil, with the failing rows in its tooltip.
+  // Row badges would repeat the same message inside the list.
+  const rowError = rows
+    .filter((row) => row.error)
+    .map((row) => `${row.name}: ${row.error}`)
+    .join(' · ');
   return (
     <PanelSection
       title={title}
@@ -67,14 +73,17 @@ export function PickableSection({
       // and lines up with the rows above.
       className={divided ? undefined : 'panel-section-inline'}
       action={
-        <IconButton
-          label={actionLabel}
-          tooltip={actionLabel}
-          active={picking}
-          onClick={onTogglePicking}
-        >
-          {picking ? <Check size={14} /> : <Pencil size={14} />}
-        </IconButton>
+        <span className="panel-section-actions">
+          {rowError && <ErrorBadge message={rowError} />}
+          <IconButton
+            label={actionLabel}
+            tooltip={actionLabel}
+            active={picking}
+            onClick={onTogglePicking}
+          >
+            {picking ? <Check size={14} /> : <Pencil size={14} />}
+          </IconButton>
+        </span>
       }
     >
       {error && <FormError message={error} />}
@@ -88,10 +97,7 @@ export function PickableSection({
               <>
                 <span className="tree-icon">{row.icon}</span>
                 <span className="tree-name">{row.name}</span>
-                <span className="tree-meta">
-                  {row.meta}
-                  {row.error && <ErrorBadge message={row.error} />}
-                </span>
+                <span className="tree-meta">{row.meta}</span>
                 {picking && row.onRemove && (
                   <IconButton label={removeLabel} tooltip={removeLabel} onClick={row.onRemove}>
                     <X size={13} />

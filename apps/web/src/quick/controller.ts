@@ -8,6 +8,7 @@ import type {
   Vec3,
 } from '@icancad/model';
 import { useDocumentStore } from '../stores/documentStore';
+import { resolvedFeatureFor } from '../stores/formulaStore';
 import { snapAngle, snapLength } from './handleDrag';
 import {
   buildQuickEdgeTreatment,
@@ -93,12 +94,13 @@ export class QuickExtrudeDrag {
       this.featureId = bound.id;
       this.originalFeature = bound;
       this.locked = true;
+      const resolved = resolvedFeatureFor(bound);
       this.currentValue =
         this.axis === 'second'
-          ? (bound.secondDirection?.distance ?? 0)
-          : bound.reversed
-            ? -bound.distance
-            : bound.distance;
+          ? (resolved?.secondDirection?.distance ?? 0)
+          : resolved?.reversed
+            ? -resolved.distance
+            : (resolved?.distance ?? 0);
       this.currentOp = bound.op;
       return;
     }
@@ -402,7 +404,7 @@ export class QuickEdgeTreatmentDrag {
       this.locked = true;
       this.originalKind = bound.kind;
       this.currentKind = bound.kind;
-      this.currentSize = bound.size;
+      this.currentSize = resolvedFeatureFor(bound)?.size ?? 0;
       return;
     }
     this.featureId = null;

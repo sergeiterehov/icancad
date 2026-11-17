@@ -7,7 +7,9 @@ import {
 } from '../src/primitive/params';
 import { operationHandles } from '../src/quick/operationHandles';
 import { useDocumentStore } from '../src/stores/documentStore';
+import { useFormulaStore } from '../src/stores/formulaStore';
 import { modelOf, modelProject } from './modelFixture';
+import { resolved } from './resolvedFixture';
 
 const labels = {
   extrude: 'Extrude',
@@ -34,6 +36,8 @@ const labels = {
   topRadius: 'Top radius',
   baseRadius: 'Base radius',
   ringDiameter: 'Ring diameter',
+  ringRadius: 'Ring radius',
+  tubeRadius: 'Tube radius',
   tubeDiameter: 'Tube diameter',
   sides: 'Sides',
   sidesTooltip: 'Sides tooltip',
@@ -98,7 +102,11 @@ describe('primitive parameters', () => {
       params: { majorRadius: 5, tubeRadius: 20 },
     });
     if (normalized.kind !== 'torus') throw new Error('expected a torus');
-    expect(normalized.params.tubeRadius).toBeLessThan(normalized.params.majorRadius);
+    const { majorRadius, tubeRadius } = normalized.params;
+    if (typeof majorRadius !== 'number' || typeof tubeRadius !== 'number') {
+      throw new Error('expected literal numbers');
+    }
+    expect(tubeRadius).toBeLessThan(majorRadius);
   });
 
   it('keeps the pyramid between 3 and 120 sides', () => {
@@ -123,7 +131,9 @@ describe('primitive parameters', () => {
       'pyramid',
       'capsule',
     ] as const) {
-      expect(primitiveGizmoOrigin(defaultPrimitiveFeature(kind, kind, 'ab'))).toEqual([0, 0, 0]);
+      expect(primitiveGizmoOrigin(resolved(defaultPrimitiveFeature(kind, kind, 'ab')))).toEqual([
+        0, 0, 0,
+      ]);
     }
   });
 });
@@ -131,7 +141,7 @@ describe('primitive parameters', () => {
 describe('primitive handles', () => {
   it('offers three size arrows and a move gizmo for a box', () => {
     const box = defaultPrimitiveFeature('box', 'Cube', 'box');
-    const ids = handlesFor(box).map((handle) => handle.id);
+    const ids = handlesFor(resolved(box)).map((handle) => handle.id);
     expect(ids).toEqual([
       'primitive:box:dx',
       'primitive:box:dy',
@@ -204,25 +214,52 @@ describe('primitive handles', () => {
     expect(sides!.orbit!.angle).toBeCloseTo(Math.PI / 4, 6);
   });
 
-  it('offers a diameter handle for a sphere and a tube diameter for a torus', () => {
+  it('offers no handle for a parameter that is a formula', () => {
+    const box = defaultPrimitiveFeature('box', 'Cube', 'box');
+    const driven = {
+      ...box,
+      params: { ...box.params, dx: { formula: 'width' } },
+    } as unknown as PrimitiveFeature;
+    const project = projectWith(driven);
+    useFormulaStore.setState({
+      resolution: {
+        model: { ...modelOf(project), features: [resolved(box)] },
+        inputKey: 'test',
+        variableValues: {},
+        variableErrors: {},
+        errors: {},
+        drivenSketches: new Set<string>(),
+        revision: 1,
+      },
+    });
+    try {
+      const ids = handlesFor(driven).map((handle) => handle.id);
+      expect(ids).not.toContain('primitive:box:dx');
+      expect(ids).toContain('primitive:box:dy');
+    } finally {
+      useFormulaStore.setState({ resolution: null });
+    }
+  });
+
+  it('offers a radius handle for a sphere and radius handles for a torus', () => {
     const sphere = defaultPrimitiveFeature('sphere', 'Sphere', 'sphere');
     const sphereHandle = handlesFor(sphere).find(
       (handle) => handle.id === 'primitive:sphere:radius',
     );
-    expect(sphereHandle).toMatchObject({ value: 20, tooltip: 'Diameter' });
+    expect(sphereHandle).toMatchObject({ value: 10, tooltip: 'Radius' });
 
     const torus = defaultPrimitiveFeature('torus', 'Torus', 'torus');
     const handles = handlesFor(torus);
     expect(handles.find((handle) => handle.id === 'primitive:torus:majorRadius')).toMatchObject({
       origin: [-20, 0, 0],
-      value: 40,
-      tooltip: 'Ring diameter',
+      value: 20,
+      tooltip: 'Ring radius',
     });
     expect(handles.find((handle) => handle.id === 'primitive:torus:tubeRadius')).toMatchObject({
       origin: [20, 0, -5],
       direction: [0, 0, 1],
-      value: 10,
-      tooltip: 'Tube diameter',
+      value: 5,
+      tooltip: 'Tube radius',
     });
   });
 });
@@ -255,7 +292,7 @@ describe('primitive drags', () => {
     expect(edited.transform.translation).toEqual([0, 0, 0]);
     drag.end();
     expect(useDocumentStore.getState().past).toHaveLength(1);
-    expect(primitiveGizmoOrigin(edited)).toEqual([0, 0, 0]);
+    expect(primitiveGizmoOrigin(resolved(edited))).toEqual([0, 0, 0]);
   });
 
   it('changes the pyramid side count discretely from the orbit grip', () => {

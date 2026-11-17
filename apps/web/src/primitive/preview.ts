@@ -1,4 +1,10 @@
-import { BODY_COLORS, featureBodyId, type PrimitiveFeature, type Model } from '@icancad/model';
+import {
+  BODY_COLORS,
+  featureBodyId,
+  type PrimitiveFeature,
+  type Resolved,
+  type ResolvedModel,
+} from '@icancad/model';
 import type { ScenePreview } from '../stores/kernelStore';
 import { primitivePreviewMesh } from './mesh';
 
@@ -8,7 +14,10 @@ import { primitivePreviewMesh } from './mesh';
  * still gets an added mark, but the viewport skips it because the ghost already
  * represents the object.
  */
-export function primitivePreview(feature: PrimitiveFeature, project: Model): ScenePreview {
+export function primitivePreview(
+  feature: Resolved<PrimitiveFeature>,
+  project: ResolvedModel,
+): ScenePreview {
   const bodyId = featureBodyId(feature.id);
   const metadata = project.metadata[bodyId];
   const color =

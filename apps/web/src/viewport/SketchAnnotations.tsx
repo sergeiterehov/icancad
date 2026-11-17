@@ -1,4 +1,4 @@
-import type { SketchFeature } from '@icancad/model';
+import { isFormula, type SketchFeature } from '@icancad/model';
 import { MousePointer2, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -17,11 +17,14 @@ import {
 } from '../sketch/dimensions';
 import { useDocumentStore, useViewModel } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
+import { resolvedFeatureFor, useFormulaStore } from '../stores/formulaStore';
 import { useUiStore } from '../stores/uiStore';
 import { CONSTRAINT_CATALOG } from '../ui/constraintCatalog';
 import { useContextMenuStore } from '../ui/ContextMenu';
-import { useWheelStep } from '../ui/Controls';
+import { paramText, useWheelStep } from '../ui/Controls';
+import { formulaMessage } from '../ui/formulaMessage';
 import { formatStep, parseNumber, steppedValue, wheelStep } from '../ui/numberStep';
+import { Tooltip } from '../ui/Tooltip';
 import { getViewport } from './handle';
 
 interface Position {
@@ -55,6 +58,8 @@ export function SketchAnnotations() {
   const selectedConstraintIds = useUiStore((state) => state.sketchConstraintIds);
   const selectConstraint = useUiStore((state) => state.selectSketchConstraint);
   const setSketchSelection = useUiStore((state) => state.setSketchSelection);
+  const dimensionEditId = useUiStore((state) => state.sketchDimensionEditId);
+  const setDimensionEdit = useUiStore((state) => state.setSketchDimensionEdit);
   const openMenu = useContextMenuStore((state) => state.open);
   const showToast = useUiStore((state) => state.showToast);
   const project = useViewModel();
@@ -75,20 +80,40 @@ export function SketchAnnotations() {
     (candidate): candidate is SketchFeature =>
       candidate.id === activeSketchId && candidate.type === 'sketch',
   );
-  const frame = useMemo(
-    () =>
-      feature
-        ? computeSketchFrame(
-            feature,
-            feature.plane.type === 'face' ? meshes[feature.plane.bodyId ?? ''] : undefined,
-          )
-        : null,
-    [feature, meshes],
+  const resolution = useFormulaStore((state) => state.resolution);
+  const formulaRevision = resolution?.revision ?? 0;
+  const resolvedFeature = useMemo(
+    () => (feature ? resolvedFeatureFor(feature) : undefined),
+    [feature, formulaRevision],
   );
+  const frame = useMemo(() => {
+    const driven = resolvedFeature?.type === 'sketch' ? resolvedFeature : feature;
+    return driven
+      ? computeSketchFrame(
+          driven,
+          driven.plane.type === 'face' ? meshes[driven.plane.bodyId ?? ''] : undefined,
+        )
+      : null;
+  }, [feature, resolvedFeature, meshes]);
   const annotations = useMemo(
-    () => (feature ? dimensionAnnotations(feature, locale) : []),
-    [feature, locale],
+    () =>
+      resolvedFeature?.type === 'sketch'
+        ? dimensionAnnotations(resolvedFeature, locale)
+        : feature
+          ? dimensionAnnotations(feature, locale)
+          : [],
+    [feature, resolvedFeature, locale],
   );
+  const constraintErrors = useMemo(() => {
+    if (!feature) return new Map<string, string>();
+    const errors = resolution?.errors[feature.id] ?? {};
+    const found = new Map<string, string>();
+    feature.constraints.forEach((constraint, index) => {
+      const message = formulaMessage(t, errors[`constraints.${index}.value`]);
+      if (message) found.set(constraint.id, message);
+    });
+    return found;
+  }, [feature, resolution?.errors, t]);
   const references = useMemo(
     () => (feature ? referenceAnnotations(feature, locale, 'mm') : []),
     [feature, locale],
@@ -104,10 +129,13 @@ export function SketchAnnotations() {
       return;
     }
     let frameId = 0;
-    const tick = () => {
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    const measure = () => {
       const viewport = getViewport();
       if (!viewport) {
-        frameId = requestAnimationFrame(tick);
+        // A throttled tab has no animation frames; a timer still places the
+        // labels once the viewport exists.
+        retry ??= setTimeout(measure, 100);
         return;
       }
       const next: Record<string, Position> = {};
@@ -122,11 +150,20 @@ export function SketchAnnotations() {
         };
       }
       setPositions((previous) => (samePositions(previous, next) ? previous : next));
+    };
+    // Measure once before the first frame, so a label never waits for a paint
+    // that a throttled tab would not schedule.
+    measure();
+    const tick = () => {
+      measure();
       frameId = requestAnimationFrame(tick);
     };
     frameId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frameId);
-  }, [frame]);
+    return () => {
+      cancelAnimationFrame(frameId);
+      if (retry) clearTimeout(retry);
+    };
+  }, [frame, annotations, references]);
 
   useEffect(() => {
     if (!editingId) return;
@@ -163,6 +200,11 @@ export function SketchAnnotations() {
     }
   };
 
+  // A driven dimension scrolls the view instead of stepping its value.
+  const editingFormula = isFormula(
+    annotations.find((candidate) => candidate.id === editingId)?.constraint.value,
+  );
+
   // A wheel step applies right away but keeps the value open for the next notch.
   useWheelStep(
     inputRef,
@@ -170,6 +212,8 @@ export function SketchAnnotations() {
       if (!editingId || solving.current) return;
       const annotation = annotations.find((candidate) => candidate.id === editingId);
       if (!annotation || draft.trim() === '') return;
+      // A formula scrolls the view instead of stepping its value.
+      if (draft.trimStart().startsWith('=')) return;
       const parsed = parseNumber(draft);
       if (!Number.isFinite(parsed)) return;
       const next = steppedValue(parsed, step.current, direction);
@@ -179,10 +223,8 @@ export function SketchAnnotations() {
       setDraft(formatStep(next, step.current));
       void applyValue(annotation, next);
     },
-    editingId !== null,
+    editingId !== null && !editingFormula,
   );
-
-  if (!feature || !activeSketchReady) return null;
 
   const selectedEntityIds = new Set(
     selectionKeys.map((key) => key.split('#')[0]).filter((id): id is string => Boolean(id)),
@@ -201,11 +243,22 @@ export function SketchAnnotations() {
     endApplyGesture();
     cancelled.current = false;
     setEditingId(annotation.id);
-    const text = String(annotation.constraint.value ?? 0);
+    // The label is measured from the resolved sketch, but the editor edits the
+    // authored dimension: a driven one must open as its formula, not its value.
+    const authored = feature?.constraints.find((constraint) => constraint.id === annotation.id);
+    const text = paramText(authored?.value ?? annotation.constraint.value ?? 0);
     step.current = wheelStep(text);
     setDraft(text);
     selectConstraint(annotation.id);
   };
+
+  // The constraint list opens the same editor as a double click on the label.
+  useEffect(() => {
+    if (!dimensionEditId) return;
+    const annotation = annotations.find((candidate) => candidate.id === dimensionEditId);
+    setDimensionEdit(null);
+    if (annotation) beginEdit(annotation);
+  }, [dimensionEditId, annotations, setDimensionEdit]);
 
   const removeConstraint = (id: string) => {
     if (!feature) return;
@@ -255,11 +308,33 @@ export function SketchAnnotations() {
       cancelled.current = false;
       return;
     }
+    const text = raw.trim();
+    if (text.startsWith('=')) {
+      const source = text.slice(1).trim();
+      setEditingId(null);
+      if (!source || !feature) return;
+      const constraints = feature.constraints.map((constraint) =>
+        constraint.id === annotation.id
+          ? { ...constraint, value: { formula: source } }
+          : constraint,
+      );
+      apply({ type: 'feature/replace', feature: { ...feature, constraints } });
+      return;
+    }
     const value = parseNumber(raw);
     setEditingId(null);
-    if (!Number.isFinite(value) || value === annotation.constraint.value) return;
+    // Compare with the authored value: a formula that already computes this
+    // number still has to become that number when it is replaced.
+    const current = feature?.constraints.find(
+      (constraint) => constraint.id === annotation.id,
+    )?.value;
+    if (!Number.isFinite(value) || (typeof current === 'number' && value === current)) return;
     await applyValue(annotation, value);
   };
+
+  // Every hook runs before this point, so entering or leaving the sketch does
+  // not change the number of hooks the component calls.
+  if (!feature || !activeSketchReady) return null;
 
   return (
     <div className="sketch-annotations" data-testid="sketch-annotations">
@@ -283,19 +358,22 @@ export function SketchAnnotations() {
         const position = positions[annotation.id];
         if (!position) return null;
         const editing = editingId === annotation.id;
+        const authored = feature.constraints.find((constraint) => constraint.id === annotation.id);
         const Icon = CONSTRAINT_CATALOG[annotation.constraint.type]?.icon;
+        const constraintError = constraintErrors.get(annotation.id);
         return (
           <div
             key={annotation.id}
             className="sketch-annotation"
             role="button"
             tabIndex={0}
-            aria-label={`${annotation.text}. ${t('constraint.editValue')}`}
+            aria-label={`${annotation.text}. ${constraintError ?? t('constraint.editValue')}`}
             data-active={selectedConstraints.has(annotation.id) ? 'true' : undefined}
+            data-driven={isFormula(authored?.value) ? 'true' : undefined}
             data-dimmed={isDimmed(annotation) ? 'true' : undefined}
+            data-error={constraintError ? 'true' : undefined}
             data-testid={`sketch-annotation-${annotation.id}`}
             style={{ left: position.x, top: position.y }}
-            title={t('constraint.editValue')}
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => {
               event.stopPropagation();
@@ -342,14 +420,19 @@ export function SketchAnnotations() {
                 }}
               />
             ) : (
-              <>
-                {Icon ? (
-                  <span className="sketch-annotation-icon" aria-hidden="true">
-                    <Icon size={12} />
-                  </span>
-                ) : null}
-                <span>{annotation.text}</span>
-              </>
+              <Tooltip
+                content={constraintError ?? t('constraint.editValue')}
+                delay={constraintError ? 150 : undefined}
+              >
+                <span className="sketch-annotation-content">
+                  {Icon ? (
+                    <span className="sketch-annotation-icon" aria-hidden="true">
+                      <Icon size={12} />
+                    </span>
+                  ) : null}
+                  <span>{annotation.text}</span>
+                </span>
+              </Tooltip>
             )}
           </div>
         );

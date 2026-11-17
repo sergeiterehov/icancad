@@ -4,10 +4,50 @@ export type Vec3 = [number, number, number];
 
 export type MeshFormat = 'stl' | 'obj' | 'ply' | 'glb';
 
+/**
+ * A numeric parameter written as a Python expression. The leading `=` the user
+ * types in a field is a UI marker only and is never stored.
+ */
+export interface Formula {
+  formula: string;
+}
+
+/** A numeric parameter: a literal or a formula that resolves to one. */
+export type ParamValue = number | Formula;
+
+export type ParamVec3 = [ParamValue, ParamValue, ParamValue];
+
+export function isFormula(value: unknown): value is Formula {
+  return typeof value === 'object' && value !== null && 'formula' in value;
+}
+
+/**
+ * Replaces every parameter of a shape with the number it resolves to; strings,
+ * ids and geometry snapshots keep their type.
+ */
+export type Resolved<T> = T extends ParamValue
+  ? number
+  : T extends readonly unknown[]
+    ? { [K in keyof T]: Resolved<T[K]> }
+    : T extends object
+      ? { [K in keyof T]: Resolved<T[K]> }
+      : T;
+
+export type VariableType = 'number' | 'string';
+
+/** A named project value, usable from any operation of the project. */
+export interface Variable {
+  id: string;
+  name: string;
+  type: VariableType;
+  /** number: a Python expression; string: the text itself. */
+  source: string;
+}
+
 export interface Transform {
-  translation: Vec3;
-  rotation: Vec3;
-  scale: number;
+  translation: ParamVec3;
+  rotation: ParamVec3;
+  scale: ParamValue;
 }
 
 export type FeatureType =
@@ -43,42 +83,42 @@ interface PrimitiveBase extends FeatureBase {
 
 export interface BoxPrimitive extends PrimitiveBase {
   kind: 'box';
-  params: { dx: number; dy: number; dz: number };
+  params: { dx: ParamValue; dy: ParamValue; dz: ParamValue };
 }
 
 /** The radius is stored; the inspector shows the diameter. */
 export interface SpherePrimitive extends PrimitiveBase {
   kind: 'sphere';
-  params: { radius: number };
+  params: { radius: ParamValue };
 }
 
 export interface CylinderPrimitive extends PrimitiveBase {
   kind: 'cylinder';
-  params: { radius: number; height: number };
+  params: { radius: ParamValue; height: ParamValue };
 }
 
 export interface ConePrimitive extends PrimitiveBase {
   kind: 'cone';
   /** A zero top radius makes a sharp cone. */
-  params: { bottomRadius: number; topRadius: number; height: number };
+  params: { bottomRadius: ParamValue; topRadius: ParamValue; height: ParamValue };
 }
 
 /** The radii are stored; the inspector shows the diameters. */
 export interface TorusPrimitive extends PrimitiveBase {
   kind: 'torus';
-  params: { majorRadius: number; tubeRadius: number };
+  params: { majorRadius: ParamValue; tubeRadius: ParamValue };
 }
 
 /** A regular pyramid: `radius` is the circumradius of the base polygon. */
 export interface PyramidPrimitive extends PrimitiveBase {
   kind: 'pyramid';
-  params: { sides: number; radius: number; height: number };
+  params: { sides: ParamValue; radius: ParamValue; height: ParamValue };
 }
 
 /** A capsule: `height` is the length of the straight cylindrical section. */
 export interface CapsulePrimitive extends PrimitiveBase {
   kind: 'capsule';
-  params: { radius: number; height: number };
+  params: { radius: ParamValue; height: ParamValue };
 }
 
 export type PrimitiveFeature =
@@ -95,16 +135,16 @@ export interface ImportMeshFeature extends FeatureBase {
   assetId: string;
   format: MeshFormat;
   transform: Transform;
-  scale: number;
+  scale: ParamValue;
 }
 
 export interface ConvertToSolidFeature extends FeatureBase {
   type: 'convert-to-solid';
   sourceBodyId: string;
   mode: 'auto' | 'heal' | 'voxel';
-  voxelSize?: number;
-  targetTriangles?: number;
-  tolerance?: number;
+  voxelSize?: ParamValue;
+  targetTriangles?: ParamValue;
+  tolerance?: ParamValue;
 }
 
 export type SketchEntity =
@@ -170,7 +210,7 @@ export interface SketchConstraint {
   id: string;
   type: ConstraintType;
   refs: SketchConstraintRef[];
-  value?: number;
+  value?: ParamValue;
   x?: number;
   y?: number;
 }
@@ -186,7 +226,7 @@ export type SketchPlaneRef =
   | {
       type: 'datum';
       plane: 'XY' | 'XZ' | 'YZ';
-      offset: number;
+      offset: ParamValue;
       /** The sketch looks at the back of the plane, like a flipped section. */
       inverted?: boolean;
     }
@@ -196,7 +236,7 @@ export type SketchPlaneRef =
       bodyId?: string;
       topoId?: string;
       /** Distance along the face normal, away from the face. */
-      offset?: number;
+      offset?: ParamValue;
       frame?: SketchFrame;
       /** The sketch looks at the back of the face, like a flipped section. */
       inverted?: boolean;
@@ -242,7 +282,7 @@ export type ExtrudeEnd = 'blind' | 'symmetric' | 'through-all';
 
 export interface ExtrudeSecondDirection {
   end: 'blind' | 'through-all';
-  distance: number;
+  distance: ParamValue;
 }
 
 /** What sweeps the profile: a straight pull or a turn around an axis. */
@@ -261,8 +301,8 @@ export type RevolveAxis =
 export interface RevolveSpec {
   axis: RevolveAxis;
   /** Degrees around the axis, measured right-handed; the sweep runs start…end. */
-  start: number;
-  end: number;
+  start: ParamValue;
+  end: ParamValue;
   /** Turns the sweep the other way round: both angles are negated. */
   inverted: boolean;
 }
@@ -331,7 +371,7 @@ export interface ExtrudeFeature extends FeatureBase {
   /** Axis and angles of a revolve; absent until the method is a revolve. */
   revolve?: RevolveSpec;
   end: ExtrudeEnd;
-  distance: number;
+  distance: ParamValue;
   /** Extrude along the opposite side of the sketch plane or face normal. */
   reversed: boolean;
   /** Optional extrusion to the opposite side of the sketch plane. */
@@ -353,9 +393,9 @@ export interface ShellFeature extends FeatureBase {
   /** Faces left open in the wall. */
   removeFaces: BodyFaceRef[];
   /** Wall thickness in millimetres. */
-  thickness: number;
+  thickness: ParamValue;
   /** Gap between the input surface and an outward shell; 0 for a cavity. */
-  offset: number;
+  offset: ParamValue;
   direction: 'inward' | 'outward';
 }
 
@@ -372,20 +412,20 @@ export interface EntityRef {
 
 export interface HoleSpec {
   kind: 'simple' | 'counterbore' | 'countersink';
-  diameter: number;
-  depth?: number;
+  diameter: ParamValue;
+  depth?: ParamValue;
   throughAll: boolean;
   clearance?: string;
-  headDiameter?: number;
-  headDepth?: number;
-  angle?: number;
+  headDiameter?: ParamValue;
+  headDepth?: ParamValue;
+  angle?: ParamValue;
 }
 
 export interface HoleFeature extends FeatureBase {
   type: 'hole';
   bodyId: string;
   faceRef: EntityRef;
-  positions: Array<{ x: number; y: number }>;
+  positions: Array<{ x: ParamValue; y: ParamValue }>;
   spec: HoleSpec;
 }
 
@@ -393,7 +433,7 @@ export interface RibFeature extends FeatureBase {
   type: 'rib';
   bodyId: string;
   sketchId: string;
-  thickness: number;
+  thickness: ParamValue;
   direction: Vec3;
 }
 
@@ -412,7 +452,7 @@ export interface EdgeTreatmentFeature extends FeatureBase {
   /** Edges picked one by one. */
   edgeRefs: BodyEdgeRef[];
   /** Requested radius (fillet) or leg distance (chamfer), in millimetres. */
-  size: number;
+  size: ParamValue;
 }
 
 export interface BooleanFeature extends FeatureBase {
@@ -456,14 +496,14 @@ export type ArrayDirection =
   | {
       kind: 'linear';
       direction: Vec3;
-      spacing: number;
+      spacing: ParamValue;
       /**
        * Tilt of the direction, in degrees. Two directions of a grid meet at any
        * angle instead of a right one, which is what turns a box of copies into
        * a parallelepiped (ADR 0029).
        */
-      angle?: number;
-      count: number;
+      angle?: ParamValue;
+      count: ParamValue;
     }
   | {
       kind: 'rotation';
@@ -473,13 +513,13 @@ export type ArrayDirection =
        * over the gaps. The span is always positive: which way the copies turn
        * is a state of its own, so the field never shows a minus sign.
        */
-      angle: number;
+      angle: ParamValue;
       /** The copies turn the other way round: the span is measured backwards. */
       inverted?: boolean;
-      count: number;
+      count: ParamValue;
     }
   /** `paths` is empty while the direction waits for curves to be picked. */
-  | { kind: 'path'; paths: ArrayPath[]; count: number };
+  | { kind: 'path'; paths: ArrayPath[]; count: ParamValue };
 
 /**
  * What the copies of a rotation turn around: a world axis through the centre of
@@ -601,6 +641,8 @@ export interface Model {
   metadata: Record<string, ObjectMetadata>;
   view: ViewState;
   historyEnd: string | null;
+  /** Named values visible only in this model. */
+  variables: Variable[];
   /** Folders of the timeline; they never change the build order. */
   groups: FeatureGroup[];
 }
@@ -619,15 +661,22 @@ export interface FeatureGroup {
 export type SuperObject = Model;
 
 export interface Project {
-  schemaVersion: 4;
+  schemaVersion: 6;
   id: string;
   name: string;
   units: 'mm';
   superObjects: SuperObject[];
   activeSuperObjectId: string;
+  /** Named values shared by every model of the project. */
+  variables: Variable[];
   createdAt: string;
   updatedAt: string;
 }
+
+export type ResolvedFeature = Resolved<Feature>;
+
+/** A model with every formula replaced by the number it resolves to. */
+export type ResolvedModel = Omit<Model, 'features'> & { features: ResolvedFeature[] };
 
 export type FeatureErrorCode =
   | 'KERNEL_NOT_READY'
@@ -635,4 +684,6 @@ export type FeatureErrorCode =
   | 'SHAPE_NOT_FOUND'
   | 'INVALID_PARAMS'
   | 'NOT_IMPLEMENTED'
-  | 'OP_FAILED';
+  | 'OP_FAILED'
+  | 'CONSTRAINT_CONFLICT'
+  | 'EXPRESSION_ERROR';

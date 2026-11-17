@@ -1,5 +1,7 @@
 import type { MakePrimitiveParams } from '@icancad/kernel';
-import type { PrimitiveFeature, PrimitiveKind, Vec3 } from '@icancad/model';
+import type { ParamValue, PrimitiveFeature, PrimitiveKind, Resolved, Vec3 } from '@icancad/model';
+
+export type ResolvedPrimitiveFeature = Resolved<PrimitiveFeature>;
 
 /** Smallest size worth building and the smallest a handle can leave. */
 export const MIN_PRIMITIVE_SIZE = 0.1;
@@ -50,8 +52,10 @@ export function defaultPrimitiveFeature(
 
 /** Keeps every primitive inside the range its kernel maker accepts. */
 export function normalizePrimitive(feature: PrimitiveFeature): PrimitiveFeature {
-  const size = (value: number, minimum = MIN_PRIMITIVE_SIZE) =>
-    Number.isFinite(value) ? Math.max(minimum, value) : minimum;
+  const size = (value: ParamValue, minimum = MIN_PRIMITIVE_SIZE): ParamValue => {
+    if (typeof value !== 'number') return value;
+    return Number.isFinite(value) ? Math.max(minimum, value) : minimum;
+  };
   switch (feature.kind) {
     case 'box':
       return {
@@ -77,28 +81,44 @@ export function normalizePrimitive(feature: PrimitiveFeature): PrimitiveFeature 
         ...feature,
         params: {
           bottomRadius: size(feature.params.bottomRadius),
-          topRadius: Number.isFinite(feature.params.topRadius)
-            ? Math.max(0, feature.params.topRadius)
-            : 0,
+          topRadius:
+            typeof feature.params.topRadius === 'number'
+              ? Number.isFinite(feature.params.topRadius)
+                ? Math.max(0, feature.params.topRadius)
+                : 0
+              : feature.params.topRadius,
           height: size(feature.params.height),
         },
       };
     case 'torus': {
-      const majorRadius = Math.max(MIN_PRIMITIVE_SIZE * 2, size(feature.params.majorRadius));
-      const tubeRadius = Math.min(
-        size(feature.params.tubeRadius),
-        Math.max(MIN_PRIMITIVE_SIZE, majorRadius - MIN_PRIMITIVE_SIZE),
-      );
-      return { ...feature, params: { majorRadius, tubeRadius } };
-    }
-    case 'pyramid': {
-      const sides = Number.isFinite(feature.params.sides)
-        ? Math.round(feature.params.sides)
-        : PYRAMID_MIN_SIDES;
+      const majorRadius = size(feature.params.majorRadius, MIN_PRIMITIVE_SIZE * 2);
+      const tubeRadius = size(feature.params.tubeRadius);
+      if (typeof majorRadius !== 'number' || typeof tubeRadius !== 'number') {
+        return { ...feature, params: { majorRadius, tubeRadius } };
+      }
       return {
         ...feature,
         params: {
-          sides: Math.min(PYRAMID_MAX_SIDES, Math.max(PYRAMID_MIN_SIDES, sides)),
+          majorRadius,
+          tubeRadius: Math.min(
+            tubeRadius,
+            Math.max(MIN_PRIMITIVE_SIZE, majorRadius - MIN_PRIMITIVE_SIZE),
+          ),
+        },
+      };
+    }
+    case 'pyramid': {
+      const sides =
+        typeof feature.params.sides === 'number' && Number.isFinite(feature.params.sides)
+          ? Math.min(
+              PYRAMID_MAX_SIDES,
+              Math.max(PYRAMID_MIN_SIDES, Math.round(feature.params.sides)),
+            )
+          : feature.params.sides;
+      return {
+        ...feature,
+        params: {
+          sides,
           radius: size(feature.params.radius),
           height: size(feature.params.height),
         },
@@ -115,7 +135,21 @@ export function normalizePrimitive(feature: PrimitiveFeature): PrimitiveFeature 
   }
 }
 
-export function primitiveParamValue(feature: PrimitiveFeature, key: PrimitiveSizeKey): number {
+/** Whether the resolved parameters can build geometry at all. */
+export function primitiveParamsAreFinite(feature: ResolvedPrimitiveFeature): boolean {
+  const values = [
+    ...Object.values(feature.params),
+    ...feature.transform.translation,
+    ...feature.transform.rotation,
+    feature.transform.scale,
+  ];
+  return values.every((value) => typeof value === 'number' && Number.isFinite(value));
+}
+
+export function primitiveParamValue(
+  feature: ResolvedPrimitiveFeature,
+  key: PrimitiveSizeKey,
+): number {
   return (feature.params as Record<string, number>)[key] ?? 0;
 }
 
@@ -123,9 +157,9 @@ export function primitiveParamValue(feature: PrimitiveFeature, key: PrimitiveSiz
 export function withPrimitiveParam(
   feature: PrimitiveFeature,
   key: PrimitiveSizeKey,
-  value: number,
+  value: ParamValue,
 ): PrimitiveFeature {
-  const params = { ...feature.params, [key]: value } as Record<string, number>;
+  const params = { ...feature.params, [key]: value } as Record<string, ParamValue>;
   return normalizePrimitive({ ...feature, params } as PrimitiveFeature);
 }
 
@@ -133,13 +167,13 @@ export function withPrimitiveParam(
  * Place of the translation gizmo: the anchor the inspector edits. It stays put
  * when a size changes, so dragging a size never moves the object's origin.
  */
-export function primitiveGizmoOrigin(feature: PrimitiveFeature): Vec3 {
+export function primitiveGizmoOrigin(feature: ResolvedPrimitiveFeature): Vec3 {
   return [...feature.transform.translation];
 }
 
 /** Request the kernel rebuilds a primitive from. */
 export function primitiveKernelParams(
-  feature: PrimitiveFeature,
+  feature: ResolvedPrimitiveFeature,
   shapeId: string,
 ): MakePrimitiveParams {
   const at = feature.transform.translation;

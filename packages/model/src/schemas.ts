@@ -3,7 +3,13 @@ import { pruneEmptyGroups } from './groups';
 import { createId } from './ids';
 import type { Project } from './types';
 
-export const PROJECT_SCHEMA_VERSION = 4;
+export const PROJECT_SCHEMA_VERSION = 6;
+
+/** Documents written before model variables. */
+const MODEL_VARIABLE_LESS_SCHEMA_VERSION = 5;
+
+/** Documents written before project variables and formulas. */
+const FORMULA_LESS_SCHEMA_VERSION = 4;
 
 /** Models without timeline folders: a valid document, just one version behind. */
 const GROUP_LESS_SCHEMA_VERSION = 3;
@@ -13,10 +19,15 @@ const LEGACY_SCHEMA_VERSION = 2;
 
 const vec3 = z.tuple([z.number(), z.number(), z.number()]);
 
+/** A numeric parameter: a literal or a Python expression. */
+const formula = z.object({ formula: z.string().trim().min(1) });
+const param = (literal: z.ZodNumber) => z.union([literal, formula]);
+const paramVec3 = z.tuple([param(z.number()), param(z.number()), param(z.number())]);
+
 const transform = z.object({
-  translation: vec3,
-  rotation: vec3,
-  scale: z.number(),
+  translation: paramVec3,
+  rotation: paramVec3,
+  scale: param(z.number()),
 });
 
 const featureBase = {
@@ -38,58 +49,68 @@ const primitiveFeature = z
       ...primitiveBase,
       kind: z.literal('box'),
       params: z.object({
-        dx: z.number().positive(),
-        dy: z.number().positive(),
-        dz: z.number().positive(),
+        dx: param(z.number().positive()),
+        dy: param(z.number().positive()),
+        dz: param(z.number().positive()),
       }),
     }),
     z.object({
       ...primitiveBase,
       kind: z.literal('sphere'),
-      params: z.object({ radius: z.number().positive() }),
+      params: z.object({ radius: param(z.number().positive()) }),
     }),
     z.object({
       ...primitiveBase,
       kind: z.literal('cylinder'),
-      params: z.object({ radius: z.number().positive(), height: z.number().positive() }),
+      params: z.object({
+        radius: param(z.number().positive()),
+        height: param(z.number().positive()),
+      }),
     }),
     z.object({
       ...primitiveBase,
       kind: z.literal('cone'),
       params: z.object({
-        bottomRadius: z.number().positive(),
-        topRadius: z.number().nonnegative(),
-        height: z.number().positive(),
+        bottomRadius: param(z.number().positive()),
+        topRadius: param(z.number().nonnegative()),
+        height: param(z.number().positive()),
       }),
     }),
     z.object({
       ...primitiveBase,
       kind: z.literal('torus'),
       params: z.object({
-        majorRadius: z.number().positive(),
-        tubeRadius: z.number().positive(),
+        majorRadius: param(z.number().positive()),
+        tubeRadius: param(z.number().positive()),
       }),
     }),
     z.object({
       ...primitiveBase,
       kind: z.literal('pyramid'),
       params: z.object({
-        sides: z.number().int().min(3).max(120),
-        radius: z.number().positive(),
-        height: z.number().positive(),
+        sides: param(z.number().int().min(3).max(120)),
+        radius: param(z.number().positive()),
+        height: param(z.number().positive()),
       }),
     }),
     z.object({
       ...primitiveBase,
       kind: z.literal('capsule'),
       params: z.object({
-        radius: z.number().positive(),
-        height: z.number().positive(),
+        radius: param(z.number().positive()),
+        height: param(z.number().positive()),
       }),
     }),
   ])
   .superRefine((value, context) => {
-    if (value.kind === 'torus' && value.params.tubeRadius >= value.params.majorRadius) {
+    // Formulas are checked after they resolve; literals are checked here.
+    if (value.kind !== 'torus') return;
+    const { tubeRadius, majorRadius } = value.params;
+    if (
+      typeof tubeRadius === 'number' &&
+      typeof majorRadius === 'number' &&
+      tubeRadius >= majorRadius
+    ) {
       context.addIssue({
         code: 'custom',
         path: ['params', 'tubeRadius'],
@@ -104,7 +125,7 @@ const importMeshFeature = z.object({
   assetId: z.string().min(1),
   format: z.enum(['stl', 'obj', 'ply', 'glb']).default('stl'),
   transform,
-  scale: z.number().positive(),
+  scale: param(z.number().positive()),
 });
 
 const convertToSolidFeature = z.object({
@@ -112,9 +133,9 @@ const convertToSolidFeature = z.object({
   type: z.literal('convert-to-solid'),
   sourceBodyId: z.string().min(1),
   mode: z.enum(['auto', 'heal', 'voxel']),
-  voxelSize: z.number().positive().optional(),
-  targetTriangles: z.number().int().positive().optional(),
-  tolerance: z.number().positive().optional(),
+  voxelSize: param(z.number().positive()).optional(),
+  targetTriangles: param(z.number().int().positive()).optional(),
+  tolerance: param(z.number().positive()).optional(),
 });
 
 const entityRef = z.object({
@@ -215,7 +236,7 @@ const sketchConstraint = z.object({
       }),
     )
     .min(1),
-  value: z.number().optional(),
+  value: param(z.number()).optional(),
   x: z.number().optional(),
   y: z.number().optional(),
 });
@@ -224,14 +245,14 @@ const sketchPlaneRef = z.union([
   z.object({
     type: z.literal('datum'),
     plane: z.enum(['XY', 'XZ', 'YZ']),
-    offset: z.number(),
+    offset: param(z.number()),
     inverted: z.boolean().optional(),
   }),
   z.object({
     type: z.literal('face'),
     bodyId: z.string().min(1).optional(),
     topoId: z.string().min(1).optional(),
-    offset: z.number().optional(),
+    offset: param(z.number()).optional(),
     frame: z
       .object({
         origin: vec3,
@@ -296,8 +317,8 @@ const revolveAxis = z.discriminatedUnion('kind', [
 
 const revolveSpec = z.object({
   axis: revolveAxis,
-  start: z.number(),
-  end: z.number(),
+  start: param(z.number()),
+  end: param(z.number()),
   inverted: z.boolean().default(false),
 });
 
@@ -311,10 +332,10 @@ const extrudeFeature = z.object({
   method: z.enum(['extrude', 'revolve']).default('extrude'),
   revolve: revolveSpec.optional(),
   end: z.enum(['blind', 'symmetric', 'through-all']),
-  distance: z.number(),
+  distance: param(z.number()),
   reversed: z.boolean().default(false),
   secondDirection: z
-    .object({ end: z.enum(['blind', 'through-all']), distance: z.number() })
+    .object({ end: z.enum(['blind', 'through-all']), distance: param(z.number()) })
     .optional(),
   op: z.enum(['new', 'add', 'subtract', 'intersect']),
   scope: z.enum(['all', 'selected']),
@@ -327,20 +348,20 @@ const shellFeature = z.object({
   type: z.literal('shell'),
   bodyIds: z.array(z.string().min(1)).default([]),
   removeFaces: z.array(bodyFaceRef).default([]),
-  thickness: z.number().positive(),
-  offset: z.number().nonnegative().default(0),
+  thickness: param(z.number().positive()),
+  offset: param(z.number().nonnegative()).default(0),
   direction: z.enum(['inward', 'outward']),
 });
 
 const holeSpec = z.object({
   kind: z.enum(['simple', 'counterbore', 'countersink']),
-  diameter: z.number().positive(),
-  depth: z.number().positive().optional(),
+  diameter: param(z.number().positive()),
+  depth: param(z.number().positive()).optional(),
   throughAll: z.boolean(),
   clearance: z.string().optional(),
-  headDiameter: z.number().positive().optional(),
-  headDepth: z.number().positive().optional(),
-  angle: z.number().positive().optional(),
+  headDiameter: param(z.number().positive()).optional(),
+  headDepth: param(z.number().positive()).optional(),
+  angle: param(z.number().positive()).optional(),
 });
 
 const holeFeature = z.object({
@@ -348,7 +369,7 @@ const holeFeature = z.object({
   type: z.literal('hole'),
   bodyId: z.string().min(1),
   faceRef: entityRef,
-  positions: z.array(z.object({ x: z.number(), y: z.number() })),
+  positions: z.array(z.object({ x: param(z.number()), y: param(z.number()) })),
   spec: holeSpec,
 });
 
@@ -357,7 +378,7 @@ const ribFeature = z.object({
   type: z.literal('rib'),
   bodyId: z.string().min(1),
   sketchId: z.string().min(1),
-  thickness: z.number().positive(),
+  thickness: param(z.number().positive()),
   direction: vec3,
 });
 
@@ -389,7 +410,7 @@ const edgeTreatmentFeature = z.object({
       convex: z.boolean().optional(),
     }),
   ),
-  size: z.number().positive(),
+  size: param(z.number().positive()),
 });
 
 const arrayPath = z.discriminatedUnion('kind', [
@@ -444,23 +465,23 @@ const arrayDirectionShape = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('linear'),
     direction: vec3,
-    spacing: z.number(),
-    angle: z.number().optional(),
-    count: z.number().int().min(1).max(120),
+    spacing: param(z.number()),
+    angle: param(z.number()).optional(),
+    count: param(z.number().int().min(1).max(120)),
   }),
   z.object({
     kind: z.literal('rotation'),
     axis: arrayAxis,
-    angle: z.number(),
+    angle: param(z.number()),
     inverted: z.boolean().optional(),
-    count: z.number().int().min(1).max(120),
+    count: param(z.number().int().min(1).max(120)),
   }),
   z.object({
     kind: z.literal('path'),
     // Written while a path was a single curve; that is a chain of one.
     path: arrayPath.nullable().optional(),
     paths: z.array(arrayPath).optional(),
-    count: z.number().int().min(1).max(120),
+    count: param(z.number().int().min(1).max(120)),
   }),
 ]);
 
@@ -566,6 +587,13 @@ const featureGroup = z.object({
   parentId: z.string().min(1).nullable(),
 });
 
+const variableSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  type: z.enum(['number', 'string']),
+  source: z.string(),
+});
+
 const modelSchema = z.object({
   type: z.literal('model'),
   id: z.string().min(1),
@@ -575,6 +603,7 @@ const modelSchema = z.object({
   metadata: z.record(z.string(), objectMetadata),
   view: viewState,
   historyEnd: z.string().nullable(),
+  variables: z.array(variableSchema).default([]),
   groups: z.array(featureGroup).default([]),
 });
 
@@ -589,6 +618,7 @@ export const projectSchema = z
     units: z.literal('mm'),
     superObjects: z.array(superObjectSchema).min(1),
     activeSuperObjectId: z.string().min(1),
+    variables: z.array(variableSchema).default([]),
     createdAt: z.string(),
     updatedAt: z.string(),
   })
@@ -625,6 +655,7 @@ function migrateLegacyProject(
     metadata: legacy.metadata,
     view: legacy.view,
     historyEnd: legacy.historyEnd,
+    variables: [],
     groups: [],
   };
   return {
@@ -673,10 +704,19 @@ export function parseProject(input: unknown, options: ParseProjectOptions = {}):
       });
     }
     candidate = migrateLegacyProject(legacy.data, options.modelName ?? 'Model');
-  } else if (version === GROUP_LESS_SCHEMA_VERSION) {
-    // Folders arrived with version 4; every other field reads the same, and the
-    // model schema fills the empty list in.
+  } else if (version === MODEL_VARIABLE_LESS_SCHEMA_VERSION) {
+    // Model variables arrived with version 6; the schema fills the list in.
     candidate = { ...(input as Record<string, unknown>), schemaVersion: PROJECT_SCHEMA_VERSION };
+  } else if (version === GROUP_LESS_SCHEMA_VERSION) {
+    // Folders arrived with version 4; variables with version 5. Every other
+    // field reads the same, and the schema fills the new lists in.
+    candidate = { ...(input as Record<string, unknown>), schemaVersion: PROJECT_SCHEMA_VERSION };
+  } else if (version === FORMULA_LESS_SCHEMA_VERSION) {
+    candidate = {
+      ...(input as Record<string, unknown>),
+      schemaVersion: PROJECT_SCHEMA_VERSION,
+      variables: [],
+    };
   } else if (version !== PROJECT_SCHEMA_VERSION) {
     throw new ProjectFileError(
       'UNSUPPORTED_SCHEMA_VERSION',
@@ -724,7 +764,7 @@ function normalizeFeature(feature: Project['superObjects'][number]['features'][n
   if (feature.type !== 'array') return feature;
   let changed = false;
   const directions = feature.directions.map((direction) => {
-    if (direction.kind !== 'rotation') return direction;
+    if (direction.kind !== 'rotation' || typeof direction.angle !== 'number') return direction;
     const span = Math.max(0, Math.min(360, Math.abs(direction.angle)));
     const inverted = direction.angle < 0 ? !direction.inverted : (direction.inverted ?? false);
     if (span === direction.angle && inverted === (direction.inverted ?? false)) {

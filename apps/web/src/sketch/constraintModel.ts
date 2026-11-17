@@ -1,6 +1,7 @@
 import {
   createId,
   type ConstraintType,
+  type ParamValue,
   type SketchConstraint,
   type SketchConstraintRef,
   type SketchEntity,
@@ -15,6 +16,7 @@ import {
 import { useUiStore } from '../stores/uiStore';
 import { solveSketch } from './client';
 import { projectionEntityIds } from './projection';
+import { constraintsForSolve, sketchHasFormulaError } from './resolvedConstraints';
 
 export interface ConstraintAction {
   key: string;
@@ -385,17 +387,31 @@ export function applyConstraintAction(
   const entities = sketchEntityIndex(feature.entities);
   const constraints = constraintsForAction(action, entities);
   if (constraints.length === 0) return Promise.reject(new ConstraintSolveError('failed'));
-  return solveWithConstraints(feature, [...feature.constraints, ...constraints]);
+  const authored = [...feature.constraints, ...constraints];
+  // The solver has no numbers to work with while a formula is broken. The new
+  // constraint still belongs to the sketch, so it waits for the fix with the
+  // rest of the authored constraints untouched.
+  if (sketchHasFormulaError(feature.id)) {
+    return Promise.resolve({ ...feature, constraints: authored });
+  }
+  return solveWithConstraints(feature, [...constraintsForSolve(feature), ...constraints]).then(
+    (next) => ({ ...next, constraints: authored }),
+  );
 }
 
 export async function diagnoseSketch(feature: SketchFeature): Promise<void> {
+  if (sketchHasFormulaError(feature.id)) {
+    useUiStore.getState().setSketchFrozen([]);
+    useUiStore.getState().setSketchProblems([]);
+    return;
+  }
   if (feature.constraints.length === 0) {
     useUiStore.getState().setSketchFrozen([]);
     useUiStore.getState().setSketchProblems([]);
     return;
   }
   try {
-    const result = await solveSketch(feature.entities, feature.constraints, [], {
+    const result = await solveSketch(feature.entities, constraintsForSolve(feature), [], {
       diagnose: true,
       derived: [...projectionEntityIds(feature)],
     });
@@ -427,15 +443,127 @@ export function removeSketchEntities(
   };
 }
 
+const SATISFACTION_TOLERANCE = 1e-5;
+
+function almostEqual(first: number, second: number): boolean {
+  return (
+    Math.abs(first - second) <=
+    SATISFACTION_TOLERANCE * Math.max(1, Math.abs(first), Math.abs(second))
+  );
+}
+
+function distanceMeasurement(
+  constraint: SketchConstraint,
+  entities: Map<string, SketchEntity>,
+): number | undefined {
+  const refs = constraint.refs;
+  const first = refs[0] ? entities.get(refs[0].entityId) : undefined;
+  if (refs.length === 1) {
+    return first?.type === 'line'
+      ? Math.hypot(first.x2 - first.x1, first.y2 - first.y1)
+      : undefined;
+  }
+  if (refs.length !== 2) return undefined;
+  const second = refs[1] ? entities.get(refs[1].entityId) : undefined;
+  const firstPoint = refPoint(refs[0]!, entities);
+  const secondPoint = refPoint(refs[1]!, entities);
+  const firstIsPoint = first?.type === 'point' || refs[0]!.pointIndex !== undefined;
+  const secondIsPoint = second?.type === 'point' || refs[1]!.pointIndex !== undefined;
+  if (firstIsPoint && secondIsPoint && firstPoint && secondPoint) {
+    return Math.hypot(secondPoint[0] - firstPoint[0], secondPoint[1] - firstPoint[1]);
+  }
+  if (firstIsPoint && firstPoint && second?.type === 'line') {
+    return pointToLineDistance(firstPoint, second);
+  }
+  if (secondIsPoint && secondPoint && first?.type === 'line') {
+    return pointToLineDistance(secondPoint, first);
+  }
+  if (first?.type === 'line' && second?.type === 'line' && firstPoint) {
+    return pointToLineDistance(firstPoint, second);
+  }
+  return undefined;
+}
+
+function axisDistanceMeasurement(
+  constraint: SketchConstraint,
+  entities: Map<string, SketchEntity>,
+  axis: 0 | 1,
+): number | undefined {
+  if (constraint.refs.length !== 2) return undefined;
+  const [firstRef, secondRef] = constraint.refs;
+  const first = firstRef ? refPoint(firstRef, entities) : null;
+  const second = secondRef ? refPoint(secondRef, entities) : null;
+  return first && second ? Math.abs(second[axis] - first[axis]) : undefined;
+}
+
+/**
+ * Whether the geometry already satisfies every numeric constraint. A sketch
+ * solved for a literal keeps that solution when a formula resolves to the same
+ * number, so an unnecessary solver pass cannot reject valid geometry.
+ */
+export function constraintsSatisfied(
+  constraints: SketchConstraint[],
+  entities: SketchEntity[],
+): boolean {
+  const map = sketchEntityIndex(entities);
+  return constraints.every((constraint) => {
+    if (typeof constraint.value !== 'number' || !Number.isFinite(constraint.value)) return true;
+    switch (constraint.type) {
+      case 'distance': {
+        const measured = distanceMeasurement(constraint, map);
+        return measured !== undefined && almostEqual(measured, constraint.value);
+      }
+      case 'horizontal-distance':
+      case 'vertical-distance': {
+        const measured = axisDistanceMeasurement(
+          constraint,
+          map,
+          constraint.type === 'horizontal-distance' ? 0 : 1,
+        );
+        return measured !== undefined && almostEqual(measured, constraint.value);
+      }
+      case 'angle': {
+        const lines = constraint.refs
+          .map((ref) => map.get(ref.entityId))
+          .filter((entity): entity is Line => entity?.type === 'line');
+        if (lines.length !== 2) return false;
+        const measured = segmentAngle(lines[0]!, lines[1]!);
+        return measured !== undefined && almostEqual(measured, constraint.value);
+      }
+      case 'radius':
+      case 'diameter': {
+        const entity = map.get(constraint.refs[0]?.entityId ?? '');
+        if (entity?.type !== 'circle' && entity?.type !== 'arc') return false;
+        const measured = constraint.type === 'radius' ? entity.r : entity.r * 2;
+        return almostEqual(measured, constraint.value);
+      }
+      default:
+        return true;
+    }
+  });
+}
+
 export function applyConstraintValue(
   feature: SketchFeature,
   constraintId: string,
-  value: number,
+  value: ParamValue,
+  /** Resolved constraints: a driven dimension reaches the solver as a number. */
+  solved: SketchConstraint[] = constraintsForSolve(feature),
 ): Promise<SketchFeature> {
-  return solveWithConstraints(
-    feature,
-    feature.constraints.map((constraint) =>
-      constraint.id === constraintId ? { ...constraint, value } : constraint,
-    ),
+  const authored = feature.constraints.map((constraint) =>
+    constraint.id === constraintId ? { ...constraint, value } : constraint,
   );
+  if (sketchHasFormulaError(feature.id)) {
+    return Promise.resolve({ ...feature, constraints: authored });
+  }
+  const forSolve = solved.map((constraint) =>
+    constraint.id === constraintId ? { ...constraint, value } : constraint,
+  );
+  if (constraintsSatisfied(forSolve, feature.entities)) {
+    return Promise.resolve({ ...feature, constraints: authored });
+  }
+  return solveWithConstraints(feature, forSolve).then((next) => ({
+    ...next,
+    constraints: authored,
+  }));
 }

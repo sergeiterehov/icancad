@@ -140,6 +140,8 @@ interface UiState {
   activeSketchReady: boolean;
   sketchSelectionIds: string[];
   sketchConstraintIds: string[];
+  /** A dimension the constraint list asked the canvas editor to open. */
+  sketchDimensionEditId: string | null;
   sketchFrozenEntityIds: string[];
   sketchAutoHighlightIds: string[];
   /** Geometry under the pointer while selecting; empty while a tool creates. */
@@ -187,6 +189,7 @@ interface UiState {
   setActiveSketchReady: (ready: boolean) => void;
   setSketchSelection: (ids: string[]) => void;
   selectSketchConstraint: (id: string | null) => void;
+  setSketchDimensionEdit: (id: string | null) => void;
   selectSketchConstraints: (ids: string[]) => void;
   setSketchFrozen: (ids: string[]) => void;
   setSketchAutoHighlight: (ids: string[]) => void;
@@ -412,6 +415,7 @@ export const useUiStore = create<UiState>((set) => ({
   activeSketchReady: true,
   sketchSelectionIds: [],
   sketchConstraintIds: [],
+  sketchDimensionEditId: null,
   sketchFrozenEntityIds: [],
   sketchAutoHighlightIds: [],
   sketchHoverIds: [],
@@ -463,6 +467,7 @@ export const useUiStore = create<UiState>((set) => ({
       activeSketchReady: activeSketchId === null,
       sketchSelectionIds: [],
       sketchConstraintIds: [],
+      sketchDimensionEditId: null,
       sketchFrozenEntityIds: [],
       sketchAutoHighlightIds: [],
       sketchHoverIds: [],
@@ -477,6 +482,8 @@ export const useUiStore = create<UiState>((set) => ({
       sketchAutoHighlightIds: [],
       sketchHoverIds: [],
     }),
+  setSketchDimensionEdit: (sketchDimensionEditId) => set({ sketchDimensionEditId }),
+
   selectSketchConstraint: (sketchConstraintId) =>
     set({
       sketchConstraintIds: sketchConstraintId ? [sketchConstraintId] : [],

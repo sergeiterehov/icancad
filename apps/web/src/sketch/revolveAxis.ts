@@ -149,5 +149,7 @@ export function bodyEdgeAxisRef(
 /** The angles the operation sweeps, in degrees; inverting mirrors both. */
 export function revolveAngles(revolve: RevolveSpec): { start: number; end: number } {
   const sign = revolve.inverted ? -1 : 1;
-  return { start: revolve.start * sign, end: revolve.end * sign };
+  const num = (value: RevolveSpec['start']) =>
+    typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  return { start: num(revolve.start) * sign, end: num(revolve.end) * sign };
 }

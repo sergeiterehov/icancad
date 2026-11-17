@@ -141,7 +141,9 @@
     "extrude": "Extrusion",
     "metrics": "Metrics",
     "objects": "Objects",
-    "model": "Model"
+    "model": "Model",
+    "ringRadius": "Ring radius",
+    "tubeRadius": "Tube radius"
   },
   "timeline": {
     "group": "Group",
@@ -240,7 +242,10 @@
     "ARRAY_PATH_EMPTY": "The path has no length.",
     "ARRAY_PATH_BROKEN": "The path curves do not meet end to end.",
     "ARRAY_ANGLE_EMPTY": "The angle is zero: set a turn for the copies.",
-    "ARRAY_ARC_NEEDED": "Pick an arc or a circle: only a round curve has a centre to turn around."
+    "ARRAY_ARC_NEEDED": "Pick an arc or a circle: only a round curve has a centre to turn around.",
+    "EXPRESSION_ERROR": "A formula in this operation could not be evaluated",
+    "CONSTRAINT_CONFLICT": "The constraints cannot be satisfied",
+    "FORMULA_LOAD_FAILED": "The formula engine could not start"
   },
   "features": {
     "box": "Box",
@@ -641,5 +646,28 @@
     "tiltHint": "Tilt of a straight direction: X and Y lean inside the horizontal plane, Z turns around X. The array becomes a parallelepiped instead of a box.",
     "sketchCurve": "Sketch curve",
     "removeCurve": "Remove curve"
+  },
+  "formula": {
+    "variables": "Variables",
+    "variableAdd": "Add variable",
+    "variableDelete": "Delete variable",
+    "typeNumber": "Number",
+    "typeString": "Text",
+    "name": "Name",
+    "value": "Value",
+    "source": "Expression",
+    "empty": "Add variables and use them in parameters",
+    "errors": {
+      "SYNTAX": "Syntax error: {{message}}",
+      "UNKNOWN_NAME": "Unknown name: {{name}}",
+      "CYCLE": "Variables refer to each other in a cycle",
+      "TYPE": "The expression must be a number",
+      "VALUE": "The expression cannot be evaluated: {{message}}",
+      "DEPENDENCY_ERROR": "A variable this expression uses has an error",
+      "DUPLICATE": "This name is already used",
+      "RESERVED": "This name is reserved",
+      "INVALID_NAME": "A name starts with a letter and contains letters, digits and _"
+    },
+    "loading": "Loading the formula engine…"
   }
 }

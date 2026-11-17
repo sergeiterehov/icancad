@@ -631,6 +631,14 @@ button:disabled {
   padding: 0 8px;
 }
 
+/* A context header inside the scrolling body separates the stacked entities:
+   the panel header names the model, this one opens the project below it. */
+.panel-context-header {
+  min-height: 34px;
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
 .panel-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -704,6 +712,11 @@ button:disabled {
 .panel-section-icon {
   display: inline-flex;
   color: var(--text-dim);
+}
+
+.panel-section-actions {
+  display: inline-flex;
+  align-items: center;
 }
 
 .panel-count {
@@ -1194,8 +1207,23 @@ html[data-pointer='finger'] .tree-row .tree-eye {
   background: var(--panel-3);
 }
 
-.constraint-row[data-active='true'] {
-  background: var(--accent-soft);
+/* A formula constraint reads blue; selecting it speaks the violet of selected
+   geometry without changing the row background. */
+.constraint-row.is-formula .constraint-value-text {
+  color: var(--accent);
+}
+
+.constraint-row[data-active='true'] .constraint-label,
+.constraint-row[data-active='true'] .constraint-value-text {
+  color: var(--pick);
+}
+
+.constraint-row[data-active='true'] .constraint-value-text:hover {
+  color: var(--pick);
+}
+
+.constraint-row .constraint-value-text.is-error {
+  color: var(--danger);
 }
 
 .constraint-row[data-dimmed='true'] {
@@ -1246,10 +1274,6 @@ html[data-pointer='finger'] .tree-row .tree-eye {
   color: var(--text-faint);
 }
 
-.constraint-row[data-active='true'] .constraint-icon {
-  color: var(--accent);
-}
-
 .constraint-row[data-problem='true'] .constraint-icon {
   color: var(--warn);
 }
@@ -1266,9 +1290,22 @@ html[data-pointer='finger'] .tree-row .tree-eye {
 
 .constraint-value-text {
   flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  padding: 0;
   color: var(--text-dim);
   font-size: 10.5px;
   font-variant-numeric: tabular-nums;
+  cursor: text;
+}
+
+.constraint-value-text:hover {
+  color: var(--text);
+}
+
+.constraint-value-text.is-formula,
+.constraint-value-text.is-formula:hover {
+  color: var(--accent);
 }
 
 .error {
@@ -2552,6 +2589,20 @@ html[data-pointer='finger'] .selection-item .icon-btn {
   flex: 0 0 auto;
 }
 
+.dimension-field.has-error {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.dimension-field.is-formula .dimension-input {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  color: var(--accent);
+}
+
+.dimension-field.has-error .dimension-input {
+  color: var(--danger);
+}
+
 /* A size the kernel had to reduce: the mark says the value is not what is used. */
 .dimension-warning {
   display: inline-flex;
@@ -2873,19 +2924,35 @@ html[data-pointer='finger'] .selection-item .icon-btn {
   border-color: var(--accent);
 }
 
+.sketch-annotation-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .sketch-annotation-icon {
   display: inline-flex;
   color: var(--text-faint);
 }
 
-.sketch-annotation[data-active='true'] .sketch-annotation-icon {
+/* A driven dimension reads blue until it is selected. */
+.sketch-annotation[data-driven='true'] {
   color: var(--accent);
 }
 
 .sketch-annotation[data-active='true'] {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent);
+  border-color: var(--pick);
+  color: var(--pick);
+}
+
+.sketch-annotation[data-error='true'],
+.sketch-annotation[data-error='true'][data-active='true'] {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.sketch-annotation[data-error='true'] .sketch-annotation-icon {
+  color: var(--danger);
 }
 
 .sketch-annotation[data-dimmed='true'] {
@@ -3457,4 +3524,89 @@ html[data-pointer='finger'] .selection-item .icon-btn {
 .dock-right .btn:focus-visible,
 .dock-right .select:focus-visible {
   border-color: transparent;
+}
+
+/* A model's variables sit directly under its name field: they keep the
+   inspector's side inset without drawing a section rule of their own. */
+.panel-section.variables-section-embedded {
+  padding: 0 8px;
+}
+
+.panel-section.variables-section-embedded:has(+ .panel-section-divided) {
+  padding-bottom: 12px;
+}
+
+/* Project variables: a compact list, since formulas are the reason it exists. */
+.variables-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.variable-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.variable-main {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.variable-type {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.variable-type:hover {
+  color: var(--text);
+}
+
+.variable-name {
+  flex: 0 0 88px;
+  width: 88px;
+  max-width: 88px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: text;
+}
+
+.variable-main .tree-rename {
+  flex: 0 0 88px;
+  width: 88px;
+}
+
+.variable-main .dimension-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+}
+
+.variable-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  font-size: 11.5px;
+}
+
+.variable-error {
+  margin: 0 0 0 26px;
+  font-size: 10px;
+  color: #e5484d;
 }

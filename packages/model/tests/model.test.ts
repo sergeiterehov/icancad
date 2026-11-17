@@ -203,7 +203,7 @@ describe('project model', () => {
 
   it('migrates a flat version 2 project into one model', () => {
     const project = parseProject(legacyFile([boxFeature()]));
-    expect(project.schemaVersion).toBe(4);
+    expect(project.schemaVersion).toBe(6);
     expect(project.superObjects).toHaveLength(1);
     expect(activeModel(project).name).toBe('Model');
     expect(activeModel(project).features.map((feature) => feature.id)).toEqual(['feat_box']);

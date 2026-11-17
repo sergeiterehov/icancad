@@ -10,3 +10,4 @@ playwright-report/
 test-results/
 *.tsbuildinfo
 apps/web/public/occt/
+apps/web/public/pyodide/

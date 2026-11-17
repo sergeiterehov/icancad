@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ArrayDirection, SketchFeature, SketchFrame, Vec3 } from '@icancad/model';
+import type { ArrayDirection, Resolved, SketchFeature, SketchFrame, Vec3 } from '@icancad/model';
 import {
   chainPolyline,
   directionMatrices,
@@ -14,7 +14,7 @@ const frame: SketchFrame = {
   normal: [0, 0, 1],
 };
 
-function sketchWith(lines: [number, number, number, number][]): SketchFeature {
+function sketchWith(lines: [number, number, number, number][]): Resolved<SketchFeature> {
   return {
     id: 'feat_sketch',
     name: 'Sketch',
@@ -32,14 +32,14 @@ function sketchWith(lines: [number, number, number, number][]): SketchFeature {
     })),
     constraints: [],
     references: [],
-  };
+  } as Resolved<SketchFeature>;
 }
 
 function pathOf(index: number) {
   return { kind: 'sketch-edge' as const, sketchId: 'feat_sketch', entityId: `line_${index}` };
 }
 
-function context(sketch: SketchFeature): ArrayPlacementContext {
+function context(sketch: Resolved<SketchFeature>): ArrayPlacementContext {
   return { meshes: {}, sketches: [sketch], frames: { [sketch.id]: frame } };
 }
 
@@ -55,7 +55,7 @@ function move(matrix: readonly number[], point: Vec3): Vec3 {
 
 describe('array placements', () => {
   it('spreads a rotation over the whole angle it stores', () => {
-    const direction: ArrayDirection = {
+    const direction: Resolved<ArrayDirection> = {
       kind: 'rotation',
       axis: { kind: 'world', axis: 'z' },
       angle: 90,
@@ -69,7 +69,7 @@ describe('array placements', () => {
   });
 
   it('divides a full turn by the count, so two copies sit opposite', () => {
-    const direction: ArrayDirection = {
+    const direction: Resolved<ArrayDirection> = {
       kind: 'rotation',
       axis: { kind: 'world', axis: 'z' },
       angle: 360,
@@ -83,7 +83,7 @@ describe('array placements', () => {
   });
 
   it('spreads three copies of a full turn a third apart', () => {
-    const direction: ArrayDirection = {
+    const direction: Resolved<ArrayDirection> = {
       kind: 'rotation',
       axis: { kind: 'world', axis: 'z' },
       angle: 360,
@@ -95,7 +95,7 @@ describe('array placements', () => {
   });
 
   it('turns around a world axis through the centre of the model', () => {
-    const direction: ArrayDirection = {
+    const direction: Resolved<ArrayDirection> = {
       kind: 'rotation',
       axis: { kind: 'world', axis: 'z' },
       angle: 90,
@@ -109,7 +109,7 @@ describe('array placements', () => {
   });
 
   it('turns around the normal of a picked face, through its centre', () => {
-    const direction: ArrayDirection = {
+    const direction: Resolved<ArrayDirection> = {
       kind: 'rotation',
       axis: { kind: 'face', bodyId: 'body_1', faceId: '3', origin: [5, 0, 0], normal: [0, 0, 1] },
       angle: 180,
@@ -122,7 +122,7 @@ describe('array placements', () => {
   });
 
   it('turns the other way round when the direction is inverted', () => {
-    const direction: ArrayDirection = {
+    const direction: Resolved<ArrayDirection> = {
       kind: 'rotation',
       axis: { kind: 'world', axis: 'z' },
       angle: 90,
@@ -135,7 +135,7 @@ describe('array placements', () => {
   });
 
   it('tilts a straight direction, so rows can meet at an angle', () => {
-    const direction: ArrayDirection = {
+    const direction: Resolved<ArrayDirection> = {
       kind: 'linear',
       direction: [0, 1, 0],
       spacing: 10,
@@ -166,7 +166,7 @@ describe('array placements', () => {
       [0, 0, 10, 0],
       [10, 0, 10, 10],
     ]);
-    const direction: ArrayDirection = {
+    const direction: Resolved<ArrayDirection> = {
       kind: 'path',
       paths: [pathOf(0), pathOf(1)],
       count: 3,
@@ -202,14 +202,18 @@ describe('array placements', () => {
       edges: [edge],
     };
     const matrices = directionMatrices(
-      { kind: 'path', paths: [{ kind: 'body-edge', bodyId: 'body_1', edgeId: 'edge_0' }], count: 2 },
+      {
+        kind: 'path',
+        paths: [{ kind: 'body-edge', bodyId: 'body_1', edgeId: 'edge_0' }],
+        count: 2,
+      },
       { meshes: { body_1: mesh }, sketches: [] },
     );
     expect(move(matrices[1]!, [0, 0, 0])).toEqual([0, 0, 20]);
   });
 
   it('never makes more copies than the ceiling allows', () => {
-    const direction: ArrayDirection = {
+    const direction: Resolved<ArrayDirection> = {
       kind: 'linear',
       direction: [1, 0, 0],
       spacing: 5,

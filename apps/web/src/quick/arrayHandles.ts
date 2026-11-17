@@ -1,9 +1,12 @@
 import {
   activeModel,
+  isDriven,
   type ArrayDirection,
   type ArrayFeature,
   type Model,
   type Project,
+  type Resolved,
+  type ResolvedFeature,
   type SketchFeature,
   type Vec3,
 } from '@icancad/model';
@@ -21,12 +24,14 @@ import {
 } from '../kernel/arrayPlacement';
 import { previewArrayCopies } from '../kernel/rebuild';
 import { useDocumentStore } from '../stores/documentStore';
+import { resolvedFeatureFor } from '../stores/formulaStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { snapLength } from './handleDrag';
-import type {
-  OperationHandle,
-  OperationHandleContext,
-  OperationHandleDrag,
+import {
+  resolvedFeature,
+  type OperationHandle,
+  type OperationHandleContext,
+  type OperationHandleDrag,
 } from './operationHandles';
 
 /** What a grip of an array direction changes. */
@@ -34,11 +39,19 @@ type ArrayGrip = 'spacing' | 'count' | 'angle' | 'rotationCount' | 'pathCount';
 
 /** The meshes and sketches a direction is read from, as the panel sees them. */
 function placementContext(context: OperationHandleContext): ArrayPlacementContext {
+  const allowed = new Set(context.project.features.map((feature) => feature.id));
+  const sketches = context.resolvedProject
+    ? context.resolvedProject.features.filter(
+        (feature): feature is Extract<ResolvedFeature, { type: 'sketch' }> =>
+          feature.type === 'sketch' && allowed.has(feature.id),
+      )
+    : context.project.features
+        .filter((feature): feature is SketchFeature => feature.type === 'sketch')
+        .map((feature) => resolvedFeatureFor(feature))
+        .filter((feature): feature is NonNullable<typeof feature> => Boolean(feature));
   return {
     meshes: context.meshes,
-    sketches: context.project.features.filter(
-      (feature): feature is SketchFeature => feature.type === 'sketch',
-    ),
+    sketches,
     frames: context.sketchFrames,
   };
 }
@@ -70,7 +83,11 @@ function rotationArc(
   axis: { origin: Vec3; direction: Vec3 },
   seed: Vec3,
 ): { axis: Vec3; center: Vec3; reference: Vec3; radius: number } {
-  const offset: Vec3 = [seed[0] - axis.origin[0], seed[1] - axis.origin[1], seed[2] - axis.origin[2]];
+  const offset: Vec3 = [
+    seed[0] - axis.origin[0],
+    seed[1] - axis.origin[1],
+    seed[2] - axis.origin[2],
+  ];
   const along =
     offset[0] * axis.direction[0] + offset[1] * axis.direction[1] + offset[2] * axis.direction[2];
   const radial: Vec3 = [
@@ -100,9 +117,12 @@ function arcPoint(
 ): Vec3 {
   const tangent = cross(arc.axis, arc.reference);
   return [
-    arc.center[0] + (arc.reference[0] * Math.cos(angle) + tangent[0] * Math.sin(angle)) * arc.radius,
-    arc.center[1] + (arc.reference[1] * Math.cos(angle) + tangent[1] * Math.sin(angle)) * arc.radius,
-    arc.center[2] + (arc.reference[2] * Math.cos(angle) + tangent[2] * Math.sin(angle)) * arc.radius,
+    arc.center[0] +
+      (arc.reference[0] * Math.cos(angle) + tangent[0] * Math.sin(angle)) * arc.radius,
+    arc.center[1] +
+      (arc.reference[1] * Math.cos(angle) + tangent[1] * Math.sin(angle)) * arc.radius,
+    arc.center[2] +
+      (arc.reference[2] * Math.cos(angle) + tangent[2] * Math.sin(angle)) * arc.radius,
   ];
 }
 
@@ -130,12 +150,16 @@ export function arrayHandles(context: OperationHandleContext): OperationHandle[]
     (candidate) => candidate.id === context.selection[0]?.id,
   );
   if (!feature || feature.type !== 'array' || feature.suppressed) return [];
+  const geometry = resolvedFeature(feature);
+  if (!geometry) return [];
   const seed = context.arraySeed?.featureId === feature.id ? context.arraySeed.origin : null;
   if (!seed) return [];
   const placements = placementContext(context);
+  const driven = (index: number, field: 'spacing' | 'count' | 'angle') =>
+    isDriven(feature, `directions.${index}.${field}`);
 
   const handles: OperationHandle[] = [];
-  feature.directions.forEach((direction, index) => {
+  geometry.directions.forEach((direction, index) => {
     const count = Math.max(1, Math.min(MAX_ARRAY_COPIES, Math.floor(direction.count)));
     if (direction.kind === 'linear') {
       const axis = unit(direction.direction);
@@ -146,7 +170,7 @@ export function arrayHandles(context: OperationHandleContext): OperationHandle[]
         origin: seed,
         direction: axis,
         value: spacing,
-        enabled: true,
+        enabled: !driven(index, 'spacing'),
         thickness: 1.2,
         tooltip: context.labels.arraySpacing,
         beginDrag: () =>
@@ -162,7 +186,7 @@ export function arrayHandles(context: OperationHandleContext): OperationHandle[]
         origin: seed,
         direction: axis,
         value: spacing * (count - 1),
-        enabled: true,
+        enabled: !driven(index, 'count'),
         thickness: 1.2,
         kind: 'ball',
         tipOnly: true,
@@ -195,7 +219,7 @@ export function arrayHandles(context: OperationHandleContext): OperationHandle[]
         origin: arcPoint(arc, span),
         direction: arcTangent(arc, span),
         value: direction.angle,
-        enabled: true,
+        enabled: !driven(index, 'angle'),
         thickness: 1.2,
         tooltip: context.labels.arrayAngle,
         arc: { ...arc, angle: span },
@@ -211,7 +235,7 @@ export function arrayHandles(context: OperationHandleContext): OperationHandle[]
         origin: firstCopy,
         direction: arcTangent(arc, step),
         value: count,
-        enabled: true,
+        enabled: !driven(index, 'count'),
         thickness: 1.2,
         tooltip: context.labels.arrayCount,
         orbit: { ...arc, angle: step },
@@ -257,7 +281,7 @@ export function arrayHandles(context: OperationHandleContext): OperationHandle[]
       origin: seed,
       direction: tangent,
       value: total * t,
-      enabled: true,
+      enabled: !driven(index, 'count'),
       thickness: 1.2,
       kind: 'ball',
       tipOnly: true,
@@ -272,7 +296,7 @@ export function arrayHandles(context: OperationHandleContext): OperationHandle[]
         }),
     });
   });
-  return handles;
+  return handles.filter((handle) => handle.enabled);
 }
 
 function startDrag(
@@ -301,6 +325,7 @@ function startDrag(
 export class ArrayDrag implements OperationHandleDrag {
   private before: Project | null = null;
   private original: ArrayFeature | null = null;
+  private resolved: Resolved<ArrayFeature> | null = null;
   private changed = false;
   private currentValue = 0;
 
@@ -345,7 +370,8 @@ export class ArrayDrag implements OperationHandleDrag {
     this.before = state.project;
     const feature = arrayOf(activeModel(state.project), this.featureId);
     this.original = feature ?? null;
-    const direction = feature?.directions[this.index];
+    this.resolved = feature ? (resolvedFeatureFor(feature) ?? null) : null;
+    const direction = this.resolved?.directions[this.index];
     this.changed = false;
     this.currentValue = currentValueOf(direction, this.grip) ?? 0;
   }
@@ -354,17 +380,21 @@ export class ArrayDrag implements OperationHandleDrag {
     if (!this.before || !this.original) return;
     const state = useDocumentStore.getState();
     const feature = arrayOf(activeModel(state.project), this.featureId);
-    const direction = feature?.directions[this.index];
-    if (!feature || !direction) return;
+    const direction = this.resolved?.directions[this.index];
+    if (!feature || !direction || !this.resolved) return;
     const next = nextDirection(direction, this.grip, value, this.options);
     if (!next) return;
     const directions = [...feature.directions];
-    directions[this.index] = next;
+    // Only the dragged field becomes a number: the rest keep their formulas.
+    directions[this.index] = withGrip(feature.directions[this.index]!, next, this.grip);
     const updated: ArrayFeature = { ...feature, directions };
     state.preview({ type: 'feature/replace', feature: updated });
+    const resolvedDirections = [...this.resolved.directions];
+    resolvedDirections[this.index] = next;
+    this.resolved = { ...this.resolved, directions: resolvedDirections };
     // The copies are one volume already in memory: move them with the pointer
     // instead of waiting for the rebuild, which then only confirms them.
-    const copies = previewArrayCopies(updated);
+    const copies = previewArrayCopies(this.resolved);
     if (copies) useKernelStore.getState().setPreviewGhosts(updated.id, copies.ghosts);
     this.currentValue = currentValueOf(next, this.grip) ?? 0;
     this.changed = true;
@@ -385,14 +415,30 @@ export class ArrayDrag implements OperationHandleDrag {
   private reset(): void {
     this.before = null;
     this.original = null;
+    this.resolved = null;
     this.changed = false;
     this.currentValue = 0;
   }
 }
 
+/** Applies what a grip changed to the authored direction. */
+function withGrip(
+  authored: ArrayDirection,
+  next: Resolved<ArrayDirection>,
+  grip: ArrayGrip,
+): ArrayDirection {
+  if (grip === 'spacing' && next.kind === 'linear' && authored.kind === 'linear') {
+    return { ...authored, spacing: next.spacing };
+  }
+  if (grip === 'angle' && next.kind === 'rotation' && authored.kind === 'rotation') {
+    return { ...authored, angle: next.angle, inverted: next.inverted };
+  }
+  return { ...authored, count: next.count };
+}
+
 /** The direction a grip drag produces, or null when it would change nothing. */
 function nextDirection(
-  direction: ArrayDirection,
+  direction: Resolved<ArrayDirection>,
   grip: ArrayGrip,
   value: number,
   options: {
@@ -402,7 +448,7 @@ function nextDirection(
     scale?: number;
     closed?: boolean;
   },
-): ArrayDirection | null {
+): Resolved<ArrayDirection> | null {
   if (!Number.isFinite(value)) return null;
   if (grip === 'spacing' && direction.kind === 'linear') {
     return { ...direction, spacing: snapLength(value) };
@@ -436,7 +482,10 @@ function nextDirection(
   return null;
 }
 
-function currentValueOf(direction: ArrayDirection | undefined, grip: ArrayGrip): number | null {
+function currentValueOf(
+  direction: Resolved<ArrayDirection> | undefined,
+  grip: ArrayGrip,
+): number | null {
   if (!direction) return null;
   switch (grip) {
     case 'spacing':

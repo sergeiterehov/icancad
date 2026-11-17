@@ -1,6 +1,7 @@
 import { groupFeatureIds, groupPath, groupRanges, pruneEmptyGroups } from './groups';
 import { historyErrors, type HistoryIssue } from './history';
 import { activeModel, touch, updateActiveModel } from './project';
+import { variableNameProblem, variableSourceProblem } from './variables';
 import {
   HISTORY_START,
   type BodyRef,
@@ -10,6 +11,7 @@ import {
   type ObjectMetadata,
   type Project,
   type SuperObject,
+  type Variable,
 } from './types';
 
 /** Commands that edit the feature history of the active model. */
@@ -43,7 +45,14 @@ export type ProjectCommand =
   | { type: 'model/add'; model: SuperObject }
   | { type: 'model/activate'; modelId: string }
   | { type: 'model/rename'; modelId: string; name: string }
-  | { type: 'model/remove'; modelId: string };
+  | { type: 'model/feature/replace'; modelId: string; feature: Feature }
+  | { type: 'model/remove'; modelId: string }
+  | { type: 'variable/add'; variable: Variable }
+  | { type: 'variable/replace'; variable: Variable }
+  | { type: 'variable/remove'; variableId: string }
+  | { type: 'model-variable/add'; modelId: string; variable: Variable }
+  | { type: 'model-variable/replace'; modelId: string; variable: Variable }
+  | { type: 'model-variable/remove'; modelId: string; variableId: string };
 
 export type Command = ModelCommand | ProjectCommand;
 
@@ -52,6 +61,7 @@ export type CommandErrorCode =
   | 'UNKNOWN_GROUP'
   | 'UNKNOWN_BODY'
   | 'UNKNOWN_MODEL'
+  | 'UNKNOWN_VARIABLE'
   | 'DUPLICATE_ID'
   | 'INVALID_INDEX'
   | 'INVALID_VALUE'
@@ -320,6 +330,39 @@ function findSuperObject(project: Project, modelId: string): SuperObject {
   return found;
 }
 
+function allVariables(project: Project): Variable[] {
+  return [
+    ...project.variables,
+    ...project.superObjects.flatMap((superObject) => superObject.variables),
+  ];
+}
+
+function checkVariable(project: Project, variable: Variable, selfId?: string): string {
+  const name = variable.name.trim();
+  const nameProblem = variableNameProblem(name);
+  if (nameProblem === 'EMPTY') {
+    throw new CommandError('INVALID_VALUE', 'Variable name cannot be empty');
+  }
+  if (nameProblem === 'INVALID') {
+    throw new CommandError('INVALID_VALUE', `Invalid variable name: ${name}`);
+  }
+  if (nameProblem === 'RESERVED') {
+    throw new CommandError('INVALID_VALUE', `Reserved variable name: ${name}`);
+  }
+  const duplicate = allVariables(project).some(
+    (candidate) => candidate.id !== selfId && candidate.name === name,
+  );
+  if (duplicate) {
+    throw new CommandError('INVALID_VALUE', `Duplicate variable name: ${name}`);
+  }
+  if (variable.type !== 'number' && variable.type !== 'string') {
+    throw new CommandError('INVALID_VALUE', `Unknown variable type: ${variable.type}`);
+  }
+  const sourceProblem = variableSourceProblem(variable);
+  if (sourceProblem) throw new CommandError('INVALID_VALUE', sourceProblem);
+  return name;
+}
+
 function checkModelName(project: Project, name: string, modelId?: string): string {
   const trimmed = name.trim();
   if (!trimmed) throw new CommandError('INVALID_VALUE', 'Model name cannot be empty');
@@ -358,6 +401,105 @@ function applyProjectCommand(project: Project, command: ProjectCommand): Project
         ...project,
         superObjects: project.superObjects.map((superObject) =>
           superObject.id === command.modelId ? { ...superObject, name } : superObject,
+        ),
+      };
+    }
+    case 'variable/add': {
+      if (allVariables(project).some((variable) => variable.id === command.variable.id)) {
+        throw new CommandError('DUPLICATE_ID', `Duplicate variable id: ${command.variable.id}`);
+      }
+      const name = checkVariable(project, command.variable);
+      return {
+        ...project,
+        variables: [...project.variables, { ...command.variable, name }],
+      };
+    }
+    case 'variable/replace': {
+      if (!project.variables.some((variable) => variable.id === command.variable.id)) {
+        throw new CommandError('UNKNOWN_VARIABLE', `Unknown variable: ${command.variable.id}`);
+      }
+      const name = checkVariable(project, command.variable, command.variable.id);
+      return {
+        ...project,
+        variables: project.variables.map((variable) =>
+          variable.id === command.variable.id ? { ...command.variable, name } : variable,
+        ),
+      };
+    }
+    case 'variable/remove': {
+      if (!project.variables.some((variable) => variable.id === command.variableId)) {
+        throw new CommandError('UNKNOWN_VARIABLE', `Unknown variable: ${command.variableId}`);
+      }
+      return {
+        ...project,
+        variables: project.variables.filter((variable) => variable.id !== command.variableId),
+      };
+    }
+    case 'model/feature/replace': {
+      const model = findSuperObject(project, command.modelId);
+      return {
+        ...project,
+        superObjects: project.superObjects.map((superObject) =>
+          superObject.id === model.id
+            ? replaceFeature(superObject, command.feature.id, () => command.feature)
+            : superObject,
+        ),
+      };
+    }
+    case 'model-variable/add': {
+      const model = findSuperObject(project, command.modelId);
+      if (allVariables(project).some((variable) => variable.id === command.variable.id)) {
+        throw new CommandError('DUPLICATE_ID', `Duplicate variable id: ${command.variable.id}`);
+      }
+      const name = checkVariable(project, command.variable);
+      return {
+        ...project,
+        superObjects: project.superObjects.map((superObject) =>
+          superObject.id === model.id
+            ? {
+                ...superObject,
+                variables: [...superObject.variables, { ...command.variable, name }],
+              }
+            : superObject,
+        ),
+      };
+    }
+    case 'model-variable/replace': {
+      const model = findSuperObject(project, command.modelId);
+      if (!model.variables.some((variable) => variable.id === command.variable.id)) {
+        throw new CommandError('UNKNOWN_VARIABLE', `Unknown variable: ${command.variable.id}`);
+      }
+      const name = checkVariable(project, command.variable, command.variable.id);
+      return {
+        ...project,
+        superObjects: project.superObjects.map((superObject) =>
+          superObject.id === model.id
+            ? {
+                ...superObject,
+                variables: superObject.variables.map((variable) =>
+                  variable.id === command.variable.id ? { ...command.variable, name } : variable,
+                ),
+              }
+            : superObject,
+        ),
+      };
+    }
+    case 'model-variable/remove': {
+      const model = findSuperObject(project, command.modelId);
+      if (!model.variables.some((variable) => variable.id === command.variableId)) {
+        throw new CommandError('UNKNOWN_VARIABLE', `Unknown variable: ${command.variableId}`);
+      }
+      return {
+        ...project,
+        superObjects: project.superObjects.map((superObject) =>
+          superObject.id === model.id
+            ? {
+                ...superObject,
+                variables: superObject.variables.filter(
+                  (variable) => variable.id !== command.variableId,
+                ),
+              }
+            : superObject,
         ),
       };
     }

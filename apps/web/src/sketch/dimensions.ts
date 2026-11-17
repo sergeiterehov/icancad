@@ -1,4 +1,10 @@
-import type { SketchConstraint, SketchEntity, SketchFeature, SketchMeasure } from '@icancad/model';
+import type {
+  ParamValue,
+  SketchConstraint,
+  SketchEntity,
+  SketchFeature,
+  SketchMeasure,
+} from '@icancad/model';
 import { sketchEntityIndex, tessellateEntity, type Point2 } from '@icancad/sketch';
 import { constraintEntityIds, refPoint } from './constraintModel';
 import { measureInfo } from './measure';
@@ -151,8 +157,14 @@ function anchorPoint(
   return null;
 }
 
+function valueOf(value: ParamValue | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 function annotationText(constraint: SketchConstraint, locale: string): string {
-  const value = formatValue(constraint.value ?? 0, locale);
+  const number = valueOf(constraint.value);
+  if (number === undefined) return '—';
+  const value = formatValue(number, locale);
   switch (constraint.type) {
     case 'angle':
       return `${value}°`;

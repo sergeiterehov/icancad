@@ -1,6 +1,14 @@
 import { createId } from './ids';
 import { PROJECT_SCHEMA_VERSION } from './schemas';
-import type { BodyRef, Model, ObjectMetadata, Project, RevolveSpec, SuperObject } from './types';
+import type {
+  BodyRef,
+  Model,
+  ObjectMetadata,
+  Project,
+  Resolved,
+  RevolveSpec,
+  SuperObject,
+} from './types';
 
 /**
  * Colours of objects, also offered as the colour palette. Mid tones only, so a
@@ -50,6 +58,7 @@ export function createModel(name = 'Model'): Model {
       sectionPlanes: [],
     },
     historyEnd: null,
+    variables: [],
     groups: [],
   };
 }
@@ -64,6 +73,7 @@ export function createProject(name = 'Untitled project', modelName = 'Model'): P
     units: 'mm',
     superObjects: [model],
     activeSuperObjectId: model.id,
+    variables: [],
     createdAt: now,
     updatedAt: now,
   };
@@ -109,7 +119,7 @@ export function featureBodyId(featureId: string, index = 0): string {
 }
 
 /** A revolve starts as a full turn around the world Z axis. */
-export function defaultRevolve(): RevolveSpec {
+export function defaultRevolve(): Resolved<RevolveSpec> {
   return { axis: { kind: 'world', axis: 'z' }, start: 0, end: 360, inverted: false };
 }
 
