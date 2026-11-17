@@ -17,16 +17,16 @@ Open http://127.0.0.1:5173/, wait for the kernel status to become **Ready**, the
 
 ## Commands
 
-| Command | What it does |
-| --- | --- |
-| `corepack pnpm dev` | Vite dev server with the kernel worker |
-| `corepack pnpm build` | Typecheck and production build (copies OCCT WASM) |
-| `corepack pnpm preview` | Serve the production build, including the service worker |
-| `corepack pnpm typecheck` | TypeScript check for every workspace package |
-| `corepack pnpm test` | Vitest unit/integration tests (document model, sketch helpers, OCCT in Node, project files, i18n parity) |
-| `corepack pnpm lint` | ESLint flat config |
-| `corepack pnpm e2e` | Playwright smoke tests (Chromium) |
-| `corepack pnpm spike:occt` | Standalone OCCT capability/size/startup probe |
+| Command                    | What it does                                                                                             |
+| -------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `corepack pnpm dev`        | Vite dev server with the kernel worker                                                                   |
+| `corepack pnpm build`      | Typecheck and production build (copies OCCT WASM)                                                        |
+| `corepack pnpm preview`    | Serve the production build, including the service worker                                                 |
+| `corepack pnpm typecheck`  | TypeScript check for every workspace package                                                             |
+| `corepack pnpm test`       | Vitest unit/integration tests (document model, sketch helpers, OCCT in Node, project files, i18n parity) |
+| `corepack pnpm lint`       | ESLint flat config                                                                                       |
+| `corepack pnpm e2e`        | Playwright smoke tests (Chromium)                                                                        |
+| `corepack pnpm spike:occt` | Standalone OCCT capability/size/startup probe                                                            |
 
 ## Architecture
 
@@ -66,9 +66,9 @@ docs/adr/                 Architecture decision records
 
 The production build is installable and offline-capable. [vite-plugin-pwa](https://vite-pwa-org.netlify.app/) generates `manifest.webmanifest`, the PNG icon set and a Workbox service worker; the app registers the worker itself in [apps/web/src/pwa/updates.ts](apps/web/src/pwa/updates.ts), because a reload has to save the open project first.
 
-- **Install** — browsers that offer an install prompt show *Install app* in the project menu. iOS has no prompt API; its install tags live in [apps/web/index.html](apps/web/index.html), and the same menu item explains *Share → Add to Home Screen*. The manifest icon paths are relative, so the build installs both at a domain root and under the GitHub Pages project path.
+- **Install** — browsers that offer an install prompt show _Install app_ in the project menu. iOS has no prompt API; its install tags live in [apps/web/index.html](apps/web/index.html), and the same menu item explains _Share → Add to Home Screen_. The manifest icon paths are relative, so the build installs both at a domain root and under the GitHub Pages project path.
 - **Offline** — the shell is precached during install: entry chunk, CSS, the three workers, the planegcs WASM and the icons. The 63 MB OCCT binary is not part of the install; the kernel caches it on first use under a content-hashed URL (`occt/opencascade.wasm.wasm?v=<sha256>`), so later starts need no network, a new OCCT build reaches the app, and an unchanged one is never downloaded twice. IndexedDB already holds the projects, so a reload without a network loses nothing.
-- **Updates** — a new build waits instead of replacing the running one. The toast's *Reload* button, or *Update ICanCAD* in the project menu, flushes the project to IndexedDB and then activates the waiting worker. The page also asks for a new deployment every hour, since a modeling session outlives many deploys.
+- **Updates** — a new build waits instead of replacing the running one. The toast's _Reload_ button, or _Update ICanCAD_ in the project menu, flushes the project to IndexedDB and then activates the waiting worker. The page also asks for a new deployment every hour, since a modeling session outlives many deploys.
 - **Theme colour** — the browser's window chrome follows the app theme through the `theme-color` meta tag.
 
 The worker exists only in a production build: the dev server rewrites modules on every edit, and a cache in front of it would serve stale code. To try the PWA:
@@ -96,7 +96,7 @@ Pages serves the static files as they are: `.wasm` arrives with `application/was
 
 `.github/workflows/deploy-site.yml` builds the site for the domain root (`VITE_BASE=/`) and mirrors `apps/web/dist` over FTP on every push to `main` and on a manual run. The repository secrets `FTP_HOST`, `FTP_USERNAME` and `FTP_PASSWORD` hold the account; the workflow reads the password from the `LFTP_PASSWORD` environment variable, so it never appears in a command line or a log. The FTP account is chrooted to the directory the domain serves, so the build is uploaded to the account root (`/`); a manual run can name another directory. The upload uses `lftp mirror --reverse --delete`, so only new and changed files travel, and files the build no longer contains are removed from the host. The run ends by asking the domain for the uploaded build, so a site root that does not match the account fails the workflow instead of passing quietly.
 
-[apps/web/public/.htaccess](apps/web/public/.htaccess) travels with the build and gives an Apache or LiteSpeed host the headers listed below. icancad.com answers with nginx, which does not read `.htaccess` — the `.wasm` MIME type already comes from its own table, and the caching and COOP/COEP rules have to be set in the hosting panel if the site needs them — while GitHub Pages ignores the file as well. Both deployments are independent: a failure of one leaves the other published.
+[apps/web/public/.htaccess](apps/web/public/.htaccess) travels with the build and gives an Apache or LiteSpeed host the headers listed below. icancad.com answers with nginx, which does not read `.htaccess` — the `.wasm` MIME type already comes from its own table, while `.mjs` is served as `application/octet-stream`; the Pyodide loader is therefore copied under `.js` names — and the caching and COOP/COEP rules have to be set in the hosting panel if the site needs them. GitHub Pages ignores the file as well. Both deployments are independent: a failure of one leaves the other published.
 
 ### Any other static host
 

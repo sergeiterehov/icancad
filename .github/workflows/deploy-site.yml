@@ -122,13 +122,15 @@ jobs:
       - name: Check the domain serves the build
         run: |
           for attempt in 1 2 3 4 5 6; do
-            if curl -fsS --max-time 20 https://icancad.com/ | grep -q '<title>ICanCAD</title>'; then
-              echo "icancad.com serves the build"
+            if curl -fsS --max-time 20 https://icancad.com/ | grep -q '<title>ICanCAD</title>' &&
+               curl -fsSI --max-time 20 https://icancad.com/pyodide/pyodide.js |
+                 grep -qi '^content-type:.*javascript'; then
+              echo "icancad.com serves the build and the formula runtime"
               exit 0
             fi
             sleep 10
           done
-          echo "::error::icancad.com does not serve the uploaded build; check the site root in the hosting panel"
+          echo "::error::icancad.com does not serve the uploaded build; check the site root and the JavaScript MIME type in the hosting panel"
           exit 1
 
       - name: Show the account's directories
