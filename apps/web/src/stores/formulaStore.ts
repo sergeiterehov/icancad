@@ -22,6 +22,10 @@ interface FormulaState {
   status: FormulaStatus;
   phase: string | null;
   error: string | null;
+  /** Python version reported by the runtime; null until it is ready. */
+  python: string | null;
+  /** Pyodide version reported by the runtime; null until it is ready. */
+  pyodide: string | null;
   resolution: FormulaResolution | null;
   /** Sources currently being evaluated; the rebuild does not start on them. */
   pendingKey: string | null;
@@ -36,14 +40,22 @@ export const useFormulaStore = create<FormulaState>((set) => ({
   status: 'idle',
   phase: null,
   error: null,
+  python: null,
+  pyodide: null,
   resolution: null,
   pendingKey: null,
 
   handleStatus: (event) => {
     if (event.phase === 'loading-python') {
-      set({ status: 'loading', phase: event.phase, error: null });
+      set({ status: 'loading', phase: event.phase, error: null, python: null, pyodide: null });
     } else if (event.phase === 'ready') {
-      set({ status: 'ready', phase: event.phase, error: null });
+      set({
+        status: 'ready',
+        phase: event.phase,
+        error: null,
+        python: event.python ?? null,
+        pyodide: event.pyodide ?? null,
+      });
     } else {
       set({ status: 'error', phase: event.phase, error: event.message ?? 'FORMULA_LOAD_FAILED' });
     }
@@ -53,7 +65,15 @@ export const useFormulaStore = create<FormulaState>((set) => ({
   setResolution: (resolution) => set({ resolution, pendingKey: null, error: null }),
   setError: (message) => set({ status: 'error', error: message, pendingKey: null }),
   reset: () =>
-    set({ status: 'idle', phase: null, error: null, resolution: null, pendingKey: null }),
+    set({
+      status: 'idle',
+      phase: null,
+      error: null,
+      python: null,
+      pyodide: null,
+      resolution: null,
+      pendingKey: null,
+    }),
 }));
 
 /** The resolved active model, or null while formulas are still being computed. */

@@ -58,7 +58,8 @@ export function startFormulaWorker(options: FormulaWorkerOptions): void {
       }
       evaluate = fn as (raw: string) => string;
       rename = renameFn as (raw: string) => string;
-      post({ type: 'status', phase: 'ready', pyodide: module.version ?? '' });
+      const python = String(pyodide.runPython('import sys; sys.version.split()[0]'));
+      post({ type: 'status', phase: 'ready', python, pyodide: module.version ?? '' });
       return pyodide;
     })().catch((error: unknown) => {
       post({

@@ -7,12 +7,24 @@ import type {
 import type { SketchFrame, Vec3 } from '@icancad/model';
 import { create } from 'zustand';
 import type { MeshStats } from '@icancad/io';
+import type { Feature } from '@icancad/model';
 import type { KernelTask } from '../kernel/scheduler';
 
 export type KernelStatus = 'idle' | 'loading' | 'ready' | 'error';
 
 export function isModelRebuilding(state: { status: KernelStatus; tasks: KernelTask[] }): boolean {
   return state.status !== 'ready' || state.tasks.some((task) => task.key === 'rebuild');
+}
+
+/** Sum of the last measured operation times, ignoring suppressed operations. */
+export function timelineDuration(
+  features: readonly Feature[],
+  operationMs: Readonly<Record<string, number>>,
+): number {
+  return features.reduce(
+    (total, feature) => (feature.suppressed ? total : total + (operationMs[feature.id] ?? 0)),
+    0,
+  );
 }
 
 /** How an object differs between the model and the operation being edited. */
@@ -104,6 +116,8 @@ interface KernelState {
   projectionLost: Record<string, string[]>;
   /** Increments whenever a rebuild publishes a scene. */
   sceneVersion: number;
+  /** Wall-clock time of each operation, keyed by feature id. */
+  operationMs: Record<string, number>;
   shapeStats: Record<string, ShapeStats>;
   meshStats: Record<string, MeshStats>;
   /**
@@ -136,6 +150,7 @@ interface KernelState {
   setError: (message: string) => void;
   setTasks: (tasks: KernelTask[]) => void;
   setRebuildCursor: (rebuildCursor: number | null) => void;
+  setOperationMs: (featureId: string, ms: number) => void;
   setScene: (
     meshes: Record<string, TessellationResult>,
     shapeStats: Record<string, ShapeStats>,
@@ -178,6 +193,7 @@ export const useKernelStore = create<KernelState>((set) => ({
   sketchFrames: {},
   projectionLost: {},
   sceneVersion: 0,
+  operationMs: {},
   shapeStats: {},
   meshStats: {},
   bodyShapes: {},
@@ -222,6 +238,8 @@ export const useKernelStore = create<KernelState>((set) => ({
 
   setTasks: (tasks) => set({ tasks }),
   setRebuildCursor: (rebuildCursor) => set({ rebuildCursor }),
+  setOperationMs: (featureId, ms) =>
+    set((state) => ({ operationMs: { ...state.operationMs, [featureId]: ms } })),
 
   setScene: (
     meshes,
@@ -270,6 +288,7 @@ export const useKernelStore = create<KernelState>((set) => ({
       sketchFrames: {},
       projectionLost: {},
       sceneVersion: state.sceneVersion + 1,
+      operationMs: {},
       shapeStats: {},
       meshStats: {},
       bodyShapes: {},

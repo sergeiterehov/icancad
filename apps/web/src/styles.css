@@ -2660,6 +2660,8 @@ html[data-pointer='finger'] .selection-item .icon-btn {
   position: fixed;
   z-index: 1200;
   width: 268px;
+  max-height: min(70vh, 640px);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 10px;

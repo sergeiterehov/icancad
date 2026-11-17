@@ -162,7 +162,7 @@
   },
   "status": {
     "kernelLoading": "Загрузка ядра OCCT…",
-    "kernelReady": "OCCT {{version}} · {{ms}} мс",
+    "kernelReady": "Компоненты ядра готовы",
     "rebuild": "Пересчёт модели",
     "queue": "Очередь",
     "taskRunning": "выполняется",
@@ -184,7 +184,15 @@
     "operationErrorsTitle": "Ошибки операций",
     "errorHint": "Не удалось загрузить ядро",
     "elapsed": "{{time}} с",
-    "queued": "в очереди: {{count}}"
+    "queued": "в очереди: {{count}}",
+    "sketchSolving": "Решается скетч",
+    "sketchSolver": "Солвер скетча",
+    "solving": "Решается…",
+    "idle": "Свободен",
+    "lastSolve": "Последнее решение",
+    "python": "Python",
+    "pythonRuntime": "Среда Python",
+    "timelineTime": "Время таймлайна"
   },
   "empty": {
     "retry": "Повторить",

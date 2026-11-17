@@ -56,7 +56,8 @@ formula-specific — it takes sources and returns numbers and diagnostics.
 
 Pyodide is a boot dependency, not a lazy add-on: the page shows its loading phase
 next to the kernel's, and the offline cache carries the wasm, the stdlib archive
-and the lock file.
+and the lock file. The ready message carries the Python and Pyodide versions, and
+the kernel popover shows them beside the sketch solver's live state.
 
 ### Resolution is a layer between the document and the rebuild
 

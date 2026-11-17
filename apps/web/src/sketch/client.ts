@@ -1,9 +1,11 @@
 import type { SketchConstraint, SketchEntity } from '@icancad/model';
+import { useSketchSolverStore } from '../stores/sketchSolverStore';
 import type { SketchSolveResponse, SketchSolveResult, SolverPin } from './protocol';
 
 interface Pending {
   resolve: (result: SketchSolveResult) => void;
   reject: (error: Error) => void;
+  startedAt: number;
 }
 
 let worker: Worker | null = null;
@@ -21,12 +23,16 @@ function getWorker(): Worker {
     const request = pending.get(data.id);
     if (!request) return;
     pending.delete(data.id);
+    useSketchSolverStore.getState().end(performance.now() - request.startedAt);
     if (data.ok) request.resolve(data.result);
     else request.reject(new Error(data.error));
   };
   worker.onerror = (event) => {
     const error = new Error(event.message || 'Sketch solver crashed');
-    for (const request of pending.values()) request.reject(error);
+    for (const request of pending.values()) {
+      useSketchSolverStore.getState().end(performance.now() - request.startedAt);
+      request.reject(error);
+    }
     pending.clear();
     worker = null;
   };
@@ -41,15 +47,23 @@ export function solveSketch(
 ): Promise<SketchSolveResult> {
   const id = ++sequence;
   const active = getWorker();
+  const startedAt = performance.now();
+  useSketchSolverStore.getState().begin();
   return new Promise<SketchSolveResult>((resolve, reject) => {
-    pending.set(id, { resolve, reject });
-    active.postMessage({
-      id,
-      entities,
-      constraints,
-      pinned,
-      derived: options.derived ? [...options.derived] : undefined,
-      diagnose: options.diagnose,
-    });
+    pending.set(id, { resolve, reject, startedAt });
+    try {
+      active.postMessage({
+        id,
+        entities,
+        constraints,
+        pinned,
+        derived: options.derived ? [...options.derived] : undefined,
+        diagnose: options.diagnose,
+      });
+    } catch (error) {
+      pending.delete(id);
+      useSketchSolverStore.getState().end(performance.now() - startedAt);
+      reject(error instanceof Error ? error : new Error(String(error)));
+    }
   });
 }

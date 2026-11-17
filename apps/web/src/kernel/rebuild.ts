@@ -556,7 +556,12 @@ async function runRebuild(
       // The input shapes are what an array repeats a later modification from,
       // so they are read before the operation replaces them.
       const beforeShapes = new Map(state.bodyShapes);
-      await evaluateFeature(feature, state, { client, epoch, project, drivenSketches });
+      const startedAt = performance.now();
+      try {
+        await evaluateFeature(feature, state, { client, epoch, project, drivenSketches });
+      } finally {
+        useKernelStore.getState().setOperationMs(feature.id, performance.now() - startedAt);
+      }
       if (epoch !== rebuildEpoch) return;
       if (!state.featureErrors[feature.id]) {
         captureFeatureShapes(state, feature.id, beforeShapes);
@@ -609,7 +614,14 @@ async function runRebuild(
         const next = cloneState(base);
         if (!previewFeature.suppressed) {
           const beforeShapes = new Map(next.bodyShapes);
-          await evaluateFeature(previewFeature, next, { client, epoch, project, ghost });
+          const startedAt = performance.now();
+          try {
+            await evaluateFeature(previewFeature, next, { client, epoch, project, ghost });
+          } finally {
+            useKernelStore
+              .getState()
+              .setOperationMs(previewFeature.id, performance.now() - startedAt);
+          }
           if (epoch !== rebuildEpoch) return;
           if (!next.featureErrors[previewFeature.id]) {
             captureFeatureShapes(next, previewFeature.id, beforeShapes);

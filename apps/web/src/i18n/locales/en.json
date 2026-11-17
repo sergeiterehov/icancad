@@ -162,7 +162,7 @@
   },
   "status": {
     "kernelLoading": "Loading OCCT kernel…",
-    "kernelReady": "OCCT {{version}} · {{ms}} ms",
+    "kernelReady": "Kernel components are ready",
     "rebuild": "Rebuilding model",
     "queue": "Queue",
     "taskRunning": "running",
@@ -184,7 +184,15 @@
     "operationErrorsTitle": "Operation errors",
     "errorHint": "The kernel failed to load",
     "elapsed": "{{time}} s",
-    "queued": "{{count}} queued"
+    "queued": "{{count}} queued",
+    "sketchSolving": "Solving sketch",
+    "sketchSolver": "Sketch solver",
+    "solving": "Solving…",
+    "idle": "Idle",
+    "lastSolve": "Last solve",
+    "python": "Python",
+    "pythonRuntime": "Python runtime",
+    "timelineTime": "Timeline time"
   },
   "empty": {
     "retry": "Retry",
