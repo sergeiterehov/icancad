@@ -8,7 +8,10 @@ import {
   selectedFeatureIds,
   selectedSketchDetailId,
 } from '../src/stores/selection';
-import { emptyTapClearsSelection } from '../src/viewport/selectionPick';
+import {
+  emptyTapClearsSelection,
+  emptyTapClearsSelectionCount,
+} from '../src/viewport/selectionPick';
 
 const project = {
   bodies: [
@@ -116,5 +119,10 @@ describe('selection helpers', () => {
     expect(emptyTapClearsSelection(two, 'touch')).toBe(false);
     expect(emptyTapClearsSelection(two, 'pen')).toBe(false);
     expect(emptyTapClearsSelection(two, 'mouse')).toBe(true);
+    // The sketch canvas counts its own selection rather than listing items.
+    expect(emptyTapClearsSelectionCount(0, 'touch')).toBe(true);
+    expect(emptyTapClearsSelectionCount(1, 'touch')).toBe(true);
+    expect(emptyTapClearsSelectionCount(2, 'touch')).toBe(false);
+    expect(emptyTapClearsSelectionCount(2, 'mouse')).toBe(true);
   });
 });

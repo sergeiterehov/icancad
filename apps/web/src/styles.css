@@ -125,6 +125,12 @@ button:disabled {
   --dock-right: 0px;
   /* The model dock hangs below the logo, and its edge follows it there. */
   --dock-top: 58px;
+  /* How far each panel keeps from the top and bottom of the workspace. The
+     layout raises these while a floating bar crosses the panel's column. */
+  --dock-left-top: var(--dock-top);
+  --dock-left-bottom: var(--dock-gap);
+  --dock-right-top: var(--dock-gap);
+  --dock-right-bottom: var(--dock-gap);
 }
 
 .workspace[data-left-dock='open'] {
@@ -230,12 +236,14 @@ button:disabled {
 }
 
 .dock-left {
-  top: var(--dock-top);
+  top: var(--dock-left-top);
+  bottom: var(--dock-left-bottom);
   left: 0;
 }
 
 .dock-right {
-  top: var(--dock-gap);
+  top: var(--dock-right-top);
+  bottom: var(--dock-right-bottom);
   right: 0;
 }
 
@@ -243,7 +251,7 @@ button:disabled {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: var(--dock-left-width);
+  width: min(var(--dock-left-width), calc(100vw - 2 * var(--dock-gap)));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -283,7 +291,7 @@ button:disabled {
 
 .dock-right .dock-surface {
   right: var(--dock-gap);
-  width: var(--dock-right-width);
+  width: min(var(--dock-right-width), calc(100vw - 2 * var(--dock-gap)));
 }
 
 .dock[data-open='false'] .dock-surface {
@@ -315,7 +323,7 @@ button:disabled {
   left: 0;
   /* The edge starts where the panel does: the top of the column belongs to the
      logo, and reaching past it for the logo should not open the panel. */
-  top: var(--dock-top);
+  top: var(--dock-left-top);
 }
 
 .dock-right .dock-trigger {
@@ -393,8 +401,9 @@ button:disabled {
 }
 
 /* Both floating bars stay centred in the window: `--bar-shift` (see
-   useFloatingBarShift) moves a bar only as far as a side dock needs to stop
-   covering it, and the width limit shrinks it when no room is left. */
+   useFloatingBarShift) moves a bar only as far as the logo or, on a short
+   screen, a side dock needs to stop covering it, and `--bar-max` shrinks it
+   when no room is left. */
 .tool-dock {
   position: absolute;
   top: var(--dock-gap);
@@ -1019,6 +1028,17 @@ html[data-pointer='finger'] .tree-row .tree-eye {
     width: 72px;
     height: 22px;
   }
+
+  /* The tongue is the way a finger works a panel, so it gets a fingertip's
+     width rather than a cursor's. */
+  .dock-tab {
+    width: 28px;
+    height: 88px;
+  }
+
+  .dock[data-open='false'] .dock-tab::after {
+    inset: -14px -12px;
+  }
 }
 
 .input-wrap {
@@ -1374,6 +1394,23 @@ html[data-pointer='finger'] .tree-row .tree-eye {
   display: flex;
   align-items: center;
   gap: 2px;
+}
+
+.tool-rail-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* A narrow screen cannot hold the sketch tools in one line: the two groups
+   become two rows instead of a strip that runs off the edge. */
+.workspace[data-narrow='true'] .tool-rail-sketch {
+  flex-direction: column;
+  gap: 2px;
+}
+
+.workspace[data-narrow='true'] .tool-rail-sketch .tool-rail-row > .tool-separator:first-child {
+  display: none;
 }
 
 .tooltip-anchor {

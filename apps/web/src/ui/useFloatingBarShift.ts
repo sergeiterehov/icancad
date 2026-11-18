@@ -1,15 +1,13 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import { useUiStore } from '../stores/uiStore';
-
-/** Breathing room the layout keeps between a dock and the bars. */
-const INSET = 8;
-
-/** The corner gives way in two steps before the bar loses any room. */
-export type MarkSqueeze = 0 | 1 | 2;
+import { BAR_EDGE_INSET, SHORT_LAYOUT_HEIGHT } from './barLayout';
 
 function pixels(style: CSSStyleDeclaration, name: string): number {
   return Number.parseFloat(style.getPropertyValue(name)) || 0;
 }
+
+/** The corner gives way in two steps before the bar loses any room. */
+export type MarkSqueeze = 0 | 1 | 2;
 
 /** The corner block, as it stands while nothing of it is hidden. */
 interface WholeMark {
@@ -42,39 +40,42 @@ function measureMark(mark: HTMLElement): WholeMark {
  * corner gives way, in order: the project name and the rule before it, then the
  * product name, and only then does the bar start to shrink against the mark,
  * which cannot give way at all — the mark is the app.
+ *
+ * `wantedLeft` is where the bar would start if the corner were not there, so a
+ * bar pushed left by a dock squeezes the corner just as a wide bar does.
  */
-export function markSqueeze(centred: number, mark: WholeMark, inset = INSET): MarkSqueeze {
+export function markSqueeze(
+  wantedLeft: number,
+  mark: WholeMark,
+  inset = BAR_EDGE_INSET,
+): MarkSqueeze {
   // The deepest step first: a bar that needs more than the name is also
   // pressed against the mark, and asking the near question first would answer
   // for the whole.
-  if (centred < mark.right - mark.name + inset) return 2;
-  if (centred < mark.right + inset) return 1;
+  if (wantedLeft < mark.right - mark.name + inset) return 2;
+  if (wantedLeft < mark.right + inset) return 1;
   return 0;
 }
 
 /** Where the bar may start once the corner is squeezed that far. */
-export function markEdge(squeeze: MarkSqueeze, mark: WholeMark, inset = INSET): number {
+export function markEdge(squeeze: MarkSqueeze, mark: WholeMark, inset = BAR_EDGE_INSET): number {
   if (squeeze < 2) return 0;
   return mark.right - mark.name - mark.brand + inset;
 }
 
 /**
- * A floating bar stays centred in the window. A side dock that reaches it
- * pushes it just as far as it has to, so the bars only move when they would
- * otherwise be covered; only when no room is left does the bar start to shrink,
- * and the width it may take lands in `--bar-max`. The offset lands in
- * `--bar-shift`, which the bar applies as a relative offset: a transform would
- * capture the fixed tooltips opened inside it.
+ * A floating bar stays centred in the window. The corner of the top row gives
+ * way before the bar does: the project name and its rule go, then the product
+ * name, and the mark stays. Only with the mark alone beside it does the bar
+ * start to shrink, which is what keeps the sketch tools reachable on a small
+ * tablet.
  *
- * Panels are as tall as their content, so a dock only stands in a bar's way
- * when the two also meet vertically: a short model panel leaves the operations
- * strip alone even though the strip crosses its column. Both the panels and the
- * bar are watched, because the content changes while the app runs.
+ * On a tall screen the side docks keep clear of the bars vertically (see
+ * {@link useDockClearance}), so the bars ignore them. A short screen has no
+ * room for that: there the bar moves sideways off a dock, as before.
  *
- * The corner of the row holds the project mark, and it gives way before the bar
- * does: the project name and its rule go, then the product name, and the mark
- * stays. Only with the mark alone beside it does the bar start to shrink, which
- * is what keeps the sketch tools reachable on a small tablet.
+ * The offset lands in `--bar-shift`, which the bar applies as a relative
+ * offset: a transform would capture the fixed tooltips opened inside it.
  */
 export function useFloatingBarShift(
   container: RefObject<HTMLDivElement | null>,
@@ -102,12 +103,15 @@ export function useFloatingBarShift(
       // parse as numbers; they mirror the width and gap read here.
       const style = getComputedStyle(workspace);
       const gap = pixels(style, '--dock-gap');
-      const width = window.innerWidth;
+      const width = document.documentElement.clientWidth || window.innerWidth;
+      // A tall screen keeps the docks below the bars instead (useDockClearance);
+      // only a short one still needs the bars to move sideways.
+      const short = window.innerHeight < SHORT_LAYOUT_HEIGHT;
       // The row is read from the container, which does not move with the shift.
       const row = element.getBoundingClientRect();
 
       const reach = (side: 'left' | 'right', open: boolean) => {
-        if (!open) return 0;
+        if (!short || !open) return 0;
         // A panel is asked for now rather than remembered: it exists only while
         // it is open, and this runs before it has been put on the page.
         const surface = workspace.querySelector(`.dock-${side} .dock-surface`);
@@ -117,15 +121,18 @@ export function useFloatingBarShift(
         const panel = surface.getBoundingClientRect();
         if (row.top >= panel.bottom || row.bottom <= panel.top) return 0;
         const widthName = side === 'left' ? '--dock-left-width' : '--dock-right-width';
-        return pixels(style, widthName) + gap + INSET;
+        return pixels(style, widthName) + gap + BAR_EDGE_INSET;
       };
 
-      const freeRight = width - INSET - reach('right', rightDock);
-      const dockLeft = INSET + reach('left', leftDock);
-      const barWidth = bar.offsetWidth;
+      const freeRight = width - BAR_EDGE_INSET - reach('right', rightDock);
+      const dockLeft = BAR_EDGE_INSET + reach('left', leftDock);
       // The whole strip of tools, before any limit is put on it.
-      const natural = bar.scrollWidth || barWidth;
+      const natural = Math.max(bar.scrollWidth, bar.offsetWidth);
       const centred = (width - natural) / 2;
+      // Where the bar would start if neither the corner nor a width limit moved
+      // it. This is what decides how much of the corner has to go, so a bar
+      // pushed left by a dock squeezes the logo instead of running under it.
+      const wanted = Math.min(centred, freeRight - natural);
 
       // The corner only matters to the bar that shares its row: the strip on the
       // top edge. The operations bar is at the bottom, so it says nothing about
@@ -136,9 +143,7 @@ export function useFloatingBarShift(
         if (!wholeMark.current && !anchor.dataset.squeeze) {
           wholeMark.current = measureMark(anchor);
         }
-        const squeeze: MarkSqueeze = wholeMark.current
-          ? markSqueeze(centred, wholeMark.current)
-          : 0;
+        const squeeze: MarkSqueeze = wholeMark.current ? markSqueeze(wanted, wholeMark.current) : 0;
         if ((anchor.dataset.squeeze ?? '') !== (squeeze ? String(squeeze) : '')) {
           if (squeeze) anchor.dataset.squeeze = String(squeeze);
           else delete anchor.dataset.squeeze;
@@ -147,10 +152,14 @@ export function useFloatingBarShift(
       }
 
       const freeLeft = Math.max(dockLeft, markLeft);
-      // Push the bar off the docks and off the mark first; the width limit
-      // starts shrinking it only once the free space is gone.
-      const left = Math.max(Math.min(centred, freeRight - barWidth), freeLeft);
-      element.style.setProperty('--bar-shift', `${Math.round(left - centred)}px`);
+      // The bar is laid out inside `--bar-max`, so the edge it aims for has to
+      // be measured with the width that limit leaves, not the natural one.
+      const shown = Math.min(natural, Math.max(0, freeRight - freeLeft));
+      const left = Math.max(Math.min(wanted, freeRight - shown), freeLeft);
+      // `left` is a relative offset from where centring puts the limited bar;
+      // deriving it from the natural width would count the limit twice.
+      const flexLeft = (width - shown) / 2;
+      element.style.setProperty('--bar-shift', `${Math.round(left - flexLeft)}px`);
       element.style.setProperty('--bar-max', `${Math.max(0, freeRight - freeLeft)}px`);
     };
 

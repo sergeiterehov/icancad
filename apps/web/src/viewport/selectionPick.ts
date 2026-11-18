@@ -11,7 +11,12 @@ export function emptyTapClearsSelection(
   selection: readonly SelectionItem[],
   pointerType: string,
 ): boolean {
-  return !isKeylessPointer(pointerType) || selection.length <= 1;
+  return emptyTapClearsSelectionCount(selection.length, pointerType);
+}
+
+/** The same rule where the selection is counted rather than listed. */
+export function emptyTapClearsSelectionCount(count: number, pointerType: string): boolean {
+  return !isKeylessPointer(pointerType) || count <= 1;
 }
 
 /** What the pointer found in the viewport, richest detail first. */

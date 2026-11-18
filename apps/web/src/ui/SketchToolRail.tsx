@@ -105,74 +105,78 @@ export function SketchToolRail() {
   };
 
   return (
-    <nav className="tool-rail" aria-label={t('panels.tools')}>
-      {TOOLS.map(({ tool, label }) => {
-        const shortcut = SKETCH_TOOL_SHORTCUTS[tool];
-        return (
-          <IconButton
-            key={tool}
-            label={t(label)}
-            tooltip={shortcut ? `${t(label)} (${shortcut})` : t(label)}
-            active={sketchTool === tool}
-            onClick={() => setSketchTool(tool)}
-          >
-            {tool === 'select' ? (
-              <MousePointer2 size={17} />
-            ) : tool === 'project' ? (
-              <Presentation size={17} />
-            ) : (
-              <SketchEntityIcon type={tool} size={17} />
-            )}
-          </IconButton>
-        );
-      })}
+    <nav className="tool-rail tool-rail-sketch" aria-label={t('panels.tools')}>
+      <div className="tool-rail-row">
+        {TOOLS.map(({ tool, label }) => {
+          const shortcut = SKETCH_TOOL_SHORTCUTS[tool];
+          return (
+            <IconButton
+              key={tool}
+              label={t(label)}
+              tooltip={shortcut ? `${t(label)} (${shortcut})` : t(label)}
+              active={sketchTool === tool}
+              onClick={() => setSketchTool(tool)}
+            >
+              {tool === 'select' ? (
+                <MousePointer2 size={17} />
+              ) : tool === 'project' ? (
+                <Presentation size={17} />
+              ) : (
+                <SketchEntityIcon type={tool} size={17} />
+              )}
+            </IconButton>
+          );
+        })}
+      </div>
 
-      <div className="tool-separator" />
+      <div className="tool-rail-row">
+        <div className="tool-separator" />
 
-      <IconButton
-        label={t('tools.construction')}
-        tooltip={`${t('tools.construction')} (${SKETCH_CONSTRUCTION_SHORTCUT})`}
-        active={constructionActive}
-        disabled={constructionEntities.length === 0}
-        onClick={toggleSelectedConstruction}
-      >
-        <LineStyle size={17} />
-      </IconButton>
-      <IconButton
-        label={t('tools.constraints')}
-        disabled={actions.length === 0 || busy}
-        onClick={openConstraints}
-      >
-        <Ruler size={17} />
-      </IconButton>
-      <IconButton
-        label={t('common.delete')}
-        disabled={entitySelection.length === 0}
-        onClick={() => {
-          if (!feature) return;
-          const next = removeSketchEntities(feature, entitySelection);
-          apply({ type: 'feature/replace', feature: next });
-          setSketchSelection([]);
-          void diagnoseSketch(next);
-        }}
-      >
-        <Trash2 size={17} />
-      </IconButton>
-      <div className="tool-separator" />
+        <IconButton
+          label={t('tools.construction')}
+          tooltip={`${t('tools.construction')} (${SKETCH_CONSTRUCTION_SHORTCUT})`}
+          active={constructionActive}
+          disabled={constructionEntities.length === 0}
+          onClick={toggleSelectedConstruction}
+        >
+          <LineStyle size={17} />
+        </IconButton>
+        <IconButton
+          label={t('tools.constraints')}
+          disabled={actions.length === 0 || busy}
+          onClick={openConstraints}
+        >
+          <Ruler size={17} />
+        </IconButton>
+        <IconButton
+          label={t('common.delete')}
+          disabled={entitySelection.length === 0}
+          onClick={() => {
+            if (!feature) return;
+            const next = removeSketchEntities(feature, entitySelection);
+            apply({ type: 'feature/replace', feature: next });
+            setSketchSelection([]);
+            void diagnoseSketch(next);
+          }}
+        >
+          <Trash2 size={17} />
+        </IconButton>
+        <div className="tool-separator" />
 
-      <IconButton label={t('sketch.done')} onClick={() => setActiveSketch(null)}>
-        <Check size={17} />
-      </IconButton>
-      <div className="tool-separator" />
+        <IconButton label={t('sketch.done')} onClick={() => setActiveSketch(null)}>
+          <Check size={17} />
+        </IconButton>
+        <div className="tool-separator" />
 
-      <IconButton
-        label={t('tools.magnet')}
-        active={magnetEnabled}
-        onClick={() => setMagnetEnabled(!magnetEnabled)}
-      >
-        <Magnet size={17} />
-      </IconButton>
-      <SectionTool />
+        <IconButton
+          label={t('tools.magnet')}
+          active={magnetEnabled}
+          onClick={() => setMagnetEnabled(!magnetEnabled)}
+        >
+          <Magnet size={17} />
+        </IconButton>
+        <SectionTool />
+      </div>
     </nav>
   );
 }

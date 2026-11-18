@@ -26,6 +26,7 @@ import { SketchToolRail } from './ui/SketchToolRail';
 import { Timeline } from './ui/Timeline';
 import { Toast } from './ui/Toast';
 import { ToolRail } from './ui/ToolRail';
+import { useDockClearance } from './ui/useDockClearance';
 import { useFloatingBarShift } from './ui/useFloatingBarShift';
 import { Viewport } from './viewport/Viewport';
 import { installPointerWatch } from './viewport/inputProfile';
@@ -80,6 +81,7 @@ export default function App() {
   const operationsDock = useRef<HTMLDivElement>(null);
   useFloatingBarShift(toolDock, hydrated);
   useFloatingBarShift(operationsDock, hydrated);
+  useDockClearance(hydrated);
 
   return (
     <div className="app-shell">

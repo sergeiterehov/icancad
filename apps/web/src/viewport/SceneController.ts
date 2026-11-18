@@ -33,12 +33,15 @@ import {
 import { cameraDragMode, cameraScheme } from './cameraControls';
 import { gridLineRange, niceGridStep, SKETCH_GRID_TARGET_PX } from './sketchGrid';
 import {
+  isKeylessPointer,
   isTouchPointer,
+  lastPointerType,
   noteWheelKind,
   resolvedPointerKind,
   wheelPointerKind,
   type PointerKind,
 } from './inputProfile';
+import { isDoubleTap, type TapMark } from './doubleTap';
 import { orbitAbout, orbitPivotPoint, orbitRotation, pointOnRayAtTarget } from './orbitPivot';
 import { facesPlane, sketchTurnMode } from './sketchView';
 import { trackballOrbit } from './trackball';
@@ -180,8 +183,6 @@ function arcGripPoint(arc: SceneArcHandle, angle: number): THREE.Vector3 {
 const HATCH_SPACING_PX = 6;
 /** Screen distance over which a through-cut ghost fades out. */
 const GHOST_FADE_PX = 100;
-const DOUBLE_CLICK_MS = 350;
-const DOUBLE_CLICK_SLOP_PX = 6;
 /** Length of the idle arrow, before an operation gives the handle a value. */
 const HANDLE_IDLE_PX = 48;
 const HANDLE_HIT_PX = 9;
@@ -612,7 +613,7 @@ export class SceneController {
   private pointerDown: { x: number; y: number } | null = null;
   private pointerMoved = false;
   /** Previous click, so a second one on the same spot reads as a double click. */
-  private lastClick: { time: number; x: number; y: number } | null = null;
+  private lastClick: TapMark | null = null;
   private readonly raycaster = new THREE.Raycaster();
   private transition: {
     from: CameraPose;
@@ -1621,7 +1622,7 @@ export class SceneController {
       if (!handle.enabled || handle.kind !== 'move') continue;
       const projected = this.projectWorld(new THREE.Vector3(...handle.origin));
       const distance = Math.hypot(local.x - projected.x, local.y - projected.y);
-      if (distance > HANDLE_HIT_PX + 3) continue;
+      if (distance > (HANDLE_HIT_PX + 3) * this.pickReach()) continue;
       if (best && distance >= best.distance) continue;
       best = { handle, axisX: 0, axisY: 0, pixelsPerMm: 1, distance };
     }
@@ -1648,7 +1649,7 @@ export class SceneController {
       const grip = arcGripPoint(handle.orbit, handle.orbit.angle);
       const projected = this.projectWorld(grip);
       const distance = Math.hypot(local.x - projected.x, local.y - projected.y);
-      if (distance > HANDLE_HIT_PX + 4) continue;
+      if (distance > (HANDLE_HIT_PX + 4) * this.pickReach()) continue;
       if (best && distance >= best.distance) continue;
       best = { handle, axisX: 0, axisY: 0, pixelsPerMm: 1, distance };
     }
@@ -1669,7 +1670,7 @@ export class SceneController {
       if (!handle.enabled || !arc) continue;
       const projected = this.handleScreenGeometry(handle);
       if (!projected) continue;
-      const hitPx = HANDLE_HIT_PX * (handle.thickness ?? 1) + 2;
+      const hitPx = (HANDLE_HIT_PX * (handle.thickness ?? 1) + 2) * this.pickReach();
       let distance = Math.hypot(local.x - projected.origin.x, local.y - projected.origin.y);
       if (Math.abs(arc.angle) > 0.02) {
         const steps = Math.max(2, Math.ceil(Math.abs(arc.angle) / (Math.PI / 36)));
@@ -1788,7 +1789,7 @@ export class SceneController {
       const pixelsPerMm = Math.hypot(axisX, axisY);
       if (pixelsPerMm < 0.5) continue;
       const tipDistance = Math.hypot(local.x - projected.tip.x, local.y - projected.tip.y);
-      const hitPx = HANDLE_HIT_PX * (handle.thickness ?? 1) + 4;
+      const hitPx = (HANDLE_HIT_PX * (handle.thickness ?? 1) + 4) * this.pickReach();
       if (tipDistance > hitPx) continue;
       if (tipBest && tipDistance >= tipBest.tipDistance) continue;
       tipBest = {
@@ -1829,7 +1830,7 @@ export class SceneController {
       );
       const tipDistance = Math.hypot(local.x - projected.tip.x, local.y - projected.tip.y);
       // A heavier arrow is easier to catch, so its band grows with it.
-      const hitPx = HANDLE_HIT_PX * (handle.thickness ?? 1);
+      const hitPx = HANDLE_HIT_PX * (handle.thickness ?? 1) * this.pickReach();
       if (distance > hitPx && tipDistance > hitPx + 3) continue;
       if (best) {
         // Opposite handles of one extrusion lie on the same line, so a point
@@ -2707,7 +2708,7 @@ export class SceneController {
     if (!this.raycaster.ray.intersectPlane(plane, world)) return null;
     const point = worldToSketchPoint(active.frame, [world.x, world.y, world.z]);
     const unitsPerPixel = (this.camera.top - this.camera.bottom) / Math.max(1, this.height);
-    const limit = unitsPerPixel * tolerancePx;
+    const limit = unitsPerPixel * tolerancePx * this.pickReach();
     const sketchEntities = withFundamentalEntities(
       entities ?? this.sketchData.find((candidate) => candidate.id === active.id)?.entities ?? [],
     );
@@ -3168,6 +3169,14 @@ export class SceneController {
     this.updateCamera();
   }
 
+  /**
+   * A fingertip covers more of the screen than a cursor, and it cannot hover to
+   * aim: the pick band around geometry grows to match it.
+   */
+  private pickReach(): number {
+    return isKeylessPointer(lastPointerType()) ? 2 : 1;
+  }
+
   pickSketch(
     clientX: number,
     clientY: number,
@@ -3213,11 +3222,12 @@ export class SceneController {
       }
       return distance;
     };
+    const reach = this.pickReach();
     let entityId: string | null = null;
     let best = Number.POSITIVE_INFINITY;
     const consider = (entity: SketchEntity) => {
       const distance = hitDistance(entity);
-      const limit = unitsPerPixel * (entity.type === 'point' ? 4 : 3);
+      const limit = unitsPerPixel * (entity.type === 'point' ? 4 : 3) * reach;
       if (distance <= limit && distance < best) {
         best = distance;
         entityId = entity.id;
@@ -3236,7 +3246,7 @@ export class SceneController {
     // that coincide with a curve. Pick the nearest point globally.
     let pointEntityId: string | null = null;
     let pointIndex: number | null = null;
-    let bestPoint = unitsPerPixel * 4;
+    let bestPoint = unitsPerPixel * 4 * reach;
     for (const entity of sketchEntities) {
       // Axis endpoints are not geometry the user can grab or constrain.
       if (isSketchAxisId(entity.id)) continue;
@@ -4434,14 +4444,9 @@ export class SceneController {
       this.pointerDown = null;
       this.pointerMoved = false;
       if (shouldPick) {
-        const now = performance.now();
-        const previous = this.lastClick;
-        const double =
-          previous !== null &&
-          now - previous.time < DOUBLE_CLICK_MS &&
-          Math.hypot(event.clientX - previous.x, event.clientY - previous.y) <=
-            DOUBLE_CLICK_SLOP_PX;
-        this.lastClick = double ? null : { time: now, x: event.clientX, y: event.clientY };
+        const tap: TapMark = { time: performance.now(), x: event.clientX, y: event.clientY };
+        const double = isDoubleTap(this.lastClick, tap);
+        this.lastClick = double ? null : tap;
         if (double) {
           // The pair means "open what made this face", so it must not also
           // re-select the object the first click already selected.
@@ -4969,7 +4974,7 @@ export class SceneController {
       const point = new THREE.Vector3(position[0], position[1], position[2]);
       const projected = this.projectWorld(point);
       const distance = Math.hypot(local.x - projected.x, local.y - projected.y);
-      if (distance > 8) continue;
+      if (distance > 8 * this.pickReach()) continue;
       if (!best || distance < best.distance) best = { distance, elementId, point };
     }
     if (!best) return null;
@@ -5020,7 +5025,7 @@ export class SceneController {
             local.x - (previous.x + dx * t),
             local.y - (previous.y + dy * t),
           );
-          if (distance <= 6) {
+          if (distance <= 6 * this.pickReach()) {
             const best = candidates.get(edge.id);
             if (!best || distance < best.distance) {
               candidates.set(edge.id, {
@@ -5131,7 +5136,7 @@ export class SceneController {
           const pa = this.projectWorld(a);
           const pb = this.projectWorld(b);
           const distance = pointSegmentDistance([local.x, local.y], [pa.x, pa.y], [pb.x, pb.y]);
-          if (distance > 6) continue;
+          if (distance > 6 * this.pickReach()) continue;
           const depth = Math.min(
             a.clone().sub(raycaster.ray.origin).dot(raycaster.ray.direction),
             b.clone().sub(raycaster.ray.origin).dot(raycaster.ray.direction),

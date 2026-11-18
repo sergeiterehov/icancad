@@ -71,7 +71,9 @@ import {
 import { useKernelStore } from '../stores/kernelStore';
 import { useUiStore } from '../stores/uiStore';
 import { useContextMenuStore } from '../ui/ContextMenu';
-import { isKeylessPointer } from './inputProfile';
+import { isKeylessPointer, lastPointerType } from './inputProfile';
+import { emptyTapClearsSelectionCount } from './selectionPick';
+import { isDoubleTap, type TapMark } from './doubleTap';
 import { getViewport, type ViewportCamera } from './handle';
 
 function distance(a: Point2, b: Point2): number {
@@ -278,6 +280,8 @@ export function SketchEditor() {
   const [hover, setHover] = useState<Point2 | null>(null);
   const [hoverSnap, setHoverSnap] = useState<SketchSnap | null>(null);
   const pointerDown = useRef<{ x: number; y: number } | null>(null);
+  // A finger drops a set it built with a second tap in the same empty place.
+  const lastEmptyTap = useRef<TapMark | null>(null);
   // A press that may become a stretch, and the tap it must not also send.
   const createPress = useRef<{
     tool: SketchTool;
@@ -1184,11 +1188,28 @@ export function SketchEditor() {
           event.clientY,
           currentSketchEntities(activeSketchId),
         );
-        if (!pick) {
-          // Empty space is the way to let go of everything, whatever the pointer.
+        if (!pick?.entityId) {
+          const tap: TapMark = {
+            time: performance.now(),
+            x: event.clientX,
+            y: event.clientY,
+          };
+          // A finger drops a set it built tap by tap only on a second tap in the
+          // same empty place; one object still goes at once, as it does in 3D.
+          if (!emptyTapClearsSelectionCount(selectionIds.length, lastPointerType())) {
+            if (isDoubleTap(lastEmptyTap.current, tap)) {
+              lastEmptyTap.current = null;
+              setSketchSelection([]);
+            } else {
+              lastEmptyTap.current = tap;
+            }
+            return;
+          }
+          lastEmptyTap.current = null;
           setSketchSelection([]);
           return;
         }
+        lastEmptyTap.current = null;
         const pickEntity = pick.entityId
           ? sketchEntityIndex(sketch.entities).get(pick.entityId)
           : undefined;
