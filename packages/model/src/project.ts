@@ -13,10 +13,19 @@ import type {
 /**
  * Colours of objects, also offered as the colour palette. Mid tones only, so a
  * body stays readable on the dark and the light theme. The order is the order
- * of the palette: the default blue first, then greens, yellows, reds, violets
- * and finally the neutral greys.
+ * of the palette, and so the order bodies take colours in: the first bodies of a
+ * project are quiet ones — a grey and four muted tints, each on a hue of its own
+ * so a pair of them still reads apart — and the saturated hues of every family
+ * follow, so a model only gets loud once it has many bodies.
  */
 export const BODY_COLORS = [
+  // Quiet tints: a neutral grey and four hues calmed down to a tint.
+  '#9aa1a9',
+  '#7a8fae',
+  '#a3b593',
+  '#ad8f79',
+  '#a190ad',
+  // Full-strength hues, family by family.
   '#6ea8fe',
   '#7fd1e0',
   '#4f6ddb',
@@ -36,15 +45,14 @@ export const BODY_COLORS = [
   '#e29ad6',
   '#a5764f',
   '#c8a27a',
-  '#607d8b',
-  '#6d7a8d',
-  '#90a4ae',
-  '#b0bec5',
-  '#9e9e9e',
 ];
 
-/** Sketches are blue until the user picks another colour. */
-export const SKETCH_COLOR = BODY_COLORS[0] ?? '#6ea8fe';
+/**
+ * Sketches are blue until the user picks another colour. The first palette
+ * colour is a quiet grey now, and a sketch row has to read as a sketch rather
+ * than as another body, so the blue is named here instead.
+ */
+export const SKETCH_COLOR = '#6ea8fe';
 
 export function createModel(name = 'Model'): Model {
   return {

@@ -80,3 +80,14 @@ The first working shell exposed conceptual ambiguity: the left panel and the bot
 - Whether queued rebuilds should be listed per feature instead of one coalesced "Rebuilding model" entry.
 - Whether Shift+click should add to the selection or perform range selection in the tree/timeline.
 - Whether bulk editing (rename, visibility, delete) is needed for multi-selection.
+
+## Amendments
+
+- The palette opens with quiet tints and gets loud only later. The first bodies of
+  a project take a neutral grey and four calmed hues — dusty blue, sage, clay and
+  heather — so a small model reads as one calm set and still tells its bodies
+  apart by hue; the saturated colour of every family follows, and the plain greys
+  that used to close the list are gone. The order of the palette is the order
+  bodies take colours in (ADR 0009), so this is a change of both. The sketch
+  keeps a blue of its own rather than the first palette colour, which is now a
+  grey.
