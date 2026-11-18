@@ -454,7 +454,12 @@ export function SketchAnnotations() {
                 ref={inputRef}
                 className="sketch-annotation-input"
                 value={draft}
-                inputMode="decimal"
+                // A dimension accepts a formula as well as a number, so the
+                // on-screen keyboard has to offer "=" and letters.
+                inputMode="text"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
                 autoFocus
                 onChange={(event) => {
                   step.current = wheelStep(event.target.value);

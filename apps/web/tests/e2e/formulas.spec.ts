@@ -315,6 +315,8 @@ test.describe('formulas', () => {
     await page.locator('.sketch-annotation').dblclick({ force: true });
     const editor = page.locator('.sketch-annotation-input');
     await expect(editor).toHaveValue('=width');
+    // A phone must offer letters and "=" here, not a numeric pad.
+    await expect(editor).toHaveAttribute('inputmode', 'text');
 
     // Entering the number the formula computes still replaces the formula.
     await editor.fill('14');
