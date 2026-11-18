@@ -290,7 +290,10 @@
     "moveX": "Move along X — drag",
     "moveY": "Move along Y — drag",
     "moveZ": "Move along Z — drag",
-    "sides": "Sides N — drag around the circle"
+    "sides": "Sides N — drag around the circle",
+    "rotateX": "Rotate around X — drag",
+    "rotateY": "Rotate around Y — drag",
+    "rotateZ": "Rotate around Z — drag"
   },
   "common": {
     "close": "Close",
@@ -399,6 +402,8 @@
     "plane": "Plane",
     "placement": "Placement",
     "offset": "Offset",
+    "rotation": "Rotation",
+    "rotationAxis": "Rotation around {{axis}}",
     "entities": "Entities",
     "face": "Face {{index}}",
     "edge": "Edge {{index}}",

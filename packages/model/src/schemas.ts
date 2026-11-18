@@ -249,12 +249,14 @@ const sketchPlaneRef = z.union([
     plane: z.enum(['XY', 'XZ', 'YZ']),
     offset: param(z.number()),
     inverted: z.boolean().optional(),
+    rotation: paramVec3.optional(),
   }),
   z.object({
     type: z.literal('face'),
     bodyId: z.string().min(1).optional(),
     topoId: z.string().min(1).optional(),
     offset: param(z.number()).optional(),
+    rotation: paramVec3.optional(),
     frame: z
       .object({
         origin: vec3,

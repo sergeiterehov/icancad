@@ -10,6 +10,13 @@ import { closesOnLeave, dockHand, opensOnHover, showsTab, type DockHand } from '
 export const STARTUP_TUCK_MS = 1000;
 
 /**
+ * How long an open panel stays after the cursor leaves before it tucks away.
+ * Without a pause, moving from the panel to the scene would close it the moment
+ * the pointer crosses the edge, so a value is picked rather than zero.
+ */
+export const AUTO_HIDE_DELAY_MS = 1000;
+
+/**
  * A side panel that floats above the 3D view and slides out to an edge tab.
  *
  * The panel is worked in one of two ways, because the hands are two. A cursor
@@ -100,6 +107,40 @@ export function FloatDock({
     else setOpen(!open);
   }, [held, open, setOpen]);
 
+  // A leave gives the panel back after a pause, so a pointer that crosses the
+  // edge on its way to the scene does not close it. The references let the
+  // timer re-read the state it was scheduled under: a panel that becomes held,
+  // pinned or covered by its menu during the pause stays open.
+  const handRef = useRef(hand);
+  handRef.current = hand;
+  const heldRef = useRef(held);
+  heldRef.current = held;
+  const hideRef = useRef(hide);
+  hideRef.current = hide;
+  const hideTimer = useRef<number | null>(null);
+  const cancelHide = useCallback(() => {
+    if (hideTimer.current === null) return;
+    window.clearTimeout(hideTimer.current);
+    hideTimer.current = null;
+  }, []);
+  useEffect(() => cancelHide, [cancelHide]);
+  const scheduleHide = useCallback(() => {
+    cancelHide();
+    hideTimer.current = window.setTimeout(() => {
+      hideTimer.current = null;
+      if (
+        closesOnLeave(
+          handRef.current,
+          heldRef.current,
+          useContextMenuStore.getState().menu !== null,
+          useUiStore.getState().pinnedPanels,
+        )
+      ) {
+        hideRef.current();
+      }
+    }, AUTO_HIDE_DELAY_MS);
+  }, [cancelHide]);
+
   // The panel shows itself at start and tucks away once, a moment later: an
   // open panel at launch is an invitation, not a state the user chose. A hand on
   // the panel cancels the timer, on every device.
@@ -140,23 +181,35 @@ export function FloatDock({
       onPointerEnter={(event) => {
         const next = dockHand(event.pointerType);
         if (next !== hand) setHand(next);
+        // Coming back before the pause runs out keeps the panel where it was.
+        cancelHide();
         if (opensOnHover(next)) show();
       }}
       onPointerLeave={() => {
         // A menu opened from the panel is drawn over the scene, so it counts as
         // still being at the panel rather than having left it.
         if (closesOnLeave(hand, held, useContextMenuStore.getState().menu !== null, pinnedPanels)) {
-          hide();
+          scheduleHide();
         }
       }}
     >
-      <div className="dock-trigger" aria-hidden="true" onClick={show} />
+      <div
+        className="dock-trigger"
+        aria-hidden="true"
+        onClick={() => {
+          cancelHide();
+          show();
+        }}
+      />
       <aside
         className="dock-surface"
         aria-label={label}
         data-testid={testId}
         inert={!shown}
-        onFocusCapture={show}
+        onFocusCapture={() => {
+          cancelHide();
+          show();
+        }}
       >
         {children}
       </aside>
@@ -166,7 +219,10 @@ export function FloatDock({
         aria-label={label}
         aria-expanded={shown}
         title={label}
-        onClick={toggle}
+        onClick={() => {
+          cancelHide();
+          toggle();
+        }}
       >
         {side === 'left' ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
       </button>

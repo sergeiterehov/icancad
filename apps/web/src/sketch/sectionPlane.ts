@@ -7,7 +7,13 @@ import type {
   SketchFrame,
   Vec3,
 } from '@icancad/model';
-import { datumFrame, faceFrame, type Point2 } from '@icancad/sketch';
+import {
+  datumFrame,
+  faceFrame,
+  rotateFrame,
+  type Point2,
+  type SketchRotationAngles,
+} from '@icancad/sketch';
 import { isPlanarFace } from '../viewport/planarFace';
 
 export const SKETCH_SECTION_ID = '__sketch-plane__';
@@ -142,10 +148,18 @@ function numeric(value: ParamValue | undefined): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
-export function computeSketchFrame(
-  feature: SketchLike,
-  faceMesh?: TessellationResult,
-): SketchFrame {
+/** Authored angles resolved to numbers; an absent rotation is all zeroes. */
+export function sketchRotationAngles(feature: SketchLike): SketchRotationAngles {
+  const rotation = feature.plane.rotation;
+  return rotation ? [numeric(rotation[0]), numeric(rotation[1]), numeric(rotation[2])] : [0, 0, 0];
+}
+
+/**
+ * The frame before rotation: the pose of the datum or face, its offset and its
+ * direction flip. A face follows its mesh when one is given; otherwise the pose
+ * captured when it was picked is used.
+ */
+export function sketchFrameBasis(feature: SketchLike, faceMesh?: TessellationResult): SketchFrame {
   if (feature.plane.type === 'datum') {
     return withDirection(
       datumFrame(feature.plane.plane, numeric(feature.plane.offset)),
@@ -161,20 +175,18 @@ export function computeSketchFrame(
   );
 }
 
+export function computeSketchFrame(
+  feature: SketchLike,
+  faceMesh?: TessellationResult,
+): SketchFrame {
+  return rotateFrame(sketchFrameBasis(feature, faceMesh), sketchRotationAngles(feature));
+}
+
 // The frozen frame wins; without one (before the first rebuild) fall back to
 // the frame captured when the face was picked.
 export function sketchFrameOf(feature: SketchLike, frozenFrame?: SketchFrame): SketchFrame {
   if (frozenFrame) return frozenFrame;
-  if (feature.plane.type === 'datum') {
-    return withDirection(
-      datumFrame(feature.plane.plane, numeric(feature.plane.offset)),
-      feature.plane.inverted,
-    );
-  }
-  return withDirection(
-    withSketchOffset(feature.plane.frame ?? datumFrame('XY', 0), numeric(feature.plane.offset)),
-    feature.plane.inverted,
-  );
+  return rotateFrame(sketchFrameBasis(feature), sketchRotationAngles(feature));
 }
 
 // A face plane is usable only while it still has a picked face and a frame.

@@ -236,6 +236,8 @@ export type SketchPlaneRef =
       offset: ParamValue;
       /** The sketch looks at the back of the plane, like a flipped section. */
       inverted?: boolean;
+      /** Angles in degrees around the sketch axes X, Y and Z, applied in order. */
+      rotation?: ParamVec3;
     }
   | {
       type: 'face';
@@ -247,6 +249,8 @@ export type SketchPlaneRef =
       frame?: SketchFrame;
       /** The sketch looks at the back of the face, like a flipped section. */
       inverted?: boolean;
+      /** Angles in degrees around the sketch axes X, Y and Z, applied in order. */
+      rotation?: ParamVec3;
     };
 
 export type SketchMeasure = 'length' | 'angle' | 'radius' | 'diameter' | 'x' | 'y' | 'rx' | 'ry';

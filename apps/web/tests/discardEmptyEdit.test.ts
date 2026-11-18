@@ -103,6 +103,31 @@ describe('discarding an operation that was never configured', () => {
     ).toBeUndefined();
   });
 
+  it('keeps an empty sketch finished from the toolbar', () => {
+    const id = useDocumentStore.getState().addSketch('Sketch', 'XY')!;
+    useUiStore.setState({ activeSketchId: id });
+    useDocumentStore.getState().beginFeatureEdit(id);
+    useDocumentStore.getState().keepFreshSketch();
+    useUiStore.setState({ activeSketchId: null });
+    useDocumentStore.getState().endFeatureEdit();
+    expect(feature(id)).toBeDefined();
+  });
+
+  it('keeps an empty sketch whose placement was changed', () => {
+    const id = useDocumentStore.getState().addSketch('Sketch', 'XY')!;
+    useUiStore.setState({ activeSketchId: id });
+    useDocumentStore.getState().beginFeatureEdit(id);
+    const current = feature(id);
+    if (current?.type !== 'sketch') throw new Error('expected a sketch');
+    useDocumentStore.getState().apply({
+      type: 'feature/replace',
+      feature: { ...current, plane: { type: 'datum', plane: 'XZ', offset: 5 } },
+    });
+    useUiStore.setState({ activeSketchId: null });
+    useDocumentStore.getState().endFeatureEdit();
+    expect(feature(id)).toBeDefined();
+  });
+
   it('keeps a sketch once a curve is in it', () => {
     const id = useDocumentStore.getState().addSketch('Sketch', 'XY')!;
     useUiStore.setState({ activeSketchId: id });

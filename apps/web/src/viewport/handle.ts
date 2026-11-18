@@ -85,7 +85,13 @@ export interface SceneArcHandle {
   reference: [number, number, number];
   /** Angle of the grip in radians, right-handed around `axis`. */
   angle: number;
+  /** Model-space radius; `radiusPx` replaces it when that is set. */
   radius: number;
+  /**
+   * A radius that stays the same number of screen pixels at any zoom. When set,
+   * it replaces `radius` for drawing and hit testing.
+   */
+  radiusPx?: number;
 }
 
 /**

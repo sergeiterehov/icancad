@@ -4,7 +4,9 @@ import type {
   EdgeTreatmentFeature,
   EdgeTreatmentKind,
   ExtrudeFeature,
+  ParamVec3,
   Project,
+  SketchFeature,
   Vec3,
 } from '@icancad/model';
 import { useDocumentStore } from '../stores/documentStore';
@@ -344,7 +346,92 @@ export class RevolveAngleDrag {
 }
 
 /**
- * One drag of the edge treatment arrow. The first drag creates the operation: a
+ * One drag of a sketch rotation ring. The handle reports the angle in degrees,
+ * which is the value the inspector field shows; the rotation is stored in
+ * `plane.rotation`. The whole gesture is a single undo step.
+ */
+export class SketchRotationDrag {
+  private before: Project | null = null;
+  private changed = false;
+  private currentValue: number;
+
+  constructor(
+    private readonly featureId: string,
+    private readonly index: 0 | 1 | 2,
+    private readonly axisLabel: string,
+    initialValue: number,
+  ) {
+    this.currentValue = initialValue;
+  }
+
+  get value(): number {
+    return this.currentValue;
+  }
+
+  get op(): ExtrudeFeature['op'] | null {
+    return null;
+  }
+
+  get kind(): EdgeTreatmentKind | null {
+    return null;
+  }
+
+  get unit(): 'angle' {
+    return 'angle';
+  }
+
+  get label(): string {
+    return this.axisLabel;
+  }
+
+  start(): void {
+    this.before = useDocumentStore.getState().project;
+    this.changed = false;
+  }
+
+  update(value: number): void {
+    if (!this.before) return;
+    const state = useDocumentStore.getState();
+    const feature = activeModel(state.project).features.find(
+      (candidate): candidate is SketchFeature =>
+        candidate.id === this.featureId && candidate.type === 'sketch',
+    );
+    if (!feature?.plane.rotation) return;
+    const stored = snapAngle(value);
+    const rotation: ParamVec3 = [...feature.plane.rotation];
+    rotation[this.index] = stored;
+    this.currentValue = stored;
+    state.preview({
+      type: 'feature/replace',
+      feature: { ...feature, plane: { ...feature.plane, rotation } },
+    });
+    this.changed = true;
+  }
+
+  end(): void {
+    if (this.changed && this.before) {
+      useDocumentStore.getState().commitPreview(this.before);
+    }
+    this.before = null;
+    this.changed = false;
+  }
+
+  cancel(): void {
+    const state = useDocumentStore.getState();
+    if (this.before && activeModel(state.project).features.some((f) => f.id === this.featureId)) {
+      const feature = activeModel(this.before).features.find(
+        (candidate): candidate is SketchFeature =>
+          candidate.id === this.featureId && candidate.type === 'sketch',
+      );
+      if (feature) state.preview({ type: 'feature/replace', feature });
+    }
+    this.before = null;
+    this.changed = false;
+  }
+}
+
+/**
+ * One drag of an edge treatment arrow. The first drag creates the operation: a
  * plain grab cuts a chamfer, holding shift rounds the corner, and the kind is
  * locked when the pointer is released. Later drags only change the size. The
  * arrow length is the offset of the created face, which is what the pointer

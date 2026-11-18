@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { datumFrame, faceFrame } from '../src/frame';
+import { datumFrame, faceFrame, rotateFrame, rotateVector } from '../src/frame';
 
 function cross(a: readonly number[], b: readonly number[]): [number, number, number] {
   return [
@@ -48,5 +48,50 @@ describe('face frames', () => {
     const frame = faceFrame([0, 0, 10], [0, 0, 1]);
     expect(frame.xAxis).toEqual([1, 0, 0]);
     expect(frame.yAxis[2]).toBeCloseTo(0, 6);
+  });
+});
+
+describe('rotated frames', () => {
+  const base = datumFrame('XY', 5);
+
+  it('keeps the frame when every angle is zero', () => {
+    expect(rotateFrame(base, [0, 0, 0])).toBe(base);
+  });
+
+  it('turns around the origin and stays right-handed', () => {
+    const frame = rotateFrame(base, [30, -20, 45]);
+    expect(frame.origin).toEqual([0, 0, 5]);
+    expectClose(cross(frame.xAxis, frame.yAxis), frame.normal);
+    expect(Math.hypot(...frame.xAxis)).toBeCloseTo(1, 6);
+    expect(Math.hypot(...frame.yAxis)).toBeCloseTo(1, 6);
+  });
+
+  it('tilts the plane around X and spins it around Z', () => {
+    const tilted = rotateFrame(base, [90, 0, 0]);
+    expectClose(tilted.xAxis, [1, 0, 0]);
+    expectClose(tilted.yAxis, [0, 0, 1]);
+    expectClose(tilted.normal, [0, -1, 0]);
+
+    const spun = rotateFrame(base, [0, 0, 90]);
+    expectClose(spun.xAxis, [0, 1, 0]);
+    expectClose(spun.yAxis, [-1, 0, 0]);
+    expectClose(spun.normal, [0, 0, 1]);
+  });
+
+  it('applies the angles as intrinsic turns X, then Y, then Z', () => {
+    // Rx(90) · Ry(90): the frame leans so its X axis points along world Y.
+    const frame = rotateFrame(base, [90, 90, 0]);
+    expectClose(frame.xAxis, [0, 1, 0]);
+    expectClose(frame.yAxis, [0, 0, 1]);
+    expectClose(frame.normal, [1, 0, 0]);
+  });
+
+  it('turns a vector around an axis by a right-handed angle', () => {
+    const quarter = rotateVector([1, 0, 0], [0, 0, 1], Math.PI / 2);
+    expectClose(quarter, [0, 1, 0]);
+    expect(Math.hypot(...rotateVector([3, 4, 5], [0, 0, 1], 0.7))).toBeCloseTo(
+      Math.hypot(3, 4, 5),
+      6,
+    );
   });
 });

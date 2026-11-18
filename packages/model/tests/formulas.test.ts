@@ -123,6 +123,26 @@ describe('parameters', () => {
     expect(isDriven(sketch, 'constraints.0.value')).toBe(true);
   });
 
+  it('registers the sketch plane rotation angles', () => {
+    const sketch = {
+      id: 'feat_sketch',
+      name: 'Sketch',
+      suppressed: false,
+      type: 'sketch',
+      plane: { type: 'datum', plane: 'XY', offset: 0, rotation: [30, { formula: 'tilt' }, -45] },
+      entities: [],
+      constraints: [],
+      references: [],
+    } as unknown as Feature;
+    const specs = new Map(featureParameterSpecs(sketch).map((spec) => [spec.path, spec]));
+    for (const path of ['plane.rotation.0', 'plane.rotation.1', 'plane.rotation.2']) {
+      expect(specs.get(path)?.kind).toBe('angle');
+    }
+    expect(collectFormulas(sketch, sketch.id)).toEqual([
+      { targetId: 'feat_sketch', path: 'plane.rotation.1', source: 'tilt' },
+    ]);
+  });
+
   it('cover every parameter path of every kind', () => {
     for (const kind of [
       'box',

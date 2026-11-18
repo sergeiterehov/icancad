@@ -40,3 +40,36 @@ export function facesPlane(
 export function sketchTurnMode(facing: boolean): CameraDragMode {
   return facing ? 'pan' : 'orbit';
 }
+
+type Vec3 = readonly [number, number, number];
+
+function cross(a: Vec3, b: Vec3): Vec3 {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+
+function normalize(vector: Vec3): Vec3 {
+  const length = Math.hypot(...vector) || 1;
+  return [vector[0] / length, vector[1] / length, vector[2] / length];
+}
+
+/**
+ * The roll that puts the sketch's own Y axis up and its X axis to the right.
+ * The turntable basis of a view along the plane normal has some arbitrary up;
+ * rolling about the eye direction by this angle makes the sketch axes match the
+ * screen axes, so a turned sketch opens the way it was drawn.
+ */
+export function sketchViewRoll(azimuth: number, polar: number, yAxis: Vec3): number {
+  const eye: Vec3 = [
+    Math.sin(polar) * Math.cos(azimuth),
+    Math.sin(polar) * Math.sin(azimuth),
+    Math.cos(polar),
+  ];
+  const upHint: Vec3 = Math.abs(Math.cos(polar)) > 0.999 ? [0, 1, 0] : [0, 0, 1];
+  const right = normalize(cross(upHint, eye));
+  const up = normalize(cross(eye, right));
+  const turn = cross(up, yAxis);
+  return Math.atan2(
+    turn[0] * eye[0] + turn[1] * eye[1] + turn[2] * eye[2],
+    up[0] * yAxis[0] + up[1] * yAxis[1] + up[2] * yAxis[2],
+  );
+}

@@ -132,3 +132,28 @@ it('reads a sketch without projections as an empty list', async () => {
   if (sketch?.type !== 'sketch') return;
   expect(sketch.projections).toEqual([]);
 });
+
+it('keeps the sketch plane rotation through the archive', async () => {
+  const project = applyCommands(sampleProject(), [
+    {
+      type: 'feature/add',
+      feature: {
+        id: 'feat_sketch',
+        name: 'Sketch',
+        suppressed: false,
+        type: 'sketch',
+        plane: { type: 'datum', plane: 'XY', offset: 0, rotation: [30, { formula: 'tilt' }, -45] },
+        entities: [],
+        constraints: [],
+        references: [],
+      },
+    },
+  ]);
+  const blob = serializeProjectFile(project, new Map());
+  const sketch = modelOf(
+    parseProjectFile(new Uint8Array(await blob.arrayBuffer())).project,
+  ).features.at(-1);
+  expect(sketch?.type).toBe('sketch');
+  if (sketch?.type !== 'sketch') return;
+  expect(sketch.plane.rotation).toEqual([30, { formula: 'tilt' }, -45]);
+});

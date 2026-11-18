@@ -78,3 +78,46 @@ export function worldToSketchPoint(frame: SketchFrame, world: readonly number[])
     dx * frame.yAxis[0] + dy * frame.yAxis[1] + dz * frame.yAxis[2],
   ];
 }
+
+/** Angles around the sketch axes X, Y and Z, in degrees. */
+export type SketchRotationAngles = readonly [number, number, number];
+
+/** Rotates a vector around a unit axis by a right-handed angle in radians. */
+export function rotateVector(vector: Vec3, axis: Vec3, radians: number): Vec3 {
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const [x, y, z] = vector;
+  const [ax, ay, az] = axis;
+  const along = ax * x + ay * y + az * z;
+  const crossX = ay * z - az * y;
+  const crossY = az * x - ax * z;
+  const crossZ = ax * y - ay * x;
+  return [
+    x * cos + crossX * sin + ax * along * (1 - cos),
+    y * cos + crossY * sin + ay * along * (1 - cos),
+    z * cos + crossZ * sin + az * along * (1 - cos),
+  ];
+}
+
+/**
+ * Turns a frame around its own origin. The angles are intrinsic rotations around
+ * the sketch axes X, then Y, then Z, so Z spins the sketch in its own plane and
+ * X/Y tilt that plane.
+ */
+export function rotateFrame(frame: SketchFrame, rotation: SketchRotationAngles): SketchFrame {
+  const [x, y, z] = rotation;
+  if (x === 0 && y === 0 && z === 0) return frame;
+  const radians = Math.PI / 180;
+  const turn = (vector: Vec3): Vec3 => {
+    // The composition is Rx · Ry · Rz, so a vector meets Z first.
+    let next = rotateVector(vector, frame.normal, z * radians);
+    next = rotateVector(next, frame.yAxis, y * radians);
+    return rotateVector(next, frame.xAxis, x * radians);
+  };
+  return {
+    origin: [frame.origin[0], frame.origin[1], frame.origin[2]],
+    xAxis: turn(frame.xAxis),
+    yAxis: turn(frame.yAxis),
+    normal: turn(frame.normal),
+  };
+}

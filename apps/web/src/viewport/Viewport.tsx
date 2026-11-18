@@ -397,6 +397,9 @@ export function Viewport() {
       arraySpacing: t('array.spacing'),
       arrayCount: t('array.count'),
       arrayAngle: t('array.angle'),
+      sketchRotateX: t('handles.rotateX'),
+      sketchRotateY: t('handles.rotateY'),
+      sketchRotateZ: t('handles.rotateZ'),
     }),
     [t],
   );
@@ -584,6 +587,7 @@ export function Viewport() {
                 topoId: pick.faceId,
                 offset: feature.plane.type === 'face' ? (feature.plane.offset ?? 0) : 0,
                 frame: faceFrame(pick.origin, pick.normal),
+                ...(feature.plane.rotation ? { rotation: feature.plane.rotation } : {}),
               },
             },
           });

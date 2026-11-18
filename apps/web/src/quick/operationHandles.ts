@@ -40,6 +40,7 @@ import {
 } from './target';
 import { primitiveHandles } from './primitiveHandles';
 import { arrayHandles } from './arrayHandles';
+import { sketchRotationHandles } from './sketchRotationHandles';
 import { quickTargetKey, type QuickTargetGeometry } from './types';
 
 /** A drag started by an operation handle. */
@@ -88,7 +89,7 @@ export interface OperationHandle {
   trail?: Vec3[];
   /** A move grip is a circle; every other handle is an arrow. */
   kind?: 'arrow' | 'move' | 'ball';
-  /** Translation arrows take the colour of their world axis. */
+  /** Translation arrows and rotation rings take the colour of their world axis. */
   axis?: 'x' | 'y' | 'z';
   /** A short translation arrow keeps its screen length instead of a model size. */
   fixedLengthPx?: number;
@@ -158,6 +159,10 @@ export interface OperationHandleContext {
     arraySpacing: string;
     arrayCount: string;
     arrayAngle: string;
+    /** The three rings that turn a sketch plane. */
+    sketchRotateX: string;
+    sketchRotateY: string;
+    sketchRotateZ: string;
   };
   /**
    * Centre of the volume the edited array repeats, named after the array it
@@ -182,6 +187,7 @@ export function operationHandles(context: OperationHandleContext): OperationHand
     ...edgeTreatmentHandles(context),
     ...primitiveHandles(context),
     ...arrayHandles(context),
+    ...sketchRotationHandles(context),
   ].filter((handle) => handle.enabled);
 }
 

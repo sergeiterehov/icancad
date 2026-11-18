@@ -128,6 +128,11 @@ interface DocumentState {
   beginFeatureEdit: (featureId: string) => void;
   /** Ends operation editing, so the model returns to the user's cursor. */
   endFeatureEdit: () => void;
+  /**
+   * The explicit finish keeps a freshly created sketch even while it is still
+   * empty: the user asked for that plane, so it is not a stray tool.
+   */
+  keepFreshSketch: () => void;
   setSaveState: (state: SaveState) => void;
   addPrimitive: (name: string, kind: PrimitiveKind) => string | null;
   addPrimitiveBox: (name: string) => void;
@@ -595,6 +600,22 @@ function closeFreshEdit(state: DocumentState, project: Project): Partial<Documen
   return hidden === project ? { freshFeatureId: null } : { project: hidden, freshFeatureId: null };
 }
 
+/**
+ * Editing the placement of a fresh sketch keeps it: a plane the user configured
+ * is a deliberate empty sketch, not a tool that was only opened. Commands that
+ * replace the sketch are the parameter and plane changes; creating it is a
+ * different command, so it does not count.
+ */
+function editsFreshSketch(state: DocumentState, commands: readonly Command[]): boolean {
+  const fresh = state.freshFeatureId;
+  if (!fresh) return false;
+  const feature = activeModel(state.project).features.find((candidate) => candidate.id === fresh);
+  if (feature?.type !== 'sketch') return false;
+  return commands.some(
+    (command) => command.type === 'feature/replace' && command.feature.id === fresh,
+  );
+}
+
 // An operation is configured against the model that existed when it was
 // created, so the cursor it is rendered at is the one in front of it. The
 // document keeps the user's cursor untouched: the input position is derived,
@@ -754,12 +775,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         state.selection,
         state.editingFeatureId,
       );
+      const keepsFresh = editsFreshSketch(state, commands);
       // A scroll changes the document without touching the history: the value
       // that stays when the field is left becomes the one edit of the gesture.
       if (state.applyGesture) {
         set({
           project,
           selection,
+          ...(keepsFresh ? { freshFeatureId: null } : {}),
           ...reconcileEditMode(state, project, selection),
         });
         return true;
@@ -769,6 +792,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         past: [...state.past, state.project].slice(-HISTORY_LIMIT),
         future: [],
         selection,
+        ...(keepsFresh ? { freshFeatureId: null } : {}),
         ...reconcileEditMode(state, project, selection),
       });
       return true;
@@ -791,6 +815,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       set({
         project,
         selection,
+        ...(editsFreshSketch(state, commands) ? { freshFeatureId: null } : {}),
         ...reconcileEditMode(state, project, selection),
       });
     } catch {
@@ -1010,6 +1035,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       ...leaveEditMode(state),
       ...closeFreshEdit(state, state.project),
     });
+  },
+
+  keepFreshSketch: () => {
+    const state = get();
+    const fresh = state.freshFeatureId;
+    if (!fresh) return;
+    const feature = activeModel(state.project).features.find((candidate) => candidate.id === fresh);
+    if (feature?.type === 'sketch') set({ freshFeatureId: null });
   },
 
   setSaveState: (saveState) => set({ saveState }),

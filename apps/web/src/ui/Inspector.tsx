@@ -18,6 +18,8 @@ import {
   type SketchEntity,
   type ExtrudeFeature,
   type ParamValue,
+  type ParamVec3,
+  type Resolved,
   type SketchFeature,
 } from '@icancad/model';
 import {
@@ -392,6 +394,53 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
         </div>
       )}
     </PanelSection>
+  );
+}
+
+/** Switch and three axis fields that turn a sketch surface. */
+function SketchRotationFields({
+  feature,
+  resolved,
+  paramError,
+  onChange,
+  onParameter,
+}: {
+  feature: SketchFeature;
+  resolved?: Resolved<SketchFeature>;
+  paramError: (path: string) => string | undefined;
+  onChange: (rotation: ParamVec3 | undefined) => void;
+  onParameter: (path: string, value: ParamValue) => void;
+}) {
+  const { t } = useTranslation();
+  const rotation = feature.plane.rotation;
+  return (
+    <>
+      <div className="stat-row">
+        <span className="stat-label">{t('sketch.rotation')}</span>
+        <Switch
+          label={t('sketch.rotation')}
+          checked={rotation !== undefined}
+          onChange={(enabled) => onChange(enabled ? [0, 0, 0] : undefined)}
+        />
+      </div>
+      {rotation && (
+        <div className="dimension-row">
+          {(['X', 'Y', 'Z'] as const).map((axis, index) => (
+            <ParamField
+              key={axis}
+              axis={axis}
+              label={t('sketch.rotationAxis', { axis })}
+              suffix="°"
+              allowNegative
+              value={rotation[index]!}
+              resolved={resolved?.plane.rotation?.[index]}
+              error={paramError(`plane.rotation.${index}`)}
+              onCommit={(value) => onParameter(`plane.rotation.${index}`, value)}
+            />
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1491,6 +1540,9 @@ export function Inspector() {
                                   type: 'datum',
                                   plane,
                                   offset: feature.plane.offset ?? 0,
+                                  ...(feature.plane.rotation
+                                    ? { rotation: feature.plane.rotation }
+                                    : {}),
                                 },
                               },
                             })
@@ -1507,7 +1559,13 @@ export function Inspector() {
                             type: 'feature/replace',
                             feature: {
                               ...feature,
-                              plane: { type: 'face', offset: feature.plane.offset ?? 0 },
+                              plane: {
+                                type: 'face',
+                                offset: feature.plane.offset ?? 0,
+                                ...(feature.plane.rotation
+                                  ? { rotation: feature.plane.rotation }
+                                  : {}),
+                              },
                             },
                           });
                         }}
@@ -1562,6 +1620,18 @@ export function Inspector() {
                       testId="sketch-face-picker"
                     />
                   )}
+                  <SketchRotationFields
+                    feature={feature}
+                    resolved={resolvedFeature?.type === 'sketch' ? resolvedFeature : undefined}
+                    paramError={(path) => paramError(feature.id, path)}
+                    onChange={(rotation) =>
+                      apply({
+                        type: 'feature/replace',
+                        feature: { ...feature, plane: { ...feature.plane, rotation } },
+                      })
+                    }
+                    onParameter={(path, value) => setFeatureParameter(feature.id, path, value)}
+                  />
                 </div>
               </PanelSection>
             )}

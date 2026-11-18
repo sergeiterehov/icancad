@@ -43,7 +43,7 @@ import {
 } from './inputProfile';
 import { isDoubleTap, type TapMark } from './doubleTap';
 import { orbitAbout, orbitPivotPoint, orbitRotation, pointOnRayAtTarget } from './orbitPivot';
-import { facesPlane, sketchTurnMode } from './sketchView';
+import { facesPlane, sketchTurnMode, sketchViewRoll } from './sketchView';
 import { trackballOrbit } from './trackball';
 import type {
   SceneArcHandle,
@@ -171,13 +171,13 @@ function pointOnTrail(
   );
 }
 
-function arcGripPoint(arc: SceneArcHandle, angle: number): THREE.Vector3 {
+function arcGripPoint(arc: SceneArcHandle, angle: number, radius = arc.radius): THREE.Vector3 {
   const axis = new THREE.Vector3(...arc.axis).normalize();
   const reference = new THREE.Vector3(...arc.reference).normalize();
   const tangent = new THREE.Vector3().crossVectors(axis, reference);
   return new THREE.Vector3(...arc.center)
-    .addScaledVector(reference, Math.cos(angle) * arc.radius)
-    .addScaledVector(tangent, Math.sin(angle) * arc.radius);
+    .addScaledVector(reference, Math.cos(angle) * radius)
+    .addScaledVector(tangent, Math.sin(angle) * radius);
 }
 
 const HATCH_SPACING_PX = 6;
@@ -947,14 +947,20 @@ export class SceneController {
     return this.theme === 'dark' ? 0x0c0e12 : 0xffffff;
   }
 
+  /** The radius an arc is drawn and hit-tested with, in world units. */
+  private arcRadius(arc: SceneArcHandle): number {
+    return arc.radiusPx === undefined ? arc.radius : arc.radiusPx / this.pixelsPerWorldUnit();
+  }
+
   /** Projected arrow of a handle, using the same length the user sees. */
   private handleScreenGeometry(
     handle: SceneHandle,
   ): { origin: { x: number; y: number }; tip: { x: number; y: number } } | null {
     const arc = handle.arc ?? handle.orbit;
     if (arc) {
-      const grip = arcGripPoint(arc, arc.angle);
-      const next = arcGripPoint(arc, arc.angle + 0.05);
+      const radius = this.arcRadius(arc);
+      const grip = arcGripPoint(arc, arc.angle, radius);
+      const next = arcGripPoint(arc, arc.angle + 0.05, radius);
       return {
         origin: this.projectWorld(grip),
         tip: this.projectWorld(next),
@@ -1350,7 +1356,7 @@ export class SceneController {
     if (!arc) return;
     const worldPerPixel = 1 / this.pixelsPerWorldUnit();
     const center = new THREE.Vector3(...arc.center);
-    const grip = arcGripPoint(arc, arc.angle);
+    const grip = arcGripPoint(arc, arc.angle, this.arcRadius(arc));
     const hovered = this.hoveredHandleId === handle.id;
     const color = hovered ? 0xffffff : this.handleColorFor(handle);
     const outlineColor = this.handleOutlineColor();
@@ -1450,18 +1456,19 @@ export class SceneController {
     if (!arc) return;
     const worldPerPixel = 1 / this.pixelsPerWorldUnit();
     const hovered = this.hoveredHandleId === handle.id;
-    const color = hovered ? 0xffffff : this.handleColor();
+    const color = hovered ? 0xffffff : this.handleColorFor(handle);
     const outlineColor = this.handleOutlineColor();
     const halo = worldPerPixel;
     const linewidth = (hovered ? 3.2 : 2.3) * (handle.thickness ?? 1);
+    const radius = this.arcRadius(arc);
 
     const steps = Math.max(2, Math.ceil(Math.abs(arc.angle) / (Math.PI / 36)));
     const positions: number[] = [];
     for (let index = 0; index <= steps; index += 1) {
-      const point = arcGripPoint(arc, (arc.angle * index) / steps);
+      const point = arcGripPoint(arc, (arc.angle * index) / steps, radius);
       positions.push(point.x, point.y, point.z);
     }
-    const grip = arcGripPoint(arc, arc.angle);
+    const grip = arcGripPoint(arc, arc.angle, radius);
 
     const makeArc = (colorValue: number, width: number, order: number) => {
       const geometry = new LineGeometry();
@@ -1485,7 +1492,7 @@ export class SceneController {
     // path: the arrow shows the span the copies take out of it.
     const ring: number[] = [];
     for (let index = 0; index <= 96; index += 1) {
-      const point = arcGripPoint(arc, (Math.PI * 2 * index) / 96);
+      const point = arcGripPoint(arc, (Math.PI * 2 * index) / 96, radius);
       ring.push(point.x, point.y, point.z);
     }
     const guideGeometry = new THREE.BufferGeometry().setFromPoints(
@@ -1646,7 +1653,7 @@ export class SceneController {
     } | null = null;
     for (const handle of this.handleData) {
       if (!handle.enabled || !handle.orbit) continue;
-      const grip = arcGripPoint(handle.orbit, handle.orbit.angle);
+      const grip = arcGripPoint(handle.orbit, handle.orbit.angle, this.arcRadius(handle.orbit));
       const projected = this.projectWorld(grip);
       const distance = Math.hypot(local.x - projected.x, local.y - projected.y);
       if (distance > (HANDLE_HIT_PX + 4) * this.pickReach()) continue;
@@ -1670,13 +1677,14 @@ export class SceneController {
       if (!handle.enabled || !arc) continue;
       const projected = this.handleScreenGeometry(handle);
       if (!projected) continue;
+      const radius = this.arcRadius(arc);
       const hitPx = (HANDLE_HIT_PX * (handle.thickness ?? 1) + 2) * this.pickReach();
       let distance = Math.hypot(local.x - projected.origin.x, local.y - projected.origin.y);
       if (Math.abs(arc.angle) > 0.02) {
         const steps = Math.max(2, Math.ceil(Math.abs(arc.angle) / (Math.PI / 36)));
-        let previous = this.projectWorld(arcGripPoint(arc, 0));
+        let previous = this.projectWorld(arcGripPoint(arc, 0, radius));
         for (let index = 1; index <= steps; index += 1) {
-          const next = this.projectWorld(arcGripPoint(arc, (arc.angle * index) / steps));
+          const next = this.projectWorld(arcGripPoint(arc, (arc.angle * index) / steps, radius));
           distance = Math.min(
             distance,
             pointSegmentDistance([local.x, local.y], [previous.x, previous.y], [next.x, next.y]),
@@ -1686,7 +1694,7 @@ export class SceneController {
       }
       if (distance > hitPx) continue;
       const delta = 0.05;
-      const unit = this.projectWorld(arcGripPoint(arc, arc.angle + delta));
+      const unit = this.projectWorld(arcGripPoint(arc, arc.angle + delta, radius));
       const reach = Math.hypot(unit.x - projected.origin.x, unit.y - projected.origin.y);
       if (reach < 1) continue;
       if (best && distance >= best.distance) continue;
@@ -3095,9 +3103,18 @@ export class SceneController {
     polar: number,
   ): CameraPose {
     const origin = new THREE.Vector3(...frame.origin);
-    const pose: CameraPose = { target: origin, distance: this.distance, azimuth, polar };
-    const { right, up } = cameraBasis(azimuth, polar);
-
+    // The view is rolled so the sketch's own X and Y axes lie along the screen
+    // axes: a turned sketch opens the way it was drawn.
+    const eye = new THREE.Vector3(
+      Math.sin(polar) * Math.cos(azimuth),
+      Math.sin(polar) * Math.sin(azimuth),
+      Math.cos(polar),
+    );
+    const basis = cameraBasis(azimuth, polar);
+    const roll = sketchViewRoll(azimuth, polar, frame.yAxis);
+    const right = basis.right.clone().applyAxisAngle(eye, roll);
+    const up = basis.up.clone().applyAxisAngle(eye, roll);
+    const pose: CameraPose = { target: origin, distance: this.distance, azimuth, polar, roll };
     let minU = Infinity;
     let maxU = -Infinity;
     let minV = Infinity;
@@ -3128,6 +3145,7 @@ export class SceneController {
       distance: fitDistance(maxU - minU, maxV - minV, this.width, this.height),
       azimuth,
       polar,
+      roll,
     };
   }
 

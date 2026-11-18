@@ -87,6 +87,13 @@ export function featureParameterSpecs(feature: Feature): ParameterSpec[] {
       if (feature.plane.offset !== undefined) {
         params.push(length('plane.offset'));
       }
+      if (feature.plane.rotation !== undefined) {
+        params.push(
+          angle('plane.rotation.0'),
+          angle('plane.rotation.1'),
+          angle('plane.rotation.2'),
+        );
+      }
       // Paths are structural, like every collected source: an id is not an
       // address inside an array.
       feature.constraints.forEach((constraint, index) => {

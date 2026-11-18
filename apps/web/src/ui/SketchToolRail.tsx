@@ -163,7 +163,14 @@ export function SketchToolRail() {
         </IconButton>
         <div className="tool-separator" />
 
-        <IconButton label={t('sketch.done')} onClick={() => setActiveSketch(null)}>
+        <IconButton
+          label={t('sketch.done')}
+          onClick={() => {
+            // Finishing from the toolbar keeps the sketch even while it is empty.
+            useDocumentStore.getState().keepFreshSketch();
+            setActiveSketch(null);
+          }}
+        >
           <Check size={17} />
         </IconButton>
         <div className="tool-separator" />

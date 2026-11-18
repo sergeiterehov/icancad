@@ -129,6 +129,9 @@ const labels = {
   arraySpacing: 'Step',
   arrayCount: 'Count',
   arrayAngle: 'Angle',
+  sketchRotateX: 'Rotate X',
+  sketchRotateY: 'Rotate Y',
+  sketchRotateZ: 'Rotate Z',
 };
 
 function handles(context: {
