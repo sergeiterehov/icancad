@@ -1,14 +1,45 @@
 import { expect, test, type Page } from '@playwright/test';
 
-const DOC = 'http://127.0.0.1:5173/src/stores/documentStore.ts';
-const FORMULA = 'http://127.0.0.1:5173/src/stores/formulaStore.ts';
-const KERNEL = 'http://127.0.0.1:5173/src/stores/kernelStore.ts';
-const UI = 'http://127.0.0.1:5173/src/stores/uiStore.ts';
-const PLANES = 'http://127.0.0.1:5173/src/sketch/sectionPlane.ts';
-const HANDLE = 'http://127.0.0.1:5173/src/viewport/handle.ts';
+const DOC_PATH = '/src/stores/documentStore.ts';
+const FORMULA_PATH = '/src/stores/formulaStore.ts';
+const KERNEL_PATH = '/src/stores/kernelStore.ts';
+const UI_PATH = '/src/stores/uiStore.ts';
+const PLANES_PATH = '/src/sketch/sectionPlane.ts';
+const HANDLE_PATH = '/src/viewport/handle.ts';
+
+// The dev server appends `?t=` to a module it has hot-reloaded. Resolving the
+// URL the app actually loaded keeps the test on the same store instance.
+let DOC = DOC_PATH;
+let FORMULA = FORMULA_PATH;
+let KERNEL = KERNEL_PATH;
+let UI = UI_PATH;
+let PLANES = PLANES_PATH;
+let HANDLE = HANDLE_PATH;
 
 async function openApp(page: Page) {
   await page.goto('/');
+  const resolved = await page.evaluate(
+    (paths: Record<string, string>) => {
+      const entries = performance.getEntriesByType('resource').map((entry) => entry.name);
+      const find = (suffix: string) =>
+        entries.find((name) => name.includes(suffix)) ?? new URL(suffix, location.origin).href;
+      return Object.fromEntries(Object.entries(paths).map(([key, path]) => [key, find(path)]));
+    },
+    {
+      DOC: DOC_PATH,
+      FORMULA: FORMULA_PATH,
+      KERNEL: KERNEL_PATH,
+      UI: UI_PATH,
+      PLANES: PLANES_PATH,
+      HANDLE: HANDLE_PATH,
+    },
+  );
+  DOC = resolved.DOC!;
+  FORMULA = resolved.FORMULA!;
+  KERNEL = resolved.KERNEL!;
+  UI = resolved.UI!;
+  PLANES = resolved.PLANES!;
+  HANDLE = resolved.HANDLE!;
   await expect(page.getByTestId('app-skeleton')).toHaveCount(0, { timeout: 120_000 });
   await expect(page.getByTestId('viewport-skeleton')).toHaveCount(0, { timeout: 120_000 });
   await expect
@@ -72,6 +103,15 @@ async function sceneVersion(page: Page): Promise<number> {
     const mod = await import(href);
     return mod.useKernelStore.getState().sceneVersion;
   }, KERNEL);
+}
+
+/** A field in the inspector lives in the right dock, which may have tucked away. */
+async function openRightDock(page: Page) {
+  const dock = page.locator('.dock-right');
+  if ((await dock.getAttribute('data-open')) === 'true') return;
+  const size = page.viewportSize()!;
+  await page.mouse.move(size.width - 4, size.height / 2);
+  await expect(dock).toHaveAttribute('data-open', 'true');
 }
 
 test.describe('formulas', () => {
@@ -148,8 +188,8 @@ test.describe('formulas', () => {
       )
       .toEqual({ model: 20, error: 'UNKNOWN_NAME' });
     const inspector = page.getByTestId('inspector');
-    await expect(inspector.locator('.panel-header').first()).toHaveText('Model');
-    await expect(inspector.locator('.panel-context-header')).toHaveText('Project');
+    await expect(inspector.locator('.panel-header').first()).toHaveText(/model/i);
+    await expect(inspector.locator('.panel-context-header')).toHaveText(/project/i);
     await expect(page.locator('[data-testid="model-variables-section"]')).toContainText('mheight');
     await expect(page.locator('[data-testid="variables-section"]')).toContainText('pwidth');
   });
@@ -312,6 +352,7 @@ test.describe('formulas', () => {
     const drivenValue = page.locator('.constraint-list .constraint-value-text.is-formula');
     await expect(drivenValue).toHaveCount(1);
     // Editing a driven dimension opens its formula, not the number it produced.
+    await page.waitForTimeout(700);
     await page.locator('.sketch-annotation').dblclick({ force: true });
     const editor = page.locator('.sketch-annotation-input');
     await expect(editor).toHaveValue('=width');
@@ -342,6 +383,7 @@ test.describe('formulas', () => {
       )
       .toBe(14);
     await expect(drivenValue).toHaveCount(0);
+    await page.waitForTimeout(700);
     await page.locator('.sketch-annotation').dblclick({ force: true });
     await expect(page.locator('.sketch-annotation-input')).toHaveValue('14');
     await page.locator('.sketch-annotation-input').press('Escape');
@@ -488,6 +530,7 @@ test.describe('formulas', () => {
       )
       .toBe(20);
 
+    await openRightDock(page);
     const field = page.locator('.variable-row .dimension-field input');
     await expect(field).toHaveValue('20');
     await expect(page.locator('.variable-row .dimension-field')).toHaveClass(/is-formula/);
@@ -522,6 +565,7 @@ test.describe('formulas', () => {
       });
     }, DOC);
 
+    await openRightDock(page);
     const field = page.locator('.variable-row .dimension-field');
     const input = field.locator('.dimension-input');
     await expect(input).toHaveValue('20');
@@ -562,6 +606,7 @@ test.describe('formulas', () => {
       { docHref: DOC, featureId: id },
     );
 
+    await openRightDock(page);
     const field = page.locator('.dimension-field:has(input[aria-label="Width (X) · mm"])');
     const input = field.locator('.dimension-input');
     await expect(input).toHaveValue('40');

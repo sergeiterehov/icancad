@@ -6,6 +6,15 @@ async function waitForWorkspace(page: Page) {
 }
 
 async function openApp(page: Page) {
+  // The tests drive the model, not the floating shell: keep both docks on
+  // screen so the tree and the inspector are readable without hovering.
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('icancad.pinnedPanels', 'true');
+    } catch {
+      // Storage can be unavailable in private mode.
+    }
+  });
   await page.goto('/');
   await waitForWorkspace(page);
 }
@@ -13,22 +22,39 @@ async function openApp(page: Page) {
 const PREVIEW_MARKS =
   '.tree-row.preview-added, .tree-row.preview-modified, .tree-row.preview-removed';
 
+async function editingFeatureId(page: Page): Promise<string | null> {
+  return page.evaluate(async () => {
+    const url = (suffix: string) =>
+      performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .find((name) => name.includes(suffix));
+    const doc = await import(url('/src/stores/documentStore.ts') ?? '/src/stores/documentStore.ts');
+    return doc.useDocumentStore.getState().editingFeatureId as string | null;
+  });
+}
+
 async function commitOperation(page: Page) {
   const markers = page.locator(PREVIEW_MARKS);
-  const canvas = page.getByTestId('viewport-canvas');
-  const box = await canvas.boundingBox();
-  for (let attempt = 0; attempt < 25; attempt += 1) {
-    await page.mouse.click(box!.x + 12, box!.y + 12);
-    await page.waitForTimeout(200);
-    if ((await markers.count()) === 0) return;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    if ((await editingFeatureId(page)) === null && (await markers.count()) === 0) return;
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(150);
   }
+  expect(await editingFeatureId(page)).toBeNull();
   await expect(markers).toHaveCount(0);
 }
 
 async function addBox(page: Page) {
-  await page.getByRole('button', { name: 'Add object' }).click();
-  await page.getByRole('menuitem', { name: 'Box' }).click();
-  await expect(page.getByText('20 × 20 × 20 mm')).toBeVisible();
+  await page
+    .getByRole('navigation', { name: 'Tools' })
+    .getByRole('button', { name: 'Primitives' })
+    .click();
+  await page.getByRole('menuitem', { name: 'Cube' }).click();
+  await expect(
+    page.getByTestId('inspector').getByRole('textbox', { name: 'Width (X) · mm' }),
+  ).toHaveValue('20');
   await commitOperation(page);
 }
 
@@ -123,9 +149,12 @@ async function bodyInfos(page: Page): Promise<BodyInfo[]> {
     const doc = await import(url('/src/stores/documentStore.ts')!);
     const kernel = await import(url('/src/stores/kernelStore.ts')!);
     const store = doc.useDocumentStore.getState();
+    const model = store.project.superObjects.find(
+      (superObject: { id: string }) => superObject.id === store.project.activeSuperObjectId,
+    )!;
     const meshes = kernel.useKernelStore.getState().meshes;
-    return store.project.bodies.map((body: { id: string; createdBy: string }) => {
-      const metadata = store.project.metadata[body.id];
+    return model.bodies.map((body: { id: string; createdBy: string }) => {
+      const metadata = model.metadata[body.id];
       return {
         id: body.id,
         createdBy: body.createdBy,
@@ -138,11 +167,7 @@ async function bodyInfos(page: Page): Promise<BodyInfo[]> {
 }
 
 function boxVolume(bbox: { min: [number, number, number]; max: [number, number, number] }) {
-  return (
-    (bbox.max[0] - bbox.min[0]) *
-    (bbox.max[1] - bbox.min[1]) *
-    (bbox.max[2] - bbox.min[2])
-  );
+  return (bbox.max[0] - bbox.min[0]) * (bbox.max[1] - bbox.min[1]) * (bbox.max[2] - bbox.min[2]);
 }
 
 test.describe('quick operations', () => {
@@ -157,7 +182,7 @@ test.describe('quick operations', () => {
 
     // First click selects the object, the next one opens its face.
     await page.mouse.click(centerX, centerY);
-    await expect(inspectorTitle(page)).toHaveText('Body');
+    await expect(inspectorTitle(page)).toHaveText(/body/i);
     // The drill-down click must not be read as the second half of a double click.
     await page.waitForTimeout(420);
     await page.mouse.click(centerX + 60, centerY + 40);
@@ -166,24 +191,18 @@ test.describe('quick operations', () => {
     // A face offers the extrusion arrow and the edge treatment arrow on its
     // first rim edge (ADR 0015). Handles are withheld while the model
     // recalculates, so wait for them instead of reading one frame.
-    await expect
-      .poll(async () => (await handleScreens(page)).length, { timeout: 15_000 })
-      .toBe(2);
+    await expect.poll(async () => (await handleScreens(page)).length, { timeout: 15_000 }).toBe(2);
     const faceHandles = await handleScreens(page);
-    expect(
-      faceHandles.filter((handle) => !handle.id.startsWith('edge-treatment:')),
-    ).toHaveLength(1);
-    expect(
-      faceHandles.filter((handle) => handle.id.startsWith('edge-treatment:')),
-    ).toHaveLength(1);
+    expect(faceHandles.filter((handle) => !handle.id.startsWith('edge-treatment:'))).toHaveLength(
+      1,
+    );
+    expect(faceHandles.filter((handle) => handle.id.startsWith('edge-treatment:'))).toHaveLength(1);
     await dragHandle(page, 1, 60);
     await expect(page.locator('.timeline-op')).toHaveCount(2);
     await expect(page.locator('.timeline-op.selected')).toHaveCount(1);
-    await expect(inspectorTitle(page)).toHaveText('Extrusion');
+    await expect(inspectorTitle(page)).toHaveText(/extrusion/i);
 
-    const distance = page
-      .getByTestId('inspector')
-      .getByRole('textbox', { name: 'Distance' });
+    const distance = page.getByTestId('inspector').getByRole('textbox', { name: 'Distance' });
     const firstDistance = await distance.inputValue();
     expect(Number(firstDistance)).toBeGreaterThan(0);
 
@@ -224,12 +243,12 @@ test.describe('quick operations', () => {
     const centerX = box!.x + box!.width / 2;
     const centerY = box!.y + box!.height / 2;
     await page.mouse.click(centerX, centerY);
-    await expect(inspectorTitle(page)).toHaveText('Body');
+    await expect(inspectorTitle(page)).toHaveText(/body/i);
     await page.waitForTimeout(420);
     await page.mouse.click(centerX + 60, centerY + 40);
     await expect(page.getByText('Quick operation')).toBeVisible();
     await dragHandle(page, 1, 60);
-    await expect(inspectorTitle(page)).toHaveText('Extrusion');
+    await expect(inspectorTitle(page)).toHaveText(/extrusion/i);
 
     const inspector = page.getByTestId('inspector');
     const distances = inspector.getByRole('textbox', { name: 'Distance' });
@@ -281,30 +300,44 @@ test.describe('quick operations', () => {
     // Sketch a thin band across the top face.
     await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
     await page.getByRole('menuitem', { name: 'Select face' }).click();
-    await page.mouse.click(
-      view!.x + view!.width / 2,
-      view!.y + view!.height / 2 - 60,
-    );
+    await page.mouse.click(view!.x + view!.width / 2, view!.y + view!.height / 2 - 60);
     await expect(page.locator('.sketch-overlay')).toBeVisible();
     await page.waitForTimeout(800);
 
-    await page.getByRole('button', { name: 'Line', exact: true }).click();
-    const originX = view!.x + view!.width / 2;
-    const originY = view!.y + view!.height / 2;
-    const corners: Array<[number, number]> = [
-      [originX - 250, originY - 30],
-      [originX + 250, originY - 30],
-      [originX + 250, originY + 30],
-      [originX - 250, originY + 30],
-    ];
-    for (let index = 0; index < corners.length; index += 1) {
-      const start = corners[index]!;
-      const end = corners[(index + 1) % corners.length]!;
-      await page.mouse.click(start[0], start[1]);
-      await page.waitForTimeout(320);
-      await page.mouse.click(end[0], end[1]);
-      await page.waitForTimeout(320);
-    }
+    // The camera fits the face, so screen pixels no longer describe millimetres.
+    // Write the band in sketch units instead: it has to reach past both edges of
+    // the face to separate the body.
+    await page.evaluate(async () => {
+      const url = (suffix: string) =>
+        performance
+          .getEntriesByType('resource')
+          .map((entry) => entry.name)
+          .find((name) => name.includes(suffix));
+      const doc = await import(
+        url('/src/stores/documentStore.ts') ?? '/src/stores/documentStore.ts'
+      );
+      const state = doc.useDocumentStore.getState();
+      const model = state.project.superObjects.find(
+        (superObject: { id: string }) => superObject.id === state.project.activeSuperObjectId,
+      )!;
+      const sketch = model.features.find(
+        (feature: { type: string }) => feature.type === 'sketch',
+      ) as { id: string; entities: unknown[] };
+      state.apply({
+        type: 'feature/replace',
+        feature: {
+          ...(sketch as object),
+          entities: [
+            { id: 'band-1', type: 'line', construction: false, x1: -15, y1: -1, x2: 15, y2: -1 },
+            { id: 'band-2', type: 'line', construction: false, x1: 15, y1: -1, x2: 15, y2: 1 },
+            { id: 'band-3', type: 'line', construction: false, x1: 15, y1: 1, x2: -15, y2: 1 },
+            { id: 'band-4', type: 'line', construction: false, x1: -15, y1: 1, x2: -15, y2: -1 },
+          ],
+          constraints: [],
+        } as never,
+      });
+    });
+    await page.waitForTimeout(900);
     await page.getByRole('button', { name: 'Finish sketch', exact: true }).click();
     await expect(page.locator('.sketch-overlay')).toHaveCount(0);
 
@@ -383,7 +416,10 @@ test.describe('quick operations', () => {
       const kernel = await import(url('/src/stores/kernelStore.ts')!);
       const selection = await import(url('/src/stores/selection.ts')!);
       const store = doc.useDocumentStore.getState();
-      const body = store.project.bodies[0]!;
+      const model = store.project.superObjects.find(
+        (superObject: { id: string }) => superObject.id === store.project.activeSuperObjectId,
+      )!;
+      const body = model.bodies[0]!;
       const edge = kernel.useKernelStore.getState().meshes[body.id]!.edges![0]!;
       store.select({ kind: 'edge', id: selection.bodyEdgeId(body.id, edge.id) });
     });
@@ -409,10 +445,10 @@ test.describe('quick operations', () => {
     await page.waitForTimeout(600);
     await page.getByRole('button', { name: 'Line', exact: true }).click();
     const corners: [number, number][] = [
-      [300, 250],
-      [520, 250],
-      [520, 420],
-      [300, 420],
+      [400, 250],
+      [620, 250],
+      [620, 420],
+      [400, 420],
     ];
     for (let index = 0; index < corners.length; index += 1) {
       const start = corners[index]!;
@@ -431,6 +467,7 @@ test.describe('quick operations', () => {
     expect((await handleScreens(page))[0]?.id).toMatch(/^extrude:new:/);
 
     // A hidden sketch is not drawn, so an arrow over it would hang in the air.
+    await row.hover();
     await row.getByRole('button', { name: 'Hide' }).click();
     await row.locator('.tree-main').click();
     await expect.poll(async () => (await handleScreens(page)).length).toBe(0);

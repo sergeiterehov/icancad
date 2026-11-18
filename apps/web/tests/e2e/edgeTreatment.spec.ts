@@ -6,6 +6,15 @@ async function waitForWorkspace(page: Page) {
 }
 
 async function openApp(page: Page) {
+  // The tests drive the model, not the floating shell: keep both docks on
+  // screen so the tree and the inspector are readable without hovering.
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('icancad.pinnedPanels', 'true');
+    } catch {
+      // Storage can be unavailable in private mode.
+    }
+  });
   await page.goto('/');
   await waitForWorkspace(page);
 }
@@ -13,22 +22,39 @@ async function openApp(page: Page) {
 const PREVIEW_MARKS =
   '.tree-row.preview-added, .tree-row.preview-modified, .tree-row.preview-removed';
 
+async function editingFeatureId(page: Page): Promise<string | null> {
+  return page.evaluate(async () => {
+    const url = (suffix: string) =>
+      performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .find((name) => name.includes(suffix));
+    const doc = await import(url('/src/stores/documentStore.ts') ?? '/src/stores/documentStore.ts');
+    return doc.useDocumentStore.getState().editingFeatureId as string | null;
+  });
+}
+
 async function commitOperation(page: Page) {
   const markers = page.locator(PREVIEW_MARKS);
-  const canvas = page.getByTestId('viewport-canvas');
-  const box = await canvas.boundingBox();
-  for (let attempt = 0; attempt < 25; attempt += 1) {
-    await page.mouse.click(box!.x + 12, box!.y + 12);
-    await page.waitForTimeout(200);
-    if ((await markers.count()) === 0) return;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    if ((await editingFeatureId(page)) === null && (await markers.count()) === 0) return;
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(150);
   }
+  expect(await editingFeatureId(page)).toBeNull();
   await expect(markers).toHaveCount(0);
 }
 
 async function addBox(page: Page) {
-  await page.getByRole('button', { name: 'Add object' }).click();
-  await page.getByRole('menuitem', { name: 'Box' }).click();
-  await expect(page.getByText('20 × 20 × 20 mm')).toBeVisible();
+  await page
+    .getByRole('navigation', { name: 'Tools' })
+    .getByRole('button', { name: 'Primitives' })
+    .click();
+  await page.getByRole('menuitem', { name: 'Cube' }).click();
+  await expect(
+    page.getByTestId('inspector').getByRole('textbox', { name: 'Width (X) · mm' }),
+  ).toHaveValue('20');
   await commitOperation(page);
 }
 
@@ -68,8 +94,7 @@ async function waitForEdges(page: Page) {
             .find((name) => name.includes(s));
         const kernel = await import(url('/src/stores/kernelStore.ts')!);
         const mesh = Object.values(kernel.useKernelStore.getState().meshes)[0] as
-          | { edges?: unknown[] }
-          | undefined;
+          { edges?: unknown[] } | undefined;
         return mesh?.edges?.length ?? 0;
       }),
     )
@@ -87,7 +112,10 @@ async function selectEdge(page: Page, index = 0) {
     const kernel = await import(url('/src/stores/kernelStore.ts')!);
     const selection = await import(url('/src/stores/selection.ts')!);
     const store = doc.useDocumentStore.getState();
-    const body = store.project.bodies[0]!;
+    const model = store.project.superObjects.find(
+      (superObject: { id: string }) => superObject.id === store.project.activeSuperObjectId,
+    )!;
+    const body = model.bodies[0]!;
     const edge = kernel.useKernelStore.getState().meshes[body.id]!.edges![edgeIndex]!;
     store.select({ kind: 'edge', id: selection.bodyEdgeId(body.id, edge.id) });
   }, index);
@@ -104,9 +132,11 @@ async function addBoss(page: Page) {
     const doc = await import(url('/src/stores/documentStore.ts')!);
     const store = doc.useDocumentStore.getState();
     const sketchId = store.addSketch('Sketch', 'XY');
-    const sketch = doc.useDocumentStore
-      .getState()
-      .project.features.find((feature: { id: string }) => feature.id === sketchId);
+    const state = doc.useDocumentStore.getState();
+    const model = state.project.superObjects.find(
+      (superObject: { id: string }) => superObject.id === state.project.activeSuperObjectId,
+    )!;
+    const sketch = model.features.find((feature: { id: string }) => feature.id === sketchId);
     doc.useDocumentStore.getState().apply({
       type: 'feature/replace',
       feature: {
@@ -144,7 +174,11 @@ async function addBoss(page: Page) {
               .map((entry) => entry.name)
               .find((name) => name.includes(s));
           const doc = await import(url('/src/stores/documentStore.ts')!);
-          return doc.useDocumentStore.getState().project.bodies.length;
+          const state = doc.useDocumentStore.getState();
+          const model = state.project.superObjects.find(
+            (superObject: { id: string }) => superObject.id === state.project.activeSuperObjectId,
+          )!;
+          return model.bodies.length;
         }),
       { timeout: 20_000 },
     )
@@ -163,7 +197,10 @@ async function selectClosedEdge(page: Page) {
     const kernel = await import(url('/src/stores/kernelStore.ts')!);
     const selection = await import(url('/src/stores/selection.ts')!);
     const store = doc.useDocumentStore.getState();
-    const body = store.project.bodies[0]!;
+    const model = store.project.superObjects.find(
+      (superObject: { id: string }) => superObject.id === store.project.activeSuperObjectId,
+    )!;
+    const body = model.bodies[0]!;
     const mesh = kernel.useKernelStore.getState().meshes[body.id]!;
     const rim = mesh.edges!.find((edge: { closed: boolean }) => edge.closed)!;
     store.select({ kind: 'edge', id: selection.bodyEdgeId(body.id, rim.id) });
@@ -180,7 +217,10 @@ async function selectFace(page: Page) {
     const doc = await import(url('/src/stores/documentStore.ts')!);
     const kernel = await import(url('/src/stores/kernelStore.ts')!);
     const store = doc.useDocumentStore.getState();
-    const body = store.project.bodies[0]!;
+    const model = store.project.superObjects.find(
+      (superObject: { id: string }) => superObject.id === store.project.activeSuperObjectId,
+    )!;
+    const body = model.bodies[0]!;
     const mesh = kernel.useKernelStore.getState().meshes[body.id]!;
     store.select({ kind: 'body-face', id: `${body.id}#${mesh.faceIds[0]}` });
   });
@@ -188,6 +228,8 @@ async function selectFace(page: Page) {
 
 /** Pull the treatment arrow along itself by `pixels`, holding shift if asked. */
 async function dragArrow(page: Page, pixels: number, shift = false) {
+  // Entering the model eases the camera in; read the arrow only once it stops.
+  await page.waitForTimeout(700);
   const handle = await treatmentHandle(page);
   expect(handle).toBeTruthy();
   const dx = handle!.tipX - handle!.originX;
@@ -230,7 +272,10 @@ async function lastTreatment(page: Page): Promise<TreatmentInfo | null> {
     const doc = await import(url('/src/stores/documentStore.ts')!);
     const kernel = await import(url('/src/stores/kernelStore.ts')!);
     const store = doc.useDocumentStore.getState();
-    const feature = [...store.project.features]
+    const model = store.project.superObjects.find(
+      (superObject: { id: string }) => superObject.id === store.project.activeSuperObjectId,
+    )!;
+    const feature = [...model.features]
       .reverse()
       .find((candidate: { type: string }) => candidate.type === 'edge-treatment') as
       | {
@@ -260,7 +305,6 @@ async function lastTreatment(page: Page): Promise<TreatmentInfo | null> {
   });
 }
 
-
 async function treatmentCount(page: Page): Promise<number> {
   return page.evaluate(async () => {
     const url = (s: string) =>
@@ -269,11 +313,12 @@ async function treatmentCount(page: Page): Promise<number> {
         .map((entry) => entry.name)
         .find((name) => name.includes(s));
     const doc = await import(url('/src/stores/documentStore.ts')!);
-    return doc.useDocumentStore
-      .getState()
-      .project.features.filter(
-        (feature: { type: string }) => feature.type === 'edge-treatment',
-      ).length;
+    const state = doc.useDocumentStore.getState();
+    const model = state.project.superObjects.find(
+      (superObject: { id: string }) => superObject.id === state.project.activeSuperObjectId,
+    )!;
+    return model.features.filter((feature: { type: string }) => feature.type === 'edge-treatment')
+      .length;
   });
 }
 
@@ -286,12 +331,10 @@ async function previewMarks(page: Page) {
         .map((entry) => entry.name)
         .find((name) => name.includes(s));
     const kernel = await import(url('/src/stores/kernelStore.ts')!);
-    const preview = kernel.useKernelStore.getState().preview as
-      | {
-          bodies: { silent?: boolean; translucent?: boolean }[];
-          faceMarks?: { red: number[]; green: number[] }[];
-        }
-      | null;
+    const preview = kernel.useKernelStore.getState().preview as {
+      bodies: { silent?: boolean; translucent?: boolean }[];
+      faceMarks?: { red: number[]; green: number[] }[];
+    } | null;
     if (!preview) return null;
     return {
       silent: preview.bodies.every((body) => body.silent === true),
@@ -323,9 +366,7 @@ test.describe('edge treatment', () => {
     expect(treatment?.size).toBeGreaterThan(0.5);
     expect(treatment?.error).toBeUndefined();
     // The operation is focused, so the inspector names its type.
-    await expect(
-      page.getByTestId('inspector').getByText('Chamfer', { exact: true }),
-    ).toBeVisible();
+    await expect(page.getByTestId('inspector').getByText('Chamfer', { exact: true })).toBeVisible();
   });
 
   test('rounds an edge while shift is held', async ({ page }) => {
@@ -344,18 +385,14 @@ test.describe('edge treatment', () => {
     await selectClosedEdge(page);
 
     // A rim is a closed polyline, so this used to fail to resolve its edge.
-    await expect
-      .poll(async () => (await handleScreens(page)).length, { timeout: 15_000 })
-      .toBe(1);
+    await expect.poll(async () => (await handleScreens(page)).length, { timeout: 15_000 }).toBe(1);
     await dragArrow(page, 70, true);
     await expect.poll(async () => (await lastTreatment(page))?.kind).toBe('fillet');
     const treatment = await lastTreatment(page);
     expect(treatment?.error).toBeUndefined();
     expect(treatment?.applied).toBeGreaterThan(0);
     // Only the rounded surface is new; the cap and the wall keep their faces.
-    await expect(
-      page.getByTestId('inspector').getByText('Round', { exact: true }),
-    ).toBeVisible();
+    await expect(page.getByTestId('inspector').getByText('Round', { exact: true })).toBeVisible();
   });
 
   test('offers the treatment arrow next to the extrude arrow on a face', async ({ page }) => {
@@ -363,9 +400,7 @@ test.describe('edge treatment', () => {
     await addBox(page);
     await selectFace(page);
 
-    await expect
-      .poll(async () => (await handleScreens(page)).length)
-      .toBe(2);
+    await expect.poll(async () => (await handleScreens(page)).length).toBe(2);
     const handles = await handleScreens(page);
     expect(handles.filter((handle) => !handle.id.startsWith('edge-treatment:'))).toHaveLength(1);
     // The treatment arrow stands on the first rim edge of the face, so the two

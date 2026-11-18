@@ -1,7 +1,10 @@
 import {
   activeModel,
+  collectFormulas,
   createId,
   type Project,
+  type Resolved,
+  type ResolvedModel,
   type SketchConstraint,
   type SketchConstraintRef,
   type SketchEntity,
@@ -324,9 +327,9 @@ export function SketchEditor() {
   }, [activeSketchId, tool, sketchToolNonce]);
 
   useEffect(() => {
-    if (!activeSketchId) return;
+    if (!activeSketchId || !activeSketchReady) return;
     if (!sketch || !canEditSketch(sketch, featureErrors)) setActiveSketch(null);
-  }, [activeSketchId, sketch, featureErrors, setActiveSketch]);
+  }, [activeSketchId, activeSketchReady, sketch, featureErrors, setActiveSketch]);
 
   // Editing a sketch happens at its own place in the timeline: the cursor moves
   // in front of the sketch, so the model is exactly its input, and the sketch
@@ -353,8 +356,25 @@ export function SketchEditor() {
       // this sketch. A rebuild that was already running for an older state does
       // not satisfy this condition.
       const rebuild = () => {
-        const model = resolvedModel();
-        if (!model) return false;
+        const resolved = resolvedModel();
+        if (!resolved) return false;
+        // The formula resolution is one render behind a plane edit. A sketch
+        // without formulas is its own resolved copy, so substituting the
+        // authored feature keeps the entry rebuild from using the plane the
+        // sketch just left.
+        const authored = activeModel(useDocumentStore.getState().project).features.find(
+          (candidate): candidate is SketchFeature =>
+            candidate.id === activeSketchId && candidate.type === 'sketch',
+        );
+        const model: ResolvedModel =
+          authored && collectFormulas(authored, authored.id).length === 0
+            ? {
+                ...resolved,
+                features: resolved.features.map((feature) =>
+                  feature.id === authored.id ? (authored as Resolved<SketchFeature>) : feature,
+                ),
+              }
+            : resolved;
         void rebuildScene(model, i18n.t('status.rebuild'), {
           expressionErrors: expressionErrors(),
           drivenSketches: useFormulaStore.getState().resolution?.drivenSketches,
