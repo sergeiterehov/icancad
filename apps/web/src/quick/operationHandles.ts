@@ -274,7 +274,8 @@ function extrudeHandle(
 
 /**
  * A through-all extrusion has no free distance, so it offers no distance
- * handle; the operation is still edited in the inspector.
+ * handle; the operation is still edited in the inspector. A "to body" extent
+ * takes its length from where the sweep meets the body, so it has none either.
  */
 function extrudeHandlesFor(
   geometry: QuickTargetGeometry,
@@ -284,7 +285,7 @@ function extrudeHandlesFor(
 ): OperationHandle[] {
   if (!feature) return [extrudeHandle(geometry, context, undefined, tooltip)];
   const handles: OperationHandle[] = [];
-  if (feature.end !== 'through-all') {
+  if (feature.end !== 'through-all' && feature.end !== 'to-body') {
     handles.push(extrudeHandle(geometry, context, feature, tooltip));
   }
   if (feature.secondDirection && feature.secondDirection.end !== 'through-all') {

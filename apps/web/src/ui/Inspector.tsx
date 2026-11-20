@@ -17,6 +17,7 @@ import {
   type PrimitiveFeature,
   type SketchEntity,
   type ExtrudeFeature,
+  type ExtrudeToBodyMode,
   type ParamValue,
   type ParamVec3,
   type Resolved,
@@ -24,13 +25,18 @@ import {
 } from '@icancad/model';
 import {
   AlertTriangle,
+  ArrowBigLeftDash,
+  ArrowBigRight,
+  ArrowBigRightDash,
+  ArrowLeftFromLine,
   ArrowLeftRight,
+  ArrowLeftToLine,
   ArrowRightFromLine,
   ArrowRightToLine,
   ArrowUp,
   Box,
+  CaretsFromAxisVertical,
   ChartPie,
-  ChevronsUpDown,
   Circle,
   Folder,
   Torus,
@@ -40,8 +46,10 @@ import {
   Infinity as InfinityIcon,
   LayerArrowUp,
   MoveVertical,
+  PackageSearch,
   PawPrint,
   Pencil,
+  RulerDimensionLine,
   Spline,
   SquareArrowRightExit,
 } from 'lucide-react';
@@ -227,11 +235,16 @@ const EXTRUDE_OPS = [
  * them as the fourth way to sweep the profile.
  */
 const EXTRUDE_EXTENTS = [
-  { id: 'blind', label: 'extrude.end_blind', icon: <ArrowUp size={12} />, revolve: false },
+  {
+    id: 'blind',
+    label: 'extrude.end_blind',
+    icon: <RulerDimensionLine size={12} />,
+    revolve: false,
+  },
   {
     id: 'symmetric',
     label: 'extrude.end_symmetric',
-    icon: <ChevronsUpDown size={12} />,
+    icon: <CaretsFromAxisVertical size={12} />,
     revolve: false,
   },
   {
@@ -246,7 +259,43 @@ const EXTRUDE_EXTENTS = [
     icon: <InfinityIcon size={12} />,
     revolve: false,
   },
+  {
+    id: 'to-body',
+    label: 'extrude.end_to_body',
+    icon: <PackageSearch size={12} />,
+    revolve: false,
+  },
 ] as const;
+
+/**
+ * Which face of the body ends the sweep: the one that looks at the profile or
+ * the far one behind it.
+ */
+const EXTRUDE_TO_BODY_KINDS = [
+  { id: 'first' as const, label: 'extrude.toBody_first', icon: <ArrowRightToLine size={12} /> },
+  { id: 'last' as const, label: 'extrude.toBody_last', icon: <ArrowLeftToLine size={12} /> },
+];
+
+/** How a "to body" extent ends on the face it stops at. */
+const EXTRUDE_TO_BODY_MODES = [
+  // The filled arrows are drawn small on their grid, so they need a pixel more
+  // than the line icons beside them to read at the same size.
+  { id: 'solid' as const, label: 'extrude.toBodyMode_solid', icon: <ArrowBigRight size={14} /> },
+  { id: 'gap' as const, label: 'extrude.toBodyMode_gap', icon: <ArrowBigRightDash size={14} /> },
+  {
+    id: 'shell' as const,
+    label: 'extrude.toBodyMode_shell',
+    icon: <ArrowBigLeftDash size={14} />,
+  },
+];
+
+/** A document saved before the modes existed carries the mode in the sign. */
+function toBodyModeOf(offset: ParamValue | undefined, kind: 'first' | 'last'): ExtrudeToBodyMode {
+  if (typeof offset !== 'number' || offset === 0) return 'solid';
+  // A gap stops short of the face the sweep ends on, a layer stands on it, and
+  // "last" ends on the far side, so its layer is the one that goes positive.
+  return offset > 0 === (kind === 'first') ? 'gap' : 'shell';
+}
 
 const EXTRUDE_SECOND_ENDS = [
   { id: 'blind' as const, label: 'extrude.end_blind', icon: <ArrowUp size={12} /> },
@@ -260,6 +309,11 @@ const EXTRUDE_SECOND_ENDS = [
 // Making a new body or adding material has no meaningful "through everything".
 function throughAllAllowed(op: ExtrudeFeature['op']): boolean {
   return op === 'subtract' || op === 'intersect';
+}
+
+// "To body" is a single sweep to a surface, so it has no second direction.
+function secondDirectionAllowed(feature: Pick<ExtrudeFeature, 'end'>): boolean {
+  return feature.end !== 'symmetric' && feature.end !== 'to-body';
 }
 
 function SketchComposition({ feature }: { feature: SketchFeature }) {
@@ -483,6 +537,9 @@ export function Inspector() {
   const toggleExtrudeBodyFace = useDocumentStore((state) => state.toggleExtrudeBodyFace);
   const toggleExtrudeBodyTarget = useDocumentStore((state) => state.toggleExtrudeBodyTarget);
   const setExtrudeReversed = useDocumentStore((state) => state.setExtrudeReversed);
+  const setExtrudeToBody = useDocumentStore((state) => state.setExtrudeToBody);
+  const setExtrudeToBodyOffset = useDocumentStore((state) => state.setExtrudeToBodyOffset);
+  const setExtrudeToBodyMode = useDocumentStore((state) => state.setExtrudeToBodyMode);
   const setExtrudeMethod = useDocumentStore((state) => state.setExtrudeMethod);
   const setRevolveAxis = useDocumentStore((state) => state.setRevolveAxis);
   const setRevolveAngles = useDocumentStore((state) => state.setRevolveAngles);
@@ -511,6 +568,8 @@ export function Inspector() {
   const setPickingShellFaces = useUiStore((state) => state.setPickingShellFaces);
   const pickingRevolveAxis = useUiStore((state) => state.pickingRevolveAxis);
   const setPickingRevolveAxis = useUiStore((state) => state.setPickingRevolveAxis);
+  const pickingToBody = useUiStore((state) => state.pickingExtrudeToBody);
+  const setPickingToBody = useUiStore((state) => state.setPickingExtrudeToBody);
   const setPickingExtrude = useUiStore((state) => state.setPickingExtrude);
   const setPickingExtrudeBodies = useUiStore((state) => state.setPickingExtrudeBodies);
   const setPickingSketchPlane = useUiStore((state) => state.setPickingSketchPlane);
@@ -665,6 +724,12 @@ export function Inspector() {
     ) {
       setPickingRevolveAxis(null);
     }
+    if (
+      pickingToBody &&
+      (pickingToBody !== feature?.id || feature?.type !== 'extrude' || feature.end !== 'to-body')
+    ) {
+      setPickingToBody(null);
+    }
   }, [
     picking,
     pickingBodies,
@@ -672,6 +737,7 @@ export function Inspector() {
     pickingShellFaces,
     pickingSketchPlane,
     pickingRevolveAxis,
+    pickingToBody,
     feature,
     setPickingExtrude,
     setPickingExtrudeBodies,
@@ -679,6 +745,7 @@ export function Inspector() {
     setPickingShellFaces,
     setPickingSketchPlane,
     setPickingRevolveAxis,
+    setPickingToBody,
   ]);
 
   useEffect(() => {
@@ -700,6 +767,23 @@ export function Inspector() {
   }, [pickingRevolveAxis, setPickingRevolveAxis]);
 
   const extrudeFeature = feature?.type === 'extrude' ? feature : undefined;
+  const toBodyKind = extrudeFeature?.toBody?.kind ?? 'first';
+  const toBodyOffset = extrudeFeature?.toBodyOffset;
+  const toBodyMode = extrudeFeature?.toBody?.mode ?? toBodyModeOf(toBodyOffset, toBodyKind);
+  // The field shows a size: the sign it once carried is the mode now.
+  const toBodySize =
+    typeof toBodyOffset === 'number' ? Math.abs(toBodyOffset) : (toBodyOffset ?? 0);
+  const toBodySizeLabel =
+    toBodyMode === 'shell' ? 'extrude.toBodyThickness' : 'extrude.toBodyOffset';
+  // The field is a size, so a formula that evaluates to a negative number still
+  // reads as the distance the extent keeps.
+  const toBodyResolved =
+    resolvedFeature?.type === 'extrude' && typeof resolvedFeature.toBodyOffset === 'number'
+      ? Math.abs(resolvedFeature.toBodyOffset)
+      : undefined;
+  const toBodyBodyName = extrudeFeature?.toBody?.bodyId
+    ? objectName(project, extrudeFeature.toBody.bodyId, t('extrude.toBodyBody'))
+    : undefined;
   // A revolve keeps its line between visits; an operation switched by an older
   // file may have no spec yet, so the default stands in.
   const revolve =
@@ -1681,6 +1765,11 @@ export function Inspector() {
                             }
                             setExtrudeMethod(feature.id, 'extrude');
                             setExtrudeEnd(feature.id, extent.id);
+                            if (extent.id === 'to-body') {
+                              if (!feature.toBody) setExtrudeToBody(feature.id, { kind: 'first' });
+                            } else {
+                              setPickingToBody(null);
+                            }
                           }}
                         />
                       ))}
@@ -1780,7 +1869,7 @@ export function Inspector() {
                           </div>
                         </div>
                       </>
-                    ) : (
+                    ) : feature.end === 'to-body' ? null : (
                       <div className="control-group">
                         {feature.end !== 'through-all' && feature.end !== 'symmetric' && (
                           <span className="field-label">{t('extrude.distance')}</span>
@@ -1822,7 +1911,85 @@ export function Inspector() {
                   </div>
                 </PanelSection>
 
-                {feature.method === 'extrude' && feature.end !== 'symmetric' && (
+                {feature.method === 'extrude' && feature.end === 'to-body' && (
+                  <>
+                    <PanelSection title={t('extrude.toBody')}>
+                      {/* Which face ends the sweep, with the invert button next
+                          to the tabs for aiming it at a body on the other side
+                          of the profile. */}
+                      <div className="dimension-row extrude-target-row">
+                        <Segmented ariaLabel={t('extrude.toBody')}>
+                          {EXTRUDE_TO_BODY_KINDS.map((kind) => (
+                            <SegmentedTab
+                              key={kind.id}
+                              label={t(kind.label as never)}
+                              icon={kind.icon}
+                              active={toBodyKind === kind.id}
+                              onClick={() =>
+                                setExtrudeToBody(feature.id, { ...feature.toBody, kind: kind.id })
+                              }
+                            />
+                          ))}
+                        </Segmented>
+                        <span className="dimension-toggle">
+                          <IconButton
+                            label={t('extrude.reverseDirection')}
+                            tooltip={t('extrude.reverseDirection')}
+                            active={feature.reversed}
+                            className="dimension-toggle-button"
+                            onClick={() => setExtrudeReversed(feature.id, !feature.reversed)}
+                          >
+                            <ArrowLeftRight size={15} />
+                          </IconButton>
+                        </span>
+                      </div>
+                    </PanelSection>
+
+                    <PanelSection title={t('extrude.toBodyMode')}>
+                      <div className="section-stack">
+                        <Segmented ariaLabel={t('extrude.toBodyMode')}>
+                          {EXTRUDE_TO_BODY_MODES.map((mode) => (
+                            <SegmentedTab
+                              key={mode.id}
+                              label={t(mode.label as never)}
+                              icon={mode.icon}
+                              active={toBodyMode === mode.id}
+                              onClick={() => setExtrudeToBodyMode(feature.id, mode.id)}
+                            />
+                          ))}
+                        </Segmented>
+                        {/* Only a gap and a layer have a size; ending on the face
+                            is the shape of the profile itself. */}
+                        {toBodyMode !== 'solid' && (
+                          <div className="control-group">
+                            <span className="field-label">{t(toBodySizeLabel as never)}</span>
+                            <div className="dimension-row">
+                              <ParamField
+                                icon={
+                                  toBodyMode === 'shell' ? (
+                                    <ArrowLeftFromLine size={14} />
+                                  ) : (
+                                    <ArrowRightToLine size={14} />
+                                  )
+                                }
+                                label={t(toBodySizeLabel as never)}
+                                suffix="mm"
+                                value={toBodySize}
+                                resolved={toBodyResolved}
+                                error={paramError(feature.id, 'toBodyOffset')}
+                                onCommit={(value) =>
+                                  setExtrudeToBodyOffset(feature.id, value, toBodyMode)
+                                }
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </PanelSection>
+                  </>
+                )}
+
+                {feature.method === 'extrude' && secondDirectionAllowed(feature) && (
                   <PanelSection
                     title={t('extrude.secondDirection')}
                     action={
@@ -1916,6 +2083,35 @@ export function Inspector() {
                     removeLabel={t('extrude.removeObject')}
                     rows={bodyRows}
                   />
+                )}
+
+                {feature.method === 'extrude' && feature.end === 'to-body' && (
+                  <PanelSection title={t('extrude.toBodySearch')}>
+                    {/* The body is optional: without one the sweep takes the
+                        nearest body for "first" and the farthest for "last",
+                        with one it ignores everything else on the way. */}
+                    <ObjectPickerField
+                      compact
+                      label={t('extrude.toBodyBody')}
+                      value={toBodyBodyName}
+                      placeholder={t('extrude.toBodyAnyBody')}
+                      icon={<Box size={12} />}
+                      active={pickingToBody === feature.id}
+                      onClick={() =>
+                        setPickingToBody(pickingToBody === feature.id ? null : feature.id)
+                      }
+                      onClear={
+                        feature.toBody?.bodyId
+                          ? () => {
+                              setPickingToBody(null);
+                              setExtrudeToBody(feature.id, { ...feature.toBody, kind: toBodyKind });
+                            }
+                          : undefined
+                      }
+                      clearLabel={t('common.clear')}
+                      testId="extrude-to-body-picker"
+                    />
+                  </PanelSection>
                 )}
 
                 <PickableSection

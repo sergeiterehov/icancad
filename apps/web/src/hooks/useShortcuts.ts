@@ -45,7 +45,8 @@ export function useShortcuts(): void {
           ui.pickingShellBodies ||
           ui.pickingShellFaces ||
           ui.pickingSketchPlane ||
-          ui.pickingSectionFace
+          ui.pickingSectionFace ||
+          ui.pickingExtrudeToBody
         ) {
           event.preventDefault();
           ui.endPicking();

@@ -39,6 +39,7 @@ import {
   type SectionPlane,
   type SketchFeature,
   type ExtrudeFeature,
+  type ExtrudeToBodyMode,
   type RevolveAxis,
   type DeleteBodyFeature,
   type ShellFeature,
@@ -177,6 +178,16 @@ interface DocumentState {
   ) => void;
   toggleExtrudeBodyTarget: (featureId: string, bodyId: string) => void;
   setExtrudeReversed: (featureId: string, reversed: boolean) => void;
+  /** Body a "to body" extent stops at; `bodyId` is set only for `kind: 'body'`. */
+  setExtrudeToBody: (featureId: string, toBody: ExtrudeFeature['toBody']) => void;
+  /**
+   * Distance in front of the surface or the layer thickness, always a size; the
+   * mode is written with it, so a document that still carries it in the sign is
+   * brought over the moment its value is edited.
+   */
+  setExtrudeToBodyOffset: (featureId: string, value: ParamValue, mode?: ExtrudeToBodyMode) => void;
+  /** How the sweep ends on the surface; a gap or a layer needs a size of its own. */
+  setExtrudeToBodyMode: (featureId: string, mode: ExtrudeToBodyMode) => void;
   setExtrudeMethod: (featureId: string, method: ExtrudeFeature['method']) => void;
   setRevolveAxis: (featureId: string, axis: RevolveAxis) => void;
   setRevolveAngles: (featureId: string, angles: { start?: ParamValue; end?: ParamValue }) => void;
@@ -277,6 +288,8 @@ function withOrderKey(order: readonly string[] | undefined, key: string, add: bo
 }
 
 const HISTORY_LIMIT = 100;
+/** What a gap or a layer gets the moment the user picks it, so it shows at once. */
+const DEFAULT_TO_BODY_SIZE = 2;
 
 /**
  * Content of a document without the parts that are bookkeeping rather than an
@@ -1661,6 +1674,53 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     );
     if (!feature) return;
     get().apply({ type: 'feature/replace', feature: { ...feature, reversed } });
+  },
+
+  setExtrudeToBody: (featureId, toBody) => {
+    const feature = activeModel(get().project).features.find(
+      (candidate): candidate is ExtrudeFeature =>
+        candidate.id === featureId && candidate.type === 'extrude',
+    );
+    if (!feature) return;
+    get().apply({ type: 'feature/replace', feature: { ...feature, toBody } });
+  },
+
+  setExtrudeToBodyOffset: (featureId, value, mode) => {
+    const feature = activeModel(get().project).features.find(
+      (candidate): candidate is ExtrudeFeature =>
+        candidate.id === featureId && candidate.type === 'extrude',
+    );
+    if (!feature) return;
+    const toBody = mode ? { kind: 'first' as const, ...feature.toBody, mode } : feature.toBody;
+    get().apply({ type: 'feature/replace', feature: { ...feature, toBodyOffset: value, toBody } });
+  },
+
+  setExtrudeToBodyMode: (featureId, mode) => {
+    const feature = activeModel(get().project).features.find(
+      (candidate): candidate is ExtrudeFeature =>
+        candidate.id === featureId && candidate.type === 'extrude',
+    );
+    if (!feature) return;
+    const toBody = { kind: 'first' as const, ...feature.toBody, mode };
+    const stored = feature.toBodyOffset;
+    // A formula stays what it is, a size carries over between the modes, and a
+    // new one opens at the default because nothing would show otherwise.
+    const size =
+      typeof stored === 'number'
+        ? Math.abs(stored) > 0
+          ? Math.abs(stored)
+          : DEFAULT_TO_BODY_SIZE
+        : (stored ?? DEFAULT_TO_BODY_SIZE);
+    get().apply({
+      type: 'feature/replace',
+      feature: {
+        ...feature,
+        toBody,
+        // A solid ends on the surface itself, but the size stays for the mode the
+        // user switches back to.
+        toBodyOffset: mode === 'solid' ? (stored ?? 0) : size,
+      },
+    });
   },
 
   setExtrudeMethod: (featureId, method) => {

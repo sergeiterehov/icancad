@@ -335,8 +335,16 @@ const extrudeFeature = z.object({
   objectOrder: z.array(z.string()).default([]),
   method: z.enum(['extrude', 'revolve']).default('extrude'),
   revolve: revolveSpec.optional(),
-  end: z.enum(['blind', 'symmetric', 'through-all']),
+  end: z.enum(['blind', 'symmetric', 'through-all', 'to-body']),
   distance: param(z.number()),
+  toBody: z
+    .object({
+      kind: z.enum(['first', 'last']),
+      bodyId: z.string().min(1).optional(),
+      mode: z.enum(['solid', 'gap', 'shell']).optional(),
+    })
+    .optional(),
+  toBodyOffset: param(z.number()).optional(),
   reversed: z.boolean().default(false),
   secondDirection: z
     .object({ end: z.enum(['blind', 'through-all']), distance: param(z.number()) })

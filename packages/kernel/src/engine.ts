@@ -16,6 +16,7 @@ import type {
   MakePrimitiveParams,
   MakePrismParams,
   MakeRevolveParams,
+  OffsetShapeParams,
   ProfileCurve,
   ProfileLoop,
   RevolveAxisLine,
@@ -1190,6 +1191,52 @@ export class KernelEngine {
       // only moved stays owned by the operation that made it.
       facesFromBase: this.facesFromBase(built.shape, source),
     };
+  }
+
+  /**
+   * The surface of a body moved along its own normals. A positive distance
+   * grows the body — a gap measured to it is the same everywhere, whatever the
+   * curvature — and a negative one shrinks it.
+   *
+   * This is the only operation that offsets a surface rather than moving the
+   * body: a translation gives a clearance that disappears where the surface runs
+   * along the translation, an offset gives the same distance in every direction.
+   */
+  offsetShape(params: OffsetShapeParams): MakeBoxResult {
+    if (!params.shapeId) throw new KernelOpError('INVALID_PARAMS', 'shapeId is required');
+    if (!params.sourceShapeId) {
+      throw new KernelOpError('INVALID_PARAMS', 'sourceShapeId is required');
+    }
+    if (!Number.isFinite(params.distance) || params.distance === 0) {
+      throw new KernelOpError('INVALID_PARAMS', 'distance must be a non-zero number');
+    }
+    const oc = this.requireOc();
+    const source = this.getShape(params.sourceShapeId);
+    const distance = params.distance;
+    for (const join of [
+      oc.GeomAbs_JoinType.GeomAbs_Intersection,
+      oc.GeomAbs_JoinType.GeomAbs_Arc,
+    ]) {
+      const offset = this.thickSolid(source, [], distance, join);
+      const solid = offset ? this.ensureSolid(this.positiveVolume(offset)) : null;
+      if (!solid) continue;
+      const sourceVolume = this.shapeVolume(source);
+      const volume = this.shapeVolume(solid);
+      if (!Number.isFinite(volume)) continue;
+      // An offset that leaves the body as it was, or swallows it whole, is not
+      // the surface the operation asked to end on.
+      if (distance > 0 ? !(volume > sourceVolume) : !(volume > 0 && volume < sourceVolume)) {
+        continue;
+      }
+      try {
+        if (!new oc.BRepCheck_Analyzer(solid, true).IsValid_2()) continue;
+      } catch {
+        continue;
+      }
+      this.shapes.set(params.shapeId, solid);
+      return { shapeId: params.shapeId, stats: this.countTopology(solid) };
+    }
+    throw new KernelOpError('OFFSET_FAILED', 'This body cannot be offset by that distance');
   }
 
   /**

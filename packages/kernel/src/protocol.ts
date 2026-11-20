@@ -281,6 +281,17 @@ export interface ShellParams {
   direction: 'inward' | 'outward';
 }
 
+export interface OffsetShapeParams {
+  shapeId: string;
+  /** Body whose surface is moved. */
+  sourceShapeId: string;
+  /**
+   * Distance the surface moves along its own normal: positive grows the body,
+   * negative shrinks it.
+   */
+  distance: number;
+}
+
 export interface ShellResult {
   shapeId: string;
   stats: ShapeStats;
@@ -343,6 +354,7 @@ export type KernelErrorCode =
   | 'NO_EDGES'
   | 'EDGE_TREATMENT_FAILED'
   | 'SHELL_FAILED'
+  | 'OFFSET_FAILED'
   | 'NOT_IMPLEMENTED'
   | 'OP_FAILED';
 
@@ -359,6 +371,7 @@ export type KernelRequestPayload =
   | { type: 'split-solids'; params: SplitSolidsParams }
   | { type: 'edge-treatment'; params: EdgeTreatmentParams }
   | { type: 'shell'; params: ShellParams }
+  | { type: 'offset-shape'; params: OffsetShapeParams }
   | { type: 'transform-shape'; params: TransformShapeParams }
   | { type: 'face-centre'; params: FaceCentreParams }
   | { type: 'tessellate'; shapeId: string; quality?: TessellationQuality }

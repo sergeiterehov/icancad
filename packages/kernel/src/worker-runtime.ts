@@ -86,6 +86,11 @@ export function startKernelWorker(options: KernelWorkerOptions = {}): void {
           postSuccess(scope, request.id, engine.shell(request.params));
           break;
         }
+        case 'offset-shape': {
+          await engine.init();
+          postSuccess(scope, request.id, engine.offsetShape(request.params));
+          break;
+        }
         case 'transform-shape': {
           await engine.init();
           postSuccess(scope, request.id, engine.transformShape(request.params));

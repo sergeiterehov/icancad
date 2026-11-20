@@ -3170,6 +3170,17 @@ html[data-pointer='finger'] .selection-item .icon-btn {
   height: 26px;
 }
 
+/* A "to body" extent: the target tabs take the room the invert button leaves,
+   so the row reads as one control instead of a floating switch. */
+.extrude-target-row .segmented {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.extrude-target-row .segmented-tab {
+  min-width: max-content;
+}
+
 .segmented {
   display: flex;
   gap: 1px;

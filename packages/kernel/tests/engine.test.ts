@@ -786,9 +786,7 @@ describe('OCCT kernel engine', () => {
   it('applies every placement of a tool in one boolean', () => {
     engine.makeBox({ shapeId: 'all-base', dx: 40, dy: 20, dz: 5, at: [-20, -10, 0] });
     engine.makeBox({ shapeId: 'all-tool', dx: 4, dy: 4, dz: 10, at: [-2, -2, 0] });
-    const placements = [0, 10, -10].map(
-      (x) => [1, 0, 0, x, 0, 1, 0, 0, 0, 0, 1, 0] as number[],
-    );
+    const placements = [0, 10, -10].map((x) => [1, 0, 0, x, 0, 1, 0, 0, 0, 0, 1, 0] as number[]);
     const together = engine.booleanAll({
       shapeId: 'all-one',
       baseShapeId: 'all-base',
@@ -822,9 +820,7 @@ describe('OCCT kernel engine', () => {
     // as shapes that keep apart, so a copy hidden inside another would drop out
     // and the row would come out short.
     engine.makeBox({ shapeId: 'row-box', dx: 20, dy: 20, dz: 20 });
-    const placements = [10, 20].map(
-      (x) => [1, 0, 0, x, 0, 1, 0, 0, 0, 0, 1, 0] as number[],
-    );
+    const placements = [10, 20].map((x) => [1, 0, 0, x, 0, 1, 0, 0, 0, 0, 1, 0] as number[]);
     const fused = engine.booleanAll({
       shapeId: 'row-all',
       baseShapeId: 'row-box',
@@ -840,9 +836,7 @@ describe('OCCT kernel engine', () => {
 
   it('leaves a copy that lands away from the body a solid of its own', () => {
     engine.makeBox({ shapeId: 'apart-box', dx: 20, dy: 20, dz: 20 });
-    const placements = [10, 60].map(
-      (x) => [1, 0, 0, x, 0, 1, 0, 0, 0, 0, 1, 0] as number[],
-    );
+    const placements = [10, 60].map((x) => [1, 0, 0, x, 0, 1, 0, 0, 0, 0, 1, 0] as number[]);
     const fused = engine.booleanAll({
       shapeId: 'apart-all',
       baseShapeId: 'apart-box',
@@ -1609,5 +1603,707 @@ describe('OCCT kernel engine', () => {
         normal: faceNormals(mesh).get(side)!,
       }),
     ).toThrow(KernelOpError);
+  });
+  // "To body" extrudes trim their tool against the body they end on instead of
+  // cutting it with a plane, so the end face follows any surface (ADR 0035).
+  // The recipe a "to body" extent follows: cut the prism with the body whose
+  // surface is moved out by the gap, drop what the prism keeps behind it, and
+  // read the ending face off the result.
+  describe('extrude to a body', () => {
+    /** A cylinder of radius 20 standing between z = 0 and z = 40. */
+    const cylinder = () =>
+      engine.makePrimitive({
+        shapeId: 'probe-cylinder',
+        kind: 'cylinder',
+        radius: 20,
+        height: 40,
+        at: [0, 0, 0],
+      });
+
+    /** A 10 by 10 column sweeping along +X from x = -60 through the cylinder. */
+    const profile = (shapeId: string, distances: number[]) =>
+      engine.makePrism({
+        shapeId,
+        origin: [-60, 0, 20],
+        xAxis: [0, 1, 0],
+        yAxis: [0, 0, 1],
+        regions: [
+          {
+            outer: {
+              curves: [
+                { type: 'line', x1: -5, y1: -5, x2: 5, y2: -5 },
+                { type: 'line', x1: 5, y1: -5, x2: 5, y2: 5 },
+                { type: 'line', x1: 5, y1: 5, x2: -5, y2: 5 },
+                { type: 'line', x1: -5, y1: 5, x2: -5, y2: -5 },
+              ],
+            },
+            holes: [],
+          },
+        ],
+        distances,
+      });
+
+    /** Where the cylinder's surface stands at the profile's edge. */
+    const surfaceAt = Math.sqrt(20 * 20 - 5 * 5);
+    /** Reach from the profile plane past the whole body. */
+    const fullReach = 60 + 20 + 1;
+
+    it('moves the surface of a body out by the same distance everywhere', () => {
+      cylinder();
+      engine.offsetShape({ shapeId: 'grown', sourceShapeId: 'probe-cylinder', distance: 2.5 });
+      const mesh = engine.tessellate('grown');
+      // Radius 22.5 and a height that grew at both ends.
+      expect(mesh.bbox.min[0]).toBeCloseTo(-22.5, 1);
+      expect(mesh.bbox.min[2]).toBeCloseTo(-2.5, 2);
+      expect(mesh.bbox.max[2]).toBeCloseTo(42.5, 2);
+      engine.offsetShape({ shapeId: 'shrunk', sourceShapeId: 'probe-cylinder', distance: -2.5 });
+      expect(engine.tessellate('shrunk').bbox.max[0]).toBeCloseTo(17.5, 1);
+    });
+
+    it('ends a front extent on the face that looks at the profile', () => {
+      cylinder();
+      profile('front-prism', [fullReach]);
+      const air = engine.booleanShape({
+        shapeId: 'front-air',
+        baseShapeId: 'front-prism',
+        toolShapeId: 'probe-cylinder',
+        op: 'cut',
+      });
+      // The prism passes the body, so what it keeps behind it is a solid of its
+      // own: only the part at the profile plane belongs to the extent.
+      expect(air.stats.solids).toBe(2);
+      const parts = engine.splitSolids({ shapeId: 'front-air', prefix: 'front' });
+      const atPlane = parts.solids.filter(
+        (solid) => engine.tessellate(solid.shapeId).bbox.min[0] < -60 + 0.01,
+      );
+      expect(atPlane).toHaveLength(1);
+      const mesh = engine.tessellate(atPlane[0]!.shapeId);
+      // The column stops on the near side of the cylinder, following it.
+      expect(mesh.bbox.min[0]).toBeCloseTo(-60, 5);
+      expect(mesh.bbox.max[0]).toBeCloseTo(-surfaceAt, 4);
+    });
+
+    it('leaves the gap it is asked for in front of the face', () => {
+      cylinder();
+      for (const gap of [2, 5]) {
+        engine.offsetShape({
+          shapeId: `grown-${gap}`,
+          sourceShapeId: 'probe-cylinder',
+          distance: gap,
+        });
+        profile(`gap-prism-${gap}`, [fullReach]);
+        engine.booleanShape({
+          shapeId: `gap-air-${gap}`,
+          baseShapeId: `gap-prism-${gap}`,
+          toolShapeId: `grown-${gap}`,
+          op: 'cut',
+        });
+        const parts = engine.splitSolids({ shapeId: `gap-air-${gap}`, prefix: `gap-${gap}` });
+        const kept = parts.solids.find(
+          (solid) => engine.tessellate(solid.shapeId).bbox.min[0] < -60 + 0.01,
+        )!;
+        // The end is the cylinder's surface moved out by the gap, which is not
+        // the same as the surface pushed along one axis: the offset grows the
+        // radius, so the end sits a little further out at the profile's edge.
+        const mesh = engine.tessellate(kept.shapeId);
+        expect(mesh.bbox.max[0]).toBeCloseTo(-Math.sqrt((20 + gap) ** 2 - 25), 1);
+      }
+    });
+
+    it('reaches the far face for a back extent', () => {
+      cylinder();
+      profile('back-prism', [fullReach]);
+      engine.booleanShape({
+        shapeId: 'back-front',
+        baseShapeId: 'back-prism',
+        toolShapeId: 'probe-cylinder',
+        op: 'cut',
+      });
+      engine.booleanShape({
+        shapeId: 'back-material',
+        baseShapeId: 'back-prism',
+        toolShapeId: 'probe-cylinder',
+        op: 'common',
+      });
+      const front = engine
+        .splitSolids({ shapeId: 'back-front', prefix: 'back' })
+        .solids.find((solid) => engine.tessellate(solid.shapeId).bbox.min[0] < -60 + 0.01)!;
+      const result = engine.booleanShape({
+        shapeId: 'back-column',
+        baseShapeId: front.shapeId,
+        toolShapeId: 'back-material',
+        op: 'fuse',
+      });
+      expect(result.stats.solids).toBe(1);
+      const mesh = engine.tessellate('back-column');
+      // From the profile plane to the far side, in one piece.
+      expect(mesh.bbox.min[0]).toBeCloseTo(-60, 5);
+      expect(mesh.bbox.max[0]).toBeCloseTo(20, 4);
+    });
+
+    it('joins a front extent to the body it ends on', () => {
+      cylinder();
+      // The face the union lands on is passed by a hair, so the tool shares
+      // material with the body instead of only touching it.
+      engine.offsetShape({ shapeId: 'shrunk', sourceShapeId: 'probe-cylinder', distance: -0.01 });
+      profile('union-prism', [fullReach]);
+      engine.booleanShape({
+        shapeId: 'union-air',
+        baseShapeId: 'union-prism',
+        toolShapeId: 'shrunk',
+        op: 'cut',
+      });
+      const parts = engine.splitSolids({ shapeId: 'union-air', prefix: 'union' });
+      const kept = parts.solids.find(
+        (solid) => engine.tessellate(solid.shapeId).bbox.min[0] < -60 + 0.01,
+      )!;
+      const joined = engine.booleanShape({
+        shapeId: 'union-body',
+        baseShapeId: 'probe-cylinder',
+        toolShapeId: kept.shapeId,
+        op: 'fuse',
+      });
+      // A boss standing on the wall is one body with it.
+      expect(joined.stats.solids).toBe(1);
+      expect(engine.tessellate('union-body').bbox.min[0]).toBeCloseTo(-60, 5);
+    });
+
+    it('leaves a layer of the requested thickness on the face', () => {
+      cylinder();
+      engine.offsetShape({ shapeId: 'grown', sourceShapeId: 'probe-cylinder', distance: 2 });
+      profile('layer-prism', [fullReach]);
+      engine.booleanShape({
+        shapeId: 'layer-air',
+        baseShapeId: 'layer-prism',
+        toolShapeId: 'probe-cylinder',
+        op: 'cut',
+      });
+      const parts = engine.splitSolids({ shapeId: 'layer-air', prefix: 'layer' });
+      const near = parts.solids.find(
+        (solid) => engine.tessellate(solid.shapeId).bbox.min[0] < -60 + 0.01,
+      )!;
+      engine.booleanShape({
+        shapeId: 'layer-air-outer',
+        baseShapeId: 'layer-prism',
+        toolShapeId: 'grown',
+        op: 'cut',
+      });
+      const layer = engine.booleanShape({
+        shapeId: 'layer-shell',
+        baseShapeId: near.shapeId,
+        toolShapeId: 'layer-air-outer',
+        op: 'cut',
+      });
+      expect(layer.stats.solids).toBe(1);
+      // Two millimetres of wall standing on the cylinder's near side, over the
+      // whole profile: the shell between radius 20 and radius 22.
+      let expected = 0;
+      const steps = 400;
+      for (let step = 0; step < steps; step += 1) {
+        const y = -5 + (10 * (step + 0.5)) / steps;
+        expected += Math.sqrt(484 - y * y) - Math.sqrt(400 - y * y);
+      }
+      // Ten millimetres of the profile along the cylinder's axis.
+      expected *= (10 / steps) * 10;
+      expect(meshSignedVolume(engine.tessellate('layer-shell')) / expected).toBeCloseTo(1, 1);
+    });
+  });
+
+  // A sphere is met at uneven depths under one profile, which is where a single
+  // prism reach fails: it keeps a sliver of air behind the body.
+  describe('extrude to a curved body', () => {
+    /** A ball of radius 10 at the origin. */
+    const ball = () =>
+      engine.makePrimitive({ shapeId: 'probe-ball', kind: 'sphere', radius: 10, at: [0, 0, 0] });
+
+    /** A 12 by 12 square 30 mm above the ball, sweeping down through it. */
+    const sweep = (shapeId: string, distances: number[]) =>
+      engine.makePrism({
+        shapeId,
+        origin: [0, 0, 30],
+        xAxis: [1, 0, 0],
+        yAxis: [0, 1, 0],
+        regions: [
+          {
+            outer: {
+              curves: [
+                { type: 'line', x1: -6, y1: -6, x2: 6, y2: -6 },
+                { type: 'line', x1: 6, y1: -6, x2: 6, y2: 6 },
+                { type: 'line', x1: 6, y1: 6, x2: -6, y2: 6 },
+                { type: 'line', x1: -6, y1: 6, x2: -6, y2: -6 },
+              ],
+            },
+            holes: [],
+          },
+        ],
+        distances,
+      });
+
+    /** Volume of the column from the profile down to a sphere of this radius. */
+    const columnDownTo = (radius: number) => {
+      const steps = 200;
+      let expected = 0;
+      for (let x = 0; x < steps; x += 1) {
+        for (let y = 0; y < steps; y += 1) {
+          const px = -6 + (12 * (x + 0.5)) / steps;
+          const py = -6 + (12 * (y + 0.5)) / steps;
+          expected += 30 - Math.sqrt(radius * radius - px * px - py * py);
+        }
+      }
+      return expected * (12 / steps) * (12 / steps);
+    };
+
+    it('keeps nothing behind the ball it ends on', () => {
+      ball();
+      sweep('curved-prism', [-41]);
+      const tool = engine.booleanShape({
+        shapeId: 'curved-air',
+        baseShapeId: 'curved-prism',
+        toolShapeId: 'probe-ball',
+        op: 'cut',
+      });
+      // The prism passes the ball, so what it keeps beyond it is a solid of its
+      // own, cut off by the ball: an extent keeps only the part at the plane.
+      expect(tool.stats.solids).toBe(2);
+      const split = engine.splitSolids({ shapeId: 'curved-air', prefix: 'curved' });
+      const front = split.solids.find(
+        (solid) => engine.tessellate(solid.shapeId).bbox.max[2] > 29,
+      )!;
+      const behind = split.solids.find((solid) => solid !== front)!;
+      const mesh = engine.tessellate(front.shapeId);
+      // The column from the profile down to the ball, over the whole profile.
+      expect(mesh.bbox.max[2]).toBeCloseTo(30, 6);
+      // Faceting of the sphere, not geometry from behind it, is the difference.
+      expect(meshSignedVolume(mesh) / columnDownTo(10)).toBeCloseTo(1, 2);
+      // What is behind the ball, and must not reach the result.
+      expect(engine.tessellate(behind.shapeId).bbox.max[2]).toBeCloseTo(-5.29, 2);
+    });
+
+    it('leaves a gap of the same size all round a sphere', () => {
+      ball();
+      engine.offsetShape({ shapeId: 'probe-ball-grown', sourceShapeId: 'probe-ball', distance: 2 });
+      sweep('gap-prism', [-41]);
+      engine.booleanShape({
+        shapeId: 'gap-air',
+        baseShapeId: 'gap-prism',
+        toolShapeId: 'probe-ball-grown',
+        op: 'cut',
+      });
+      const split = engine.splitSolids({ shapeId: 'gap-air', prefix: 'gap' });
+      const front = split.solids.find(
+        (solid) => engine.tessellate(solid.shapeId).bbox.max[2] > 29,
+      )!;
+      // The gap is a sphere of its own: the surface of the ball moved out by two,
+      // so the distance is two everywhere and not just under the middle.
+      expect(meshSignedVolume(engine.tessellate(front.shapeId)) / columnDownTo(12)).toBeCloseTo(
+        1,
+        2,
+      );
+    });
+
+    it('leaves a layer on a curved face: a shell, not a flat-ended cap', () => {
+      ball();
+      engine.offsetShape({ shapeId: 'probe-ball-out', sourceShapeId: 'probe-ball', distance: 3 });
+      sweep('layer-prism', [-41]);
+      engine.booleanShape({
+        shapeId: 'layer-air',
+        baseShapeId: 'layer-prism',
+        toolShapeId: 'probe-ball',
+        op: 'cut',
+      });
+      engine.booleanShape({
+        shapeId: 'layer-air-outer',
+        baseShapeId: 'layer-prism',
+        toolShapeId: 'probe-ball-out',
+        op: 'cut',
+      });
+      const split = engine.splitSolids({ shapeId: 'layer-air', prefix: 'layer' });
+      const near = split.solids.find((solid) => engine.tessellate(solid.shapeId).bbox.max[2] > 29)!;
+      const layer = engine.booleanShape({
+        shapeId: 'curved-layer',
+        baseShapeId: near.shapeId,
+        toolShapeId: 'layer-air-outer',
+        op: 'cut',
+      });
+      expect(layer.stats.solids).toBe(1);
+      // The shell between radius 10 and radius 13 over the profile's shadow.
+      const steps = 200;
+      let expected = 0;
+      for (let x = 0; x < steps; x += 1) {
+        for (let y = 0; y < steps; y += 1) {
+          const px = -6 + (12 * (x + 0.5)) / steps;
+          const py = -6 + (12 * (y + 0.5)) / steps;
+          const rho = px * px + py * py;
+          expected += Math.sqrt(169 - rho) - Math.sqrt(100 - rho);
+        }
+      }
+      expected *= (12 / steps) * (12 / steps);
+      expect(meshSignedVolume(engine.tessellate('curved-layer')) / expected).toBeCloseTo(1, 1);
+    });
+  });
+
+  it('refuses to centre a face that is not flat', () => {
+    engine.makePrimitive({ shapeId: 'round-body', kind: 'cylinder', radius: 10, height: 5 });
+    const mesh = engine.tessellate('round-body');
+    const side = faceFacing(mesh, [1, 0, 0]);
+    expect(() =>
+      engine.faceCentre({
+        shapeId: 'round-body',
+        faceId: side,
+        normal: faceNormals(mesh).get(side)!,
+      }),
+    ).toThrow(KernelOpError);
+  });
+  // "To body" extrudes trim their tool against the body they end on instead of
+  // cutting it with a plane, so the end face follows any surface (ADR 0035).
+  describe('extrude to a body', () => {
+    /** A cylinder of radius 20 standing between z = 0 and z = 40. */
+    const cylinder = () =>
+      engine.makePrimitive({
+        shapeId: 'probe-cylinder',
+        kind: 'cylinder',
+        radius: 20,
+        height: 40,
+        at: [0, 0, 0],
+      });
+
+    /** A 10 by 10 column sweeping along +X from x = -60 through the cylinder. */
+    const profile = () => ({
+      shapeId: 'probe-prism',
+      origin: [-60, 0, 20] as [number, number, number],
+      xAxis: [0, 1, 0] as [number, number, number],
+      yAxis: [0, 0, 1] as [number, number, number],
+      regions: [
+        {
+          outer: {
+            curves: [
+              { type: 'line' as const, x1: -5, y1: -5, x2: 5, y2: -5 },
+              { type: 'line' as const, x1: 5, y1: -5, x2: 5, y2: 5 },
+              { type: 'line' as const, x1: 5, y1: 5, x2: -5, y2: 5 },
+              { type: 'line' as const, x1: -5, y1: 5, x2: -5, y2: -5 },
+            ],
+          },
+          holes: [],
+        },
+      ],
+      distances: [120],
+    });
+
+    /** Where the cylinder's surface stands at the profile's edge. */
+    const surfaceAt = Math.sqrt(20 * 20 - 5 * 5);
+    /** Reach from the profile plane to the deepest point of the near face. */
+    const frontReach = 60 - surfaceAt;
+
+    it('ends a front extent on the face that looks at the profile', () => {
+      cylinder();
+      engine.makePrism({ ...profile(), distances: [frontReach] });
+      engine.booleanShape({
+        shapeId: 'front-air',
+        baseShapeId: 'probe-prism',
+        toolShapeId: 'probe-cylinder',
+        op: 'cut',
+      });
+      const mesh = engine.tessellate('front-air');
+      // The column stops on the near side of the cylinder, following it, and
+      // leaves nothing behind the far face.
+      expect(mesh.bbox.min[0]).toBeCloseTo(-60, 5);
+      expect(mesh.bbox.max[0]).toBeCloseTo(-surfaceAt, 4);
+      expect(mesh.bbox.max[2]).toBeGreaterThan(20);
+    });
+
+    it('reaches the far face for a back extent', () => {
+      cylinder();
+      engine.makePrism(profile());
+      engine.makePrism({ ...profile(), shapeId: 'probe-front', distances: [frontReach] });
+      engine.booleanShape({
+        shapeId: 'back-front',
+        baseShapeId: 'probe-front',
+        toolShapeId: 'probe-cylinder',
+        op: 'cut',
+      });
+      engine.booleanShape({
+        shapeId: 'back-material',
+        baseShapeId: 'probe-prism',
+        toolShapeId: 'probe-cylinder',
+        op: 'common',
+      });
+      const result = engine.booleanShape({
+        shapeId: 'back-column',
+        baseShapeId: 'back-front',
+        toolShapeId: 'back-material',
+        op: 'fuse',
+      });
+      expect(result.stats.solids).toBe(1);
+      const mesh = engine.tessellate('back-column');
+      // From the profile plane to the far side, in one piece.
+      expect(mesh.bbox.min[0]).toBeCloseTo(-60, 5);
+      expect(mesh.bbox.max[0]).toBeCloseTo(20, 4);
+    });
+
+    it('joins a front extent to the body it ends on', () => {
+      cylinder();
+      engine.makePrism({ ...profile(), distances: [frontReach] });
+      engine.booleanShape({
+        shapeId: 'union-air',
+        baseShapeId: 'probe-prism',
+        toolShapeId: 'probe-cylinder',
+        op: 'cut',
+      });
+      const joined = engine.booleanShape({
+        shapeId: 'union-body',
+        baseShapeId: 'probe-cylinder',
+        toolShapeId: 'union-air',
+        op: 'fuse',
+      });
+      // A boss standing on the wall is one body with it.
+      expect(joined.stats.solids).toBe(1);
+      const mesh = engine.tessellate('union-body');
+      expect(mesh.bbox.min[0]).toBeCloseTo(-60, 5);
+    });
+
+    it('leaves a layer of the requested thickness on the face', () => {
+      cylinder();
+      engine.makePrism(profile());
+      engine.transformShape({
+        shapeId: 'probe-cylinder-moved',
+        sourceShapeId: 'probe-cylinder',
+        matrix: [1, 0, 0, -2, 0, 1, 0, 0, 0, 0, 1, 0],
+      });
+      engine.booleanShape({
+        shapeId: 'layer-air',
+        baseShapeId: 'probe-prism',
+        toolShapeId: 'probe-cylinder',
+        op: 'cut',
+      });
+      engine.booleanShape({
+        shapeId: 'layer-air-outer',
+        baseShapeId: 'probe-prism',
+        toolShapeId: 'probe-cylinder-moved',
+        op: 'cut',
+      });
+      const layer = engine.booleanShape({
+        shapeId: 'layer-shell',
+        baseShapeId: 'layer-air',
+        toolShapeId: 'layer-air-outer',
+        op: 'cut',
+      });
+      expect(layer.stats.solids).toBe(1);
+      const mesh = engine.tessellate('layer-shell');
+      // Two millimetres of wall on the cylinder's near side.
+      expect(mesh.bbox.min[0]).toBeCloseTo(-22, 1);
+      expect(mesh.bbox.max[0]).toBeCloseTo(-surfaceAt, 1);
+    });
+  });
+
+  // A sphere is met at uneven depths under one profile, which is where a single
+  // prism reach fails: it keeps a sliver of air behind the body.
+  describe('extrude to a curved body', () => {
+    /** A ball of radius 10 at the origin. */
+    const ball = () =>
+      engine.makePrimitive({ shapeId: 'probe-ball', kind: 'sphere', radius: 10, at: [0, 0, 0] });
+
+    /** A 12 by 12 square 30 mm above the ball, sweeping down through it. */
+    const sweep = (shapeId: string, distances: number[]) =>
+      engine.makePrism({
+        shapeId,
+        origin: [0, 0, 30],
+        xAxis: [1, 0, 0],
+        yAxis: [0, 1, 0],
+        regions: [
+          {
+            outer: {
+              curves: [
+                { type: 'line', x1: -6, y1: -6, x2: 6, y2: -6 },
+                { type: 'line', x1: 6, y1: -6, x2: 6, y2: 6 },
+                { type: 'line', x1: 6, y1: 6, x2: -6, y2: 6 },
+                { type: 'line', x1: -6, y1: 6, x2: -6, y2: -6 },
+              ],
+            },
+            holes: [],
+          },
+        ],
+        distances,
+      });
+
+    it('leaves the part behind the ball to be dropped', () => {
+      ball();
+      sweep('curved-prism', [-41]);
+      const tool = engine.booleanShape({
+        shapeId: 'curved-air',
+        baseShapeId: 'curved-prism',
+        toolShapeId: 'probe-ball',
+        op: 'cut',
+      });
+      // The prism passes the ball, so what it keeps beyond it is a solid of its
+      // own, cut off by the ball: an extent keeps only the part at the plane.
+      expect(tool.stats.solids).toBe(2);
+      const split = engine.splitSolids({ shapeId: 'curved-air', prefix: 'curved' });
+      const [front, behind] = split.solids.map((solid) => ({
+        mesh: engine.tessellate(solid.shapeId),
+        volume: meshSignedVolume(engine.tessellate(solid.shapeId)),
+      }));
+      // The column from the profile down to the ball, over the whole profile.
+      let expected = 0;
+      const steps = 200;
+      for (let x = 0; x < steps; x += 1) {
+        for (let y = 0; y < steps; y += 1) {
+          const px = -6 + (12 * (x + 0.5)) / steps;
+          const py = -6 + (12 * (y + 0.5)) / steps;
+          expected += 30 - Math.sqrt(100 - px * px - py * py);
+        }
+      }
+      expected *= (12 / steps) * (12 / steps);
+      expect(front!.mesh.bbox.max[2]).toBeCloseTo(30, 6);
+      // Faceting of the sphere, not geometry from behind it, is the difference.
+      expect(front!.volume / expected).toBeCloseTo(1, 2);
+      // What is behind the ball, and must not reach the result.
+      expect(behind!.mesh.bbox.max[2]).toBeCloseTo(-5.29, 2);
+      expect(behind!.volume).toBeGreaterThan(300);
+    });
+
+    it('leaves a layer of the requested thickness on a curved face', () => {
+      ball();
+      sweep('curved-prism', [-41]);
+      engine.transformShape({
+        shapeId: 'probe-ball-back',
+        sourceShapeId: 'probe-ball',
+        matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 3],
+      });
+      engine.booleanShape({
+        shapeId: 'curved-air',
+        baseShapeId: 'curved-prism',
+        toolShapeId: 'probe-ball',
+        op: 'cut',
+      });
+      engine.booleanShape({
+        shapeId: 'curved-air-outer',
+        baseShapeId: 'curved-prism',
+        toolShapeId: 'probe-ball-back',
+        op: 'cut',
+      });
+      const layer = engine.booleanShape({
+        shapeId: 'curved-layer',
+        baseShapeId: 'curved-air',
+        toolShapeId: 'curved-air-outer',
+        op: 'cut',
+      });
+      // The layer follows the sphere, so its volume is the thickness over the
+      // whole profile, not a difference of two flat ends.
+      expect(layer.stats.solids).toBe(1);
+      expect(meshSignedVolume(engine.tessellate('curved-layer'))).toBeCloseTo(3 * 12 * 12, 3);
+    });
+  });
+
+  it('refuses to centre a face that is not flat', () => {
+    engine.makePrimitive({ shapeId: 'round-body', kind: 'cylinder', radius: 10, height: 5 });
+    const mesh = engine.tessellate('round-body');
+    const side = faceFacing(mesh, [1, 0, 0]);
+    expect(() =>
+      engine.faceCentre({
+        shapeId: 'round-body',
+        faceId: side,
+        normal: faceNormals(mesh).get(side)!,
+      }),
+    ).toThrow(KernelOpError);
+  });
+  // "To body" extrudes trim their tool against the body they stop at instead of
+  // cutting it with a plane, so the end face follows any surface (ADR 0035).
+  it('stops a prism on the far side of a body it is intersected with', () => {
+    // A block from z = 0 to z = 6, and a prism that starts above it.
+    engine.makeBox({ shapeId: 'to-body-block', dx: 20, dy: 20, dz: 6 });
+    engine.makePrism({
+      shapeId: 'to-body-prism',
+      origin: [10, 10, 20],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 1, 0],
+      regions: [
+        {
+          outer: {
+            curves: [
+              { type: 'line', x1: -4, y1: -4, x2: 4, y2: -4 },
+              { type: 'line', x1: 4, y1: -4, x2: 4, y2: 4 },
+              { type: 'line', x1: 4, y1: 4, x2: -4, y2: 4 },
+              { type: 'line', x1: -4, y1: 4, x2: -4, y2: -4 },
+            ],
+          },
+          holes: [],
+        },
+      ],
+      distances: [-30],
+    });
+    const reached = engine.booleanShape({
+      shapeId: 'to-body-last',
+      baseShapeId: 'to-body-prism',
+      toolShapeId: 'to-body-block',
+      op: 'common',
+    });
+    expect(reached.stats.solids).toBe(1);
+    const mesh = engine.tessellate('to-body-last');
+    // The column of material inside the block: from its top to its bottom.
+    expect(mesh.bbox.min[2]).toBeCloseTo(0, 5);
+    expect(mesh.bbox.max[2]).toBeCloseTo(6, 5);
+  });
+
+  it('leaves a layer from the surface and the same surface moved along the sweep', () => {
+    // A cylinder standing between z = 10 and z = 30, and the column above it.
+    engine.makePrimitive({
+      shapeId: 'layer-cylinder',
+      kind: 'cylinder',
+      radius: 10,
+      height: 20,
+      at: [0, 0, 10],
+    });
+    engine.transformShape({
+      shapeId: 'layer-cylinder-moved',
+      sourceShapeId: 'layer-cylinder',
+      matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1],
+    });
+    engine.makePrism({
+      shapeId: 'layer-prism',
+      origin: [0, 0, 50],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 1, 0],
+      regions: [
+        {
+          outer: {
+            curves: [
+              { type: 'line', x1: -15, y1: -15, x2: 15, y2: -15 },
+              { type: 'line', x1: 15, y1: -15, x2: 15, y2: 15 },
+              { type: 'line', x1: 15, y1: 15, x2: -15, y2: 15 },
+              { type: 'line', x1: -15, y1: 15, x2: -15, y2: -15 },
+            ],
+          },
+          holes: [],
+        },
+      ],
+      distances: [-60],
+    });
+    // The air above the surface, and the air above the same surface one
+    // millimetre further towards the profile.
+    engine.booleanShape({
+      shapeId: 'layer-air',
+      baseShapeId: 'layer-prism',
+      toolShapeId: 'layer-cylinder',
+      op: 'cut',
+    });
+    engine.booleanShape({
+      shapeId: 'layer-air-outer',
+      baseShapeId: 'layer-prism',
+      toolShapeId: 'layer-cylinder-moved',
+      op: 'cut',
+    });
+    const layer = engine.booleanShape({
+      shapeId: 'layer',
+      baseShapeId: 'layer-air',
+      toolShapeId: 'layer-air-outer',
+      op: 'cut',
+    });
+    expect(layer.stats.solids).toBe(1);
+    const mesh = engine.tessellate('layer');
+    // The layer starts on the surface and is one millimetre thick, and its
+    // sides follow the cylinder instead of the square the profile grew from.
+    expect(mesh.bbox.min[2]).toBeCloseTo(30, 5);
+    expect(mesh.bbox.max[2]).toBeCloseTo(31, 5);
+    expect(mesh.bbox.max[0]).toBeCloseTo(10, 3);
   });
 });

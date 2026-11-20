@@ -261,7 +261,9 @@
     "ARRAY_ARC_NEEDED": "Pick an arc or a circle: only a round curve has a centre to turn around.",
     "EXPRESSION_ERROR": "A formula in this operation could not be evaluated",
     "CONSTRAINT_CONFLICT": "The constraints cannot be satisfied",
-    "FORMULA_LOAD_FAILED": "The formula engine could not start"
+    "FORMULA_LOAD_FAILED": "The formula engine could not start",
+    "TO_BODY_MISSING": "The extrusion does not reach a body: pick a body or reverse the direction",
+    "TO_BODY_EMPTY": "Nothing is left between the profile and the body: check the extent and the offset"
   },
   "features": {
     "box": "Box",
@@ -555,7 +557,20 @@
     "selectEdge": "Select edge",
     "angleStart": "Start angle",
     "angleEnd": "End angle",
-    "invertRevolve": "Flip revolve direction"
+    "invertRevolve": "Flip revolve direction",
+    "end_to_body": "To body",
+    "toBody": "To side",
+    "toBody_first": "Front",
+    "toBody_last": "Back",
+    "toBodyMode": "Mode",
+    "toBodyMode_solid": "Solid",
+    "toBodyMode_gap": "Gap",
+    "toBodyMode_shell": "Shell",
+    "toBodyOffset": "Offset to surface",
+    "toBodyThickness": "Thickness from surface",
+    "toBodyBody": "Body",
+    "toBodyAnyBody": "Any body on the way",
+    "toBodySearch": "Intersection search"
   },
   "delete": {
     "title": "Delete operation?",

@@ -261,7 +261,9 @@
     "ARRAY_ARC_NEEDED": "Выберите дугу или окружность: центр есть только у круглой кривой.",
     "EXPRESSION_ERROR": "Формулу в этой операции не удалось вычислить",
     "CONSTRAINT_CONFLICT": "Ограничения несовместимы",
-    "FORMULA_LOAD_FAILED": "Движок формул не запустился"
+    "FORMULA_LOAD_FAILED": "Движок формул не запустился",
+    "TO_BODY_MISSING": "Выдавливание не встречает тело: выберите тело или разверните направление",
+    "TO_BODY_EMPTY": "Между профилем и телом ничего не остаётся: проверьте глубину и отступ"
   },
   "features": {
     "box": "Куб",
@@ -555,7 +557,20 @@
     "selectEdge": "Выбрать ребро",
     "angleStart": "Начальный угол",
     "angleEnd": "Конечный угол",
-    "invertRevolve": "Инверсия направления вращения"
+    "invertRevolve": "Инверсия направления вращения",
+    "end_to_body": "До тела",
+    "toBody": "К стороне",
+    "toBody_first": "Лицевой",
+    "toBody_last": "Тыльной",
+    "toBodyMode": "Способ",
+    "toBodyMode_solid": "Сплошной",
+    "toBodyMode_gap": "Отступ",
+    "toBodyMode_shell": "Оболочка",
+    "toBodyOffset": "Отступ до поверхности",
+    "toBodyThickness": "Толщина от поверхности",
+    "toBodyBody": "Тело",
+    "toBodyAnyBody": "Любое тело на пути",
+    "toBodySearch": "Поиск пересечений"
   },
   "delete": {
     "title": "Удалить операцию?",

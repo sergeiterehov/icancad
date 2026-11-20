@@ -60,6 +60,14 @@ import { resolveShellFaceRef } from '../quick/shell';
 import { resolveEdgeRef } from './edgeLookup';
 import { edgeTreatmentLimit } from './edgeTreatment';
 import { resolveFaceRef } from './faceLookup';
+import {
+  pickReferenceBody,
+  profileSamples,
+  signedToBodyOffset,
+  toBodyPlan,
+  traceProfile,
+  type ToBodyPlan,
+} from './extrudeToBody';
 import { KernelTaskCancelledError, kernelTaskQueue } from './scheduler';
 import { splitAssignment, splitBodyId } from './splitBodies';
 import { RebuildCache, type RebuildCheckpoint } from './checkpoints';
@@ -84,6 +92,11 @@ const MIN_TREATMENT_SIZE = 0.01;
 const LONG_OPERATION_MS = 2000;
 /** How far a union reaches behind its plane to overlap the body it joins. */
 const UNION_EMBED = 0.01;
+/**
+ * How close to the profile plane a tool still counts as touching it. A tool
+ * always starts on the plane; tessellation moves its vertices by rounding only.
+ */
+const PLANE_TOLERANCE = 1e-3;
 
 /**
  * The mesh estimate is the exact geometric ceiling, which is also the size the
@@ -1165,6 +1178,7 @@ async function applyExtrude(
     shapeId: string,
     plane: { origin: Vec3; xAxis: Vec3; yAxis: Vec3; normal: Vec3 },
     regions: ProfileRegion[],
+    plan: ToBodyPlan | null,
   ) =>
     revolveAxis && revolveAnglesRad
       ? {
@@ -1193,7 +1207,7 @@ async function applyExtrude(
               outer: profile.outer,
               holes: profile.holes,
             })),
-            distances: extrudeDistances(feature, plane.origin, plane.normal, meshes),
+            distances: extrudeDistances(feature, plane.origin, plane.normal, meshes, plan),
             // A union reaches back into the body it joins, so a sketch drawn on
             // a face adds material instead of floating beside it.
             ...(feature.op === 'add' ? { embed: UNION_EMBED } : {}),
@@ -1206,6 +1220,7 @@ async function applyExtrude(
     faceId: number,
     pose: { origin: Vec3; normal: Vec3 },
     embed: boolean,
+    plan: ToBodyPlan | null,
   ) =>
     revolveAxis && revolveAnglesRad
       ? {
@@ -1219,7 +1234,7 @@ async function applyExtrude(
             sourceShapeId,
             faceId,
             normal: pose.normal,
-            distances: extrudeDistances(feature, pose.origin, pose.normal, meshes),
+            distances: extrudeDistances(feature, pose.origin, pose.normal, meshes, plan),
             embed,
           },
         };
@@ -1231,6 +1246,199 @@ async function applyExtrude(
   };
   const bodyErrorCode = (bodyId: string) =>
     bodyOwner.has(bodyId) ? 'BODY_NOT_SOLID' : 'UNKNOWN_BODY';
+
+  // "To body" has no free distance: the sweep looks for the body it ends on and
+  // the tools are trimmed by it. "First" ends on the face that looks at the
+  // profile, "last" on the far face of the body (ADR 0035).
+  const toBodyKind =
+    feature.end === 'to-body' && feature.method === 'extrude'
+      ? (feature.toBody?.kind ?? 'first')
+      : null;
+  // The inspector stores a size and the way it ends on the face; the sign that
+  // tells the trim which side of the face to take follows from the two.
+  const toBodyOffset = signedToBodyOffset(
+    feature.toBodyOffset ?? 0,
+    toBodyKind ?? 'first',
+    feature.toBody?.mode,
+  );
+
+  interface ToBodyReference {
+    bodyId: string;
+    shapeId: string;
+    plan: ToBodyPlan;
+    direction: Vec3;
+    /** A point of the profile plane: what a tool "touches" is measured from it. */
+    origin: Vec3;
+  }
+
+  const toBodyReference = (origin: Vec3, normal: Vec3, samples: Vec3[]): ToBodyReference | null => {
+    if (!toBodyKind) return null;
+    const direction = signedDirection(normal, feature.reversed ? -1 : 1);
+    const hits = traceProfile(meshes, samples, direction);
+    const bodyId = pickReferenceBody(hits, toBodyKind, feature.toBody?.bodyId);
+    const shapeId = bodyId ? bodyShapes.get(bodyId) : undefined;
+    if (!bodyId || !shapeId) throw new Error('TO_BODY_MISSING');
+    // A union has to share material with the body it joins: the face it lands on
+    // is passed by a hair, exactly like an added blind extrusion.
+    const embed = feature.op === 'add' ? UNION_EMBED : 0;
+    const plan = toBodyPlan(hits, bodyId, toBodyKind, toBodyOffset, embed);
+    if (!plan) throw new Error('TO_BODY_EMPTY');
+    return { bodyId, shapeId, plan, direction, origin };
+  };
+
+  /**
+   * Trims one tool of a "to body" extent against its reference body. The gap is
+   * made by moving the body's surface along its own normals, so the tool ends the
+   * same distance from the body wherever the profile meets it, and the end
+   * follows any curvature instead of being cut by a plane.
+   */
+  const trimToBody = async (
+    shapeId: string,
+    reference: ToBodyReference,
+    startsInside: boolean,
+  ): Promise<string> => {
+    const { plan, direction, origin } = reference;
+    const boolean = async (
+      resultId: string,
+      baseShapeId: string,
+      toolShapeId: string,
+      op: 'cut' | 'common' | 'fuse',
+    ) => {
+      await client.request({
+        type: 'boolean',
+        params: { shapeId: resultId, baseShapeId, toolShapeId, op },
+      });
+    };
+    /**
+     * The body with its surface moved along its own normals. An offset, not a
+     * translation: the distance from the tool's end to the body is then the same
+     * everywhere, including where the surface runs along the sweep.
+     */
+    const offsetBody = async (suffix: string, distance: number): Promise<string> => {
+      if (distance === 0) return reference.shapeId;
+      const offsetId = trackShape(`${shapeId}:${suffix}`);
+      await client.request({
+        type: 'offset-shape',
+        params: { shapeId: offsetId, sourceShapeId: reference.shapeId, distance },
+      });
+      return offsetId;
+    };
+    /**
+     * Drops what the prism keeps behind the reference body. Cutting the body out
+     * of a prism that passes it leaves that sliver as its own solid, cut off by
+     * the body: only the parts that reach the profile plane belong to the tool.
+     */
+    const atPlane = async (shapeId: string, suffix: string): Promise<string> => {
+      const stats = await client.request<ShapeStats>({ type: 'topology', shapeId });
+      if (epoch !== rebuildEpoch) return shapeId;
+      if (stats.solids < 2) return shapeId;
+      const prefix = `${shapeId}:${suffix}`;
+      for (let index = 0; index < stats.solids; index += 1) {
+        trackShape(`${prefix}:solid-${index}`);
+      }
+      const split = await client.request<SplitSolidsResult>({
+        type: 'split-solids',
+        params: { shapeId, prefix },
+      });
+      if (epoch !== rebuildEpoch) return shapeId;
+      const kept: string[] = [];
+      for (const solid of split.solids) {
+        const mesh = await client.request<TessellationResult>({
+          type: 'tessellate',
+          shapeId: solid.shapeId,
+        });
+        if (epoch !== rebuildEpoch) return shapeId;
+        if (reachesPlane(mesh, origin, direction)) kept.push(solid.shapeId);
+      }
+      if (kept.length === 0) throw new Error('TO_BODY_EMPTY');
+      let result = kept[0]!;
+      for (const piece of kept.slice(1)) {
+        const fusedId = trackShape(`${shapeId}:${suffix}-fused`);
+        await boolean(fusedId, result, piece, 'fuse');
+        result = fusedId;
+      }
+      return result;
+    };
+    /** What the profile sweeps through up to the ending face. */
+    const regionTo = async (suffix: string, bodySuffix: string, distance: number) => {
+      const bodyId = await offsetBody(bodySuffix, distance);
+      if (epoch !== rebuildEpoch) return shapeId;
+      const regionId = trackShape(`${shapeId}:${suffix}`);
+      await boolean(regionId, shapeId, bodyId, startsInside ? 'common' : 'cut');
+      return regionId;
+    };
+    try {
+      const frontId = await atPlane(await regionTo('front', 'body', plan.offset), 'front-kept');
+      if (epoch !== rebuildEpoch) return shapeId;
+      if (!plan.whole) {
+        if (plan.outerOffset === undefined) return frontId;
+        // A layer is what the sweep covers up to the face minus what it covers
+        // up to that face moved outwards: a shell of that thickness on the body.
+        const outerId = await regionTo('outer', 'outer-body', plan.outerOffset);
+        if (epoch !== rebuildEpoch) return shapeId;
+        const layerId = trackShape(`${shapeId}:layer`);
+        await boolean(layerId, frontId, outerId, 'cut');
+        if (epoch !== rebuildEpoch) return shapeId;
+        return layerId;
+      }
+      // The column from the profile to the far face: the part in front of the
+      // body plus the material of the body itself.
+      const faceId = await offsetBody('face', plan.offset);
+      if (epoch !== rebuildEpoch) return shapeId;
+      const materialId = trackShape(`${shapeId}:material`);
+      await boolean(materialId, shapeId, faceId, 'common');
+      if (epoch !== rebuildEpoch) return shapeId;
+      const resultId = trackShape(`${shapeId}:to-body`);
+      await boolean(resultId, frontId, materialId, 'fuse');
+      if (epoch !== rebuildEpoch) return shapeId;
+      return resultId;
+    } catch {
+      // A boolean against the reference body that leaves nothing — or a surface
+      // the kernel cannot offset — is the extent missing the body, not a kernel
+      // failure worth reporting as one.
+      throw new Error('TO_BODY_EMPTY');
+    }
+  };
+
+  /** Whether the profile itself sits in material, which flips "cut" to "common". */
+  const startsInsideBody = (bodyId: string, samples: readonly Vec3[]): boolean => {
+    const mesh = meshes[bodyId];
+    if (!mesh || samples.length === 0) return false;
+    const inside = samples.filter((point) => pointInMesh(mesh, point)).length;
+    return inside * 2 > samples.length;
+  };
+
+  const buildProfileShape = async (
+    shapeId: string,
+    plane: { origin: Vec3; xAxis: Vec3; yAxis: Vec3; normal: Vec3 },
+    regions: ProfileRegion[],
+  ): Promise<string> => {
+    const samples = profileSamples(regions, plane);
+    const reference = toBodyReference(plane.origin, plane.normal, samples);
+    await client.request(profileRequest(shapeId, plane, regions, reference?.plan ?? null));
+    if (epoch !== rebuildEpoch) return shapeId;
+    if (!reference) return shapeId;
+    return trimToBody(shapeId, reference, startsInsideBody(reference.bodyId, samples));
+  };
+
+  const buildFaceShape = async (
+    shapeId: string,
+    sourceShapeId: string,
+    faceId: number,
+    pose: { origin: Vec3; normal: Vec3 },
+    embed: boolean,
+    bodyId: string,
+  ): Promise<string> => {
+    const mesh = meshes[bodyId];
+    const samples = mesh ? faceSamples(mesh, faceId) : [];
+    const reference = toBodyReference(pose.origin, pose.normal, samples);
+    await client.request(
+      faceRequest(shapeId, sourceShapeId, faceId, pose, embed, reference?.plan ?? null),
+    );
+    if (epoch !== rebuildEpoch) return shapeId;
+    if (!reference) return shapeId;
+    return trimToBody(shapeId, reference, startsInsideBody(reference.bodyId, samples));
+  };
 
   // A new body operation may produce several bodies. Every region and every
   // picked face becomes an independent solid, exactly as the user picked them.
@@ -1302,8 +1510,11 @@ async function applyExtrude(
         if (emittedGroups.has(group)) continue;
         emittedGroups.add(group);
         const bodyId = extrudeBodyId(feature.id, `body-${slot}`);
-        const shapeId = trackShape(`${feature.id}:prism-${slot}`);
-        await client.request(profileRequest(shapeId, frame!, group));
+        const shapeId = await buildProfileShape(
+          trackShape(`${feature.id}:prism-${slot}`),
+          frame!,
+          group,
+        );
         if (epoch !== rebuildEpoch) return;
         bodyShapes.set(bodyId, shapeId);
         bodyOwner.set(bodyId, feature.id);
@@ -1326,8 +1537,14 @@ async function applyExtrude(
         continue;
       }
       const bodyId = extrudeBodyId(feature.id, `body-${slot}`);
-      const shapeId = trackShape(`${feature.id}:face-${slot}`);
-      await client.request(faceRequest(shapeId, sourceShapeId, Number(ref.faceId), ref, false));
+      const shapeId = await buildFaceShape(
+        trackShape(`${feature.id}:face-${slot}`),
+        sourceShapeId,
+        Number(ref.faceId),
+        ref,
+        false,
+        ref.bodyId,
+      );
       if (epoch !== rebuildEpoch) return;
       bodyShapes.set(bodyId, shapeId);
       bodyOwner.set(bodyId, feature.id);
@@ -1364,14 +1581,20 @@ async function applyExtrude(
   // booleans leaves behind as internal faces that make later cuts miss.
   const separateParts = feature.op === 'add' && explicitTargetsEarly;
   if (selected.length > 0 && !separateParts) {
-    const shapeId = trackShape(`tool:${feature.id}:sketch`);
-    await client.request(profileRequest(shapeId, frame!, selected));
+    const shapeId = await buildProfileShape(
+      trackShape(`tool:${feature.id}:sketch`),
+      frame!,
+      selected,
+    );
     if (epoch !== rebuildEpoch) return;
     toolParts.push({ shapeId, key: `s:${sketch!.id}#*` });
   } else {
     for (const [index, profile] of selected.entries()) {
-      const shapeId = trackShape(`tool:${feature.id}:sketch-${index}`);
-      await client.request(profileRequest(shapeId, frame!, [profile]));
+      const shapeId = await buildProfileShape(
+        trackShape(`tool:${feature.id}:sketch-${index}`),
+        frame!,
+        [profile],
+      );
       if (epoch !== rebuildEpoch) return;
       toolParts.push({ shapeId, key: `s:${sketch!.id}#${profile.id}` });
     }
@@ -1390,9 +1613,13 @@ async function applyExtrude(
     // A face a previous boolean moved to another body keeps its identity, so
     // the target list follows it instead of adding to a body it left behind.
     if (!refBodyRemap.has(ref.bodyId)) refBodyRemap.set(ref.bodyId, resolved.bodyId);
-    const shapeId = trackShape(`tool:${feature.id}:face-${index}`);
-    await client.request(
-      faceRequest(shapeId, sourceShapeId, resolved.faceId, ref, feature.op === 'add'),
+    const shapeId = await buildFaceShape(
+      trackShape(`tool:${feature.id}:face-${index}`),
+      sourceShapeId,
+      resolved.faceId,
+      ref,
+      feature.op === 'add',
+      resolved.bodyId,
     );
     if (epoch !== rebuildEpoch) return;
     toolParts.push({ shapeId, key: `b:${ref.bodyId}#${ref.faceId}` });
@@ -1591,8 +1818,11 @@ async function applyExtrude(
       };
       if (selected.length > 0) {
         for (const [index, profile] of selected.entries()) {
-          const toolId = trackShape(`${feature.id}:single-tool-${index}`);
-          await client.request(profileRequest(toolId, frame!, [profile]));
+          const toolId = await buildProfileShape(
+            trackShape(`${feature.id}:single-tool-${index}`),
+            frame!,
+            [profile],
+          );
           if (epoch !== rebuildEpoch) return;
           await applyPart(toolId, index);
           if (epoch !== rebuildEpoch) return;
@@ -2885,12 +3115,21 @@ function extrudeDistances(
   origin: readonly [number, number, number],
   normal: readonly [number, number, number],
   meshes: Record<string, TessellationResult>,
+  toBodyPlan?: ToBodyPlan | null,
 ): number[] {
   const sign = feature.reversed ? -1 : 1;
   const distances: number[] = [];
   if (feature.end === 'symmetric') {
     const half = Math.abs(feature.distance);
     distances.push(-half, half);
+    return distances;
+  }
+  // "To body" has no free distance: the reach comes from where the sweep meets
+  // the reference body, and a reversed extent reaches back for the layer it
+  // leaves on the surface.
+  if (feature.end === 'to-body') {
+    if (!toBodyPlan) throw new Error('TO_BODY_MISSING');
+    distances.push(sign * toBodyPlan.far);
     return distances;
   }
   // Older files can hold a through-all extent that the current operation does
@@ -2914,6 +3153,27 @@ function extrudeDistances(
     distances.push(-sign * back);
   }
   return distances;
+}
+
+/**
+ * Whether a tessellated shape touches the profile plane. Points before it are
+ * negative, and a tool that reaches the plane has a vertex on it.
+ */
+function reachesPlane(
+  mesh: TessellationResult,
+  origin: readonly [number, number, number],
+  direction: readonly [number, number, number],
+): boolean {
+  const positions = mesh.positions;
+  let nearest = Infinity;
+  for (let index = 0; index + 2 < positions.length; index += 3) {
+    const along =
+      (positions[index]! - origin[0]) * direction[0] +
+      (positions[index + 1]! - origin[1]) * direction[1] +
+      (positions[index + 2]! - origin[2]) * direction[2];
+    if (along < nearest) nearest = along;
+  }
+  return nearest <= PLANE_TOLERANCE;
 }
 
 // Support of one tessellation along a direction, cached: through-all needs it

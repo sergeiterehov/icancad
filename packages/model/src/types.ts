@@ -289,12 +289,31 @@ export interface SketchFeature extends FeatureBase {
   projections?: SketchProjection[];
 }
 
-export type ExtrudeEnd = 'blind' | 'symmetric' | 'through-all';
+export type ExtrudeEnd = 'blind' | 'symmetric' | 'through-all' | 'to-body';
 
 export interface ExtrudeSecondDirection {
   end: 'blind' | 'through-all';
   distance: ParamValue;
 }
+
+/**
+ * Where a "to body" extrude ends: on the face of the body that looks towards
+ * the profile (`first`) or on the one away from it (`last`).
+ */
+export interface ExtrudeToBody {
+  kind: 'first' | 'last';
+  /** A picked body to stop at; without one the sweep takes the nearest or farthest. */
+  bodyId?: string;
+  /**
+   * How the sweep ends on that body: solid ends on the surface, gap stops the
+   * given distance in front of it, shell keeps a layer of that thickness standing
+   * on it. Absent in older documents, where the sign of the offset carried it.
+   */
+  mode?: ExtrudeToBodyMode;
+}
+
+/** Where a "to body" sweep ends relative to the surface that stops it. */
+export type ExtrudeToBodyMode = 'solid' | 'gap' | 'shell';
 
 /** What sweeps the profile: a straight pull or a turn around an axis. */
 export type ExtrudeMethod = 'extrude' | 'revolve';
@@ -383,6 +402,14 @@ export interface ExtrudeFeature extends FeatureBase {
   revolve?: RevolveSpec;
   end: ExtrudeEnd;
   distance: ParamValue;
+  /** The body a `to-body` extent stops at; absent for every other extent. */
+  toBody?: ExtrudeToBody;
+  /**
+   * Millimetres measured from the face the extrusion ends on, not from the
+   * profile plane. A size once `mode` says how the sweep ends there; a document
+   * from before that carries the way in the sign of this number instead.
+   */
+  toBodyOffset?: ParamValue;
   /** Extrude along the opposite side of the sketch plane or face normal. */
   reversed: boolean;
   /** Optional extrusion to the opposite side of the sketch plane. */

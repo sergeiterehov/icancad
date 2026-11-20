@@ -14,6 +14,7 @@ import {
   resolveBody,
   SKETCH_COLOR,
   sketchObjectId,
+  type ExtrudeFeature,
   type PrimitiveFeature,
   type Resolved,
   type SketchFeature,
@@ -282,6 +283,7 @@ export function Viewport() {
   const pickingSketchPlane = useUiStore((state) => state.pickingSketchPlane);
   const pickingSectionFace = useUiStore((state) => state.pickingSectionFace);
   const pickingRevolveAxis = useUiStore((state) => state.pickingRevolveAxis);
+  const pickingExtrudeToBody = useUiStore((state) => state.pickingExtrudeToBody);
   const pickingArrayBodies = useUiStore((state) => state.pickingArrayBodies);
   const pickingArrayOperations = useUiStore((state) => state.pickingArrayOperations);
   const pickingArrayFace = useUiStore((state) => state.pickingArrayFace);
@@ -343,6 +345,7 @@ export function Viewport() {
     Boolean(pickingSketchPlane) ||
     Boolean(pickingSectionFace) ||
     Boolean(pickingRevolveAxis) ||
+    Boolean(pickingExtrudeToBody) ||
     // The array's own grips are only meaningful once what it repeats is picked,
     // and while picking they would take the clicks aimed at the geometry.
     Boolean(pickingArrayBodies) ||
@@ -807,6 +810,36 @@ export function Viewport() {
           }
           return;
         }
+        const toBodyPicker = ui.pickingExtrudeToBody;
+        if (toBodyPicker) {
+          if (!pick) return;
+          // A body, its face or its edge all name the same body: the extent
+          // stops at the whole body's surface, not at one face of it.
+          const bodyId =
+            pick.kind === 'body'
+              ? pick.id
+              : pick.kind === 'body-face' ||
+                  pick.kind === 'body-edge' ||
+                  pick.kind === 'body-vertex'
+                ? pick.bodyId
+                : undefined;
+          if (!bodyId) return;
+          const body = activeModel(store.project).bodies.find(
+            (candidate) => candidate.id === bodyId,
+          );
+          if (!body || body.kind === 'mesh') return;
+          const feature = activeModel(store.project).features.find(
+            (candidate): candidate is ExtrudeFeature =>
+              candidate.id === toBodyPicker && candidate.type === 'extrude',
+          );
+          store.setExtrudeToBody(toBodyPicker, {
+            ...feature?.toBody,
+            kind: feature?.toBody?.kind ?? 'first',
+            bodyId,
+          });
+          ui.setPickingExtrudeToBody(null);
+          return;
+        }
         if (!pick) {
           store.select(null);
           return;
@@ -883,7 +916,8 @@ export function Viewport() {
           ui.pickingExtrudeBodies ||
           ui.pickingSketchPlane ||
           ui.pickingSectionFace ||
-          ui.pickingRevolveAxis
+          ui.pickingRevolveAxis ||
+          ui.pickingExtrudeToBody
         ) {
           return;
         }
@@ -1475,10 +1509,14 @@ export function Viewport() {
         Boolean(pickingSketchPlane) ||
         Boolean(pickingSectionFace) ||
         Boolean(pickingRevolveAxis) ||
+        Boolean(pickingExtrudeToBody) ||
         Boolean(pickingArrayFace) ||
         Boolean(pickingArrayPath) ||
         sketchProjecting,
-      bodyPicking: Boolean(pickingExtrudeBodies) || Boolean(pickingShellBodies),
+      bodyPicking:
+        Boolean(pickingExtrudeBodies) ||
+        Boolean(pickingShellBodies) ||
+        Boolean(pickingExtrudeToBody),
       edgePicking:
         Boolean(pickingEdges) ||
         Boolean(pickingRevolveAxis) ||
@@ -1502,6 +1540,7 @@ export function Viewport() {
     pickingShellBodies,
     pickingShellFaces,
     pickingRevolveAxis,
+    pickingExtrudeToBody,
     pickingArrayFace,
     pickingArrayPath,
     sketchProjecting,
