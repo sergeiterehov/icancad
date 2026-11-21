@@ -2,7 +2,7 @@
 
 Browser CAD for 3D printing. The long-term goal is a Figma-like parametric modeler with a linear feature history, OpenCascade (OCCT) B-rep geometry and Blender mesh import.
 
-**Current status: M4 (modeling tool set).** The app shell, i18n, project/model document layer with undo/redo, IndexedDB autosave, `.icad` project files and the OCCT kernel pipeline are implemented. Modeling covers seven primitives, mesh import (STL/OBJ/PLY/GLB), STEP import with product names and colours, a constrained sketcher, extrude/revolve with add/subtract/intersect, fillet/chamfer, shell/cavity, move/rotate/scale transforms, arrays, sections and STL/STEP export. The production build installs as a PWA and works offline once the kernel has been loaded. Persistent topological naming (M5) and mesh → solid conversion are still ahead; the feature backlog lives in [MEMO.md](MEMO.md).
+**Current status: M4 (modeling tool set).** The app shell, i18n, project/model document layer with undo/redo, IndexedDB autosave, `.icad` project files and the OCCT kernel pipeline are implemented. Modeling covers seven primitives, mesh import (STL/OBJ/PLY/GLB) with a source-unit setting, STEP import with product names and colours, a constrained sketcher, extrude/revolve with add/subtract/intersect, fillet/chamfer, shell/cavity, move/rotate/scale transforms, arrays, sections and STL/STEP export. The production build installs as a PWA and works offline once the kernel has been loaded. Persistent topological naming (M5) and mesh → solid conversion are still ahead; the feature backlog lives in [MEMO.md](MEMO.md).
 
 ## Quick start
 

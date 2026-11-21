@@ -17,6 +17,7 @@ import {
   insertionPoint,
   historyInsertIndex,
   isFeatureInHistory,
+  DEFAULT_MESH_UNIT,
   isMeshObject,
   nextGroupName,
   nextModelName,
@@ -2020,6 +2021,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       type: 'import-mesh',
       assetId: featureId,
       format,
+      unit: DEFAULT_MESH_UNIT,
       transform: { translation: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
       scale: 1,
     };

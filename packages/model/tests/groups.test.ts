@@ -12,6 +12,7 @@ import {
   insertionPoint,
   nextGroupName,
   parseProject,
+  PROJECT_SCHEMA_VERSION,
   pruneEmptyGroups,
   timelineNodes,
   updateActiveModel,
@@ -366,7 +367,7 @@ describe('group serialization', () => {
     delete document.superObjects[0].groups;
     document.schemaVersion = 3;
     const parsed = parseProject(document);
-    expect(parsed.schemaVersion).toBe(6);
+    expect(parsed.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
     expect(activeModel(parsed).groups).toEqual([]);
     expect(activeModel(parsed).features.map((feature) => feature.id)).toEqual(['a', 'b']);
   });

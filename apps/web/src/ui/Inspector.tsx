@@ -101,6 +101,7 @@ import {
 } from './featureIcons';
 import { PickableSection, type PickableRow } from './PickableSection';
 import { ArraySection } from './ArraySection';
+import { ImportMeshSection } from './ImportMeshSection';
 import { TransformSection } from './TransformSection';
 import { VariablesSection } from './VariablesSection';
 import {
@@ -2232,6 +2233,7 @@ export function Inspector() {
               </>
             )}
 
+            {feature.type === 'import-mesh' && <ImportMeshSection feature={feature} />}
             {feature.type === 'array' && <ArraySection feature={feature} />}
             {feature.type === 'transform' && <TransformSection feature={feature} />}
 

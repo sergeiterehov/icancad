@@ -59,6 +59,7 @@ import { primitiveKernelParams } from '../primitive/params';
 import { primitivePreview } from '../primitive/preview';
 import { getKernelClient, retryKernel } from './client';
 import { importStepToKernel, loadImportedStep } from './import';
+import { importedMeshScale, scaledMeshStats } from './importUnits';
 import { faceRegion, pointInMesh } from '../quick/geometry';
 import { resolveShellFaceRef } from '../quick/shell';
 import { resolveEdgeRef } from './edgeLookup';
@@ -139,8 +140,8 @@ async function loadImportedMesh(assetId: string, format: MeshFormat): Promise<Pa
 function transformImportedMesh(
   mesh: ParsedMesh,
   feature: Resolved<ImportMeshFeature>,
-): TessellationResult {
-  const scale = feature.scale || 1;
+): { mesh: TessellationResult; stats: MeshStats } {
+  const scale = importedMeshScale(feature);
   const [rx, ry, rz] = feature.transform.rotation;
   const [tx, ty, tz] = feature.transform.translation;
   const cx = Math.cos(rx);
@@ -188,19 +189,23 @@ function transformImportedMesh(
     normals[index + 2] = nz2;
   }
 
+  const bounds: MeshStats['bounds'] =
+    mesh.positions.length > 0
+      ? { min, max }
+      : { min: [0, 0, 0], max: [0, 0, 0] };
   return {
-    positions,
-    normals,
-    indices: mesh.indices,
-    faceIds: new Uint32Array(positions.length / 3),
-    triangleCount: mesh.stats.triangleCount,
-    vertexCount: positions.length / 3,
-    bbox: {
-      min: mesh.positions.length > 0 ? min : [0, 0, 0],
-      max: mesh.positions.length > 0 ? max : [0, 0, 0],
+    mesh: {
+      positions,
+      normals,
+      indices: mesh.indices,
+      faceIds: new Uint32Array(positions.length / 3),
+      triangleCount: mesh.stats.triangleCount,
+      vertexCount: positions.length / 3,
+      bbox: bounds,
+      // Imported meshes are not B-reps, so they have no selectable edges.
+      edges: [],
     },
-    // Imported meshes are not B-reps, so they have no selectable edges.
-    edges: [],
+    stats: scaledMeshStats(mesh.stats, scale, bounds),
   };
 }
 
@@ -1133,10 +1138,11 @@ async function evaluateFeature(
     try {
       const parsed = await loadImportedMesh(feature.assetId, feature.format ?? 'stl');
       const bodyId = featureBodyId(feature.id);
-      state.meshes[bodyId] = transformImportedMesh(parsed, feature);
+      const transformed = transformImportedMesh(parsed, feature);
+      state.meshes[bodyId] = transformed.mesh;
       state.bodyOwner.set(bodyId, feature.id);
       state.bodySource.set(bodyId, feature.id);
-      state.meshStats[feature.id] = parsed.stats;
+      state.meshStats[feature.id] = transformed.stats;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'IMPORT_FAILED';
       state.featureErrors[feature.id] =

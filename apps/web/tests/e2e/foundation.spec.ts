@@ -506,6 +506,33 @@ test.describe('ICANCad foundation', () => {
     await expect(page.getByText('20 × 20 × 20 mm')).toBeVisible();
   });
 
+  test('converts imported meshes when the operation unit changes', async ({ page }) => {
+    await openApp(page);
+    await page.setInputFiles('[data-testid="import-mesh"]', {
+      name: 'cube.stl',
+      mimeType: 'model/stl',
+      buffer: cubeStl(20),
+    });
+
+    // The source unit lives on the import operation, so the file itself stays
+    // as it was and the rebuild applies the conversion.
+    const units = page.getByTestId('inspector').getByRole('group', { name: 'File units' });
+    await expect(units).toBeVisible();
+    await units.getByRole('button', { name: 'in', exact: true }).click();
+
+    await commitOperation(page);
+    const meshRow = page.getByTestId('left').getByRole('button', { name: /^cube/ });
+    await meshRow.click();
+    await expect(page.getByText('508 × 508 × 508 mm')).toBeVisible();
+
+    await expect(page.getByTestId('save-state')).toHaveAttribute('data-state', 'saved');
+    await page.reload();
+    const restored = page.getByTestId('left').getByRole('button', { name: /^cube/ });
+    await expect(restored).toBeVisible({ timeout: 120_000 });
+    await restored.click();
+    await expect(page.getByText('508 × 508 × 508 mm')).toBeVisible();
+  });
+
   test('supports rollback, language switching and themes', async ({ page }) => {
     await openApp(page);
     await addBox(page);

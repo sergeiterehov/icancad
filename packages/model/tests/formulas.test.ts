@@ -9,6 +9,7 @@ import {
   getParameter,
   isDriven,
   parseProject,
+  PROJECT_SCHEMA_VERSION,
   setParameter,
   type BoxPrimitive,
   type Feature,
@@ -217,7 +218,7 @@ describe('variables', () => {
     raw.schemaVersion = 4;
     delete raw.variables;
     const parsed = parseProject(raw);
-    expect(parsed.schemaVersion).toBe(6);
+    expect(parsed.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
     expect(parsed.variables).toEqual([]);
     expect(activeModel(parsed).variables).toEqual([]);
   });
@@ -227,7 +228,7 @@ describe('variables', () => {
     raw.schemaVersion = 5;
     delete (raw.superObjects as Record<string, unknown>[])[0]!.variables;
     const parsed = parseProject(raw);
-    expect(parsed.schemaVersion).toBe(6);
+    expect(parsed.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
     expect(activeModel(parsed).variables).toEqual([]);
   });
 

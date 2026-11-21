@@ -1,9 +1,12 @@
 import { z } from 'zod';
 import { pruneEmptyGroups } from './groups';
 import { createId } from './ids';
-import type { Project } from './types';
+import { DEFAULT_MESH_UNIT, MESH_UNITS, type Project } from './types';
 
-export const PROJECT_SCHEMA_VERSION = 6;
+export const PROJECT_SCHEMA_VERSION = 7;
+
+/** Documents written before imported meshes kept the file's length unit. */
+const MESH_UNIT_LESS_SCHEMA_VERSION = 6;
 
 /** Documents written before model variables. */
 const MODEL_VARIABLE_LESS_SCHEMA_VERSION = 5;
@@ -124,6 +127,7 @@ const importMeshFeature = z.object({
   type: z.literal('import-mesh'),
   assetId: z.string().min(1),
   format: z.enum(['stl', 'obj', 'ply', 'glb']).default('stl'),
+  unit: z.enum(MESH_UNITS).default(DEFAULT_MESH_UNIT),
   transform,
   scale: param(z.number().positive()),
 });
@@ -733,6 +737,9 @@ export function parseProject(input: unknown, options: ParseProjectOptions = {}):
     candidate = migrateLegacyProject(legacy.data, options.modelName ?? 'Model');
   } else if (version === MODEL_VARIABLE_LESS_SCHEMA_VERSION) {
     // Model variables arrived with version 6; the schema fills the list in.
+    candidate = { ...(input as Record<string, unknown>), schemaVersion: PROJECT_SCHEMA_VERSION };
+  } else if (version === MESH_UNIT_LESS_SCHEMA_VERSION) {
+    // Import units arrived with version 7; the schema defaults them to mm.
     candidate = { ...(input as Record<string, unknown>), schemaVersion: PROJECT_SCHEMA_VERSION };
   } else if (version === GROUP_LESS_SCHEMA_VERSION) {
     // Folders arrived with version 4; variables with version 5. Every other

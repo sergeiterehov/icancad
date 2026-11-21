@@ -215,6 +215,16 @@
     "retry": "Retry",
     "errorTitle": "Geometry kernel error"
   },
+  "importUnits": {
+    "title": "File units",
+    "hint": "The file is kept as imported; its lengths are converted to millimetres when the operation runs.",
+    "factor": "1 {{unit}} = {{factor}} mm",
+    "mm": "mm",
+    "cm": "cm",
+    "m": "m",
+    "in": "in",
+    "ft": "ft"
+  },
   "toast": {
     "saved": "Project saved",
     "imported": "Project opened",

@@ -4,6 +4,21 @@ export type Vec3 = [number, number, number];
 
 export type MeshFormat = 'stl' | 'obj' | 'ply' | 'glb';
 
+export const MESH_UNITS = ['mm', 'cm', 'm', 'in', 'ft'] as const;
+
+/** The length unit a mesh file is written in; the model itself is millimetres. */
+export type MeshUnit = (typeof MESH_UNITS)[number];
+
+export const DEFAULT_MESH_UNIT: MeshUnit = 'mm';
+
+export const MILLIMETRES_PER_MESH_UNIT: Record<MeshUnit, number> = {
+  mm: 1,
+  cm: 10,
+  m: 1000,
+  in: 25.4,
+  ft: 304.8,
+};
+
 /**
  * A numeric parameter written as a Python expression. The leading `=` the user
  * types in a field is a UI marker only and is never stored.
@@ -135,6 +150,7 @@ export interface ImportMeshFeature extends FeatureBase {
   type: 'import-mesh';
   assetId: string;
   format: MeshFormat;
+  unit: MeshUnit;
   transform: Transform;
   scale: ParamValue;
 }
@@ -728,7 +744,7 @@ export interface FeatureGroup {
 export type SuperObject = Model;
 
 export interface Project {
-  schemaVersion: 6;
+  schemaVersion: 7;
   id: string;
   name: string;
   units: 'mm';

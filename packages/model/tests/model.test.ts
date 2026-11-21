@@ -14,6 +14,7 @@ import {
   nextModelName,
   parseProject,
   ProjectFileError,
+  PROJECT_SCHEMA_VERSION,
   solidBodiesInHistory,
   validateHistory,
   type BodyRef,
@@ -203,7 +204,7 @@ describe('project model', () => {
 
   it('migrates a flat version 2 project into one model', () => {
     const project = parseProject(legacyFile([boxFeature()]));
-    expect(project.schemaVersion).toBe(6);
+    expect(project.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
     expect(project.superObjects).toHaveLength(1);
     expect(activeModel(project).name).toBe('Model');
     expect(activeModel(project).features.map((feature) => feature.id)).toEqual(['feat_box']);
@@ -410,6 +411,7 @@ describe('object metadata', () => {
           type: 'import-mesh',
           assetId: 'asset-1',
           format: 'stl',
+          unit: 'mm',
           transform,
           scale: 1,
         },
@@ -420,6 +422,36 @@ describe('object metadata', () => {
     expect(body?.kind).toBe('mesh');
     expect(isMeshObject(body!)).toBe(true);
     expect(solidBodiesInHistory(modelOf(project))).toEqual([]);
+  });
+
+  it('gives imported meshes from older projects millimetre units', () => {
+    const project = applyCommands(createProject(), [
+      {
+        type: 'feature/add',
+        feature: {
+          id: 'feat_import',
+          name: 'Imported mesh',
+          suppressed: false,
+          type: 'import-mesh',
+          assetId: 'asset-1',
+          format: 'stl',
+          unit: 'mm',
+          transform,
+          scale: 1,
+        },
+      },
+      { type: 'body/add', body: { ...bodyFor('feat_import'), kind: 'mesh' } },
+    ]);
+    const legacy = JSON.parse(JSON.stringify(project)) as unknown as Record<string, unknown>;
+    legacy.schemaVersion = 6;
+    delete (activeModel(legacy as unknown as Project).features[0] as { unit?: string }).unit;
+
+    const parsed = parseProject(legacy);
+    expect(parsed.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
+    expect(activeModel(parsed).features[0]).toMatchObject({
+      type: 'import-mesh',
+      unit: 'mm',
+    });
   });
 
   it('recognises imported meshes saved without a kind', () => {
@@ -433,6 +465,7 @@ describe('object metadata', () => {
           type: 'import-mesh',
           assetId: 'asset-1',
           format: 'stl',
+          unit: 'mm',
           transform,
           scale: 1,
         },
