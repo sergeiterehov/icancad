@@ -14,6 +14,7 @@ import { useDocumentStore } from './stores/documentStore';
 import { useUiStore } from './stores/uiStore';
 import { ConfirmDialog } from './ui/ConfirmDialog';
 import { ContextMenuHost } from './ui/ContextMenu';
+import { ExportDialogs } from './ui/ExportDialogs';
 import { FloatDock } from './ui/FloatDock';
 import { Inspector } from './ui/Inspector';
 import { LeftPanel } from './ui/LeftPanel';
@@ -129,6 +130,7 @@ export default function App() {
       <ConfirmDialog />
       <ProjectDeleteDialog />
       <ModelDeleteDialog />
+      <ExportDialogs />
     </div>
   );
 }

@@ -7,9 +7,10 @@ import {
   sketchObjectId,
   type Model,
 } from '@icancad/model';
-import { Eye, EyeOff, Move3d, Trash2 } from 'lucide-react';
+import { Download, Eye, EyeOff, Move3d, Trash2 } from 'lucide-react';
 import type { SelectionItem } from '../stores/documentStore';
 import { useDocumentStore } from '../stores/documentStore';
+import { useExportStore } from '../stores/exportStore';
 import type { ContextMenuItem } from './ContextMenu';
 
 /** An object the context menu can act on, taken from the current selection. */
@@ -143,6 +144,47 @@ export function visibilityMenuItem(
         .setObjectsVisible(
           targets.map((target) => ({ objectId: target.objectId, visible: !allVisible })),
         ),
+  };
+}
+
+export interface ExportMenuLabels {
+  export: string;
+  stl: string;
+  step: string;
+}
+
+/**
+ * Export of the picked objects: STL for anything with geometry, STEP only when
+ * the selection contains a solid body. The action goes through the same flow as
+ * the project menu, so STL asks for its quality and STEP reports skipped meshes
+ * in the same way.
+ */
+export function exportMenuItem(
+  targets: readonly MenuTarget[],
+  labels: ExportMenuLabels,
+): ContextMenuItem | null {
+  const objects = targets.filter((target) => target.kind !== 'sketch');
+  if (objects.length === 0) return null;
+  const bodyIds = objects.map((target) => target.id);
+  const formats: ContextMenuItem[] = [
+    {
+      id: 'export-stl',
+      label: labels.stl,
+      onSelect: () => useExportStore.getState().requestStl(bodyIds, true),
+    },
+  ];
+  if (objects.some((target) => target.kind === 'body')) {
+    formats.push({
+      id: 'export-step',
+      label: labels.step,
+      onSelect: () => void useExportStore.getState().requestStep(bodyIds, true),
+    });
+  }
+  return {
+    id: 'export',
+    label: labels.export,
+    icon: <Download size={14} />,
+    submenu: formats,
   };
 }
 

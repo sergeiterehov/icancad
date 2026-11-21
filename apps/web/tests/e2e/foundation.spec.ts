@@ -803,12 +803,14 @@ test.describe('ICANCad foundation', () => {
 
     const downloadPromise = page.waitForEvent('download');
     await openExportMenu(page);
-    // The item names the selection that will be exported.
+    // The item names the selection, and the scope question comes before quality.
     await page.getByRole('menuitem', { name: /^STL/ }).click();
+    await expect(page.getByTestId('export-scope-dialog')).toBeVisible();
+    await page.getByTestId('export-scope-selected').click();
     await expect(page.getByTestId('stl-export-dialog')).toBeVisible();
     await page.getByTestId('stl-export-confirm').click();
     const download = await downloadPromise;
-    expect(download.suggestedFilename()).toBe('untitled-project - model.stl');
+    expect(download.suggestedFilename()).toBe('untitled-project - model - cube.stl');
 
     await expect(page.getByTestId('save-state')).toHaveAttribute('data-state', 'saved');
     await page.reload();

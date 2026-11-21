@@ -55,6 +55,7 @@ import { showContextMenu, useContextMenuStore, type ContextMenuItem } from '../u
 import {
   colorMenuItem,
   deleteMenuItem,
+  exportMenuItem,
   objectMenuTargets,
   transformMenuItem,
   visibilityMenuItem,
@@ -916,6 +917,12 @@ export function Viewport() {
         if (visibility) items.push(visibility);
         const transform = transformMenuItem(targets, labels('features.transform'));
         if (transform) items.push(transform);
+        const exportItem = exportMenuItem(targets, {
+          export: labels('project.export'),
+          stl: labels('project.exportStl'),
+          step: labels('project.exportStep'),
+        });
+        if (exportItem) items.push(exportItem);
         const remove = deleteMenuItem(
           targets,
           targets.length > 1

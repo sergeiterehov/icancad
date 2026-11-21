@@ -69,11 +69,28 @@ describe('project file', () => {
     expect(stlFileName('My Part #1')).toBe('my-part-1.stl');
   });
 
+  it('puts a single exported body into the STL name', () => {
+    expect(stlFileName('My Part #1', 'Cube', 'Bracket')).toBe(
+      'my-part-1 - cube - bracket.stl',
+    );
+    expect(stlFileName('Мой проект', 'Модель', 'Стенка')).toBe(
+      'мой-проект - модель - стенка.stl',
+    );
+    expect(stlFileName('***', '***', '***')).toBe('project - model - body.stl');
+  });
+
   it('names a STEP file after the project and the active model', () => {
     expect(stepFileName('My Part #1', 'Cube')).toBe('my-part-1 - cube.step');
     expect(stepFileName('Мой проект', 'Модель')).toBe('мой-проект - модель.step');
     expect(stepFileName('***', '***')).toBe('project - model.step');
     expect(stepFileName('My Part #1')).toBe('my-part-1.step');
+  });
+
+  it('puts a single exported body into the STEP name', () => {
+    expect(stepFileName('My Part #1', 'Cube', 'Bracket')).toBe(
+      'my-part-1 - cube - bracket.step',
+    );
+    expect(stepFileName('My Part #1', undefined, 'Bracket')).toBe('my-part-1 - bracket.step');
   });
 });
 

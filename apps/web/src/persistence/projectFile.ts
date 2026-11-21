@@ -73,16 +73,35 @@ function slugify(name: string, fallback = 'project'): string {
   return slug || fallback;
 }
 
+/** `project - model - object.ext`; later parts drop away when they are not given. */
+function exportFileName(
+  projectName: string,
+  modelName: string | undefined,
+  objectName: string | undefined,
+  extension: string,
+): string {
+  const parts = [slugify(projectName)];
+  if (modelName !== undefined) parts.push(slugify(modelName, 'model'));
+  if (objectName !== undefined) parts.push(slugify(objectName, 'body'));
+  return `${parts.join(' - ')}.${extension}`;
+}
+
 /** `project - model.stl`; the project alone when no model name is given. */
-export function stlFileName(projectName: string, modelName?: string): string {
-  if (modelName === undefined) return `${slugify(projectName)}.stl`;
-  return `${slugify(projectName)} - ${slugify(modelName, 'model')}.stl`;
+export function stlFileName(
+  projectName: string,
+  modelName?: string,
+  objectName?: string,
+): string {
+  return exportFileName(projectName, modelName, objectName, 'stl');
 }
 
 /** `project - model.step`; the project alone when no model name is given. */
-export function stepFileName(projectName: string, modelName?: string): string {
-  if (modelName === undefined) return `${slugify(projectName)}.step`;
-  return `${slugify(projectName)} - ${slugify(modelName, 'model')}.step`;
+export function stepFileName(
+  projectName: string,
+  modelName?: string,
+  objectName?: string,
+): string {
+  return exportFileName(projectName, modelName, objectName, 'step');
 }
 
 export function projectFileName(name: string): string {

@@ -38,6 +38,7 @@ import { IconButton } from './Controls';
 import {
   colorMenuItem,
   deleteMenuItem,
+  exportMenuItem,
   objectTargets,
   transformMenuItem,
   visibilityMenuItem,
@@ -137,6 +138,12 @@ export function LeftPanel() {
     if (visibility) items.push(visibility);
     const transform = transformMenuItem(targets, t('features.transform'));
     if (transform) items.push(transform);
+    const exportItem = exportMenuItem(targets, {
+      export: t('project.export'),
+      stl: t('project.exportStl'),
+      step: t('project.exportStep'),
+    });
+    if (exportItem) items.push(exportItem);
     const remove = deleteMenuItem(
       targets,
       single ? t('context.deleteObject') : t('context.deleteSelected', { count: targets.length }),

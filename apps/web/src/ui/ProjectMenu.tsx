@@ -1,4 +1,3 @@
-import { exportStlBinary } from '@icancad/io';
 import {
   activeModel,
   bodiesInHistory,
@@ -33,8 +32,7 @@ import { useEffect, useRef, useState, type ChangeEvent, type MouseEvent } from '
 import { useTranslation } from 'react-i18next';
 import { MOD_KEY } from '../hooks/useShortcuts';
 import { setLocale, type Locale } from '../i18n';
-import { exportQuality, EXPORT_QUALITIES, type ExportQualityId } from '../io/exportQuality';
-import { meshesForExport, stepBodies, stepForExport } from '../kernel/export';
+import { downloadBlob } from '../io/download';
 import { loadAsset, saveAsset } from '../persistence/db';
 import {
   createAndOpenProject,
@@ -47,19 +45,17 @@ import {
   parseProjectFile,
   projectFileName,
   serializeProjectFile,
-  stepFileName,
-  stlFileName,
 } from '../persistence/projectFile';
 import { promptInstall } from '../pwa/install';
 import { applyUpdate } from '../pwa/updates';
 import { directBodyIds } from '../stores/selection';
 import { useDocumentStore } from '../stores/documentStore';
+import { useExportStore } from '../stores/exportStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { usePwaStore } from '../stores/pwaStore';
 import { useThemeStore } from '../stores/themeStore';
 import { useUiStore } from '../stores/uiStore';
 import { useContextMenuStore, type ContextMenuItem } from './ContextMenu';
-import { Button, Segmented, SegmentedTab } from './Controls';
 import { Tooltip } from './Tooltip';
 
 const LOCALES: { value: Locale; label: string }[] = [
@@ -108,11 +104,6 @@ export function ProjectMenu() {
   const fileInput = useRef<HTMLInputElement>(null);
   const meshInput = useRef<HTMLInputElement>(null);
   const projectsRef = useRef<Project[]>([]);
-  const [stlExport, setStlExport] = useState<{
-    bodyIds: string[];
-    quality: ExportQualityId;
-  } | null>(null);
-  const [exporting, setExporting] = useState(false);
 
   const saveLabel =
     saveState === 'saving'
@@ -122,15 +113,6 @@ export function ProjectMenu() {
         : saveState === 'saved'
           ? t('project.saved')
           : '';
-
-  const download = (blob: Blob, name: string) => {
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = name;
-    anchor.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1500);
-  };
 
   const handleExport = async () => {
     const project = useDocumentStore.getState().project;
@@ -142,87 +124,8 @@ export function ProjectMenu() {
         if (blob) assets.set(feature.assetId, new Uint8Array(await blob.arrayBuffer()));
       }
     }
-    download(serializeProjectFile(project, assets), projectFileName(project.name));
+    downloadBlob(serializeProjectFile(project, assets), projectFileName(project.name));
     showToast('toast.exported');
-  };
-
-  // Export acts on the selected bodies, or on all visible ones when nothing is
-  // selected; a selection wins even when it points at hidden objects.
-  const exportCandidates = () => {
-    const state = useDocumentStore.getState();
-    const selected = new Set(directBodyIds(state.selection));
-    return bodiesInHistory(
-      activeModel(state.project),
-      useKernelStore.getState().consumedBodies,
-    ).filter((body) => (selected.size > 0 ? selected.has(body.id) : body.visible));
-  };
-
-  const handleExportStl = () => {
-    const candidates = exportCandidates();
-    const meshes = useKernelStore.getState().meshes;
-    if (!candidates.some((body) => meshes[body.id])) {
-      showToast('toast.noGeometry', 'error');
-      return;
-    }
-    // The dialog chooses the tessellation before the kernel is asked for it.
-    setStlExport({ bodyIds: candidates.map((body) => body.id), quality: 'standard' });
-  };
-
-  const confirmStlExport = async () => {
-    if (!stlExport || exporting) return;
-    const state = useDocumentStore.getState();
-    setExporting(true);
-    try {
-      const meshes = await meshesForExport(
-        stlExport.bodyIds,
-        exportQuality(stlExport.quality).quality,
-        t('project.exportStl'),
-      );
-      if (meshes.length === 0) {
-        showToast('toast.noGeometry', 'error');
-        return;
-      }
-      download(
-        new Blob([new Uint8Array(exportStlBinary(meshes))], { type: 'model/stl' }),
-        stlFileName(state.project.name, activeModel(state.project).name),
-      );
-      showToast('toast.stlExported');
-      setStlExport(null);
-    } catch {
-      showToast('toast.stlExportFailed', 'error');
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  const handleExportStep = async () => {
-    if (exporting) return;
-    const state = useDocumentStore.getState();
-    const { bodies, skipped } = stepBodies(
-      exportCandidates(),
-      useKernelStore.getState().bodyShapes,
-    );
-    if (bodies.length === 0) {
-      showToast('toast.noGeometry', 'error');
-      return;
-    }
-    setExporting(true);
-    try {
-      const data = await stepForExport(bodies, t('project.exportStep'));
-      download(
-        new Blob([new Uint8Array(data)], { type: 'application/step' }),
-        stepFileName(state.project.name, activeModel(state.project).name),
-      );
-      if (skipped > 0) {
-        showToast('toast.stepExportedSkippedMeshes', 'info', { count: skipped });
-      } else {
-        showToast('toast.stepExported');
-      }
-    } catch {
-      showToast('toast.stepExportFailed', 'error');
-    } finally {
-      setExporting(false);
-    }
   };
 
   const projectItems = (projects: Project[]): ContextMenuItem[] => {
@@ -317,7 +220,7 @@ export function ProjectMenu() {
                 : t('project.exportStl'),
             icon: <FileBox size={14} />,
             disabled: !projectHasGeometry,
-            onSelect: handleExportStl,
+            onSelect: () => useExportStore.getState().start('stl'),
           },
           {
             id: 'export-step',
@@ -327,7 +230,7 @@ export function ProjectMenu() {
                 : t('project.exportStep'),
             icon: <Package size={14} />,
             disabled: !projectHasGeometry,
-            onSelect: () => void handleExportStep(),
+            onSelect: () => useExportStore.getState().start('step'),
           },
         ],
       },
@@ -546,55 +449,6 @@ export function ProjectMenu() {
         data-testid="import-mesh"
         onChange={(event) => void handleImportMesh(event)}
       />
-
-      {stlExport && (
-        <div
-          className="dialog-backdrop"
-          role="presentation"
-          onClick={() => {
-            if (!exporting) setStlExport(null);
-          }}
-        >
-          <div
-            className="dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-label={t('project.stlQualityTitle')}
-            data-testid="stl-export-dialog"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h2 className="dialog-title">{t('project.stlQualityTitle')}</h2>
-            <p className="dialog-text">{t('project.stlQualityText')}</p>
-            <Segmented ariaLabel={t('project.stlQuality')}>
-              {EXPORT_QUALITIES.map((quality) => (
-                <SegmentedTab
-                  key={quality.id}
-                  label={t(quality.labelKey as never)}
-                  active={stlExport.quality === quality.id}
-                  onClick={() =>
-                    setStlExport((current) =>
-                      current ? { ...current, quality: quality.id } : current,
-                    )
-                  }
-                />
-              ))}
-            </Segmented>
-            <div className="dialog-actions">
-              <Button variant="ghost" disabled={exporting} onClick={() => setStlExport(null)}>
-                {t('common.cancel')}
-              </Button>
-              <Button
-                variant="primary"
-                disabled={exporting}
-                data-testid="stl-export-confirm"
-                onClick={() => void confirmStlExport()}
-              >
-                {t('project.export')}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
