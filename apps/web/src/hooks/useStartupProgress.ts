@@ -14,6 +14,8 @@ export interface StartupProgress {
   message: string;
   /** Overall completion in 0..1; absent while the current work has no ratio. */
   progress?: number;
+  /** Extra word for the stage, such as the timeline percent while it builds. */
+  detail?: string;
   /** The current stage has no measurable progress and needs a running bar. */
   busy: boolean;
 }
@@ -31,6 +33,7 @@ export function useStartupProgress(): StartupProgress {
   const kernelStatus = useKernelStore((state) => state.status);
   const kernelRatio = useKernelStore((state) => state.ratio);
   const sceneVersion = useKernelStore((state) => state.sceneVersion);
+  const buildProgress = useKernelStore((state) => state.buildProgress);
   const formulaStatus = useFormulaStore((state) => state.status);
 
   if (!hydrated) {
@@ -61,11 +64,18 @@ export function useStartupProgress(): StartupProgress {
   // Only the first scene is boot. Later formula evaluations and rebuilds must
   // not cover the viewport again, so publishing any scene ends this stage.
   if (featureCount > 0 && sceneVersion === 0) {
+    const built = buildProgress
+      ? Math.min(1, Math.max(0, buildProgress.done / Math.max(1, buildProgress.total)))
+      : undefined;
     return {
       stage: 'model',
       message: t('status.preparingModel'),
-      progress: FORMULA_END,
-      busy: true,
+      progress: built === undefined ? FORMULA_END : FORMULA_END + (1 - FORMULA_END) * built,
+      detail:
+        built === undefined
+          ? undefined
+          : t('status.timelineProgress', { percent: Math.round(built * 100) }),
+      busy: built === undefined,
     };
   }
   return { stage: 'ready', message: '', busy: false };

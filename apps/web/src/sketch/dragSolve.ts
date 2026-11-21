@@ -214,6 +214,22 @@ export async function solveDrag({
       // Try the next attempt.
     }
   }
+  // A point held by constraints may simply be fixed: dragging it is impossible,
+  // not conflicting. The geometry the user already had is a valid answer, so the
+  // drag becomes a no-op instead of a solver error.
+  if (pointDrag && previous) {
+    return {
+      result: {
+        entities: previous,
+        status: 'success',
+        conflicting: [],
+        redundant: [],
+        dof: 0,
+        frozenEntityIds: [],
+      },
+      attempt: 'fixed',
+    };
+  }
   return null;
 }
 

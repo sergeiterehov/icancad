@@ -143,6 +143,17 @@ interface KernelState {
    */
   featureLimits: Record<string, { requested: number; applied: number }>;
   tasks: KernelTask[];
+  /**
+   * Steps of the timeline already built and how many the current rebuild will
+   * build in total, so the boot screen and the kernel status can say a percent.
+   */
+  buildProgress: { done: number; total: number } | null;
+  /**
+   * Whether the scene currently on screen is the model before the operation
+   * being edited, and so can be picked and dragged. A rebuild clears it until
+   * that state is published; the operation's own preview does not hold it back.
+   */
+  interactiveReady: boolean;
   /** Caret position of the operation currently being rebuilt. */
   rebuildCursor: number | null;
   /**
@@ -157,6 +168,8 @@ interface KernelState {
   setReady: (health: HealthResult) => void;
   setError: (message: string) => void;
   setTasks: (tasks: KernelTask[]) => void;
+  setBuildProgress: (buildProgress: { done: number; total: number } | null) => void;
+  setInteractiveReady: (interactiveReady: boolean) => void;
   setRebuildCursor: (rebuildCursor: number | null) => void;
   setOperationMs: (featureId: string, ms: number) => void;
   setLongOperation: (longOperation: boolean) => void;
@@ -216,6 +229,8 @@ export const useKernelStore = create<KernelState>((set) => ({
   faceOperations: {},
   featureLimits: {},
   tasks: [],
+  buildProgress: null,
+  interactiveReady: true,
   rebuildCursor: null,
   longOperation: false,
   interimSceneVersion: 0,
@@ -250,6 +265,8 @@ export const useKernelStore = create<KernelState>((set) => ({
   setError: (message) => set({ status: 'error', phase: 'error', error: message }),
 
   setTasks: (tasks) => set({ tasks }),
+  setBuildProgress: (buildProgress) => set({ buildProgress }),
+  setInteractiveReady: (interactiveReady) => set({ interactiveReady }),
   setRebuildCursor: (rebuildCursor) => set({ rebuildCursor }),
   setOperationMs: (featureId, ms) =>
     set((state) => ({ operationMs: { ...state.operationMs, [featureId]: ms } })),
@@ -318,6 +335,8 @@ export const useKernelStore = create<KernelState>((set) => ({
       bodyOperations: {},
       faceOperations: {},
       featureLimits: {},
+      buildProgress: null,
+      interactiveReady: true,
       rebuildCursor: null,
       longOperation: false,
     })),

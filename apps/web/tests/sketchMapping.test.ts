@@ -196,6 +196,72 @@ describe('solver pins', () => {
   });
 });
 
+describe('point on curve mapping', () => {
+  const circle: SketchEntity = {
+    id: 'circle-1',
+    type: 'circle',
+    construction: true,
+    cx: 0,
+    cy: 0,
+    r: 20,
+  };
+  const arc: SketchEntity = {
+    id: 'arc-1',
+    type: 'arc',
+    construction: false,
+    cx: 20,
+    cy: 4,
+    r: 2,
+    startAngle: 0,
+    endAngle: Math.PI,
+  };
+
+  it('targets the curve instead of the point’s own arc', () => {
+    const constraint: SketchConstraint = {
+      id: 'on-circle-1',
+      type: 'point-on-circle',
+      refs: [
+        { entityId: arc.id, pointIndex: 0 },
+        { entityId: circle.id },
+      ],
+    };
+    const { build } = primitives([circle, arc], [constraint]);
+    expect(build.primitives.find((primitive) => primitive.id === 'on-circle-1')).toMatchObject({
+      type: 'point_on_circle',
+      p_id: 'arc-1~p0',
+      c_id: 'circle-1',
+    });
+  });
+
+  it('targets the curve instead of the point’s own ellipse', () => {
+    const first: SketchEntity = {
+      id: 'ellipse-1',
+      type: 'ellipse',
+      construction: true,
+      cx: 0,
+      cy: 0,
+      rx: 10,
+      ry: 5,
+      rotation: 0,
+    };
+    const second: SketchEntity = { ...first, id: 'ellipse-2', cx: 30 };
+    const constraint: SketchConstraint = {
+      id: 'on-ellipse-1',
+      type: 'point-on-ellipse',
+      refs: [
+        { entityId: first.id, pointIndex: 0 },
+        { entityId: second.id },
+      ],
+    };
+    const { build } = primitives([first, second], [constraint]);
+    expect(build.primitives.find((primitive) => primitive.id === 'on-ellipse-1')).toMatchObject({
+      type: 'point_on_ellipse',
+      p_id: 'ellipse-1~p0',
+      e_id: 'ellipse-2',
+    });
+  });
+});
+
 describe('solver solution mapping', () => {
   it('keeps an arc on its side when a solved endpoint crosses the angle branch cut', () => {
     const arc: SketchEntity = {

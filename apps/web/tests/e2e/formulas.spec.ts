@@ -352,8 +352,12 @@ test.describe('formulas', () => {
     const drivenValue = page.locator('.constraint-list .constraint-value-text.is-formula');
     await expect(drivenValue).toHaveCount(1);
     // Editing a driven dimension opens its formula, not the number it produced.
+    // Selecting the label first settles the layout the click itself changes,
+    // so both clicks of the double click land on the same label.
     await page.waitForTimeout(700);
-    await page.locator('.sketch-annotation').dblclick({ force: true });
+    await page.locator('.sketch-annotation').click();
+    await page.waitForTimeout(300);
+    await page.locator('.sketch-annotation').dblclick();
     const editor = page.locator('.sketch-annotation-input');
     await expect(editor).toHaveValue('=width');
     // A phone must offer letters and "=" here, not a numeric pad.
@@ -384,7 +388,9 @@ test.describe('formulas', () => {
       .toBe(14);
     await expect(drivenValue).toHaveCount(0);
     await page.waitForTimeout(700);
-    await page.locator('.sketch-annotation').dblclick({ force: true });
+    await page.locator('.sketch-annotation').click();
+    await page.waitForTimeout(300);
+    await page.locator('.sketch-annotation').dblclick();
     await expect(page.locator('.sketch-annotation-input')).toHaveValue('14');
     await page.locator('.sketch-annotation-input').press('Escape');
 

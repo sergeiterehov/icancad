@@ -34,16 +34,46 @@ async function editingFeatureId(page: Page): Promise<string | null> {
   });
 }
 
+
+/** Wait until the final rebuild after leaving an operation has published. */
+async function waitForKernelIdle(page: Page) {
+  // A rebuild is scheduled by a short debounce; give it time to claim the
+  // queue before reading an idle state that is only a gap.
+  await page.waitForTimeout(250);
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(async () => {
+          const url = (suffix: string) =>
+            performance
+              .getEntriesByType('resource')
+              .map((entry) => entry.name)
+              .find((name) => name.includes(suffix));
+          const kernel = await import(
+            url('/src/stores/kernelStore.ts') ?? '/src/stores/kernelStore.ts'
+          );
+          const state = kernel.useKernelStore.getState();
+          return state.interactiveReady && !state.tasks.some((task: { key: string | null }) => task.key === 'rebuild');
+        }),
+      { timeout: 120_000 },
+    )
+    .toBe(true);
+}
+
 async function commitOperation(page: Page) {
   const markers = page.locator(PREVIEW_MARKS);
   for (let attempt = 0; attempt < 6; attempt += 1) {
-    if ((await editingFeatureId(page)) === null && (await markers.count()) === 0) return;
+    if ((await editingFeatureId(page)) === null && (await markers.count()) === 0) {
+      await waitForKernelIdle(page);
+      return;
+    }
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await page.keyboard.press('Escape');
     await page.waitForTimeout(150);
   }
   expect(await editingFeatureId(page)).toBeNull();
   await expect(markers).toHaveCount(0);
+  await waitForKernelIdle(page);
 }
 
 async function addBox(page: Page) {
@@ -388,9 +418,11 @@ test.describe('edge treatment', () => {
     await expect.poll(async () => (await handleScreens(page)).length, { timeout: 15_000 }).toBe(1);
     await dragArrow(page, 70, true);
     await expect.poll(async () => (await lastTreatment(page))?.kind).toBe('fillet');
+    // The preview publishes the input state first and the treatment result a
+    // moment later; wait for the limits the result reports.
+    await expect.poll(async () => (await lastTreatment(page))?.applied).toBeGreaterThan(0);
     const treatment = await lastTreatment(page);
     expect(treatment?.error).toBeUndefined();
-    expect(treatment?.applied).toBeGreaterThan(0);
     // Only the rounded surface is new; the cap and the wall keep their faces.
     await expect(page.getByTestId('inspector').getByText('Round', { exact: true })).toBeVisible();
   });
@@ -453,6 +485,7 @@ test.describe('edge treatment', () => {
     await dragArrow(page, 70, true);
     await expect.poll(async () => (await lastTreatment(page))?.kind).toBe('fillet');
 
+    await expect.poll(async () => (await previewMarks(page))?.marks.length).toBe(1);
     const marks = await previewMarks(page);
     // A round on a convex edge cuts material, so the rounded surface is red.
     expect(marks?.marks).toHaveLength(1);

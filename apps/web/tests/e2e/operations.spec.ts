@@ -38,16 +38,46 @@ async function editingFeatureId(page: Page): Promise<string | null> {
   });
 }
 
+
+/** Wait until the final rebuild after leaving an operation has published. */
+async function waitForKernelIdle(page: Page) {
+  // A rebuild is scheduled by a short debounce; give it time to claim the
+  // queue before reading an idle state that is only a gap.
+  await page.waitForTimeout(250);
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(async () => {
+          const url = (suffix: string) =>
+            performance
+              .getEntriesByType('resource')
+              .map((entry) => entry.name)
+              .find((name) => name.includes(suffix));
+          const kernel = await import(
+            url('/src/stores/kernelStore.ts') ?? '/src/stores/kernelStore.ts'
+          );
+          const state = kernel.useKernelStore.getState();
+          return state.interactiveReady && !state.tasks.some((task: { key: string | null }) => task.key === 'rebuild');
+        }),
+      { timeout: 120_000 },
+    )
+    .toBe(true);
+}
+
 async function commitOperation(page: Page) {
   const markers = page.locator(PREVIEW_MARKS);
   for (let attempt = 0; attempt < 6; attempt += 1) {
-    if ((await editingFeatureId(page)) === null && (await markers.count()) === 0) return;
+    if ((await editingFeatureId(page)) === null && (await markers.count()) === 0) {
+      await waitForKernelIdle(page);
+      return;
+    }
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await page.keyboard.press('Escape');
     await page.waitForTimeout(150);
   }
   expect(await editingFeatureId(page)).toBeNull();
   await expect(markers).toHaveCount(0);
+  await waitForKernelIdle(page);
 }
 
 async function addBox(page: Page) {
@@ -143,7 +173,30 @@ async function addRectangleSketch(page: Page) {
 }
 
 test.describe('modeling operations', () => {
-  test('repeats a body in a straight array', async ({ page }) => {
+  test('steps a numeric field with the wheel and shows every step', async ({ page }) => {
+  await openApp(page);
+  await toolRail(page).getByRole('button', { name: 'Primitives' }).click();
+  await page.getByRole('menuitem', { name: 'Cube' }).click();
+
+  const input = page
+    .getByTestId('inspector')
+    .getByRole('textbox', { name: 'Width (X) · mm' });
+  await expect(input).toHaveValue('20');
+  await input.click();
+  const box = await input.boundingBox();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+
+  // One notch of the mouse wheel steps the typed precision. The field has to
+  // show the value it committed, and the next notch starts from there.
+  await page.mouse.wheel(0, -100);
+  await expect(input).toHaveValue('21');
+  await page.mouse.wheel(0, -100);
+  await expect(input).toHaveValue('22');
+  await page.mouse.wheel(0, 100);
+  await expect(input).toHaveValue('21');
+});
+
+test('repeats a body in a straight array', async ({ page }) => {
     await openApp(page);
     await addBox(page);
 

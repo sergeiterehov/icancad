@@ -175,7 +175,8 @@
     "taskQueued": "в очереди",
     "cancel": "Отменить операцию",
     "openingProject": "Открываем проект и восстанавливаем историю операций…",
-    "preparingModel": "Готовим модель…"
+    "preparingModel": "Готовим модель…",
+    "timelineProgress": "таймлайн {{percent}}%"
   },
   "projectDelete": {
     "title": "Удалить проект?",
@@ -198,7 +199,8 @@
     "lastSolve": "Последнее решение",
     "python": "Python",
     "pythonRuntime": "Среда Python",
-    "timelineTime": "Время таймлайна"
+    "timelineTime": "Время таймлайна",
+    "progress": "Прогресс"
   },
   "empty": {
     "retry": "Повторить",
@@ -502,6 +504,7 @@
     "solved": "Решено",
     "conflict": "Конфликтующие или избыточные ограничения",
     "failed": "Решатель не справился",
+    "snapFailed": "Привязку не удалось закрепить ограничением; точка поставлена свободно.",
     "horizontalDistance": "Расстояние по горизонтали",
     "verticalDistance": "Расстояние по вертикали",
     "angle": "Угол",

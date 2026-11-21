@@ -83,6 +83,20 @@ function distance(a: Point2, b: Point2): number {
   return Math.hypot(b[0] - a[0], b[1] - a[1]);
 }
 
+/**
+ * The entity at the pointer's own grid points, with every magnet target
+ * ignored. If the snap cannot become a constraint, the geometry must not stay
+ * exactly on the target: it would look attached while a drag pulls it away.
+ */
+function unsnappedEntity(entity: SketchEntity, inputs: readonly SketchSnapInput[]): SketchEntity {
+  let result = entity;
+  inputs.forEach((input, index) => {
+    if (!input.snap || !input.fallback) return;
+    result = moveEntityControlPoint(result, index, input.fallback);
+  });
+  return result;
+}
+
 interface DraftPoint {
   point: Point2;
   input: SketchSnapInput;
@@ -551,6 +565,7 @@ export function SketchEditor() {
     entity: SketchEntity,
     inputs: SketchSnapInput[],
     extra: SketchConstraint[] = [],
+    fallback: SketchEntity = entity,
   ) => {
     if (!sketch || sketchHasFormulaError(sketch.id)) {
       applyAutoHighlight([]);
@@ -593,7 +608,7 @@ export function SketchEditor() {
           [],
           { diagnose: true, derived: [...projectionEntityIds(latest)] },
         );
-        if (result.conflicting.length > 0 || result.redundant.length > 0) continue;
+        if (result.conflicting.length > 0) continue;
         if (!result.entities.some((candidate) => candidate.id === entity.id)) continue;
         const current = currentSketch();
         if (!current) return;
@@ -608,8 +623,13 @@ export function SketchEditor() {
             currentEntities.push(candidate);
           }
         }
+        // A constraint the solver calls redundant is already implied; adding it
+        // would only make the next solve report the same thing again.
+        const redundant = new Set(result.redundant);
         const appliedConstraints = constraints.filter(
-          (constraint) => !current.constraints.some((candidate) => candidate.id === constraint.id),
+          (constraint) =>
+            !redundant.has(constraint.id) &&
+            !current.constraints.some((candidate) => candidate.id === constraint.id),
         );
         preview({
           type: 'feature/replace',
@@ -620,14 +640,20 @@ export function SketchEditor() {
           },
         });
         setSketchFrozen(result.frozenEntityIds);
-        setSketchProblems([...new Set([...result.conflicting, ...result.redundant])]);
+        setSketchProblems([...new Set(result.conflicting)]);
         applyAutoHighlight(auto.highlightIds);
         return;
       } catch {
         // Try the next fallback below.
       }
     }
+    // No attempt could keep the magnet target attached. Leave the geometry
+    // where the pointer was instead of at a point it is not constrained to.
+    mergeEntity(fallback);
     applyAutoHighlight([]);
+    if (inputs.some((input) => input.snap)) {
+      useUiStore.getState().showToast('constraint.snapFailed', 'error');
+    }
   };
 
   const commitNewEntity = (
@@ -637,8 +663,9 @@ export function SketchEditor() {
   ): Promise<SketchFeature | undefined> => {
     const before = useDocumentStore.getState().project;
     mergeEntity(entity);
+    const fallback = unsnappedEntity(entity, inputs);
     const committed = commitQueue.current
-      .then(() => applyAutoConstraintsNow(entity, inputs, extra))
+      .then(() => applyAutoConstraintsNow(entity, inputs, extra, fallback))
       .then(() => currentSketch())
       .catch(() => currentSketch());
     commitQueue.current = committed

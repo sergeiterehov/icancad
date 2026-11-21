@@ -32,6 +32,7 @@ export function KernelStatus() {
   const tasks = useKernelStore((state) => state.tasks);
   const featureErrors = useKernelStore((state) => state.featureErrors);
   const operationMs = useKernelStore((state) => state.operationMs);
+  const buildProgress = useKernelStore((state) => state.buildProgress);
   const sketchPending = useSketchSolverStore((state) => state.pending);
   const sketchLastMs = useSketchSolverStore((state) => state.lastMs);
   const formulaStatus = useFormulaStore((state) => state.status);
@@ -53,6 +54,10 @@ export function KernelStatus() {
   const runningTask = tasks.find((task) => task.status === 'running');
   const runningTaskId = runningTask?.id ?? null;
   const queuedCount = tasks.filter((task) => task.status === 'queued').length;
+  const buildPercent =
+    buildProgress && buildProgress.total > 0
+      ? Math.min(100, Math.round((buildProgress.done / buildProgress.total) * 100))
+      : null;
   const sketchSolving = sketchPending > 0;
   const busy = status !== 'ready' || tasks.length > 0 || sketchSolving;
   // A failed operation is as bad as a failed kernel: the model the user sees is
@@ -116,7 +121,9 @@ export function KernelStatus() {
         : sketchSolving
           ? t('kernelStatus.sketchSolving')
           : runningTask
-            ? `${runningTask.label}${elapsed ? ` · ${elapsed}` : ''}${
+            ? `${runningTask.label}${
+                runningTask.key === 'rebuild' && buildPercent !== null ? ` · ${buildPercent}%` : ''
+              }${elapsed ? ` · ${elapsed}` : ''}${
                 queuedCount > 0 ? ` · ${t('kernelStatus.queued', { count: queuedCount })}` : ''
               }`
             : t('status.kernelReady');
@@ -210,6 +217,14 @@ export function KernelStatus() {
                   {formatNumber(timelineMs, locale, 1)} ms
                 </span>
               </div>
+              {runningTask?.key === 'rebuild' && buildPercent !== null && (
+                <div className="kernel-row">
+                  <span>{t('kernelStatus.progress')}</span>
+                  <span className="kernel-row-value" data-testid="build-progress">
+                    {buildPercent}%
+                  </span>
+                </div>
+              )}
               <div className="kernel-row">
                 <span>{t('inspector.features')}</span>
                 <span className="kernel-row-value">{featureCount}</span>

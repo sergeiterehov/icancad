@@ -162,16 +162,46 @@ async function editingFeatureId(page: Page): Promise<string | null> {
 
 // Dismissing an operation is the document's own gesture, so Escape does it.
 // A picker that owns Escape first consumes one press, hence the loop.
+
+/** Wait until the final rebuild after leaving an operation has published. */
+async function waitForKernelIdle(page: Page) {
+  // A rebuild is scheduled by a short debounce; give it time to claim the
+  // queue before reading an idle state that is only a gap.
+  await page.waitForTimeout(250);
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(async () => {
+          const url = (suffix: string) =>
+            performance
+              .getEntriesByType('resource')
+              .map((entry) => entry.name)
+              .find((name) => name.includes(suffix));
+          const kernel = await import(
+            url('/src/stores/kernelStore.ts') ?? '/src/stores/kernelStore.ts'
+          );
+          const state = kernel.useKernelStore.getState();
+          return state.interactiveReady && !state.tasks.some((task: { key: string | null }) => task.key === 'rebuild');
+        }),
+      { timeout: 120_000 },
+    )
+    .toBe(true);
+}
+
 async function commitOperation(page: Page) {
   const markers = page.locator(PREVIEW_MARKS);
   for (let attempt = 0; attempt < 6; attempt += 1) {
-    if ((await editingFeatureId(page)) === null && (await markers.count()) === 0) return;
+    if ((await editingFeatureId(page)) === null && (await markers.count()) === 0) {
+      await waitForKernelIdle(page);
+      return;
+    }
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await page.keyboard.press('Escape');
     await page.waitForTimeout(150);
   }
   expect(await editingFeatureId(page)).toBeNull();
   await expect(markers).toHaveCount(0);
+  await waitForKernelIdle(page);
 }
 
 /** An empty sketch is taken off the timeline when it is left, so a test that
@@ -1887,8 +1917,70 @@ test.describe('ICANCad foundation', () => {
     await expect(page.locator('.sketch-reference')).toHaveCount(1);
     await expect(page.locator('.sketch-annotation:not(.sketch-reference)')).toHaveCount(1);
   });
-  test('undoes geometry together with automatic constraints', async ({ page }) => {
+  test('puts the centre of an arc on a construction circle', async ({ page }) => {
     await openApp(page);
+    const applied = await page.evaluate(async () => {
+      const url = (suffix: string) =>
+        performance
+          .getEntriesByType('resource')
+          .map((entry) => entry.name)
+          .find((name) => name.includes(suffix));
+      const doc = await import(
+        url('/src/stores/documentStore.ts') ?? '/src/stores/documentStore.ts'
+      );
+      const model = await import(
+        url('/src/sketch/constraintModel.ts') ?? '/src/sketch/constraintModel.ts'
+      );
+      const id = doc.useDocumentStore.getState().addSketch('Sketch', 'XY');
+      const state = doc.useDocumentStore.getState();
+      const sketch = state.project.superObjects[0].features.find(
+        (candidate: { id: string }) => candidate.id === id,
+      );
+      state.apply({
+        type: 'feature/replace',
+        feature: {
+          ...sketch,
+          entities: [
+            { id: 'circle', type: 'circle', construction: true, cx: 0, cy: 0, r: 20 },
+            {
+              id: 'arc',
+              type: 'arc',
+              construction: false,
+              cx: 20,
+              cy: 4,
+              r: 2,
+              startAngle: 0,
+              endAngle: Math.PI,
+            },
+          ],
+          constraints: [
+            { id: 'fix', type: 'fix', refs: [{ entityId: 'circle' }] },
+            { id: 'radius', type: 'radius', refs: [{ entityId: 'arc' }], value: 2 },
+          ],
+        },
+      });
+      // The point is the centre of an arc, so the constraint has to target the
+      // other reference instead of the arc the centre belongs to.
+      const feature = doc.useDocumentStore
+        .getState()
+        .project.superObjects.flatMap((object: { features: unknown[] }) => object.features)
+        .find((candidate: { id: string }) => candidate.id === id);
+      const next = await model.applyConstraintAction(feature, {
+        key: 'point-on-circle',
+        type: 'point-on-circle',
+        refs: [
+          { entityId: 'arc', pointIndex: 0 },
+          { entityId: 'circle' },
+        ],
+      });
+      const arc = next.feature.entities.find((entity: { id: string }) => entity.id === 'arc');
+      return { types: next.feature.constraints.map((item: { type: string }) => item.type), arc };
+    });
+    expect(applied.types).toContain('point-on-circle');
+    expect(Math.hypot(applied.arc.cx, applied.arc.cy)).toBeCloseTo(20, 2);
+    await expect(page.locator('.toast')).toHaveCount(0);
+  });
+  test('undoes geometry together with automatic constraints', async ({ page }) => {    await openApp(page);
     await toolRail(page).getByRole('button', { name: 'Sketch', exact: true }).click();
     await page.getByRole('menuitem', { name: 'XY plane' }).click();
     await expect(page.locator('.sketch-overlay')).toBeVisible();

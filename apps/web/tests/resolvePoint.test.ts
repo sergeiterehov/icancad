@@ -85,7 +85,7 @@ describe('resolveSketchPoint', () => {
     expect(resolution.point[1]).toBeCloseTo(0.44);
   });
 
-  it('lets the magnet win over the axis orientation', () => {
+  it('lets the magnet win over the axis orientation and keeps the grid fallback', () => {
     const resolution = resolveSketchPoint({
       raw: [1.3, 5.88],
       snap: snap({ entityId: 'p', pointIndex: 0, point: [1.37, 5.91] }),
@@ -95,6 +95,31 @@ describe('resolveSketchPoint', () => {
       anchor: [1.24, 0.44],
     });
     expect(resolution.point).toEqual([1.37, 5.91]);
+    expect(resolution.fallback).toEqual([1.5, 6]);
+    // The target is within the axis tolerance too, so the line keeps a vertical
+    // constraint even though the magnet chose the exact point.
+    expect(resolution.input.alignment).toBe('vertical');
+  });
+
+  it('reports the axis the step was aligned to', () => {
+    const vertical = resolveSketchPoint({
+      raw: [1.3, 5.88],
+      snap: snap(),
+      tool: 'line',
+      mode: 'free',
+      magnet: true,
+      anchor: [1.24, 0.44],
+    });
+    expect(vertical.input.alignment).toBe('vertical');
+    const horizontal = resolveSketchPoint({
+      raw: [7.88, 0.5],
+      snap: snap(),
+      tool: 'line',
+      mode: 'free',
+      magnet: true,
+      anchor: [1.24, 0.44],
+    });
+    expect(horizontal.input.alignment).toBe('horizontal');
   });
 
   it('turns the magnet and the axis orientation off together', () => {

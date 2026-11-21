@@ -11,6 +11,12 @@ export interface KernelTaskOptions<T> {
   label: string;
   key?: string;
   run: () => Promise<T>;
+  /**
+   * Called when a newer task with the same key arrives while this one runs.
+   * The queue is one worker wide, so the running task still has to answer its
+   * current request; this asks it to stop at the next place it can.
+   */
+  supersede?: () => void;
 }
 
 export class KernelTaskCancelledError extends Error {
@@ -25,6 +31,7 @@ interface QueueEntry {
   key: string | null;
   label: string;
   run: () => Promise<unknown>;
+  supersede?: () => void;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
 }
@@ -48,6 +55,10 @@ export class KernelTaskQueue {
           this.emit();
         }
       }
+      // A running task with the same key is work nobody will see any more.
+      // It cannot be cancelled in the worker without losing the request it is
+      // waiting on, but it can stop at its next step.
+      if (this.running?.entry.key === key) this.running.entry.supersede?.();
     }
 
     return new Promise<T>((resolve, reject) => {
@@ -56,6 +67,7 @@ export class KernelTaskQueue {
         key,
         label: options.label,
         run: options.run as () => Promise<unknown>,
+        supersede: options.supersede,
         resolve: resolve as (value: unknown) => void,
         reject,
       });

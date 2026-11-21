@@ -132,8 +132,15 @@ export function autoConstraintsForEntity(
 
   const constraints = [...snapConstraints];
   if (entity.type === 'line') {
-    const orientation = orientationConstraint(entity);
-    if (orientation) constraints.push(orientation);
+    // The step may have been aligned even when a magnet target won the point;
+    // that alignment is a constraint the sketch has to keep, not a one-off.
+    // The last step is the one that gives the line its direction; the first
+    // point may carry the alignment of the segment before it.
+    const aligned = inputs[inputs.length - 1]?.alignment;
+    const type = orientationConstraint(entity)?.type ?? aligned;
+    if (type) {
+      constraints.push({ id: createId('con'), type, refs: [{ entityId: entity.id }] });
+    }
   }
   return {
     constraints,

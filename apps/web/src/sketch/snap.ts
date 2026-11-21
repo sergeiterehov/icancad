@@ -34,4 +34,8 @@ export type SketchSnapMode = 'free' | 'tangent' | 'none';
 export interface SketchSnapInput {
   snap: SketchSnap | null;
   mode: SketchSnapMode;
+  /** The grid point the pointer gave, kept for when a magnet cannot be constrained. */
+  fallback?: Point2;
+  /** Axis the step was aligned to, so the automatic constraint can repeat it. */
+  alignment?: 'horizontal' | 'vertical';
 }

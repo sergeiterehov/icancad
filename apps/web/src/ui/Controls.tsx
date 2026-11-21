@@ -640,6 +640,12 @@ export function ParamField({
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const step = useRef(wheelStep(text));
+  // The draft came from a wheel step, so it keeps the padding of that step and
+  // follows the value the parent accepted.
+  const stepping = useRef(false);
+  const beginWheelGesture = useDocumentStore((state) => state.beginWheelGesture);
+  const endApplyGesture = useDocumentStore((state) => state.endApplyGesture);
+  const cancelApplyGesture = useDocumentStore((state) => state.cancelApplyGesture);
   const latest = useRef({ draft, value, resolved, onCommit });
   latest.current = { draft, value, resolved, onCommit };
 
@@ -647,14 +653,28 @@ export function ParamField({
   // is being typed. The text, not the object, is the identity: a parent may
   // build `{ formula }` inline on every render.
   useEffect(() => {
-    if (!focused) setDraft(display);
-  }, [display, focused]);
+    if (!focused) {
+      setDraft(display);
+      return;
+    }
+    // A wheel step changes the resolved value, not the authored text. Keep the
+    // field showing the number it landed on while the scroll continues.
+    if (stepping.current) {
+      const shown = typeof value === 'number' ? value : computed;
+      if (shown !== undefined) setDraft(formatStep(shown, step.current));
+    }
+  }, [display, focused, value, computed]);
+
+  // The whole visit to the field is one edit, like the plain numeric field.
+  useEffect(() => () => endApplyGesture(), [endApplyGesture]);
 
   const accepts = (next: number) => Number.isFinite(next) && (allowNegative || next > 0);
 
   const commit = () => {
+    endApplyGesture();
     const current = latest.current;
     const text = current.draft.trim();
+    stepping.current = false;
     if (isFormulaDraft(text)) {
       const source = formulaSource(text);
       // An empty expression is not a formula: the saved value comes back.
@@ -688,6 +708,11 @@ export function ParamField({
       const next = steppedValue(parsed, step.current, direction);
       if (!accepts(next)) return;
       if (typeof current.value === 'number' && next === current.value) return;
+      // The draft has to move with the value: the next notch is measured from
+      // the text in the field, and the user has to see where the scroll landed.
+      beginWheelGesture();
+      stepping.current = true;
+      setDraft(formatStep(next, step.current));
       current.onCommit(next);
     },
     !formula,
@@ -696,6 +721,8 @@ export function ParamField({
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') event.currentTarget.blur();
     if (event.key === 'Escape') {
+      cancelApplyGesture();
+      stepping.current = false;
       setDraft(paramText(latest.current.value));
       event.currentTarget.blur();
     }
@@ -727,11 +754,15 @@ export function ParamField({
           aria-invalid={error ? true : undefined}
           value={draft}
           onChange={(event) => {
+            stepping.current = false;
             step.current = wheelStep(event.target.value);
             setDraft(event.target.value);
           }}
           onFocus={(event) => {
+            // A new visit never extends the gesture of the previous one.
+            endApplyGesture();
             setFocused(true);
+            stepping.current = false;
             setDraft(text);
             step.current = wheelStep(text);
             // Focus reveals the authored value: a number or the formula.

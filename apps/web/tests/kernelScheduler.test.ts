@@ -92,6 +92,43 @@ describe('KernelTaskQueue', () => {
     expect(started).toEqual(['fresh']);
   });
 
+  it('tells a running task with the same key that a newer one arrived', async () => {
+    const queue = new KernelTaskQueue();
+    const gate = deferred<void>();
+    let superseded = 0;
+    const order: string[] = [];
+
+    const running = queue.enqueue({
+      label: 'running',
+      key: 'rebuild',
+      supersede: () => {
+        superseded += 1;
+        order.push('superseded');
+      },
+      run: async () => {
+        order.push('running:start');
+        await gate.promise;
+        order.push('running:end');
+      },
+    });
+    await Promise.resolve();
+
+    const fresh = queue.enqueue({
+      label: 'fresh',
+      key: 'rebuild',
+      run: async () => {
+        order.push('fresh');
+      },
+    });
+    expect(superseded).toBe(1);
+    // The running task still owns the single worker slot until it returns.
+    expect(order).toEqual(['running:start', 'superseded']);
+
+    gate.resolve();
+    await Promise.all([running, fresh]);
+    expect(order).toEqual(['running:start', 'superseded', 'running:end', 'fresh']);
+  });
+
   it('cancels the running task and the queue', async () => {
     const queue = new KernelTaskQueue();
     const running = deferred<void>();

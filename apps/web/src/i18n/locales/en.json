@@ -175,7 +175,8 @@
     "taskQueued": "waiting",
     "cancel": "Cancel operation",
     "openingProject": "Opening the project and restoring operation history…",
-    "preparingModel": "Preparing the model…"
+    "preparingModel": "Preparing the model…",
+    "timelineProgress": "timeline {{percent}}%"
   },
   "projectDelete": {
     "title": "Delete project?",
@@ -198,7 +199,8 @@
     "lastSolve": "Last solve",
     "python": "Python",
     "pythonRuntime": "Python runtime",
-    "timelineTime": "Timeline time"
+    "timelineTime": "Timeline time",
+    "progress": "Progress"
   },
   "empty": {
     "retry": "Retry",
@@ -502,6 +504,7 @@
     "solved": "Solved",
     "conflict": "Conflicting or redundant constraints",
     "failed": "Solver failed",
+    "snapFailed": "The snap could not be constrained; the point was placed freely.",
     "horizontalDistance": "Horizontal distance",
     "verticalDistance": "Vertical distance",
     "angle": "Angle",

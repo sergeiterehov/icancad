@@ -69,6 +69,7 @@ import {
   type ToBodyPlan,
 } from './extrudeToBody';
 import { KernelTaskCancelledError, kernelTaskQueue } from './scheduler';
+import { addEmbedFor, UNION_EMBED } from './embed';
 import { splitAssignment, splitBodyId } from './splitBodies';
 import { RebuildCache, type RebuildCheckpoint } from './checkpoints';
 import { arrayPositionCount, type Matrix3x4 } from './array';
@@ -90,8 +91,12 @@ const liveShapes = new Set<string>();
 const MIN_TREATMENT_SIZE = 0.01;
 /** An operation that runs longer than this shows the state it is building on. */
 const LONG_OPERATION_MS = 2000;
-/** How far a union reaches behind its plane to overlap the body it joins. */
-const UNION_EMBED = 0.01;
+/**
+ * How long a preview may compute before the scene in front of it is published
+ * for interaction. A quick preview keeps its last picture instead of blinking
+ * through the input state.
+ */
+const PREVIEW_BASE_DELAY_MS = 120;
 /**
  * How close to the profile plane a tool still counts as touching it. A tool
  * always starts on the plane; tessellation moves its vertices by rounding only.
@@ -263,8 +268,8 @@ interface GhostCopy {
 interface GhostCollector {
   mesh?: TessellationResult;
   fade?: { axis: [number, number, number]; start: number }[];
-  /** Body whose added part the ghost is; its base mesh is drawn instead. */
-  addBaseBodyId?: string;
+  /** Material an add brings, one volume per body it touches. */
+  additions?: TessellationResult[];
   /** Material an array adds, drawn once per copy. */
   added?: GhostCopy[];
   /** Material an array removes, drawn once per copy. */
@@ -435,8 +440,22 @@ export function resetRebuildCache(): void {
 
 export function abortRebuild(): void {
   rebuildEpoch += 1;
-  useKernelStore.getState().setRebuildCursor(null);
-  useKernelStore.getState().setLongOperation(false);
+  const kernel = useKernelStore.getState();
+  kernel.setRebuildCursor(null);
+  kernel.setLongOperation(false);
+  kernel.setBuildProgress(null);
+}
+
+/**
+ * Ends the working rebuild at its next check. The worker answers one request at
+ * a time, so this cannot start the newer build sooner; it only stops the old one
+ * from doing work nobody will see.
+ */
+function supersedeRebuild(): void {
+  rebuildEpoch += 1;
+  // The scene may be the input of the operation that was just replaced; keep
+  // it out of reach until the newer build publishes its own.
+  useKernelStore.getState().setInteractiveReady(false);
 }
 
 export function rebuildScene(
@@ -455,6 +474,7 @@ export function rebuildScene(
   return kernelTaskQueue.enqueue({
     key: 'rebuild',
     label,
+    supersede: supersedeRebuild,
     run: async () => {
       try {
         await runRebuild(
@@ -488,8 +508,11 @@ let rebuildFailures = 0;
  * usually a kernel state that cannot recover on its own.
  */
 function handleRebuildFailure(error: unknown): void {
-  useKernelStore.getState().clearPreview();
-  useKernelStore.getState().setLongOperation(false);
+  const kernel = useKernelStore.getState();
+  kernel.clearPreview();
+  kernel.setLongOperation(false);
+  kernel.setBuildProgress(null);
+  kernel.setInteractiveReady(true);
   if (error instanceof KernelTaskCancelledError) return;
   const message = error instanceof Error ? error.message : String(error);
   const code = error instanceof Error ? error.name : '';
@@ -581,7 +604,13 @@ async function runRebuild(
   const state = cached ? cloneState(cached.state) : emptyState();
   const produced: RebuildCheckpoint<RebuildState>[] = [];
 
-  useKernelStore.getState().setRebuildCursor(startIndex);
+  const progressTotal = endIndex + 1;
+  const kernel = useKernelStore.getState();
+  // Until the model in front of the edited operation is on screen there is
+  // nothing to pick; the operation's own preview does not change that.
+  kernel.setInteractiveReady(false);
+  kernel.setBuildProgress(progressTotal > 0 ? { done: startIndex, total: progressTotal } : null);
+  kernel.setRebuildCursor(startIndex);
 
   for (let index = startIndex; index <= endIndex; index += 1) {
     if (epoch !== rebuildEpoch) return;
@@ -589,6 +618,7 @@ async function runRebuild(
     if (!feature) break;
     // The dashed caret sits after the operation that is being computed.
     useKernelStore.getState().setRebuildCursor(index + 1);
+    useKernelStore.getState().setBuildProgress({ done: index, total: progressTotal });
     if (expressionErrors?.has(feature.id)) {
       state.featureErrors[feature.id] = 'EXPRESSION_ERROR';
       state.blockedFeatureId = feature.id;
@@ -628,6 +658,7 @@ async function runRebuild(
       if (state.blockedFeatureId) break;
     }
     produced.push({ index, prefix: features.slice(0, index + 1), state: cloneState(state) });
+    useKernelStore.getState().setBuildProgress({ done: index + 1, total: progressTotal });
   }
 
   if (epoch !== rebuildEpoch) return;
@@ -641,6 +672,34 @@ async function runRebuild(
   keepArrayStamp(previewFeature?.type === 'array' ? previewFeature.id : null);
   let published = base;
   let preview: ScenePreview | null = null;
+
+  /**
+   * The model before the edited operation, published as soon as it is built.
+   * Its geometry is what a picker targets, so the user never waits for the
+   * operation's own deltas; the preview replaces this scene when it is ready.
+   */
+  const publishBaseScene = () => {
+    // A build the user has already left must not make its stale scene
+    // interactive under the newer one.
+    if (epoch !== rebuildEpoch) return;
+    const store = useKernelStore.getState();
+    store.setScene(
+      base.meshes,
+      aggregateStats(base),
+      base.meshStats,
+      Object.fromEntries(base.bodyShapes),
+      base.featureErrors,
+      base.featureBodyErrors,
+      base.featureObjectErrors,
+      base.sketchFrames,
+      base.projectionLost,
+      null,
+    );
+    store.setBodyOperations(Object.fromEntries(base.bodySource));
+    store.setFaceOperations(Object.fromEntries(base.faceOwners));
+    store.setFeatureLimits(base.featureLimits);
+    store.setInteractiveReady(true);
+  };
 
   if (
     previewFeature &&
@@ -672,11 +731,16 @@ async function runRebuild(
       } else {
         const next = cloneState(base);
         if (!previewFeature.suppressed) {
+          // The pre-operation scene goes on screen if the preview takes long
+          // enough to notice, so picking its geometry never waits for this
+          // operation while a quick preview keeps the last picture.
+          const baseTimer = setTimeout(publishBaseScene, PREVIEW_BASE_DELAY_MS);
           const beforeShapes = new Map(next.bodyShapes);
           const startedAt = performance.now();
           try {
             await evaluateFeature(previewFeature, next, { client, epoch, project, ghost });
           } finally {
+            clearTimeout(baseTimer);
             useKernelStore
               .getState()
               .setOperationMs(previewFeature.id, performance.now() - startedAt);
@@ -686,10 +750,13 @@ async function runRebuild(
             captureFeatureShapes(next, previewFeature.id, beforeShapes);
           }
           // An array's preview only draws copies of the repeated volume, it does
-          // not build them: the state is still the one in front of the array, so
-          // it must not be stored as the state after it. Doing so would leave
-          // the model without its array as soon as the editing ends.
-          if (!next.blockedFeatureId && previewFeature.type !== 'array') {
+          // not build them, and an add's preview only draws the material it
+          // brings: both states are the one in front of the operation, so they
+          // must not be stored as the state after it.
+          const previewOnly =
+            previewFeature.type === 'array' ||
+            (previewFeature.type === 'extrude' && previewFeature.op === 'add');
+          if (!next.blockedFeatureId && !previewOnly) {
             produced.push({
               index: previewIndex,
               prefix: features.slice(0, previewIndex + 1),
@@ -736,9 +803,12 @@ async function runRebuild(
     );
   // Which operation produced each body's current shape, so a face can lead back
   // to the operation that made it.
-  useKernelStore.getState().setBodyOperations(Object.fromEntries(scene.bodySource));
-  useKernelStore.getState().setFaceOperations(Object.fromEntries(scene.faceOwners));
-  useKernelStore.getState().setFeatureLimits(scene.featureLimits);
+  const done = useKernelStore.getState();
+  done.setBodyOperations(Object.fromEntries(scene.bodySource));
+  done.setFaceOperations(Object.fromEntries(scene.faceOwners));
+  done.setFeatureLimits(scene.featureLimits);
+  done.setBuildProgress(null);
+  done.setInteractiveReady(true);
 
   for (const checkpoint of produced) rebuildCache.store(checkpoint);
   useDocumentStore.getState().syncCreatedBodies(base.createdBodies, base.blockedFeatureId);
@@ -831,7 +901,6 @@ function buildPreview(
       // A treatment keeps its body as it is: the mark is only there so picking
       // still targets the input shape, and the colour matches the real result.
       ...(feature.type === 'edge-treatment' ? { silent: true } : {}),
-      ...(ghost.mesh && ghost.addBaseBodyId === bodyId ? { renderBase: true } : {}),
     });
   }
   for (const bodyId of Object.keys(base.meshes)) {
@@ -854,6 +923,13 @@ function buildPreview(
       mesh: ghost.mesh,
       color: isAdd ? '#22c55e' : '#ef4444',
       ...(ghost.fade ? { fade: ghost.fade } : {}),
+    });
+  }
+  for (const [index, mesh] of (ghost.additions ?? []).entries()) {
+    ghosts.push({
+      id: `ghost:${feature.id}:addition:${index}`,
+      mesh,
+      color: '#22c55e',
     });
   }
   for (const [index, copy] of (ghost.added ?? []).entries()) {
@@ -1179,6 +1255,7 @@ async function applyExtrude(
     plane: { origin: Vec3; xAxis: Vec3; yAxis: Vec3; normal: Vec3 },
     regions: ProfileRegion[],
     plan: ToBodyPlan | null,
+    embed: number,
   ) =>
     revolveAxis && revolveAnglesRad
       ? {
@@ -1208,9 +1285,9 @@ async function applyExtrude(
               holes: profile.holes,
             })),
             distances: extrudeDistances(feature, plane.origin, plane.normal, meshes, plan),
-            // A union reaches back into the body it joins, so a sketch drawn on
-            // a face adds material instead of floating beside it.
-            ...(feature.op === 'add' ? { embed: UNION_EMBED } : {}),
+            // Only a tool that stands on material reaches behind its plane; a
+            // sweep into the body already overlaps it.
+            ...(embed > 0 ? { embed } : {}),
           },
         };
 
@@ -1415,7 +1492,20 @@ async function applyExtrude(
   ): Promise<string> => {
     const samples = profileSamples(regions, plane);
     const reference = toBodyReference(plane.origin, plane.normal, samples);
-    await client.request(profileRequest(shapeId, plane, regions, reference?.plan ?? null));
+    // The embed belongs to a union tool whose first sweep goes along the normal;
+    // a reversed or symmetric first sweep is handled by the signed distances.
+    const firstDistance = extrudeDistances(
+      feature,
+      plane.origin,
+      plane.normal,
+      meshes,
+      reference?.plan ?? null,
+    )[0];
+    const embed =
+      !revolve && feature.op === 'add' && firstDistance !== undefined && firstDistance > 0
+        ? addEmbedFor(samples, plane.normal, meshes)
+        : 0;
+    await client.request(profileRequest(shapeId, plane, regions, reference?.plan ?? null, embed));
     if (epoch !== rebuildEpoch) return shapeId;
     if (!reference) return shapeId;
     return trimToBody(shapeId, reference, startsInsideBody(reference.bodyId, samples));
@@ -1692,10 +1782,86 @@ async function applyExtrude(
     }
   }
 
-  // The added material is read off the result of the join below: cutting the
-  // body it started from out of the joined body is the material the operation
-  // brings, and it costs one boolean instead of fusing every part again.
-  let addGhost: { baseShapeId: string; resultShapeId: string; bodyId: string } | null = null;
+  // An add preview shows only the material the operation brings. The common
+  // volume says whether the tool touches the body at all (an add that misses it
+  // forks a second solid and is an error), and one cut then yields the green
+  // delta. Neither step needs the union the full rebuild will perform.
+  if (ghost && feature.op === 'add') {
+    const parts = explicitTargets ? toolParts.map((part) => part.shapeId) : [toolShapeId];
+    const additions: TessellationResult[] = [];
+    const appliedParts = new Set<string>();
+    for (const bodyId of targets) {
+      const baseShapeId = bodyShapes.get(bodyId);
+      if (!baseShapeId) {
+        if (explicitTargets) markBodyError(bodyId, bodyErrorCode(bodyId));
+        continue;
+      }
+      let touched = false;
+      for (const [index, part] of parts.entries()) {
+        const commonId = trackShape(`${feature.id}:preview-common:${bodyId}:${index}`);
+        try {
+          await client.request({
+            type: 'boolean',
+            params: {
+              shapeId: commonId,
+              baseShapeId: part,
+              toolShapeId: baseShapeId,
+              op: 'common',
+            },
+          });
+        } catch {
+          liveShapes.delete(commonId);
+          void client.request({ type: 'dispose', shapeId: commonId }).catch(() => undefined);
+          continue;
+        }
+        if (epoch !== rebuildEpoch) return;
+        const common = await client.request<ShapeStats>({ type: 'topology', shapeId: commonId });
+        if (epoch !== rebuildEpoch) return;
+        if (common.faces === 0 || common.solids === 0) {
+          liveShapes.delete(commonId);
+          void client.request({ type: 'dispose', shapeId: commonId }).catch(() => undefined);
+          continue;
+        }
+        touched = true;
+        if (explicitTargets) appliedParts.add(toolParts[index]!.key);
+        const deltaId = trackShape(`${feature.id}:preview-add:${bodyId}:${index}`);
+        try {
+          await client.request({
+            type: 'boolean',
+            params: { shapeId: deltaId, baseShapeId: part, toolShapeId: baseShapeId, op: 'cut' },
+          });
+        } catch {
+          continue;
+        }
+        if (epoch !== rebuildEpoch) return;
+        const delta = await client.request<ShapeStats>({ type: 'topology', shapeId: deltaId });
+        if (epoch !== rebuildEpoch) return;
+        if (delta.faces === 0 || delta.solids === 0) {
+          liveShapes.delete(deltaId);
+          void client.request({ type: 'dispose', shapeId: deltaId }).catch(() => undefined);
+          continue;
+        }
+        const mesh = await client.request<TessellationResult>({
+          type: 'tessellate',
+          shapeId: deltaId,
+        });
+        if (epoch !== rebuildEpoch) return;
+        additions.push(mesh);
+      }
+      if (!touched) markBodyError(bodyId, 'DISJOINT_UNION');
+    }
+    if (additions.length > 0) ghost.additions = additions;
+    if (explicitTargets) {
+      const objectErrors = featureObjectErrors[feature.id] ?? {};
+      for (const part of toolParts) {
+        if (!appliedParts.has(part.key)) objectErrors[part.key] = 'DISJOINT_UNION';
+      }
+      if (Object.keys(objectErrors).length > 0) featureObjectErrors[feature.id] = objectErrors;
+    }
+    const bodyErrors = Object.values(featureBodyErrors[feature.id] ?? {});
+    if (bodyErrors.length > 0) featureErrors[feature.id] = bodyErrors[0]!;
+    return;
+  }
 
   let applied = 0;
   /** Parts that actually affected at least one explicitly chosen body. */
@@ -1765,11 +1931,6 @@ async function applyExtrude(
         continue;
       }
 
-      // A single target is what the preview highlights: the body keeps its own
-      // colour and only the new material is drawn on top of it.
-      if (ghost && targets.length === 1) {
-        addGhost = { baseShapeId, resultShapeId: currentShapeId, bodyId };
-      }
       bodyShapes.set(bodyId, currentShapeId);
       bodySource.set(bodyId, feature.id);
       const mesh = await client.request<TessellationResult>({
@@ -1930,35 +2091,6 @@ async function applyExtrude(
       );
     }
     applied += 1;
-  }
-
-  if (ghost && feature.op === 'add' && addGhost) {
-    // The ghost is feedback only: an empty delta must not turn the operation
-    // into a failure. The join above reports its own errors.
-    const target = addGhost;
-    try {
-      const deltaId = trackShape(`${feature.id}:ghost-add`);
-      await client.request({
-        type: 'boolean',
-        params: {
-          shapeId: deltaId,
-          baseShapeId: target.resultShapeId,
-          toolShapeId: target.baseShapeId,
-          op: 'cut',
-        },
-      });
-      if (epoch !== rebuildEpoch) return;
-      ghost.mesh = await client.request<TessellationResult>({
-        type: 'tessellate',
-        shapeId: deltaId,
-      });
-      if (epoch !== rebuildEpoch) return;
-      ghost.addBaseBodyId = target.bodyId;
-    } catch {
-      if (epoch !== rebuildEpoch) return;
-      ghost.mesh = undefined;
-      ghost.addBaseBodyId = undefined;
-    }
   }
 
   // A picked face that affects none of the explicitly chosen bodies would form

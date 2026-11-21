@@ -21,12 +21,15 @@ export function SkeletonStage({
   action,
   testId,
   progress,
+  detail,
   busy = false,
 }: {
   action: string;
   testId?: string;
   /** 0..1; nothing means the work has no measurable progress. */
   progress?: number;
+  /** A stage-specific ratio, such as the timeline build percent. */
+  detail?: string;
   /** Keep the bar running inside the part that is not complete yet. */
   busy?: boolean;
 }) {
@@ -49,6 +52,18 @@ export function SkeletonStage({
       </div>
       <span className="skeleton-caption" role="status">
         {action}
+        {percent !== null && (
+          <span className="skeleton-percent" data-testid="skeleton-percent">
+            {' '}
+            · {percent}%
+          </span>
+        )}
+        {detail && (
+          <span className="skeleton-detail" data-testid="skeleton-detail">
+            {' '}
+            · {detail}
+          </span>
+        )}
       </span>
     </div>
   );
@@ -60,7 +75,12 @@ export function AppSkeleton() {
   const narrow = useNarrowLayout();
   return (
     <div className="skeleton-body" data-testid="app-skeleton" aria-busy="true">
-      <SkeletonStage action={startup.message} progress={startup.progress} busy={startup.busy} />
+      <SkeletonStage
+        action={startup.message}
+        progress={startup.progress}
+        detail={startup.detail}
+        busy={startup.busy}
+      />
       {/* The logo place: the mark and the name it now spells out beside it. */}
       <span className="skeleton-logo" aria-hidden="true">
         <span className="skeleton-logo-mark" />

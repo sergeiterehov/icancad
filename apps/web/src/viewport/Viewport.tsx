@@ -85,7 +85,6 @@ import { resolveEdgeRef } from '../kernel/edgeLookup';
 import { edgeTreatmentEdgeRef, edgeTreatmentFaceRef } from '../quick/edgeTreatment';
 import { outwardNormal } from '../quick/geometry';
 import { sketchRegionPlane } from '../sketch/regionPlane';
-import { faceCentre } from '../kernel/faceCentre';
 import { shellFaceRef } from '../quick/shell';
 import { findBoundExtrude, quickTargetFromSelection } from '../quick/target';
 import { bodyEdgeAxisRef } from '../sketch/revolveAxis';
@@ -528,7 +527,9 @@ export function Viewport() {
           return;
         }
         const store = useDocumentStore.getState();
-        if (pick && isModelRebuilding(useKernelStore.getState())) {
+        // The scene in front of the edited operation is interactive as soon as
+        // it is published; the operation's own preview does not hold this back.
+        if (pick && !useKernelStore.getState().interactiveReady) {
           ui.showToast('toast.pickAfterRebuild');
           return;
         }
@@ -752,20 +753,14 @@ export function Viewport() {
             ui.showToast('errors.FACE_NOT_PLANAR', 'error');
             return;
           }
-          // The centre is the middle of the face's extent, and only the exact
-          // geometry knows where that is: the mesh falls short of an arc's
-          // extreme by the sagitta of its chords.
-          const centre =
-            (await faceCentre(
-              mark?.baseShapeId ?? kernelState.bodyShapes[pick.bodyId],
-              Number(pick.faceId),
-              face.normal,
-            )) ?? face.centroid;
+          // The turn goes around the same middle the sketch tool uses when it
+          // lands on a face: the area-weighted centroid of the tessellation.
+          // It needs no kernel round trip, so arming the picker costs nothing.
           store.setArrayAxisFace(picker.featureId, picker.index, {
             kind: 'face',
             bodyId: pick.bodyId,
             faceId: pick.faceId,
-            origin: centre,
+            origin: face.centroid,
             normal: face.normal,
           });
           ui.setPickingArrayFace(null);
@@ -921,7 +916,7 @@ export function Viewport() {
         ) {
           return;
         }
-        if (isModelRebuilding(useKernelStore.getState())) return;
+        if (!useKernelStore.getState().interactiveReady) return;
         const store = useDocumentStore.getState();
         // A second tap on empty space is the only way a finger drops a set it
         // built: two or more picked objects are too easy to lose otherwise.

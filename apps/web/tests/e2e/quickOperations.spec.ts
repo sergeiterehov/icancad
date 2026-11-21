@@ -34,16 +34,46 @@ async function editingFeatureId(page: Page): Promise<string | null> {
   });
 }
 
+
+/** Wait until the final rebuild after leaving an operation has published. */
+async function waitForKernelIdle(page: Page) {
+  // A rebuild is scheduled by a short debounce; give it time to claim the
+  // queue before reading an idle state that is only a gap.
+  await page.waitForTimeout(250);
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(async () => {
+          const url = (suffix: string) =>
+            performance
+              .getEntriesByType('resource')
+              .map((entry) => entry.name)
+              .find((name) => name.includes(suffix));
+          const kernel = await import(
+            url('/src/stores/kernelStore.ts') ?? '/src/stores/kernelStore.ts'
+          );
+          const state = kernel.useKernelStore.getState();
+          return state.interactiveReady && !state.tasks.some((task: { key: string | null }) => task.key === 'rebuild');
+        }),
+      { timeout: 120_000 },
+    )
+    .toBe(true);
+}
+
 async function commitOperation(page: Page) {
   const markers = page.locator(PREVIEW_MARKS);
   for (let attempt = 0; attempt < 6; attempt += 1) {
-    if ((await editingFeatureId(page)) === null && (await markers.count()) === 0) return;
+    if ((await editingFeatureId(page)) === null && (await markers.count()) === 0) {
+      await waitForKernelIdle(page);
+      return;
+    }
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await page.keyboard.press('Escape');
     await page.waitForTimeout(150);
   }
   expect(await editingFeatureId(page)).toBeNull();
   await expect(markers).toHaveCount(0);
+  await waitForKernelIdle(page);
 }
 
 async function addBox(page: Page) {
@@ -218,11 +248,26 @@ test.describe('quick operations', () => {
     await expect(page.getByTestId('handle-tooltip')).toContainText('Extrude distance');
 
     // A join keeps the base body as it is and only tints the added material.
+    // The input scene is published before the preview, so wait for the ghost.
+    await expect.poll(async () => (await ghostScreens(page)).length, { timeout: 15_000 }).toBe(1);
     const ghosts = await ghostScreens(page);
     expect(ghosts).toHaveLength(1);
     expect(ghosts[0]!.color).toBe('#22c55e');
     const [base] = await bodyInfos(page);
     expect(boxVolume(ghosts[0]!.bbox)).toBeLessThan(boxVolume(base!.bbox!) * 0.5);
+    // The preview only draws the material the join brings; the body itself is
+    // the state before the operation, not a fused result.
+    const previewKinds = await page.evaluate(async () => {
+      const loaded = performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .find((name) => name.includes('/src/stores/kernelStore.ts'));
+      const kernel = await import(loaded ?? '/src/stores/kernelStore.ts');
+      return (kernel.useKernelStore.getState().preview?.bodies ?? []).map(
+        (body: { kind: string }) => body.kind,
+      );
+    });
+    expect(previewKinds).not.toContain('modified');
 
     // Dragging back past the anchor keeps the method and flips the direction.
     await dragHandle(page, -1, 110);

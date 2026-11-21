@@ -142,4 +142,28 @@ describe('automatic constraints', () => {
     expect(orientationConstraint(vertical)?.type).toBe('vertical');
     expect(orientationConstraint({ ...horizontal, y2: 20 })).toBeNull();
   });
+
+  it('keeps an axis constraint when a magnet target won the point', () => {
+    const almostVertical: SketchEntity = {
+      id: 'line',
+      type: 'line',
+      construction: false,
+      x1: 0,
+      y1: 0,
+      x2: 0.13,
+      y2: 5.47,
+    };
+    const input: SketchSnapInput = {
+      snap: snap({ entityId: 'p', pointIndex: 0, point: [0.13, 5.47] }),
+      mode: 'free',
+      fallback: [0, 5.5],
+      alignment: 'vertical',
+    };
+    const result = autoConstraintsForEntity(almostVertical, [{ ...input }, none]);
+    expect(result.snapConstraints.map((constraint) => constraint.type)).toEqual(['coincident']);
+    expect(result.constraints.map((constraint) => constraint.type)).toEqual([
+      'coincident',
+      'vertical',
+    ]);
+  });
 });

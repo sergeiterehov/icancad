@@ -925,7 +925,10 @@ function mapConstraint(
     }
     case 'point-on-circle': {
       const pointRef = refs.find((ref) => pointRefId(ref, entityMap.get(ref.entityId)));
+      // The point may be the centre of a circle or an arc, so the curve to lie
+      // on is the other reference, not merely the first one of that kind.
       const circleRef = refs.find((ref) => {
+        if (ref === pointRef) return false;
         const type = entityMap.get(ref.entityId)?.type;
         return type === 'circle' || type === 'arc';
       });
@@ -940,7 +943,9 @@ function mapConstraint(
     }
     case 'point-on-ellipse': {
       const pointRef = refs.find((ref) => pointRefId(ref, entityMap.get(ref.entityId)));
-      const ellipseRef = refs.find((ref) => entityMap.get(ref.entityId)?.type === 'ellipse');
+      const ellipseRef = refs.find(
+        (ref) => ref !== pointRef && entityMap.get(ref.entityId)?.type === 'ellipse',
+      );
       if (!pointRef || !ellipseRef) return null;
       return {
         id,

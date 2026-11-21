@@ -224,3 +224,43 @@ describe('arc dimensions', () => {
     expect(solvedArc(negativeResult).endAngle).toBeCloseTo((-Math.PI * 2) / 3, 3);
   });
 });
+
+describe('a curve centre as a constrained point', () => {
+  it('puts the centre of an arc on another circle', () => {
+    const circle: SketchEntity = {
+      id: 'c',
+      type: 'circle',
+      construction: true,
+      cx: 0,
+      cy: 0,
+      r: 20,
+    };
+    const entity: SketchEntity = {
+      id: 'a',
+      type: 'arc',
+      construction: false,
+      cx: 20,
+      cy: 4,
+      r: 2,
+      startAngle: 0,
+      endAngle: Math.PI,
+    };
+    const result = solve(
+      [circle, entity],
+      [
+        { id: 'fixc', type: 'fix', refs: [{ entityId: 'c' }] },
+        { id: 'r', type: 'radius', refs: [{ entityId: 'a' }], value: 2 },
+        {
+          id: 'on-circle',
+          type: 'point-on-circle',
+          refs: [
+            { entityId: 'a', pointIndex: 0 },
+            { entityId: 'c' },
+          ],
+        },
+      ],
+    );
+    expect(result.conflicting).toEqual([]);
+    expect(solvedArc(result).cx ** 2 + solvedArc(result).cy ** 2).toBeCloseTo(400, 3);
+  });
+});

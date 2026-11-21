@@ -65,7 +65,10 @@ it('rejects a same-axis solution that jumps the rest of the sketch', async () =>
     maxMove: 2,
   });
 
-  expect(solved).toBeNull();
+  // The jump is rejected; the sketch stays where it was instead of reporting
+  // a solver conflict.
+  expect(solved?.attempt).toBe('fixed');
+  expect(solved?.result.entities).toBe(previous);
 });
 
 it('accepts a continuous axis solution', async () => {

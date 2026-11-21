@@ -44,6 +44,8 @@ export function snapModeFor(tool: SketchTool, draftLength: number): SketchSnapMo
 
 export interface SketchPointResolution {
   point: Point2;
+  /** The grid point with the magnet ignored, used if the snap cannot be constrained. */
+  fallback: Point2;
   input: SketchSnapInput;
 }
 
@@ -71,26 +73,47 @@ export function resolveSketchPoint({
   magnet,
   anchor,
 }: ResolveOptions): SketchPointResolution {
+  const fallback = gridPoint(raw);
+  const orientationOf = (point: Point2) =>
+    tool === 'line' && anchor
+      ? axisOrientation({
+          id: 'resolve',
+          type: 'line',
+          construction: false,
+          x1: anchor[0],
+          y1: anchor[1],
+          x2: point[0],
+          y2: point[1],
+        })
+      : null;
+
   const target = magnet ? snapTargetPoint(snap, mode) : null;
-  if (target) return { point: target, input: { snap, mode } };
+  if (target) {
+    const alignment = orientationOf(target);
+    return {
+      point: target,
+      fallback,
+      input: { snap, mode, fallback, ...(alignment ? { alignment } : {}) },
+    };
+  }
 
   if (magnet && tool === 'line' && anchor) {
-    const orientation = axisOrientation({
-      id: 'resolve',
-      type: 'line',
-      construction: false,
-      x1: anchor[0],
-      y1: anchor[1],
-      x2: raw[0],
-      y2: raw[1],
-    });
+    const orientation = orientationOf(raw);
     if (orientation === 'horizontal') {
-      return { point: [gridPoint(raw)[0], anchor[1]], input: { snap: null, mode } };
+      return {
+        point: [fallback[0], anchor[1]],
+        fallback,
+        input: { snap: null, mode, fallback, alignment: orientation },
+      };
     }
     if (orientation === 'vertical') {
-      return { point: [anchor[0], gridPoint(raw)[1]], input: { snap: null, mode } };
+      return {
+        point: [anchor[0], fallback[1]],
+        fallback,
+        input: { snap: null, mode, fallback, alignment: orientation },
+      };
     }
   }
 
-  return { point: gridPoint(raw), input: { snap: null, mode } };
+  return { point: fallback, fallback, input: { snap: null, mode, fallback } };
 }
