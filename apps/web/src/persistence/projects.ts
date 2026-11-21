@@ -18,7 +18,9 @@ function importedAssetIds(project: Project): string[] {
     models.length > 0
       ? models.flatMap((superObject) => superObject.features)
       : ((project as unknown as { features?: Feature[] }).features ?? []);
-  return features.flatMap((feature) => (feature.type === 'import-mesh' ? [feature.assetId] : []));
+  return features.flatMap((feature) =>
+    feature.type === 'import-mesh' || feature.type === 'import-step' ? [feature.assetId] : [],
+  );
 }
 
 function applyProject(project: Project): void {

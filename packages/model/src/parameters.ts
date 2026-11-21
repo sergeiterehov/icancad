@@ -76,6 +76,8 @@ export function featureParameterSpecs(feature: Feature): ParameterSpec[] {
     }
     case 'import-mesh':
       return [{ path: 'scale', kind: 'number', min: 0.0001 }, ...transformSpecs()];
+    case 'import-step':
+      return [];
     case 'convert-to-solid': {
       const params: ParameterSpec[] = [{ path: 'voxelSize', kind: 'length', min: 0.1 }];
       params.push({ path: 'targetTriangles', kind: 'count', integer: true, min: 1 });

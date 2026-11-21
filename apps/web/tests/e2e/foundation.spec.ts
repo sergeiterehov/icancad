@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 
 /** The workspace shows skeletons until the project and the kernel are ready. */
@@ -818,6 +819,30 @@ test.describe('ICANCad foundation', () => {
       timeout: 120_000,
     });
   });
+
+  test('imports a STEP body as a solid with its name', async ({ page }) => {
+    await openApp(page);
+    await page.setInputFiles('[data-testid="import-mesh"]', {
+      name: 'fusion-part.step',
+      mimeType: 'application/step',
+      buffer: readFileSync(new URL('./fixtures/fusion-part.step', import.meta.url)),
+    });
+
+    const row = page.getByTestId('left').getByRole('button', { name: /^FusionPart/ });
+    await expect(row).toBeVisible({ timeout: 60_000 });
+    await row.click();
+    await expect(page.getByText('20 × 20 × 20 mm')).toBeVisible();
+    await expect(page.getByTestId('inspector').getByText('Faces', { exact: true })).toBeVisible();
+    await expect(page.getByText('Watertight')).toHaveCount(0);
+
+    // The STEP asset has to survive a reload and rebuild the same body.
+    await expect(page.getByTestId('save-state')).toHaveAttribute('data-state', 'saved');
+    await page.reload();
+    await expect(page.getByTestId('left').getByRole('button', { name: /^FusionPart/ })).toBeVisible({
+      timeout: 120_000,
+    });
+  });
+
   test('animates navigation cube edge views', async ({ page }) => {
     await openApp(page);
     const cube = page.getByTestId('nav-cube');

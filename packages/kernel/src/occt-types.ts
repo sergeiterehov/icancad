@@ -255,6 +255,25 @@ export interface OcctColor {
 export interface OcctColorTool {
   /** The enum argument picks the colour slot; generic is what a body uses. */
   SetColor_2(label: OcctLabel, color: OcctColor, type: unknown): boolean;
+  GetColor_1(label: OcctLabel, color: OcctColor): boolean;
+  /** Looks in a colour slot: surface and curve colours are what STEP files carry. */
+  GetColor_4(label: OcctLabel, type: unknown, color: OcctColor): boolean;
+}
+
+/** `STEPCAFControl_Reader`: turns a STEP file into an XCAF document. */
+export interface OcctStepReader {
+  SetColorMode(enabled: boolean): void;
+  SetNameMode(enabled: boolean): void;
+  /** Returns an `IFSelect_ReturnStatus`; `value === 1` is a successful read. */
+  ReadFile(path: string): { value: number } | undefined;
+  Transfer_1(document: unknown): boolean;
+}
+
+/** `TDF_ChildIterator`: walks the labels below a document label. */
+export interface OcctChildIterator {
+  More(): boolean;
+  Next(): void;
+  Value(): OcctLabel;
 }
 
 /** `STEPCAFControl_Writer`: writes shapes with their names and colours. */
@@ -267,6 +286,7 @@ export interface OcctStepWriter {
 
 /** The Emscripten filesystem the written STEP file is read back from. */
 export interface OcctFileSystem {
+  writeFile(path: string, data: Uint8Array): void;
   readFile(path: string): Uint8Array;
   unlink(path: string): void;
 }
@@ -466,7 +486,17 @@ export interface OcctBindings {
   };
   XCAFDoc_ColorType: {
     XCAFDoc_ColorGen: unknown;
+    XCAFDoc_ColorSurf: unknown;
+    XCAFDoc_ColorCurv: unknown;
   };
+  XCAFDoc_ShapeTool: {
+    IsSimpleShape(label: OcctLabel): boolean;
+    /** Fills the shape of a label; false when the label owns no shape. */
+    GetShape_1(label: OcctLabel, shape: OcctShape): boolean;
+  };
+  TDF_ChildIterator_2: new (label: OcctLabel, allLevels: boolean) => OcctChildIterator;
+  TopoDS_Shape: new () => OcctShape;
+  STEPCAFControl_Reader_1: new () => OcctStepReader;
   TDataStd_Name: {
     Set_1(label: OcctLabel, name: unknown): void;
   };

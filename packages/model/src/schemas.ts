@@ -128,6 +128,12 @@ const importMeshFeature = z.object({
   scale: param(z.number().positive()),
 });
 
+const importStepFeature = z.object({
+  ...featureBase,
+  type: z.literal('import-step'),
+  assetId: z.string().min(1),
+});
+
 const convertToSolidFeature = z.object({
   ...featureBase,
   type: z.literal('convert-to-solid'),
@@ -556,6 +562,7 @@ export const featureSchema = z.union([
   primitiveFeature,
   z.discriminatedUnion('type', [
     importMeshFeature,
+    importStepFeature,
     convertToSolidFeature,
     sketchFeature,
     extrudeFeature,

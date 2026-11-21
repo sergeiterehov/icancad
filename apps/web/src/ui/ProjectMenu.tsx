@@ -33,6 +33,7 @@ import { useTranslation } from 'react-i18next';
 import { MOD_KEY } from '../hooks/useShortcuts';
 import { setLocale, type Locale } from '../i18n';
 import { downloadBlob } from '../io/download';
+import { inspectStep } from '../kernel/import';
 import { loadAsset, saveAsset } from '../persistence/db';
 import {
   createAndOpenProject,
@@ -63,7 +64,7 @@ const LOCALES: { value: Locale; label: string }[] = [
   { value: 'ru', label: 'Русский' },
 ];
 
-const MESH_ACCEPT = '.stl,.obj,.ply,.glb';
+const IMPORT_ACCEPT = '.stl,.obj,.ply,.glb,.step,.stp';
 
 const SOURCE_URL = 'https://github.com/sergeiterehov/icancad';
 
@@ -119,7 +120,7 @@ export function ProjectMenu() {
     const assets = new Map<string, Uint8Array>();
     for (const superObject of project.superObjects) {
       for (const feature of superObject.features) {
-        if (feature.type !== 'import-mesh') continue;
+        if (feature.type !== 'import-mesh' && feature.type !== 'import-step') continue;
         const blob = await loadAsset(feature.assetId);
         if (blob) assets.set(feature.assetId, new Uint8Array(await blob.arrayBuffer()));
       }
@@ -342,12 +343,35 @@ export function ProjectMenu() {
     ];
   };
 
+  const handleImportStep = async (file: File) => {
+    const featureId = createId('feat');
+    try {
+      showToast('toast.stepImporting');
+      const data = new Uint8Array(await file.arrayBuffer());
+      const inspected = await inspectStep(data, t('project.importStep'));
+      if (inspected.bodies.length === 0) {
+        showToast('toast.stepNoBodies', 'error');
+        return;
+      }
+      await saveAsset(featureId, new Blob([data], { type: 'application/step' }));
+      const name = file.name.replace(/\.[^.]+$/, '') || file.name;
+      useDocumentStore.getState().addImportedStep(name, featureId, inspected.bodies);
+      showToast('toast.stepImported');
+    } catch {
+      showToast('toast.stepImportFailed', 'error');
+    }
+  };
+
   const handleImportMesh = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
     try {
       const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+      if (extension === 'step' || extension === 'stp') {
+        await handleImportStep(file);
+        return;
+      }
       const format = MESH_FORMATS[extension];
       if (!format) throw new Error('UNSUPPORTED_FORMAT');
       const bytes = new Uint8Array(await file.arrayBuffer());
@@ -444,7 +468,7 @@ export function ProjectMenu() {
       <input
         ref={meshInput}
         type="file"
-        accept={MESH_ACCEPT}
+        accept={IMPORT_ACCEPT}
         className="hidden-input"
         data-testid="import-mesh"
         onChange={(event) => void handleImportMesh(event)}

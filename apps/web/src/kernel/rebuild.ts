@@ -58,6 +58,7 @@ import { i18n } from '../i18n';
 import { primitiveKernelParams } from '../primitive/params';
 import { primitivePreview } from '../primitive/preview';
 import { getKernelClient, retryKernel } from './client';
+import { importStepToKernel, loadImportedStep } from './import';
 import { faceRegion, pointInMesh } from '../quick/geometry';
 import { resolveShellFaceRef } from '../quick/shell';
 import { resolveEdgeRef } from './edgeLookup';
@@ -1136,6 +1137,37 @@ async function evaluateFeature(
       state.bodyOwner.set(bodyId, feature.id);
       state.bodySource.set(bodyId, feature.id);
       state.meshStats[feature.id] = parsed.stats;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'IMPORT_FAILED';
+      state.featureErrors[feature.id] =
+        message === 'MISSING_ASSET' ? 'MISSING_ASSET' : 'IMPORT_FAILED';
+      state.blockedFeatureId = feature.id;
+    }
+    return;
+  }
+
+  if (feature.type === 'import-step') {
+    try {
+      const data = await loadImportedStep(feature.assetId);
+      if (epoch !== rebuildEpoch) return;
+      const result = await importStepToKernel(data, `feat:${feature.id}`);
+      if (epoch !== rebuildEpoch) return;
+      const bodyIds: string[] = [];
+      for (let index = 0; index < result.bodies.length; index += 1) {
+        const body = result.bodies[index]!;
+        const bodyId = featureBodyId(feature.id, index);
+        const shapeId = trackShape(body.shapeId);
+        const mesh = await client.request<TessellationResult>({ type: 'tessellate', shapeId });
+        if (epoch !== rebuildEpoch) return;
+        state.bodyShapes.set(bodyId, shapeId);
+        state.bodyOwner.set(bodyId, feature.id);
+        state.bodySource.set(bodyId, feature.id);
+        state.bodyStats[bodyId] = body.stats;
+        state.meshes[bodyId] = mesh;
+        ownAllFaces(state.faceOwners, bodyId, body.stats.faces, feature.id);
+        bodyIds.push(bodyId);
+      }
+      state.createdBodies.set(feature.id, bodyIds);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'IMPORT_FAILED';
       state.featureErrors[feature.id] =

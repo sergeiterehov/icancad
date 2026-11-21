@@ -10,6 +10,10 @@ import type {
   FaceCentreParams,
   FaceCentreResult,
   HealthResult,
+  ImportStepParams,
+  ImportStepResult,
+  InspectStepParams,
+  InspectStepResult,
   KernelErrorCode,
   KernelStatusEvent,
   MakeBoxResult,
@@ -36,10 +40,14 @@ import { DEFAULT_TESSELLATION_QUALITY } from './protocol';
 import type {
   OcctBindings,
   OcctBooleanMaker,
+  OcctColorTool,
+  OcctDocument,
   OcctEdgeMaker,
   OcctFaceMapper,
+  OcctLabel,
   OcctPolygonOnTriangulation,
   OcctShape,
+  OcctShapeTool,
   OcctTransformation,
   OcctTriangulation,
 } from './occt-types';
@@ -280,6 +288,8 @@ export class KernelEngine {
   private treatmentPass = 0;
   /** Counter for the unique file names STEP exports use in the wasm filesystem. */
   private exportPass = 0;
+  /** Counter for the unique file names STEP imports use in the wasm filesystem. */
+  private importPass = 0;
   /**
    * Edge selections that only build in passes: the largest size they took and
    * the smallest size they rejected.
@@ -1842,8 +1852,9 @@ export class KernelEngine {
 
     // The writer goes through the Emscripten filesystem: a unique name per call
     // keeps exports from meeting each other, and the file is removed once its
-    // bytes are in JavaScript.
-    const fileName = `icancad-export-${(this.exportPass += 1)}.step`;
+    // bytes are in JavaScript. Names stay short because the STEP reader in this
+    // OCCT build cannot open paths longer than ten characters.
+    const fileName = `w${(this.exportPass += 1) % 1000}.stp`;
     const writer = new oc.STEPCAFControl_Writer_1();
     writer.SetColorMode(true);
     writer.SetNameMode(true);
@@ -1861,6 +1872,90 @@ export class KernelEngine {
         oc.FS.unlink(fileName);
       } catch {
         // The writer may have failed before it opened the file.
+      }
+    }
+  }
+
+  /** Bodies a STEP file carries, without building them: names and colours. */
+  inspectStep(params: InspectStepParams): InspectStepResult {
+    const { oc, colorTool, labels, names } = this.readStepDocument(params.data);
+    if (labels.length === 0) {
+      throw new KernelOpError('INVALID_PARAMS', 'The STEP file has no solid bodies');
+    }
+    return {
+      bodies: labels.map((label, index) => ({
+        name: names[index] ?? `Part ${index + 1}`,
+        color: stepBodyColor(oc, colorTool, label),
+      })),
+    };
+  }
+
+  /** Builds the bodies of a STEP file into kernel shapes. */
+  importStep(params: ImportStepParams): ImportStepResult {
+    const { oc, labels } = this.readStepDocument(params.data);
+    if (labels.length === 0) {
+      throw new KernelOpError('INVALID_PARAMS', 'The STEP file has no solid bodies');
+    }
+    const bodies: ImportStepResult['bodies'] = [];
+    labels.forEach((label, index) => {
+      const shape = new oc.TopoDS_Shape();
+      if (!oc.XCAFDoc_ShapeTool.GetShape_1(label, shape) || shape.IsNull()) {
+        throw new KernelOpError('OP_FAILED', `STEP body ${index + 1} has no shape`);
+      }
+      const shapeId = `${params.prefix}:step-${index}`;
+      this.shapes.set(shapeId, shape);
+      bodies.push({ shapeId, stats: this.shapeStats(shapeId) });
+    });
+    return { bodies };
+  }
+
+  /**
+   * Reads a STEP file into an XCAF document and returns its simple shapes. The
+   * file is written to the wasm filesystem for the reader and removed again; the
+   * document keeps the shapes it produced.
+   */
+  private readStepDocument(data: Uint8Array): {
+    oc: OcctBindings;
+    document: OcctDocument;
+    shapeTool: OcctShapeTool;
+    colorTool: OcctColorTool;
+    labels: OcctLabel[];
+    names: string[];
+  } {
+    const oc = this.requireOc();
+    // The reader in this OCCT build refuses paths longer than ten characters,
+    // so the temporary file gets a short rotating name.
+    const fileName = `r${(this.importPass += 1) % 1000}.stp`;
+    oc.FS.writeFile(fileName, data);
+    try {
+      const reader = new oc.STEPCAFControl_Reader_1();
+      reader.SetNameMode(true);
+      reader.SetColorMode(true);
+      const status = reader.ReadFile(fileName);
+      if (!status || status.value !== 1) {
+        throw new KernelOpError('OP_FAILED', 'STEP file could not be read');
+      }
+      const document = new oc.TDocStd_Document(
+        new oc.TCollection_ExtendedString_2('MDTV-XCAF', true),
+      );
+      if (!reader.Transfer_1(new oc.Handle_TDocStd_Document_2(document))) {
+        throw new KernelOpError('OP_FAILED', 'STEP file could not be transferred');
+      }
+      const shapeTool = oc.XCAFDoc_DocumentTool.ShapeTool(document.Main()).get();
+      const colorTool = oc.XCAFDoc_DocumentTool.ColorTool(document.Main()).get();
+      const labels: OcctLabel[] = [];
+      const iterator = new oc.TDF_ChildIterator_2(document.Main(), true);
+      while (iterator.More()) {
+        const label = iterator.Value();
+        if (oc.XCAFDoc_ShapeTool.IsSimpleShape(label)) labels.push(label);
+        iterator.Next();
+      }
+      return { oc, document, shapeTool, colorTool, labels, names: stepProductNames(data) };
+    } finally {
+      try {
+        oc.FS.unlink(fileName);
+      } catch {
+        // The reader may have failed before it opened the file.
       }
     }
   }
@@ -2222,6 +2317,65 @@ function stepColor(value: string): [number, number, number] {
     ((number >> 8) & 0xff) / 255,
     (number & 0xff) / 255,
   ];
+}
+
+/** Colour of one STEP body, or null when the file carries none. */
+function stepBodyColor(
+  oc: OcctBindings,
+  colorTool: OcctColorTool,
+  label: OcctLabel,
+): string | null {
+  const color = new oc.Quantity_Color_3(0, 0, 0, 1);
+  const read = (type: unknown) => {
+    try {
+      return colorTool.GetColor_4(label, type, color);
+    } catch {
+      return false;
+    }
+  };
+  let found =
+    read(oc.XCAFDoc_ColorType.XCAFDoc_ColorSurf) ||
+    read(oc.XCAFDoc_ColorType.XCAFDoc_ColorCurv);
+  if (!found) {
+    try {
+      found = colorTool.GetColor_1(label, color);
+    } catch {
+      found = false;
+    }
+  }
+  if (!found) return null;
+  const channel = (value: number) =>
+    Math.round(Math.min(1, Math.max(0, value)) * 255)
+      .toString(16)
+      .padStart(2, '0');
+  return `#${channel(color.Red())}${channel(color.Green())}${channel(color.Blue())}`;
+}
+
+/** `PRODUCT` names of a STEP file, in document order. */
+function stepProductNames(data: Uint8Array): string[] {
+  const text = new TextDecoder().decode(data);
+  const names: string[] = [];
+  for (const match of text.matchAll(/PRODUCT\s*\(\s*'((?:[^']|'')*)'/g)) {
+    const name = decodeStepString(match[1] ?? '').trim();
+    if (name) names.push(name);
+  }
+  return names;
+}
+
+/** Part 21 escapes a name keeps: doubled quotes and the two hex forms. */
+function decodeStepString(value: string): string {
+  return value
+    .replace(/''/g, "'")
+    .replace(/\\X2\\([0-9A-Fa-f]+)\\X0\\/g, (_, hex: string) => {
+      let text = '';
+      for (let index = 0; index + 3 < hex.length; index += 4) {
+        text += String.fromCharCode(Number.parseInt(hex.slice(index, index + 4), 16));
+      }
+      return text;
+    })
+    .replace(/\\X\\([0-9A-Fa-f]{2})/g, (_, hex: string) =>
+      String.fromCharCode(Number.parseInt(hex, 16)),
+    );
 }
 
 interface ProfilePlane {

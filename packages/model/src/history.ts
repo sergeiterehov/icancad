@@ -110,6 +110,7 @@ function referencedBodyIds(feature: Feature): string[] {
   switch (feature.type) {
     case 'primitive':
     case 'import-mesh':
+    case 'import-step':
       return [];
     case 'convert-to-solid':
       return [feature.sourceBodyId];

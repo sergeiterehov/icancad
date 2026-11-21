@@ -353,6 +353,37 @@ export interface ExportStepResult {
   data: Uint8Array;
 }
 
+/** One body found in a STEP file before it is built in the document. */
+export interface StepBodyInfo {
+  name: string;
+  /** `#rrggbb`, or null when the file carries no colour for the body. */
+  color: string | null;
+}
+
+export interface InspectStepParams {
+  /** Bytes of the STEP file. */
+  data: Uint8Array;
+}
+
+export interface InspectStepResult {
+  bodies: StepBodyInfo[];
+}
+
+export interface ImportStepParams {
+  data: Uint8Array;
+  /** Kernel shape ids are `${prefix}:step-${index}`. */
+  prefix: string;
+}
+
+export interface ImportStepBody {
+  shapeId: string;
+  stats: ShapeStats;
+}
+
+export interface ImportStepResult {
+  bodies: ImportStepBody[];
+}
+
 export type KernelStatusPhase = 'loading-occt' | 'ready' | 'error';
 
 export interface KernelStatusEvent {
@@ -392,6 +423,8 @@ export type KernelRequestPayload =
   | { type: 'transform-shape'; params: TransformShapeParams }
   | { type: 'face-centre'; params: FaceCentreParams }
   | { type: 'export-step'; params: ExportStepParams }
+  | { type: 'inspect-step'; params: InspectStepParams }
+  | { type: 'import-step'; params: ImportStepParams }
   | { type: 'tessellate'; shapeId: string; quality?: TessellationQuality }
   | { type: 'topology'; shapeId: string }
   | { type: 'dispose'; shapeId: string };

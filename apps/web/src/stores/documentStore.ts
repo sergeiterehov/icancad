@@ -33,6 +33,7 @@ import {
   type Feature,
   type FeatureGroup,
   type ImportMeshFeature,
+  type ImportStepFeature,
   type MeshFormat,
   type Model,
   type PrimitiveKind,
@@ -51,6 +52,7 @@ import {
   type ParamValue,
   type TransformFeature,
 } from '@icancad/model';
+import type { StepBodyInfo } from '@icancad/kernel';
 import { sketchTopology } from '@icancad/sketch';
 import { useMemo } from 'react';
 import { create } from 'zustand';
@@ -214,6 +216,7 @@ interface DocumentState {
   /** Sketches: whether construction geometry is drawn in the 3D view. */
   setConstructionVisible: (sketchId: string, visible: boolean) => void;
   addImportedMesh: (name: string, featureId: string, format: MeshFormat) => void;
+  addImportedStep: (name: string, featureId: string, bodies: readonly StepBodyInfo[]) => void;
   setSectionPlanes: (planes: SectionPlane[]) => void;
   /** Asks what to do with the operations that depend on the removed ones. */
   removeFeatures: (featureIds: string[]) => void;
@@ -2041,6 +2044,53 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       )
     ) {
       selectFeatureForEditing(featureId, set);
+    }
+  },
+
+  addImportedStep: (name, featureId, bodies) => {
+    get().endFeatureEdit();
+    const state = get();
+    const feature: ImportStepFeature = {
+      id: featureId,
+      name,
+      suppressed: false,
+      type: 'import-step',
+      assetId: featureId,
+    };
+    const paletteBase = activeModel(state.project).bodies.filter(
+      (candidate) => !isMeshObject(candidate),
+    ).length;
+    const commands: Command[] = [
+      ...addFeatureCommands(activeModel(state.project), feature),
+      ...bodies.flatMap((body, index) => {
+        const ref: BodyRef = {
+          id: featureBodyId(featureId, index),
+          createdBy: featureId,
+          kind: 'solid',
+        };
+        return [
+          { type: 'body/add' as const, body: ref },
+          {
+            type: 'metadata/patch' as const,
+            objectId: ref.id,
+            patch: {
+              name: body.name,
+              color:
+                body.color ??
+                BODY_COLORS[(paletteBase + index) % BODY_COLORS.length] ??
+                '#6ea8fe',
+              visible: true,
+            },
+          },
+        ];
+      }),
+    ];
+    if (state.apply(...commands)) {
+      const selection: SelectionItem[] = bodies.map((_, index) => ({
+        kind: 'body',
+        id: featureBodyId(featureId, index),
+      }));
+      set({ selection, editingFeatureId: null, freshFeatureId: null });
     }
   },
 

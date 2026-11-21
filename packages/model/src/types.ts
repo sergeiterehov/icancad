@@ -53,6 +53,7 @@ export interface Transform {
 export type FeatureType =
   | 'primitive'
   | 'import-mesh'
+  | 'import-step'
   | 'convert-to-solid'
   | 'sketch'
   | 'extrude'
@@ -136,6 +137,12 @@ export interface ImportMeshFeature extends FeatureBase {
   format: MeshFormat;
   transform: Transform;
   scale: ParamValue;
+}
+
+/** A STEP file kept as an asset; its bodies are rebuilt from the file. */
+export interface ImportStepFeature extends FeatureBase {
+  type: 'import-step';
+  assetId: string;
 }
 
 export interface ConvertToSolidFeature extends FeatureBase {
@@ -623,6 +630,7 @@ export interface ArrayFeature extends FeatureBase {
 export type Feature =
   | PrimitiveFeature
   | ImportMeshFeature
+  | ImportStepFeature
   | ConvertToSolidFeature
   | SketchFeature
   | ExtrudeFeature

@@ -443,6 +443,31 @@ describe('object metadata', () => {
     expect(modelOf(parsed).bodies[0]?.kind).toBe('mesh');
     expect(solidBodiesInHistory(modelOf(parsed))).toEqual([]);
   });
+
+  it('parses an imported STEP as a solid body', () => {
+    const project = applyCommands(createProject(), [
+      {
+        type: 'feature/add',
+        feature: {
+          id: 'feat_step',
+          name: 'Fusion part',
+          suppressed: false,
+          type: 'import-step',
+          assetId: 'asset-2',
+        },
+      },
+      { type: 'body/add', body: bodyFor('feat_step') },
+      {
+        type: 'metadata/patch',
+        objectId: featureBodyId('feat_step'),
+        patch: { name: 'FusionPart', color: '#3366cc' },
+      },
+    ]);
+    const parsed = parseProject(JSON.parse(JSON.stringify(project)));
+    const [body] = bodiesInHistory(modelOf(parsed));
+    expect(body).toMatchObject({ kind: 'solid', name: 'FusionPart', color: '#3366cc' });
+    expect(solidBodiesInHistory(modelOf(parsed))).toHaveLength(1);
+  });
 });
 
 describe('history validation', () => {

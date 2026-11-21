@@ -51,6 +51,7 @@
     "saveError": "Ошибка сохранения",
     "fit": "Вписать в вид",
     "import": "Импорт",
+    "importStep": "Импорт STEP",
     "source": "Исходный код"
   },
   "panels": {
@@ -128,6 +129,7 @@
     "body": "Тело",
     "meshes": "Сетки",
     "mesh": "Сетка",
+    "step": "Импорт STEP",
     "operation": "Операция",
     "watertight": "Замкнутая",
     "volume": "Объём",
@@ -220,6 +222,10 @@
     "featureDeleted": "Операция удалена",
     "invalidProject": "Не удалось открыть файл проекта",
     "meshImported": "Сетка импортирована",
+    "stepImporting": "Импорт STEP…",
+    "stepImported": "STEP импортирован",
+    "stepImportFailed": "Не удалось импортировать STEP",
+    "stepNoBodies": "В STEP-файле нет твёрдых тел",
     "stlExported": "STL экспортирован",
     "stlExportFailed": "Не удалось экспортировать STL",
     "stepExported": "STEP экспортирован",

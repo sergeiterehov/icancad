@@ -107,6 +107,16 @@ export function startKernelWorker(options: KernelWorkerOptions = {}): void {
           postSuccess(scope, request.id, result, [result.data.buffer]);
           break;
         }
+        case 'inspect-step': {
+          await engine.init();
+          postSuccess(scope, request.id, engine.inspectStep(request.params));
+          break;
+        }
+        case 'import-step': {
+          await engine.init();
+          postSuccess(scope, request.id, engine.importStep(request.params));
+          break;
+        }
         case 'tessellate': {
           await engine.init();
           const result = engine.tessellate(request.shapeId, request.quality);

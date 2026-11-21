@@ -198,6 +198,8 @@ function featureTypeLabel(t: (key: string) => string, feature: Feature): string 
       return t('inspector.extrude');
     case 'import-mesh':
       return t('inspector.mesh');
+    case 'import-step':
+      return t('inspector.step');
     case 'edge-treatment':
       return t('features.edgeTreatment');
     case 'shell':

@@ -51,6 +51,7 @@
     "saveError": "Save failed",
     "fit": "Fit view",
     "import": "Import",
+    "importStep": "Import STEP",
     "source": "Source code"
   },
   "panels": {
@@ -128,6 +129,7 @@
     "body": "Body",
     "meshes": "Meshes",
     "mesh": "Mesh",
+    "step": "STEP import",
     "operation": "Operation",
     "watertight": "Watertight",
     "volume": "Volume",
@@ -220,6 +222,10 @@
     "featureDeleted": "Feature deleted",
     "invalidProject": "Could not open project file",
     "meshImported": "Mesh imported",
+    "stepImporting": "Importing STEP…",
+    "stepImported": "STEP imported",
+    "stepImportFailed": "Could not import STEP",
+    "stepNoBodies": "The STEP file has no solid bodies",
     "stlExported": "STL exported",
     "stlExportFailed": "Could not export STL",
     "stepExported": "STEP exported",

@@ -2331,4 +2331,54 @@ describe('OCCT kernel engine', () => {
       }),
     ).toThrowError(KernelOpError);
   });
+
+  it('inspects and imports one STEP body with its name and colour', () => {
+    engine.makeBox({ shapeId: 'import-box', dx: 10, dy: 20, dz: 30 });
+    const { data } = engine.exportStep({
+      bodies: [{ shapeId: 'import-box', name: 'FusionPart', color: '#3366cc' }],
+    });
+
+    expect(engine.inspectStep({ data }).bodies).toEqual([
+      { name: 'FusionPart', color: '#3366cc' },
+    ]);
+
+    const imported = engine.importStep({ data, prefix: 'feat:import' });
+    expect(imported.bodies).toHaveLength(1);
+    expect(imported.bodies[0]).toMatchObject({
+      shapeId: 'feat:import:step-0',
+      stats: { faces: 6, edges: 12, solids: 1 },
+    });
+    const mesh = engine.tessellate(imported.bodies[0]!.shapeId);
+    expect(mesh.bbox.max[0]).toBeCloseTo(10, 3);
+    expect(mesh.bbox.max[1]).toBeCloseTo(20, 3);
+    expect(mesh.bbox.max[2]).toBeCloseTo(30, 3);
+  });
+
+  it('imports every body of a multi-body STEP', () => {
+    engine.makeBox({ shapeId: 'import-a', dx: 10, dy: 20, dz: 30 });
+    engine.makeBox({ shapeId: 'import-b', dx: 50, dy: 10, dz: 5 });
+    const { data } = engine.exportStep({
+      bodies: [
+        { shapeId: 'import-a', name: 'Bracket', color: '#3366cc' },
+        { shapeId: 'import-b', name: 'Деталь', color: '#e64d1a' },
+      ],
+    });
+
+    const inspected = engine.inspectStep({ data }).bodies;
+    expect(inspected.map((body) => body.name)).toEqual(['Bracket', 'Деталь']);
+    expect(inspected.map((body) => body.color)).toEqual(['#3366cc', '#e64d1a']);
+
+    const imported = engine.importStep({ data, prefix: 'feat:multi' });
+    expect(imported.bodies.map((body) => body.shapeId)).toEqual([
+      'feat:multi:step-0',
+      'feat:multi:step-1',
+    ]);
+    expect(imported.bodies.every((body) => body.stats.solids === 1)).toBe(true);
+  });
+
+  it('rejects a file that is not STEP', () => {
+    expect(() =>
+      engine.inspectStep({ data: new TextEncoder().encode('not a step file') }),
+    ).toThrowError(KernelOpError);
+  });
 });
