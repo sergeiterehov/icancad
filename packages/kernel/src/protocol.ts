@@ -336,6 +336,23 @@ export interface FaceCentreResult {
   origin: Vec3;
 }
 
+/** A body written into a STEP file: its kernel shape, name and colour. */
+export interface StepBody {
+  shapeId: string;
+  name: string;
+  /** `#rrggbb`, the colour the object has in the model. */
+  color: string;
+}
+
+export interface ExportStepParams {
+  bodies: StepBody[];
+}
+
+export interface ExportStepResult {
+  /** Bytes of an AP214 STEP file. */
+  data: Uint8Array;
+}
+
 export type KernelStatusPhase = 'loading-occt' | 'ready' | 'error';
 
 export interface KernelStatusEvent {
@@ -374,6 +391,7 @@ export type KernelRequestPayload =
   | { type: 'offset-shape'; params: OffsetShapeParams }
   | { type: 'transform-shape'; params: TransformShapeParams }
   | { type: 'face-centre'; params: FaceCentreParams }
+  | { type: 'export-step'; params: ExportStepParams }
   | { type: 'tessellate'; shapeId: string; quality?: TessellationQuality }
   | { type: 'topology'; shapeId: string }
   | { type: 'dispose'; shapeId: string };

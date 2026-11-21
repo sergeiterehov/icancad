@@ -223,6 +223,54 @@ export interface OcctEdgeMaker {
   IsDeleted(shape: OcctShape): boolean;
 }
 
+/** `TDF_Label`: the persistent address of an object in a document. */
+export interface OcctLabel {
+  IsNull(): boolean;
+}
+
+/** `TDocStd_Document`: the XCAF document a STEP writer reads names and colours from. */
+export interface OcctDocument {
+  Main(): OcctLabel;
+}
+
+/** A handle wrapper: the object itself is reached through `get()`. */
+export interface OcctHandle<T> {
+  get(): T;
+}
+
+/** `XCAFDoc_ShapeTool`: places shapes into the document. */
+export interface OcctShapeTool {
+  /** Returns the label that owns the added shape. */
+  AddShape(shape: OcctShape, makeAssembly: boolean, isNew: boolean): OcctLabel;
+}
+
+/** `Quantity_Color`: red, green and blue in 0..1. */
+export interface OcctColor {
+  Red(): number;
+  Green(): number;
+  Blue(): number;
+}
+
+/** `XCAFDoc_ColorTool`: assigns a colour to a document label. */
+export interface OcctColorTool {
+  /** The enum argument picks the colour slot; generic is what a body uses. */
+  SetColor_2(label: OcctLabel, color: OcctColor, type: unknown): boolean;
+}
+
+/** `STEPCAFControl_Writer`: writes shapes with their names and colours. */
+export interface OcctStepWriter {
+  SetColorMode(enabled: boolean): void;
+  SetNameMode(enabled: boolean): void;
+  /** Transfers the document and writes one AP214 file. */
+  Perform_1(document: unknown, filename: unknown): boolean;
+}
+
+/** The Emscripten filesystem the written STEP file is read back from. */
+export interface OcctFileSystem {
+  readFile(path: string): Uint8Array;
+  unlink(path: string): void;
+}
+
 export interface OcctBindings {
   BRepPrimAPI_MakeBox_1: new (dx: number, dy: number, dz: number) => OcctShapeMaker;
   BRepPrimAPI_MakeBox_2: new (
@@ -404,4 +452,30 @@ export interface OcctBindings {
     GeomAbs_Tangent: unknown;
     GeomAbs_Intersection: unknown;
   };
+  TCollection_AsciiString_2: new (text: string) => unknown;
+  /**
+   * `isMultiByte` is false for names: the binding then keeps the UTF-8 bytes of
+   * a non-ASCII name intact, which is what the STEP writer encodes.
+   */
+  TCollection_ExtendedString_2: new (text: string, isMultiByte: boolean) => unknown;
+  TDocStd_Document: new (storageFormat: unknown) => OcctDocument;
+  Handle_TDocStd_Document_2: new (document: OcctDocument) => unknown;
+  XCAFDoc_DocumentTool: {
+    ShapeTool(label: OcctLabel): OcctHandle<OcctShapeTool>;
+    ColorTool(label: OcctLabel): OcctHandle<OcctColorTool>;
+  };
+  XCAFDoc_ColorType: {
+    XCAFDoc_ColorGen: unknown;
+  };
+  TDataStd_Name: {
+    Set_1(label: OcctLabel, name: unknown): void;
+  };
+  Quantity_Color_3: new (
+    red: number,
+    green: number,
+    blue: number,
+    colorType: number,
+  ) => OcctColor;
+  STEPCAFControl_Writer_1: new () => OcctStepWriter;
+  FS: OcctFileSystem;
 }

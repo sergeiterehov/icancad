@@ -79,6 +79,12 @@ export function stlFileName(projectName: string, modelName?: string): string {
   return `${slugify(projectName)} - ${slugify(modelName, 'model')}.stl`;
 }
 
+/** `project - model.step`; the project alone when no model name is given. */
+export function stepFileName(projectName: string, modelName?: string): string {
+  if (modelName === undefined) return `${slugify(projectName)}.step`;
+  return `${slugify(projectName)} - ${slugify(modelName, 'model')}.step`;
+}
+
 export function projectFileName(name: string): string {
   return `${slugify(name)}.icad`;
 }

@@ -4,6 +4,7 @@ import {
   parseProjectFile,
   projectFileName,
   serializeProjectFile,
+  stepFileName,
   stlFileName,
 } from '../src/persistence/projectFile';
 import { modelOf } from './modelFixture';
@@ -66,6 +67,13 @@ describe('project file', () => {
     expect(stlFileName('Мой проект', 'Модель')).toBe('мой-проект - модель.stl');
     expect(stlFileName('***', '***')).toBe('project - model.stl');
     expect(stlFileName('My Part #1')).toBe('my-part-1.stl');
+  });
+
+  it('names a STEP file after the project and the active model', () => {
+    expect(stepFileName('My Part #1', 'Cube')).toBe('my-part-1 - cube.step');
+    expect(stepFileName('Мой проект', 'Модель')).toBe('мой-проект - модель.step');
+    expect(stepFileName('***', '***')).toBe('project - model.step');
+    expect(stepFileName('My Part #1')).toBe('my-part-1.step');
   });
 });
 

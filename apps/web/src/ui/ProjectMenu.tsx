@@ -20,6 +20,7 @@ import {
   LayoutPanelLeft,
   Moon,
   MonitorSmartphone,
+  Package,
   Palette,
   PanelLeft,
   Redo2,
@@ -33,7 +34,7 @@ import { useTranslation } from 'react-i18next';
 import { MOD_KEY } from '../hooks/useShortcuts';
 import { setLocale, type Locale } from '../i18n';
 import { exportQuality, EXPORT_QUALITIES, type ExportQualityId } from '../io/exportQuality';
-import { meshesForExport } from '../kernel/export';
+import { meshesForExport, stepBodies, stepForExport } from '../kernel/export';
 import { loadAsset, saveAsset } from '../persistence/db';
 import {
   createAndOpenProject,
@@ -46,6 +47,7 @@ import {
   parseProjectFile,
   projectFileName,
   serializeProjectFile,
+  stepFileName,
   stlFileName,
 } from '../persistence/projectFile';
 import { promptInstall } from '../pwa/install';
@@ -144,13 +146,19 @@ export function ProjectMenu() {
     showToast('toast.exported');
   };
 
-  const handleExportStl = () => {
+  // Export acts on the selected bodies, or on all visible ones when nothing is
+  // selected; a selection wins even when it points at hidden objects.
+  const exportCandidates = () => {
     const state = useDocumentStore.getState();
     const selected = new Set(directBodyIds(state.selection));
-    const candidates = bodiesInHistory(
+    return bodiesInHistory(
       activeModel(state.project),
       useKernelStore.getState().consumedBodies,
     ).filter((body) => (selected.size > 0 ? selected.has(body.id) : body.visible));
+  };
+
+  const handleExportStl = () => {
+    const candidates = exportCandidates();
     const meshes = useKernelStore.getState().meshes;
     if (!candidates.some((body) => meshes[body.id])) {
       showToast('toast.noGeometry', 'error');
@@ -182,6 +190,36 @@ export function ProjectMenu() {
       setStlExport(null);
     } catch {
       showToast('toast.stlExportFailed', 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleExportStep = async () => {
+    if (exporting) return;
+    const state = useDocumentStore.getState();
+    const { bodies, skipped } = stepBodies(
+      exportCandidates(),
+      useKernelStore.getState().bodyShapes,
+    );
+    if (bodies.length === 0) {
+      showToast('toast.noGeometry', 'error');
+      return;
+    }
+    setExporting(true);
+    try {
+      const data = await stepForExport(bodies, t('project.exportStep'));
+      download(
+        new Blob([new Uint8Array(data)], { type: 'application/step' }),
+        stepFileName(state.project.name, activeModel(state.project).name),
+      );
+      if (skipped > 0) {
+        showToast('toast.stepExportedSkippedMeshes', 'info', { count: skipped });
+      } else {
+        showToast('toast.stepExported');
+      }
+    } catch {
+      showToast('toast.stepExportFailed', 'error');
     } finally {
       setExporting(false);
     }
@@ -280,6 +318,16 @@ export function ProjectMenu() {
             icon: <FileBox size={14} />,
             disabled: !projectHasGeometry,
             onSelect: handleExportStl,
+          },
+          {
+            id: 'export-step',
+            label:
+              selectedBodyCount > 0
+                ? t('project.exportStepSelected', { count: selectedBodyCount })
+                : t('project.exportStep'),
+            icon: <Package size={14} />,
+            disabled: !projectHasGeometry,
+            onSelect: () => void handleExportStep(),
           },
         ],
       },

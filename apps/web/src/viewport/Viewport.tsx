@@ -918,7 +918,9 @@ export function Viewport() {
         if (transform) items.push(transform);
         const remove = deleteMenuItem(
           targets,
-          targets.length > 1 ? labels('context.deleteSelected') : labels('context.deleteObject'),
+          targets.length > 1
+            ? labels('context.deleteSelected', { count: targets.length })
+            : labels('context.deleteObject'),
         );
         if (remove) items.push(remove);
         showContextMenu({ clientX: x, clientY: y, preventDefault: () => undefined }, items);

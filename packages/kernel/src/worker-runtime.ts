@@ -101,6 +101,12 @@ export function startKernelWorker(options: KernelWorkerOptions = {}): void {
           postSuccess(scope, request.id, engine.faceCentre(request.params));
           break;
         }
+        case 'export-step': {
+          await engine.init();
+          const result = engine.exportStep(request.params);
+          postSuccess(scope, request.id, result, [result.data.buffer]);
+          break;
+        }
         case 'tessellate': {
           await engine.init();
           const result = engine.tessellate(request.shapeId, request.quality);

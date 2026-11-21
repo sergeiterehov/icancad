@@ -5,6 +5,8 @@ import type {
   BoxParams,
   EdgeTreatmentParams,
   EdgeTreatmentResult,
+  ExportStepParams,
+  ExportStepResult,
   FaceCentreParams,
   FaceCentreResult,
   HealthResult,
@@ -276,6 +278,8 @@ export class KernelEngine {
   private readonly shapeEdges = new Map<string, ShapeEdges>();
   /** Counter for the throwaway ids used while a treatment is built in passes. */
   private treatmentPass = 0;
+  /** Counter for the unique file names STEP exports use in the wasm filesystem. */
+  private exportPass = 0;
   /**
    * Edge selections that only build in passes: the largest size they took and
    * the smallest size they rejected.
@@ -1804,6 +1808,63 @@ export class KernelEngine {
     }
   }
 
+  /**
+   * Writes body shapes to one AP214 STEP file. Each body becomes a top-level
+   * shape of an XCAF document with its name and colour, which is what makes
+   * the file useful in another CAD system instead of a pile of anonymous
+   * solids.
+   */
+  exportStep(params: ExportStepParams): ExportStepResult {
+    if (params.bodies.length === 0) {
+      throw new KernelOpError('INVALID_PARAMS', 'No bodies to export');
+    }
+    const oc = this.requireOc();
+    const document = new oc.TDocStd_Document(
+      new oc.TCollection_ExtendedString_2('MDTV-XCAF', true),
+    );
+    const shapeTool = oc.XCAFDoc_DocumentTool.ShapeTool(document.Main()).get();
+    const colorTool = oc.XCAFDoc_DocumentTool.ColorTool(document.Main()).get();
+    for (const body of params.bodies) {
+      const label = shapeTool.AddShape(this.getShape(body.shapeId), false, true);
+      // Names keep their UTF-8 bytes with the multibyte flag off; that is what
+      // the STEP writer encodes, so a Cyrillic name survives the round trip.
+      oc.TDataStd_Name.Set_1(
+        label,
+        new oc.TCollection_ExtendedString_2(body.name, false),
+      );
+      const [red, green, blue] = stepColor(body.color);
+      colorTool.SetColor_2(
+        label,
+        new oc.Quantity_Color_3(red, green, blue, 1),
+        oc.XCAFDoc_ColorType.XCAFDoc_ColorGen,
+      );
+    }
+
+    // The writer goes through the Emscripten filesystem: a unique name per call
+    // keeps exports from meeting each other, and the file is removed once its
+    // bytes are in JavaScript.
+    const fileName = `icancad-export-${(this.exportPass += 1)}.step`;
+    const writer = new oc.STEPCAFControl_Writer_1();
+    writer.SetColorMode(true);
+    writer.SetNameMode(true);
+    try {
+      const written = writer.Perform_1(
+        new oc.Handle_TDocStd_Document_2(document),
+        new oc.TCollection_AsciiString_2(fileName),
+      );
+      if (!written) {
+        throw new KernelOpError('OP_FAILED', 'STEP writer failed');
+      }
+      return { data: oc.FS.readFile(fileName).slice() };
+    } finally {
+      try {
+        oc.FS.unlink(fileName);
+      } catch {
+        // The writer may have failed before it opened the file.
+      }
+    }
+  }
+
   dispose(shapeId: string): boolean {
     this.shapeEdges.delete(shapeId);
     return this.shapes.delete(shapeId);
@@ -2142,6 +2203,25 @@ function updateBounds(
   if (x > max[0]) max[0] = x;
   if (y > max[1]) max[1] = y;
   if (z > max[2]) max[2] = z;
+}
+
+/** `#rrggbb` from the model as the 0..1 channels a `Quantity_Color` takes. */
+function stepColor(value: string): [number, number, number] {
+  const hex = value.trim().replace(/^#/, '');
+  const full =
+    hex.length === 3
+      ? hex
+          .split('')
+          .map((digit) => digit + digit)
+          .join('')
+      : hex;
+  if (!/^[0-9a-f]{6}$/i.test(full)) return [0.7, 0.7, 0.7];
+  const number = Number.parseInt(full, 16);
+  return [
+    ((number >> 16) & 0xff) / 255,
+    ((number >> 8) & 0xff) / 255,
+    (number & 0xff) / 255,
+  ];
 }
 
 interface ProfilePlane {

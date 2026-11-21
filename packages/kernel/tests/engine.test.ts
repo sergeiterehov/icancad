@@ -2306,4 +2306,29 @@ describe('OCCT kernel engine', () => {
     expect(mesh.bbox.max[2]).toBeCloseTo(31, 5);
     expect(mesh.bbox.max[0]).toBeCloseTo(10, 3);
   });
+
+  it('writes STEP with body names and colours', () => {
+    engine.makeBox({ shapeId: 'step-bracket', dx: 10, dy: 20, dz: 30 });
+    engine.makeBox({ shapeId: 'step-plate', dx: 50, dy: 10, dz: 5 });
+    const { data } = engine.exportStep({
+      bodies: [
+        { shapeId: 'step-bracket', name: 'Bracket', color: '#3366cc' },
+        { shapeId: 'step-plate', name: 'Деталь', color: '#e64d1a' },
+      ],
+    });
+    const text = new TextDecoder().decode(data);
+    expect(text.startsWith('ISO-10303-21;')).toBe(true);
+    expect(text).toContain("PRODUCT('Bracket'");
+    expect(text).toContain("PRODUCT('Деталь'");
+    expect(text).toMatch(/COLOUR_RGB\('',0\.2\d*,0\.4\d*,0\.8\d*\)/);
+    expect(text.match(/MANIFOLD_SOLID_BREP/g)).toHaveLength(2);
+  });
+
+  it('rejects a STEP export of an unknown shape', () => {
+    expect(() =>
+      engine.exportStep({
+        bodies: [{ shapeId: 'step-missing', name: 'Missing', color: '#000000' }],
+      }),
+    ).toThrowError(KernelOpError);
+  });
 });
