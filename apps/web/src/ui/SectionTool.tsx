@@ -1,5 +1,5 @@
 import { activeModel, createId, type SectionPlane } from '@icancad/model';
-import { SquareDashedBottom } from 'lucide-react';
+import { Opacity } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useDocumentStore } from '../stores/documentStore';
 import { useUiStore } from '../stores/uiStore';
@@ -34,7 +34,7 @@ export function SectionTool() {
 
   return (
     <IconButton label={t('tools.section')} active={active} onClick={toggle}>
-      <SquareDashedBottom size={17} />
+      <Opacity size={17} />
     </IconButton>
   );
 }

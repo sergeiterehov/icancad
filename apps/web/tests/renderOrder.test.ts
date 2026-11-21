@@ -39,6 +39,11 @@ describe('render order', () => {
     expect(RenderOrder.faceOverlay).toBeGreaterThan(RenderOrder.delta);
   });
 
+  it('draws a delta over the solid bodies and their phantoms', () => {
+    expect(RenderOrder.delta).toBeGreaterThan(RenderOrder.solid);
+    expect(RenderOrder.delta).toBeGreaterThan(RenderOrder.phantom);
+  });
+
   it('keeps gizmos above the model and its annotations', () => {
     for (const order of [RenderOrder.sketch, RenderOrder.sketchGrid, RenderOrder.annotation]) {
       expect(RenderOrder.handle).toBeGreaterThan(order);

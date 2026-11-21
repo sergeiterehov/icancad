@@ -26,6 +26,7 @@ import {
   type BodyEdgeRef,
   type BodyFaceRef,
   type BodyRef,
+  type BooleanFeature,
   type Command,
   type EdgeTreatmentFeature,
   type EdgeTreatmentKind,
@@ -142,6 +143,11 @@ interface DocumentState {
   addExtrude: (name: string, input?: ExtrudeStart) => string | null;
   addEdgeTreatment: (name: string, input?: EdgeTreatmentInput) => string | null;
   addShell: (name: string, input?: ShellInput) => string | null;
+  addBoolean: (name: string, input?: BooleanInput) => string | null;
+  setBooleanOp: (featureId: string, op: BooleanFeature['op']) => void;
+  /** Adds a body to one list and takes it out of the other. */
+  toggleBooleanBody: (featureId: string, side: BooleanSide, bodyId: string) => void;
+  setBooleanKeep: (featureId: string, side: BooleanSide, keep: boolean) => void;
   addArray: (name: string, input?: ArrayInput) => string | null;
   setArrayTarget: (featureId: string, target: ArrayFeature['target']) => void;
   toggleArrayBody: (featureId: string, bodyId: string) => void;
@@ -266,6 +272,15 @@ export interface ShellInput {
   faceRefs?: BodyFaceRef[];
 }
 
+/** Bodies a boolean starts with; the rest are picked in the inspector. */
+export interface BooleanInput {
+  bodyIds?: string[];
+  toolIds?: string[];
+}
+
+/** Which of the two lists a boolean body belongs to. */
+export type BooleanSide = 'bodies' | 'tools';
+
 /** What an array starts with: picked bodies, or operations that made bodies. */
 export interface ArrayInput {
   bodyIds?: string[];
@@ -346,6 +361,13 @@ function findArrayFeature(model: Model, featureId: string): ArrayFeature | undef
   return model.features.find(
     (candidate): candidate is ArrayFeature =>
       candidate.id === featureId && candidate.type === 'array',
+  );
+}
+
+function findBooleanFeature(model: Model, featureId: string): BooleanFeature | undefined {
+  return model.features.find(
+    (candidate): candidate is BooleanFeature =>
+      candidate.id === featureId && candidate.type === 'boolean',
   );
 }
 
@@ -548,6 +570,8 @@ function nothingConfigured(feature: Feature): boolean {
       return feature.faceRefs.length === 0 && feature.edgeRefs.length === 0;
     case 'shell':
       return feature.bodyIds.length === 0 && feature.removeFaces.length === 0;
+    case 'boolean':
+      return feature.bodyIds.length === 0 || feature.toolIds.length === 0;
     case 'array':
       return feature.bodyIds.length === 0 && feature.featureIds.length === 0;
     default:
@@ -724,6 +748,8 @@ function openPicker(ui: ReturnType<typeof useUiStore.getState>): boolean {
     ui.pickingShellFaces ??
     ui.pickingSketchPlane ??
     ui.pickingSectionFace ??
+    ui.pickingBooleanBodies ??
+    ui.pickingBooleanTools ??
     ui.pickingArrayBodies ??
     ui.pickingArrayOperations,
   );
@@ -960,6 +986,18 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     if (ui.pickingShellBodies) {
       if (item?.kind === 'body') {
         get().toggleShellBody(ui.pickingShellBodies, item.id);
+      }
+      return;
+    }
+    if (ui.pickingBooleanBodies) {
+      if (item?.kind === 'body') {
+        get().toggleBooleanBody(ui.pickingBooleanBodies, 'bodies', item.id);
+      }
+      return;
+    }
+    if (ui.pickingBooleanTools) {
+      if (item?.kind === 'body') {
+        get().toggleBooleanBody(ui.pickingBooleanTools, 'tools', item.id);
       }
       return;
     }
@@ -1373,6 +1411,68 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
           : [...feature.removeFaces, ref],
       },
     });
+  },
+
+  // The operation always makes new bodies and never changes its inputs. The
+  // first list starts from what was picked; the other list is picked next.
+  addBoolean: (name, input) => {
+    get().endFeatureEdit();
+    const bodyIds = [...new Set(input?.bodyIds ?? [])];
+    const toolIds = [...new Set(input?.toolIds ?? [])].filter(
+      (bodyId) => !bodyIds.includes(bodyId),
+    );
+    const featureId = createId('feat');
+    const feature: BooleanFeature = {
+      id: featureId,
+      name,
+      suppressed: false,
+      type: 'boolean',
+      op: 'subtract',
+      bodyIds,
+      toolIds,
+      keepBodies: false,
+      keepTools: false,
+    };
+    if (!get().apply(...addFeatureCommands(activeModel(get().project), feature))) return null;
+    selectFeatureForEditing(featureId, set);
+    // Both lists are picked like extrude target bodies, so the empty one opens
+    // its picker and the operation is ready for the next click in 3D.
+    const ui = useUiStore.getState();
+    if (bodyIds.length === 0) ui.setPickingBooleanBodies(featureId);
+    else if (toolIds.length === 0) ui.setPickingBooleanTools(featureId);
+    return featureId;
+  },
+
+  setBooleanOp: (featureId, op) => {
+    const feature = findBooleanFeature(activeModel(get().project), featureId);
+    if (!feature || feature.op === op) return;
+    get().apply({ type: 'feature/replace', feature: { ...feature, op } });
+  },
+
+  // A body belongs to one list only: picking it in the other list moves it
+  // there instead of adding a second reference.
+  toggleBooleanBody: (featureId, side, bodyId) => {
+    const feature = findBooleanFeature(activeModel(get().project), featureId);
+    if (!feature) return;
+    const body = activeModel(get().project).bodies.find((candidate) => candidate.id === bodyId);
+    if (!body || body.kind === 'mesh') return;
+    const current = side === 'bodies' ? feature.bodyIds : feature.toolIds;
+    const exists = current.includes(bodyId);
+    const bodyIds = feature.bodyIds.filter((id) => id !== bodyId);
+    const toolIds = feature.toolIds.filter((id) => id !== bodyId);
+    if (!exists) {
+      if (side === 'bodies') bodyIds.push(bodyId);
+      else toolIds.push(bodyId);
+    }
+    get().apply({ type: 'feature/replace', feature: { ...feature, bodyIds, toolIds } });
+  },
+
+  setBooleanKeep: (featureId, side, keep) => {
+    const feature = findBooleanFeature(activeModel(get().project), featureId);
+    if (!feature) return;
+    const next =
+      side === 'bodies' ? { ...feature, keepBodies: keep } : { ...feature, keepTools: keep };
+    get().apply({ type: 'feature/replace', feature: next });
   },
 
   // The array starts from the current selection: picked bodies, or picked

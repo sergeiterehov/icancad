@@ -44,6 +44,8 @@ export function useShortcuts(): void {
           ui.pickingEdges ||
           ui.pickingShellBodies ||
           ui.pickingShellFaces ||
+          ui.pickingBooleanBodies ||
+          ui.pickingBooleanTools ||
           ui.pickingSketchPlane ||
           ui.pickingSectionFace ||
           ui.pickingExtrudeToBody

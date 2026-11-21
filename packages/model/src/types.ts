@@ -493,10 +493,22 @@ export interface EdgeTreatmentFeature extends FeatureBase {
   size: ParamValue;
 }
 
+/**
+ * A boolean operation between two lists of bodies (ADR 0036). It never changes
+ * its inputs: the result is a new body, and each list decides whether its
+ * bodies survive the operation.
+ */
 export interface BooleanFeature extends FeatureBase {
   type: 'boolean';
   op: 'union' | 'subtract' | 'intersect';
+  /** The first list: the material the operation starts from. */
   bodyIds: string[];
+  /** The second list: bodies combined with, cut away or intersected with. */
+  toolIds: string[];
+  /** Keep the first-list bodies in the model after the operation. */
+  keepBodies?: boolean;
+  /** Keep the second-list bodies in the model after the operation. */
+  keepTools?: boolean;
 }
 
 // Removing an object is an operation too: the body disappears from this point in
@@ -724,4 +736,5 @@ export type FeatureErrorCode =
   | 'NOT_IMPLEMENTED'
   | 'OP_FAILED'
   | 'CONSTRAINT_CONFLICT'
-  | 'EXPRESSION_ERROR';
+  | 'EXPRESSION_ERROR'
+  | 'BOOLEAN_EMPTY';

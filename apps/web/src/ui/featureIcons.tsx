@@ -19,7 +19,6 @@ import {
   PackageOpen,
   Pill,
   Pyramid,
-  Scissors,
   SquaresIntersect,
   SquaresSubtract,
   SquaresUnite,
@@ -116,7 +115,12 @@ export function FeatureIcon({ feature, size = 16 }: { feature: Feature; size?: n
     case 'extrude':
       return <ExtrudeOpIcon op={feature.op} size={size} />;
     case 'boolean':
-      return <Scissors size={size} />;
+      return (
+        <ExtrudeOpIcon
+          op={feature.op === 'union' ? 'add' : feature.op === 'subtract' ? 'subtract' : 'intersect'}
+          size={size}
+        />
+      );
     case 'import-mesh':
       return <FileUp size={size} />;
     case 'delete-body':

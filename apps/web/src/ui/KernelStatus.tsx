@@ -31,6 +31,7 @@ export function KernelStatus() {
   const kernelError = useKernelStore((state) => state.error);
   const tasks = useKernelStore((state) => state.tasks);
   const featureErrors = useKernelStore((state) => state.featureErrors);
+  const consumedBodies = useKernelStore((state) => state.consumedBodies);
   const operationMs = useKernelStore((state) => state.operationMs);
   const buildProgress = useKernelStore((state) => state.buildProgress);
   const sketchPending = useSketchSolverStore((state) => state.pending);
@@ -40,8 +41,10 @@ export function KernelStatus() {
   const formulaPyodide = useFormulaStore((state) => state.pyodide);
   const project = useViewModel();
   const featureCount = project.features.length;
-  const bodyCount = solidBodiesInHistory(project).length;
-  const meshCount = bodiesInHistory(project).filter((body) => body.kind === 'mesh').length;
+  const bodyCount = solidBodiesInHistory(project, consumedBodies).length;
+  const meshCount = bodiesInHistory(project, consumedBodies).filter(
+    (body) => body.kind === 'mesh',
+  ).length;
   const timelineMs = timelineDuration(project.features, operationMs);
 
   const [detailsOpen, setDetailsOpen] = useState(false);

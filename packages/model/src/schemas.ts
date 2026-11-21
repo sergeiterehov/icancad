@@ -526,7 +526,12 @@ const booleanFeature = z.object({
   ...featureBase,
   type: z.literal('boolean'),
   op: z.enum(['union', 'subtract', 'intersect']),
-  bodyIds: z.array(z.string().min(1)).min(2),
+  // Both lists start empty: the operation is configured from the inspector and
+  // builds nothing until it has a body on each side.
+  bodyIds: z.array(z.string().min(1)).default([]),
+  toolIds: z.array(z.string().min(1)).default([]),
+  keepBodies: z.boolean().default(false),
+  keepTools: z.boolean().default(false),
 });
 
 const deleteBodyFeature = z.object({

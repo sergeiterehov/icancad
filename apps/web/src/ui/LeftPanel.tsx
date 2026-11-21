@@ -71,15 +71,16 @@ function entrySelection(entry: TreeEntry): SelectionItem | null {
 export function LeftPanel() {
   const { t } = useTranslation();
   const project = useViewModel();
-  const bodies = bodiesInHistory(project);
   const activeIds = activeFeatureIds(project);
   const selection = useDocumentStore((state) => state.selection);
   const selectMany = useDocumentStore((state) => state.selectMany);
   const toggleBodyVisibility = useDocumentStore((state) => state.toggleBodyVisibility);
   const toggleSketchVisibility = useDocumentStore((state) => state.toggleSketchVisibility);
   const featureErrors = useKernelStore((state) => state.featureErrors);
+  const consumedBodies = useKernelStore((state) => state.consumedBodies);
   const projectionLost = useKernelStore((state) => state.projectionLost);
   const preview = useKernelStore((state) => state.preview);
+  const bodies = bodiesInHistory(project, consumedBodies);
   const setActiveSketch = useUiStore((state) => state.setActiveSketch);
   const pickingArrayBodies = useUiStore((state) => state.pickingArrayBodies);
   const [renaming, setRenaming] = useState<string | null>(null);

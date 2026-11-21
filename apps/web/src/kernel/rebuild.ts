@@ -20,6 +20,7 @@ import {
   shellBodyId,
   type ArrayDirection,
   type ArrayFeature,
+  type BooleanFeature,
   type Resolved,
   type BodyFaceRef,
   type EdgeTreatmentFeature,
@@ -72,7 +73,7 @@ import { KernelTaskCancelledError, kernelTaskQueue } from './scheduler';
 import { addEmbedFor, UNION_EMBED } from './embed';
 import { splitAssignment, splitBodyId } from './splitBodies';
 import { RebuildCache, type RebuildCheckpoint } from './checkpoints';
-import { arrayPositionCount, type Matrix3x4 } from './array';
+import { arrayPositionCount, IDENTITY_MATRIX, type Matrix3x4 } from './array';
 import {
   arrayDirections,
   arrayPlacementMatrices as arrayPlacements,
@@ -209,6 +210,8 @@ interface RebuildState {
   meshStats: Record<string, MeshStats>;
   /** Bodies each creating operation owns, keyed by operation id. */
   createdBodies: Map<string, string[]>;
+  /** Bodies an operation consumed; the document drops their refs afterwards. */
+  consumedBodies: Set<string>;
   /** Sketch id -> frame frozen when that operation was evaluated. */
   sketchFrames: Record<string, SketchFrame>;
   sketches: Map<string, Resolved<SketchFeature>>;
@@ -328,6 +331,7 @@ function emptyState(): RebuildState {
     bodyStats: {},
     meshStats: {},
     createdBodies: new Map(),
+    consumedBodies: new Set(),
     sketchFrames: {},
     sketches: new Map(),
     featureTools: new Map(),
@@ -371,6 +375,7 @@ function cloneState(state: RebuildState): RebuildState {
     createdBodies: new Map(
       [...state.createdBodies].map(([featureId, bodyIds]) => [featureId, [...bodyIds]]),
     ),
+    consumedBodies: new Set(state.consumedBodies),
     sketchFrames: { ...state.sketchFrames },
     sketches: new Map(state.sketches),
     featureTools: new Map(
@@ -562,6 +567,7 @@ function publishInterimState(state: RebuildState): boolean {
     state.sketchFrames,
     state.projectionLost,
     null,
+    state.consumedBodies,
   );
   kernel.markInterimScene();
   return true;
@@ -694,6 +700,7 @@ async function runRebuild(
       base.sketchFrames,
       base.projectionLost,
       null,
+      base.consumedBodies,
     );
     store.setBodyOperations(Object.fromEntries(base.bodySource));
     store.setFaceOperations(Object.fromEntries(base.faceOwners));
@@ -719,9 +726,13 @@ async function runRebuild(
       // preview.
       // A cut shows the removed volume; an add shows the material it will add.
       // Both need the tool solid only the preview tessellates. An array draws
-      // one ghost per copy, so it is always evaluated again for the preview.
+      // one ghost per copy, and a boolean builds its delta from the result, so
+      // both are always evaluated again for the preview: a cached snapshot has
+      // no ghost in it, and entering the operation has to show the delta before
+      // the user touches a parameter.
       const needsGhost =
         (previewFeature.type === 'array' && !previewFeature.suppressed) ||
+        (previewFeature.type === 'boolean' && !previewFeature.suppressed) ||
         (previewFeature.type === 'extrude' &&
           (previewFeature.op === 'subtract' || previewFeature.op === 'add'));
       const cachedPreview = needsGhost ? null : rebuildCache.find(features, previewIndex);
@@ -787,20 +798,21 @@ async function runRebuild(
   const scene = preview ? withRemovedBodies(published, base) : published;
   const shapeStats = aggregateStats(scene);
 
-  useKernelStore
-    .getState()
-    .setScene(
-      scene.meshes,
-      shapeStats,
-      scene.meshStats,
-      Object.fromEntries(scene.bodyShapes),
-      scene.featureErrors,
-      scene.featureBodyErrors,
-      scene.featureObjectErrors,
-      scene.sketchFrames,
-      scene.projectionLost,
-      preview,
-    );
+  useKernelStore.getState().setScene(
+    scene.meshes,
+    shapeStats,
+    scene.meshStats,
+    Object.fromEntries(scene.bodyShapes),
+    scene.featureErrors,
+    scene.featureBodyErrors,
+    scene.featureObjectErrors,
+    scene.sketchFrames,
+    scene.projectionLost,
+    preview,
+    // The edited operation's own consumption must not hide its inputs while
+    // they are being configured; the base state is the model in front of it.
+    base.consumedBodies,
+  );
   // Which operation produced each body's current shape, so a face can lead back
   // to the operation that made it.
   const done = useKernelStore.getState();
@@ -870,6 +882,7 @@ function buildPreview(
   // ghost per copy, so the seeds stay in their own style.
   const keepsBodySolid =
     feature.type === 'array' ||
+    feature.type === 'boolean' ||
     (feature.type === 'extrude' &&
       (feature.op === 'subtract' || feature.op === 'add' || feature.op === 'intersect'));
   // Meshes cover solid bodies and imported meshes alike.
@@ -878,17 +891,33 @@ function buildPreview(
     const now = after.meshes[bodyId];
     if (!now) continue;
     if (!before) {
-      bodies.push({ id: bodyId, kind: 'added', ...describe(bodyId) });
+      // With Keep the source bodies stay and the operation only makes copies:
+      // the delta is what the user configured, so the copies stay out of the
+      // viewport (the tree still lists them). A union is drawn the same way:
+      // the base body plus the green addition, not a fused body on top of it.
+      const ghostOnly =
+        feature.type === 'boolean' && (feature.keepBodies === true || feature.op === 'union');
+      bodies.push({
+        id: bodyId,
+        kind: 'added',
+        ...describe(bodyId),
+        ...(ghostOnly ? { ghostOnly: true } : {}),
+      });
       continue;
     }
     if (before === now) continue;
     // A boolean against a body the tool misses still produces a new shape;
     // only a changed tessellation counts as a modification.
     if (meshSignature(before) === meshSignature(now)) continue;
+    // A union shows the target as it was and the green ghost adds to it; a cut
+    // shows the result itself, so the hole reads as real geometry.
+    const renderBase =
+      feature.type === 'boolean' && feature.op === 'union' && feature.keepBodies !== true;
     bodies.push({
       id: bodyId,
       kind: 'modified',
       ...describe(bodyId),
+      ...(renderBase ? { renderBase: true } : {}),
       baseMesh: before,
       // The mesh a pick lands on is the one before the operation, so its shape
       // is the one to measure when the operation has moved the body.
@@ -912,17 +941,26 @@ function buildPreview(
       ...describe(bodyId),
       ...(baseMesh ? { baseMesh } : {}),
       ...(base.bodyShapes.get(bodyId) ? { baseShapeId: base.bodyShapes.get(bodyId)! } : {}),
+      // A boolean shows what it adds or removes through its delta alone; the
+      // whole consumed body would bury the model under a red wash. The tree
+      // still lists it as removed.
+      ...(feature.type === 'boolean' ? { hidden: true } : {}),
     });
   }
 
   const ghosts: SceneGhost[] = [];
   if (ghost.mesh) {
-    const isAdd = feature.type === 'extrude' && feature.op === 'add';
+    const isAdd =
+      (feature.type === 'extrude' && feature.op === 'add') ||
+      (feature.type === 'boolean' && feature.op === 'union');
     ghosts.push({
       id: `ghost:${feature.id}`,
       mesh: ghost.mesh,
       color: isAdd ? '#22c55e' : '#ef4444',
       ...(ghost.fade ? { fade: ghost.fade } : {}),
+      // The removed volume of an intersection shares the space with the red
+      // phantoms of the bodies it consumes, so both become twice as faint.
+      ...(feature.type === 'boolean' && feature.op === 'intersect' ? { opacity: 0.2 } : {}),
     });
   }
   for (const [index, mesh] of (ghost.additions ?? []).entries()) {
@@ -1156,6 +1194,19 @@ async function evaluateFeature(
     state.createdBodies.set(feature.id, []);
     try {
       await applyArray(feature, state, context);
+    } catch (error) {
+      state.featureErrors[feature.id] = kernelErrorCode(error);
+      state.blockedFeatureId = feature.id;
+      return;
+    }
+    if (state.featureErrors[feature.id]) state.blockedFeatureId = feature.id;
+    return;
+  }
+
+  if (feature.type === 'boolean') {
+    state.createdBodies.set(feature.id, []);
+    try {
+      await applyBoolean(feature, state, context);
     } catch (error) {
       state.featureErrors[feature.id] = kernelErrorCode(error);
       state.blockedFeatureId = feature.id;
@@ -3158,6 +3209,209 @@ async function applyShell(
   if (!appliedAny || bodyErrors.length > 0) {
     state.featureErrors[feature.id] = bodyErrors[0] ?? 'NO_TARGET_BODY';
   }
+}
+
+/**
+ * Combines two lists of bodies (ADR 0036). `boolean-all` builds the result from
+ * the first body and every other body as a tool. By default the first body of
+ * the first list is modified in place, so later operations and the tree keep
+ * naming the same object; Keep asks for a copy instead. Tools are consumed
+ * unless their own Keep is on.
+ */
+async function applyBoolean(
+  feature: Resolved<BooleanFeature>,
+  state: RebuildState,
+  context: EvalContext,
+): Promise<void> {
+  const { client, epoch, ghost } = context;
+  const { bodyShapes, bodyOwner, bodySource, faceOwners, meshes, bodyStats, createdBodies } = state;
+
+  const bodyIds = [...new Set(feature.bodyIds ?? [])];
+  const toolIds = [...new Set(feature.toolIds ?? [])].filter((bodyId) => !bodyIds.includes(bodyId));
+  // A list that is still being filled is a configuration in progress, not a
+  // failure: the operation builds nothing until it has both sides.
+  if (bodyIds.length === 0 || toolIds.length === 0) return;
+
+  const markBodyError = (bodyId: string, code: string) => {
+    const errors = state.featureBodyErrors[feature.id] ?? {};
+    errors[bodyId] = code;
+    state.featureBodyErrors[feature.id] = errors;
+  };
+  // A body the rebuild no longer holds is either an imported mesh (it has a
+  // tessellation but no B-rep) or gone from this point of the history.
+  const bodyErrorCode = (bodyId: string) => (meshes[bodyId] ? 'BODY_NOT_SOLID' : 'UNKNOWN_BODY');
+
+  const parts: { bodyId: string; shapeId: string }[] = [];
+  for (const bodyId of [...bodyIds, ...toolIds]) {
+    const shapeId = bodyShapes.get(bodyId);
+    if (!shapeId) {
+      markBodyError(bodyId, bodyErrorCode(bodyId));
+      continue;
+    }
+    parts.push({ bodyId, shapeId });
+  }
+  const bodyErrors = Object.values(state.featureBodyErrors[feature.id] ?? {});
+  if (bodyErrors.length > 0) {
+    state.featureErrors[feature.id] = bodyErrors[0]!;
+    return;
+  }
+
+  const base = parts[0]!;
+  const tools = parts.slice(1);
+  const resultShapeId = trackShape(`${feature.id}:boolean`);
+  const op = feature.op === 'union' ? 'fuse' : feature.op === 'subtract' ? 'cut' : 'common';
+  // Every body keeps its pose: a boolean between lists moves nothing.
+  const result = await client.request<MakeBoxResult>({
+    type: 'boolean-all',
+    params: {
+      shapeId: resultShapeId,
+      baseShapeId: base.shapeId,
+      tools: tools.map((tool) => ({ sourceShapeId: tool.shapeId, matrix: IDENTITY_MATRIX })),
+      op,
+    },
+  });
+  if (epoch !== rebuildEpoch) return;
+  if (result.stats.solids === 0) throw new Error('BOOLEAN_EMPTY');
+
+  // What the operation does to the first list, drawn as a ghost over the model:
+  // a union adds the material of the second list, a cut or an intersection
+  // removes the part of the target the result no longer has. The delta is
+  // feedback only, so a failure to build it never fails the operation.
+  if (ghost) {
+    const targets = parts.slice(0, bodyIds.length);
+    let targetShapeId = targets[0]!.shapeId;
+    try {
+      if (targets.length > 1) {
+        const unionId = trackShape(`${feature.id}:targets`);
+        await client.request({
+          type: 'boolean-all',
+          params: {
+            shapeId: unionId,
+            baseShapeId: base.shapeId,
+            tools: targets.slice(1).map((target) => ({
+              sourceShapeId: target.shapeId,
+              matrix: IDENTITY_MATRIX,
+            })),
+            op: 'fuse',
+          },
+        });
+        if (epoch !== rebuildEpoch) return;
+        targetShapeId = unionId;
+      }
+      const deltaId = trackShape(`${feature.id}:delta`);
+      const adds = feature.op === 'union';
+      const delta = await client.request<MakeBoxResult>({
+        type: 'boolean',
+        params: {
+          shapeId: deltaId,
+          baseShapeId: adds ? resultShapeId : targetShapeId,
+          toolShapeId: adds ? targetShapeId : resultShapeId,
+          op: 'cut',
+        },
+      });
+      if (epoch !== rebuildEpoch) return;
+      if (delta.stats.solids > 0 && delta.stats.faces > 0) {
+        ghost.mesh = await client.request<TessellationResult>({
+          type: 'tessellate',
+          shapeId: deltaId,
+        });
+      }
+    } catch {
+      // A delta that OCCT cannot build is not a reason to lose the preview.
+    }
+    if (epoch !== rebuildEpoch) return;
+  }
+
+  // A result of several independent solids becomes one body each, exactly like
+  // a cut that separates a body. The largest solid takes the first slot, so the
+  // names stay put while the operation is edited.
+  let pieces: { shapeId: string; stats: ShapeStats }[] = [
+    { shapeId: resultShapeId, stats: result.stats },
+  ];
+  if (result.stats.solids > 1) {
+    const splitPrefix = `${resultShapeId}:split`;
+    for (let index = 0; index < result.stats.solids; index += 1) {
+      trackShape(`${splitPrefix}:solid-${index}`);
+    }
+    try {
+      const split = await client.request<SplitSolidsResult>({
+        type: 'split-solids',
+        params: { shapeId: resultShapeId, prefix: splitPrefix },
+      });
+      if (epoch !== rebuildEpoch) return;
+      const assignment = splitAssignment(split.solids);
+      if (assignment) {
+        pieces = [assignment.main, ...assignment.extras].map((solid) => ({
+          shapeId: solid.shapeId,
+          stats: solid.stats,
+        }));
+      }
+    } catch {
+      // Splitting is a convenience: a compound body is still the right result.
+    }
+    if (epoch !== rebuildEpoch) return;
+  }
+
+  const registerPiece = async (
+    bodyId: string,
+    piece: { shapeId: string; stats: ShapeStats },
+  ): Promise<boolean> => {
+    bodyShapes.set(bodyId, piece.shapeId);
+    bodySource.set(bodyId, feature.id);
+    bodyStats[bodyId] = piece.stats;
+    ownAllFaces(faceOwners, bodyId, piece.stats.faces, feature.id);
+    const mesh = await client.request<TessellationResult>({
+      type: 'tessellate',
+      shapeId: piece.shapeId,
+    });
+    if (epoch !== rebuildEpoch) return false;
+    meshes[bodyId] = mesh;
+    return true;
+  };
+
+  // A consumed body leaves the model from this point in the history: its
+  // reference is dropped with the shape, while the metadata stays, so switching
+  // Keep back on brings the same object back.
+  const consume = (bodyId: string) => {
+    bodyShapes.delete(bodyId);
+    bodyOwner.delete(bodyId);
+    bodySource.delete(bodyId);
+    faceOwners.delete(bodyId);
+    delete bodyStats[bodyId];
+    delete meshes[bodyId];
+    state.consumedBodies.add(bodyId);
+  };
+
+  const created: string[] = [];
+  if (feature.keepBodies) {
+    // Keep on the first list: the bodies stay as they are and the operation is
+    // performed on copies of the material they hold.
+    for (const [index, piece] of pieces.entries()) {
+      const bodyId = featureBodyId(feature.id, index);
+      bodyOwner.set(bodyId, feature.id);
+      if (!(await registerPiece(bodyId, piece))) return;
+      created.push(bodyId);
+    }
+  } else {
+    // Off (the default): the first body of the list becomes the result, so its
+    // name, colour and place in the tree stay where the user put them.
+    const targetId = base.bodyId;
+    if (!(await registerPiece(targetId, pieces[0]!))) return;
+    // A result that separated into several solids keeps the target for the
+    // largest piece; every other piece is a body of its own.
+    for (const [index, piece] of pieces.slice(1).entries()) {
+      const bodyId = splitBodyId(feature.id, targetId, index + 1);
+      bodyOwner.set(bodyId, feature.id);
+      if (!(await registerPiece(bodyId, piece))) return;
+      created.push(bodyId);
+    }
+    // The rest of the first list was the material the result was built from:
+    // it leaves the model, since its shape now lives in the target.
+    for (const bodyId of bodyIds.slice(1)) consume(bodyId);
+  }
+  createdBodies.set(feature.id, created);
+
+  if (!feature.keepTools) for (const bodyId of toolIds) consume(bodyId);
 }
 
 /** Forgets the coloured faces a treatment had on one body. */

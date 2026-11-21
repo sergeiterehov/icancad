@@ -39,6 +39,7 @@ export function PickableSection({
   removeLabel,
   error,
   rows,
+  toggle,
   divided = true,
 }: {
   title: string;
@@ -54,6 +55,8 @@ export function PickableSection({
   pickHint: string;
   removeLabel: string;
   rows: PickableRow[];
+  /** A control of the section's own, such as a Keep switch, shown in the header. */
+  toggle?: ReactNode;
   /** A rule above the section; off for a list inside a block that has one. */
   divided?: boolean;
 }) {
@@ -74,6 +77,7 @@ export function PickableSection({
       className={divided ? undefined : 'panel-section-inline'}
       action={
         <span className="panel-section-actions">
+          {toggle}
           {rowError && <ErrorBadge message={rowError} />}
           <IconButton
             label={actionLabel}

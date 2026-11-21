@@ -267,7 +267,6 @@ export function Viewport() {
         : null,
     [editingPrimitive, resolvedProject],
   );
-  const bodies = bodiesInHistory(project);
   const sectionPlanes = project.view.sectionPlanes;
   const sectionEnabled = useUiStore((state) => state.sectionEnabled);
   const activeSketchId = useUiStore((state) => state.activeSketchId);
@@ -279,6 +278,8 @@ export function Viewport() {
   const pickingEdges = useUiStore((state) => state.pickingEdges);
   const pickingShellBodies = useUiStore((state) => state.pickingShellBodies);
   const pickingShellFaces = useUiStore((state) => state.pickingShellFaces);
+  const pickingBooleanBodies = useUiStore((state) => state.pickingBooleanBodies);
+  const pickingBooleanTools = useUiStore((state) => state.pickingBooleanTools);
   const pickingSketchPlane = useUiStore((state) => state.pickingSketchPlane);
   const pickingSectionFace = useUiStore((state) => state.pickingSectionFace);
   const pickingRevolveAxis = useUiStore((state) => state.pickingRevolveAxis);
@@ -302,7 +303,9 @@ export function Viewport() {
       ? selection[0].id
       : (selectedSketchDetailId(selection) ?? undefined);
   const meshes = useKernelStore((state) => state.meshes);
+  const consumedBodies = useKernelStore((state) => state.consumedBodies);
   const preview = useKernelStore((state) => state.preview);
+  const bodies = bodiesInHistory(project, consumedBodies);
   const sketchFrames = useKernelStore((state) => state.sketchFrames);
   const featureBodyErrors = useKernelStore((state) => state.featureBodyErrors);
   const featureErrors = useKernelStore((state) => state.featureErrors);
@@ -341,6 +344,8 @@ export function Viewport() {
     Boolean(pickingEdges) ||
     Boolean(pickingShellBodies) ||
     Boolean(pickingShellFaces) ||
+    Boolean(pickingBooleanBodies) ||
+    Boolean(pickingBooleanTools) ||
     Boolean(pickingSketchPlane) ||
     Boolean(pickingSectionFace) ||
     Boolean(pickingRevolveAxis) ||
@@ -546,6 +551,14 @@ export function Viewport() {
           );
           if (!body || body.kind === 'mesh') return;
           store.toggleShellBody(ui.pickingShellBodies, pick.id);
+          return;
+        }
+        if (ui.pickingBooleanBodies || ui.pickingBooleanTools) {
+          if (pick?.kind !== 'body') return;
+          const featureId = ui.pickingBooleanBodies ?? ui.pickingBooleanTools;
+          if (!featureId) return;
+          const side = ui.pickingBooleanBodies ? 'bodies' : 'tools';
+          store.toggleBooleanBody(featureId, side, pick.id);
           return;
         }
         if (ui.pickingShellFaces) {
@@ -1277,7 +1290,7 @@ export function Viewport() {
         kind: body.kind,
         mesh: renderBase ? mark!.baseMesh! : mesh,
         color: body.color,
-        visible: body.visible,
+        visible: mark?.hidden ? false : body.visible,
         order,
         ...(mark
           ? {
@@ -1336,8 +1349,20 @@ export function Viewport() {
         ? project.features.find((feature) => feature.id === selection[0]?.id)
         : undefined;
     const extrude = selectedFeature?.type === 'extrude' ? selectedFeature : undefined;
-    const errorBodyIds = extrude ? Object.keys(featureBodyErrors[extrude.id] ?? {}) : [];
-    const targetBodyIds = extrude && extrude.op !== 'new' ? extrude.bodyIds : [];
+    const boolean = selectedFeature?.type === 'boolean' ? selectedFeature : undefined;
+    const errorBodyIds = extrude
+      ? Object.keys(featureBodyErrors[extrude.id] ?? {})
+      : boolean
+        ? Object.keys(featureBodyErrors[boolean.id] ?? {})
+        : [];
+    // A boolean highlights both lists: every body the operation reads.
+    const targetBodyIds = extrude
+      ? extrude.op !== 'new'
+        ? extrude.bodyIds
+        : []
+      : boolean
+        ? [...boolean.bodyIds, ...boolean.toolIds]
+        : [];
     controller.setBodies(
       sceneBodies,
       directBodyIds(selection),
@@ -1392,11 +1417,7 @@ export function Viewport() {
   }, [rebuilding, sceneVersion]);
 
   useEffect(() => {
-    if (
-      interimSceneVersion === 0 ||
-      modelHasSavedPose.current ||
-      !firstBuildPending.current
-    ) {
+    if (interimSceneVersion === 0 || modelHasSavedPose.current || !firstBuildPending.current) {
       return;
     }
     fitPending.current = true;
@@ -1511,6 +1532,8 @@ export function Viewport() {
       bodyPicking:
         Boolean(pickingExtrudeBodies) ||
         Boolean(pickingShellBodies) ||
+        Boolean(pickingBooleanBodies) ||
+        Boolean(pickingBooleanTools) ||
         Boolean(pickingExtrudeToBody),
       edgePicking:
         Boolean(pickingEdges) ||
@@ -1534,6 +1557,8 @@ export function Viewport() {
     pickingEdges,
     pickingShellBodies,
     pickingShellFaces,
+    pickingBooleanBodies,
+    pickingBooleanTools,
     pickingRevolveAxis,
     pickingExtrudeToBody,
     pickingArrayFace,

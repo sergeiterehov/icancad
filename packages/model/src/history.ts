@@ -43,19 +43,33 @@ export function historyInsertIndex(project: Model): number {
   return index < 0 ? project.features.length : index + 1;
 }
 
-export function bodiesInHistory(project: Model): BodyObject[] {
+/**
+ * The objects the model holds at its current timeline position. `consumed` is
+ * what the rebuild reported as used up by an operation: those refs stay in the
+ * document with their names and colours, so turning Keep back on returns the
+ * same object, but they are not in the model any more.
+ */
+export function bodiesInHistory(project: Model, consumed?: ReadonlySet<string>): BodyObject[] {
   const active = activeFeatureIds(project);
   return project.bodies
-    .filter((body) => active.has(body.createdBy) && !isBodyDeleted(project, body.id, active))
+    .filter(
+      (body) => active.has(body.createdBy) && !isBodyDeleted(project, body.id, active, consumed),
+    )
     .map((body) => resolveBody(project, body));
 }
 
 /** Only B-rep bodies; imported meshes are separate objects and not valid targets. */
-export function solidBodiesInHistory(project: Model): BodyObject[] {
-  return bodiesInHistory(project).filter((body) => body.kind === 'solid');
+export function solidBodiesInHistory(project: Model, consumed?: ReadonlySet<string>): BodyObject[] {
+  return bodiesInHistory(project, consumed).filter((body) => body.kind === 'solid');
 }
 
-function isBodyDeleted(project: Model, bodyId: string, active: Set<string>): boolean {
+function isBodyDeleted(
+  project: Model,
+  bodyId: string,
+  active: Set<string>,
+  consumed?: ReadonlySet<string>,
+): boolean {
+  if (consumed?.has(bodyId)) return true;
   return project.features.some(
     (feature) =>
       active.has(feature.id) && feature.type === 'delete-body' && feature.bodyId === bodyId,
@@ -115,7 +129,7 @@ function referencedBodyIds(feature: Feature): string[] {
     case 'rib':
       return [feature.bodyId];
     case 'boolean':
-      return feature.bodyIds;
+      return [...feature.bodyIds, ...feature.toolIds];
     case 'delete-body':
       return [feature.bodyId];
   }

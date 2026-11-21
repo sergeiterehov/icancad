@@ -147,9 +147,10 @@ export function ProjectMenu() {
   const handleExportStl = () => {
     const state = useDocumentStore.getState();
     const selected = new Set(directBodyIds(state.selection));
-    const candidates = bodiesInHistory(activeModel(state.project)).filter((body) =>
-      selected.size > 0 ? selected.has(body.id) : body.visible,
-    );
+    const candidates = bodiesInHistory(
+      activeModel(state.project),
+      useKernelStore.getState().consumedBodies,
+    ).filter((body) => (selected.size > 0 ? selected.has(body.id) : body.visible));
     const meshes = useKernelStore.getState().meshes;
     if (!candidates.some((body) => meshes[body.id])) {
       showToast('toast.noGeometry', 'error');
@@ -226,9 +227,10 @@ export function ProjectMenu() {
     const currentLocale: Locale = (i18n.resolvedLanguage ?? 'en').startsWith('ru') ? 'ru' : 'en';
     const selectedBodyCount = directBodyIds(state.selection).length;
     const meshes = useKernelStore.getState().meshes;
-    const visibleBodies = bodiesInHistory(activeModel(state.project)).filter(
-      (body) => body.visible,
-    );
+    const visibleBodies = bodiesInHistory(
+      activeModel(state.project),
+      useKernelStore.getState().consumedBodies,
+    ).filter((body) => body.visible);
     const projectHasGeometry =
       selectedBodyCount > 0 || visibleBodies.some((body) => meshes[body.id] !== undefined);
     return [

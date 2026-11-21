@@ -51,6 +51,11 @@ export interface PreviewBodyMark {
    */
   translucent?: boolean;
   /**
+   * The mark exists for the tree and for picking only; the viewport draws the
+   * operation's delta instead of the body.
+   */
+  hidden?: boolean;
+  /**
    * The mark only says which mesh to pick against; the body keeps its style and
    * the tree does not report it as changed.
    */
@@ -133,6 +138,12 @@ interface KernelState {
   featureObjectErrors: Record<string, Record<string, string>>;
   /** Operation preview, or null when the scene shows the document as is. */
   preview: ScenePreview | null;
+  /**
+   * Bodies an operation consumed on its way to this scene. The document keeps
+   * their refs and metadata, so the object tree hides them by this set rather
+   * than losing the object for good.
+   */
+  consumedBodies: ReadonlySet<string>;
   /** Operation whose evaluation produced each body's current shape. */
   bodyOperations: Record<string, string>;
   /** Operation that created each face of a body, in shape order. */
@@ -186,6 +197,7 @@ interface KernelState {
     sketchFrames: Record<string, SketchFrame>,
     projectionLost: Record<string, string[]>,
     preview: ScenePreview | null,
+    consumedBodies: ReadonlySet<string>,
   ) => void;
   /**
    * Replaces the drawn copies of the operation being edited, without a rebuild.
@@ -225,6 +237,7 @@ export const useKernelStore = create<KernelState>((set) => ({
   featureBodyErrors: {},
   featureObjectErrors: {},
   preview: null,
+  consumedBodies: new Set(),
   bodyOperations: {},
   faceOperations: {},
   featureLimits: {},
@@ -288,6 +301,7 @@ export const useKernelStore = create<KernelState>((set) => ({
     sketchFrames,
     projectionLost,
     preview,
+    consumedBodies,
   ) =>
     set((state) => ({
       meshes,
@@ -301,6 +315,7 @@ export const useKernelStore = create<KernelState>((set) => ({
       featureBodyErrors,
       featureObjectErrors,
       preview,
+      consumedBodies,
     })),
 
   setBodyOperations: (bodyOperations) => set({ bodyOperations }),
@@ -325,6 +340,7 @@ export const useKernelStore = create<KernelState>((set) => ({
       projectionLost: {},
       sceneVersion: state.sceneVersion + 1,
       operationMs: {},
+      consumedBodies: new Set(),
       shapeStats: {},
       meshStats: {},
       bodyShapes: {},

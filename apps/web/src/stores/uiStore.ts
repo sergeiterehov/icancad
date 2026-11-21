@@ -118,6 +118,10 @@ interface UiState {
   pickingShellBodies: string | null;
   /** Shell waiting for the faces it should leave open. */
   pickingShellFaces: string | null;
+  /** Boolean operation waiting for its first list of bodies. */
+  pickingBooleanBodies: string | null;
+  /** Boolean operation waiting for its second list of bodies. */
+  pickingBooleanTools: string | null;
   /** Sketch operation waiting for its plane face to be picked in the 3D view. */
   pickingSketchPlane: string | null;
   /** Section plane waiting for the face it should follow. */
@@ -166,6 +170,8 @@ interface UiState {
   setPickingEdges: (featureId: string | null) => void;
   setPickingShellBodies: (featureId: string | null) => void;
   setPickingShellFaces: (featureId: string | null) => void;
+  setPickingBooleanBodies: (featureId: string | null) => void;
+  setPickingBooleanTools: (featureId: string | null) => void;
   setPickingExtrudeBodies: (featureId: string | null) => void;
   setPickingSketchPlane: (featureId: string | null) => void;
   setPickingSectionFace: (planeId: string | null) => void;
@@ -214,6 +220,8 @@ const PICKER_KEYS = [
   'pickingEdges',
   'pickingShellBodies',
   'pickingShellFaces',
+  'pickingBooleanBodies',
+  'pickingBooleanTools',
   'pickingSketchPlane',
   'pickingSectionFace',
   'pickingRevolveAxis',
@@ -409,6 +417,8 @@ export const useUiStore = create<UiState>((set) => ({
   pickingEdges: null,
   pickingShellBodies: null,
   pickingShellFaces: null,
+  pickingBooleanBodies: null,
+  pickingBooleanTools: null,
   pickingSketchPlane: null,
   pickingSectionFace: null,
   pickingRevolveAxis: null,
@@ -447,6 +457,10 @@ export const useUiStore = create<UiState>((set) => ({
     set(onlyPicker('pickingShellBodies', pickingShellBodies)),
   setPickingShellFaces: (pickingShellFaces) =>
     set(onlyPicker('pickingShellFaces', pickingShellFaces)),
+  setPickingBooleanBodies: (pickingBooleanBodies) =>
+    set(onlyPicker('pickingBooleanBodies', pickingBooleanBodies)),
+  setPickingBooleanTools: (pickingBooleanTools) =>
+    set(onlyPicker('pickingBooleanTools', pickingBooleanTools)),
   setPickingExtrudeBodies: (pickingExtrudeBodies) =>
     set(onlyPicker('pickingExtrudeBodies', pickingExtrudeBodies)),
   setPickingSketchPlane: (pickingSketchPlane) =>

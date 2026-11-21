@@ -739,6 +739,22 @@ button:disabled {
   align-items: center;
 }
 
+/* The Keep switch of a boolean body list sits in the section header, next to
+   the picker: a small word makes the switch readable without a tooltip. */
+.boolean-keep {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 8px;
+}
+
+.boolean-keep-label {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
 .panel-count {
   font-size: 9px;
   padding: 1px 5px;

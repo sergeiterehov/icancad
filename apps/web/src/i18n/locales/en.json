@@ -64,6 +64,7 @@
     "extrudeNeedsSketch": "Select a sketch to extrude",
     "edgeTreatment": "Edge treatment",
     "shell": "Shell",
+    "boolean": "Boolean",
     "primitives": "Primitives",
     "array": "Array"
   },
@@ -265,7 +266,8 @@
     "CONSTRAINT_CONFLICT": "The constraints cannot be satisfied",
     "FORMULA_LOAD_FAILED": "The formula engine could not start",
     "TO_BODY_MISSING": "The extrusion does not reach a body: pick a body or reverse the direction",
-    "TO_BODY_EMPTY": "Nothing is left between the profile and the body: check the extent and the offset"
+    "TO_BODY_EMPTY": "Nothing is left between the profile and the body: check the extent and the offset",
+    "BOOLEAN_EMPTY": "The operation leaves nothing: the bodies do not overlap the way this operation needs."
   },
   "features": {
     "box": "Box",
@@ -281,6 +283,7 @@
     "importMesh": "Imported mesh",
     "edgeTreatment": "Edge treatment",
     "shell": "Shell",
+    "boolean": "Boolean",
     "array": "Array"
   },
   "primitive": {
@@ -634,6 +637,23 @@
     "pickBodiesHint": "Click bodies in the 3D view.",
     "pickFacesHint": "Click faces in the 3D view to leave them open.",
     "maxWarning": "The maximum {{value}} mm will be used"
+  },
+  "boolean": {
+    "operation": "Operation",
+    "subtract": "Subtract",
+    "intersect": "Intersect",
+    "union": "Union",
+    "bodies": "Bodies",
+    "tools": "Tools",
+    "keep": "Keep",
+    "keepBodiesHint": "Keep the source bodies and apply the operation to a copy.",
+    "keepToolsHint": "Keep the second-list bodies in the model after the operation.",
+    "pickBodies": "Pick bodies",
+    "pickTools": "Pick tools",
+    "emptyBodies": "Pick the bodies the operation starts from.",
+    "emptyTools": "Pick the bodies it combines with.",
+    "pickBodiesHint": "Click bodies in the 3D view or the model tree.",
+    "pickToolsHint": "Click bodies in the 3D view or the model tree; a body moves over from the other list."
   },
   "model": {
     "structure": "Project structure",

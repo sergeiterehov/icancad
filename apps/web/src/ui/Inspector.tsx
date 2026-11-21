@@ -201,6 +201,8 @@ function featureTypeLabel(t: (key: string) => string, feature: Feature): string 
       return t('features.edgeTreatment');
     case 'shell':
       return t('features.shell');
+    case 'boolean':
+      return t('features.boolean');
     case 'array':
       return t('features.array');
     default:
@@ -228,6 +230,13 @@ const EXTRUDE_OPS = [
     label: 'extrude.op_intersect',
     icon: <ExtrudeOpIcon op="intersect" />,
   },
+];
+
+/** Tabs of the boolean tool, in the order the operation reads them. */
+const BOOLEAN_OPS = [
+  { id: 'subtract' as const, label: 'boolean.subtract', icon: <ExtrudeOpIcon op="subtract" /> },
+  { id: 'union' as const, label: 'boolean.union', icon: <ExtrudeOpIcon op="add" /> },
+  { id: 'intersect' as const, label: 'boolean.intersect', icon: <ExtrudeOpIcon op="intersect" /> },
 ];
 
 /**
@@ -314,6 +323,30 @@ function throughAllAllowed(op: ExtrudeFeature['op']): boolean {
 // "To body" is a single sweep to a surface, so it has no second direction.
 function secondDirectionAllowed(feature: Pick<ExtrudeFeature, 'end'>): boolean {
   return feature.end !== 'symmetric' && feature.end !== 'to-body';
+}
+
+/**
+ * The Keep switch of a boolean body list. Off by default: the source body is
+ * consumed by the operation unless the user asks to keep it.
+ */
+function BooleanKeepToggle({
+  keep,
+  hint,
+  onChange,
+}: {
+  keep: boolean;
+  hint: string;
+  onChange: (keep: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Tooltip content={hint}>
+      <span className="boolean-keep">
+        <span className="boolean-keep-label">{t('boolean.keep')}</span>
+        <Switch label={t('boolean.keep')} checked={keep} onChange={onChange} />
+      </span>
+    </Tooltip>
+  );
 }
 
 function SketchComposition({ feature }: { feature: SketchFeature }) {
@@ -554,6 +587,9 @@ export function Inspector() {
   const setShellDirection = useDocumentStore((state) => state.setShellDirection);
   const toggleShellBody = useDocumentStore((state) => state.toggleShellBody);
   const toggleShellFace = useDocumentStore((state) => state.toggleShellFace);
+  const setBooleanOp = useDocumentStore((state) => state.setBooleanOp);
+  const toggleBooleanBody = useDocumentStore((state) => state.toggleBooleanBody);
+  const setBooleanKeep = useDocumentStore((state) => state.setBooleanKeep);
   const toggleBodyVisibility = useDocumentStore((state) => state.toggleBodyVisibility);
   const toggleSketchVisibility = useDocumentStore((state) => state.toggleSketchVisibility);
   const setConstructionVisible = useDocumentStore((state) => state.setConstructionVisible);
@@ -566,6 +602,10 @@ export function Inspector() {
   const pickingShellFaces = useUiStore((state) => state.pickingShellFaces);
   const setPickingShellBodies = useUiStore((state) => state.setPickingShellBodies);
   const setPickingShellFaces = useUiStore((state) => state.setPickingShellFaces);
+  const pickingBooleanBodies = useUiStore((state) => state.pickingBooleanBodies);
+  const pickingBooleanTools = useUiStore((state) => state.pickingBooleanTools);
+  const setPickingBooleanBodies = useUiStore((state) => state.setPickingBooleanBodies);
+  const setPickingBooleanTools = useUiStore((state) => state.setPickingBooleanTools);
   const pickingRevolveAxis = useUiStore((state) => state.pickingRevolveAxis);
   const setPickingRevolveAxis = useUiStore((state) => state.setPickingRevolveAxis);
   const pickingToBody = useUiStore((state) => state.pickingExtrudeToBody);
@@ -577,6 +617,7 @@ export function Inspector() {
   const shapeStats = useKernelStore((state) => state.shapeStats);
   const meshStats = useKernelStore((state) => state.meshStats);
   const featureErrors = useKernelStore((state) => state.featureErrors);
+  const consumedBodies = useKernelStore((state) => state.consumedBodies);
   const featureBodyErrors = useKernelStore((state) => state.featureBodyErrors);
   const featureObjectErrors = useKernelStore((state) => state.featureObjectErrors);
   const featureLimits = useKernelStore((state) => state.featureLimits);
@@ -709,6 +750,18 @@ export function Inspector() {
       setPickingShellFaces(null);
     }
     if (
+      pickingBooleanBodies &&
+      (pickingBooleanBodies !== feature?.id || feature?.type !== 'boolean')
+    ) {
+      setPickingBooleanBodies(null);
+    }
+    if (
+      pickingBooleanTools &&
+      (pickingBooleanTools !== feature?.id || feature?.type !== 'boolean')
+    ) {
+      setPickingBooleanTools(null);
+    }
+    if (
       pickingSketchPlane &&
       (pickingSketchPlane !== feature?.id ||
         feature?.type !== 'sketch' ||
@@ -735,6 +788,8 @@ export function Inspector() {
     pickingBodies,
     pickingShellBodies,
     pickingShellFaces,
+    pickingBooleanBodies,
+    pickingBooleanTools,
     pickingSketchPlane,
     pickingRevolveAxis,
     pickingToBody,
@@ -743,6 +798,8 @@ export function Inspector() {
     setPickingExtrudeBodies,
     setPickingShellBodies,
     setPickingShellFaces,
+    setPickingBooleanBodies,
+    setPickingBooleanTools,
     setPickingSketchPlane,
     setPickingRevolveAxis,
     setPickingToBody,
@@ -835,6 +892,8 @@ export function Inspector() {
           value: formatNumber(shellApplied.applied, locale, 2),
         })
       : undefined;
+  const booleanFeature = feature?.type === 'boolean' ? feature : undefined;
+  const booleanErrors = booleanFeature ? (featureBodyErrors[booleanFeature.id] ?? {}) : {};
   // The document is read again on every edit: two changes made by one click must
   // build on each other, not on the render that drew the panel.
   const replaceExtrude = (featureId: string, patch: Partial<ExtrudeFeature>) => {
@@ -913,6 +972,31 @@ export function Inspector() {
         };
       })
     : [];
+
+  // A boolean lists the bodies it reads. The rows come from the stored refs,
+  // not from the live object list: a consumed body stays visible here so its
+  // error can be read and Keep can bring it back.
+  const booleanRows = (side: 'bodies' | 'tools', bodyIds: readonly string[]): PickableRow[] =>
+    bodyIds.map((bodyId) => {
+      const ref = project.bodies.find((candidate) => candidate.id === bodyId);
+      const resolved = ref ? resolveBody(project, ref) : undefined;
+      const code = ref ? (ref.kind === 'mesh' ? 'BODY_NOT_SOLID' : undefined) : 'UNKNOWN_BODY';
+      const error = booleanErrors[bodyId] ?? code;
+      return {
+        key: `${side}:${bodyId}`,
+        icon:
+          resolved && resolved.kind === 'mesh' ? (
+            <PawPrint size={14} style={{ color: resolved.color }} />
+          ) : (
+            <Box size={14} style={resolved ? { color: resolved.color } : undefined} />
+          ),
+        name: resolved?.name ?? bodyId,
+        ...(error ? { error: translate(t, `errors.${error}`, error) } : {}),
+        onRemove: () => toggleBooleanBody(booleanFeature!.id, side, bodyId),
+      };
+    });
+  const booleanBodyRows = booleanFeature ? booleanRows('bodies', booleanFeature.bodyIds) : [];
+  const booleanToolRows = booleanFeature ? booleanRows('tools', booleanFeature.toolIds) : [];
 
   // What an extrude works on: the whole sketch, or the faces picked from it.
   const targetErrors = extrudeFeature ? (featureBodyErrors[extrudeFeature.id] ?? {}) : {};
@@ -995,7 +1079,9 @@ export function Inspector() {
   // the list only narrows the targets down. Imported meshes are objects of a
   // different kind and can never be solid-body targets.
   const otherObjects = extrudeFeature
-    ? bodiesInHistory(project).filter((body) => body.createdBy !== extrudeFeature.id)
+    ? bodiesInHistory(project, consumedBodies).filter(
+        (body) => body.createdBy !== extrudeFeature.id,
+      )
     : [];
   const targetBodies = otherObjects.filter((body) => body.kind !== 'mesh');
   const meshTargets = extrudeFeature
@@ -2291,6 +2377,72 @@ export function Inspector() {
               </>
             )}
 
+            {booleanFeature && (
+              <>
+                <PanelSection title={t('boolean.operation')}>
+                  <Segmented ariaLabel={t('boolean.operation')}>
+                    {BOOLEAN_OPS.map((op) => (
+                      <SegmentedTab
+                        key={op.id}
+                        label={t(op.label as never)}
+                        icon={op.icon}
+                        active={booleanFeature.op === op.id}
+                        onClick={() => setBooleanOp(booleanFeature.id, op.id)}
+                      />
+                    ))}
+                  </Segmented>
+                </PanelSection>
+
+                <PickableSection
+                  title={t('boolean.bodies')}
+                  count={booleanBodyRows.length}
+                  picking={pickingBooleanBodies === booleanFeature.id}
+                  onTogglePicking={() =>
+                    setPickingBooleanBodies(
+                      pickingBooleanBodies === booleanFeature.id ? null : booleanFeature.id,
+                    )
+                  }
+                  pickLabel={t('boolean.pickBodies')}
+                  finishLabel={t('extrude.finishPick')}
+                  emptyHint={t('boolean.emptyBodies')}
+                  pickHint={t('boolean.pickBodiesHint')}
+                  removeLabel={t('extrude.removeObject')}
+                  rows={booleanBodyRows}
+                  toggle={
+                    <BooleanKeepToggle
+                      keep={booleanFeature.keepBodies ?? false}
+                      hint={t('boolean.keepBodiesHint')}
+                      onChange={(keep) => setBooleanKeep(booleanFeature.id, 'bodies', keep)}
+                    />
+                  }
+                />
+
+                <PickableSection
+                  title={t('boolean.tools')}
+                  count={booleanToolRows.length}
+                  picking={pickingBooleanTools === booleanFeature.id}
+                  onTogglePicking={() =>
+                    setPickingBooleanTools(
+                      pickingBooleanTools === booleanFeature.id ? null : booleanFeature.id,
+                    )
+                  }
+                  pickLabel={t('boolean.pickTools')}
+                  finishLabel={t('extrude.finishPick')}
+                  emptyHint={t('boolean.emptyTools')}
+                  pickHint={t('boolean.pickToolsHint')}
+                  removeLabel={t('extrude.removeObject')}
+                  rows={booleanToolRows}
+                  toggle={
+                    <BooleanKeepToggle
+                      keep={booleanFeature.keepTools ?? false}
+                      hint={t('boolean.keepToolsHint')}
+                      onChange={(keep) => setBooleanKeep(booleanFeature.id, 'tools', keep)}
+                    />
+                  }
+                />
+              </>
+            )}
+
             {isPrimitive(feature) && (
               <>
                 <PanelSection title={t('inspector.position')}>
@@ -2361,10 +2513,16 @@ export function Inspector() {
             </div>
             <PanelSection title={t('inspector.properties')} divided>
               <StatRow label={t('inspector.features')} value={project.features.length} />
-              <StatRow label={t('inspector.bodies')} value={solidBodiesInHistory(project).length} />
+              <StatRow
+                label={t('inspector.bodies')}
+                value={solidBodiesInHistory(project, consumedBodies).length}
+              />
               <StatRow
                 label={t('inspector.meshes')}
-                value={bodiesInHistory(project).filter((body) => body.kind === 'mesh').length}
+                value={
+                  bodiesInHistory(project, consumedBodies).filter((body) => body.kind === 'mesh')
+                    .length
+                }
               />
               {project.historyEnd && <p className="hint">{t('inspector.rolledBack')}</p>}
             </PanelSection>

@@ -1,21 +1,23 @@
 import { activeModel, type PrimitiveKind, type SketchFeature } from '@icancad/model';
 import {
-  Box,
+  Blend,
   Circle,
   Cone,
   Cuboid,
   Cylinder,
   Torus,
-  LayoutArrowDown,
+  LayersArrowUp,
   Hexagon,
   Pill,
   Pyramid,
   Shapes,
   Square,
+  SquareStack,
 } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { arrayInputFromSelection } from '../quick/array';
+import { booleanInputFromSelection } from '../quick/boolean';
 import { edgeTreatmentTargetFromSelection } from '../quick/edgeTreatment';
 import { extrudeInputFromSelection } from '../quick/extrude';
 import { shellInputFromSelection } from '../quick/shell';
@@ -39,6 +41,7 @@ export function ToolRail() {
   const addExtrude = useDocumentStore((state) => state.addExtrude);
   const addEdgeTreatment = useDocumentStore((state) => state.addEdgeTreatment);
   const addShell = useDocumentStore((state) => state.addShell);
+  const addBoolean = useDocumentStore((state) => state.addBoolean);
   const addArray = useDocumentStore((state) => state.addArray);
   const addPrimitive = useDocumentStore((state) => state.addPrimitive);
   const openMenu = useContextMenuStore((state) => state.open);
@@ -199,7 +202,7 @@ export function ToolRail() {
           addExtrude(t('features.extrude'), input ?? undefined);
         }}
       >
-        <Box size={17} />
+        <LayersArrowUp size={17} />
       </IconButton>
 
       <IconButton
@@ -213,7 +216,7 @@ export function ToolRail() {
           addArray(t('features.array'), input ?? undefined);
         }}
       >
-        <LayoutArrowDown size={17} />
+        <SquareStack size={17} />
       </IconButton>
 
       <div className="tool-separator" />
@@ -250,6 +253,20 @@ export function ToolRail() {
         }}
       >
         <ShellIcon size={17} />
+      </IconButton>
+
+      <IconButton
+        label={t('tools.boolean')}
+        tooltip={t('tools.boolean')}
+        onClick={() => {
+          // The first picked body starts the first list and every later one goes
+          // to the second: a two-body selection creates a ready operation.
+          const store = useDocumentStore.getState();
+          const input = booleanInputFromSelection(activeModel(store.project), store.selection);
+          addBoolean(t('features.boolean'), input);
+        }}
+      >
+        <Blend size={17} />
       </IconButton>
 
       <div className="tool-separator" />

@@ -2126,7 +2126,9 @@ export class SceneController {
       return;
     }
     entry.material.transparent = true;
-    entry.material.depthTest = true;
+    // A removed body is feedback, not part of the result: it has to read over
+    // the body that now covers its place, exactly like an operation's delta.
+    entry.material.depthTest = !removed;
     entry.material.depthWrite = false;
     entry.material.polygonOffset = true;
     entry.material.polygonOffsetFactor = -1;
@@ -2140,7 +2142,7 @@ export class SceneController {
     if (entry.edges) {
       entry.edges.visible = removed;
       entry.edges.renderOrder = removed ? RenderOrder.phantom : RenderOrder.bodyEdge;
-      (entry.edges.material as THREE.LineBasicMaterial).depthTest = true;
+      (entry.edges.material as THREE.LineBasicMaterial).depthTest = !removed;
       (entry.edges.material as THREE.LineBasicMaterial).color.setHex(
         removed ? 0xef4444 : this.edgeColor,
       );
