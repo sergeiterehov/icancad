@@ -543,7 +543,10 @@ const deleteBodyFeature = z.object({
 const transformFeature = z.object({
   ...featureBase,
   type: z.literal('transform'),
-  bodyId: z.string().min(1),
+  // Both lists start empty: the operation is configured from the inspector and
+  // moves nothing until objects are picked.
+  bodyIds: z.array(z.string().min(1)).default([]),
+  sketchIds: z.array(z.string().min(1)).default([]),
   transform,
 });
 

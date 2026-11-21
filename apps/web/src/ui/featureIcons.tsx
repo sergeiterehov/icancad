@@ -16,6 +16,7 @@ import {
   Layers,
   LineSquiggle,
   LoaderCircle,
+  Move3d,
   PackageOpen,
   Pill,
   Pyramid,
@@ -132,6 +133,8 @@ export function FeatureIcon({ feature, size = 16 }: { feature: Feature; size?: n
       return <ShellIcon size={size} />;
     case 'array':
       return <LayoutArrowDown size={size} />;
+    case 'transform':
+      return <Move3d size={size} />;
     default:
       return <Layers size={size} />;
   }

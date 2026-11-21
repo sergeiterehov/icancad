@@ -284,7 +284,8 @@
     "edgeTreatment": "Edge treatment",
     "shell": "Shell",
     "boolean": "Boolean",
-    "array": "Array"
+    "array": "Array",
+    "transform": "Transform"
   },
   "primitive": {
     "coneHint": "A top radius of 0 makes a sharp cone.",
@@ -300,7 +301,8 @@
     "sides": "Sides N — drag around the circle",
     "rotateX": "Rotate around X — drag",
     "rotateY": "Rotate around Y — drag",
-    "rotateZ": "Rotate around Z — drag"
+    "rotateZ": "Rotate around Z — drag",
+    "scale": "Scale — drag"
   },
   "common": {
     "close": "Close",
@@ -711,6 +713,17 @@
     "tiltHint": "Tilt of a straight direction: X and Y lean inside the horizontal plane, Z turns around X. The array becomes a parallelepiped instead of a box.",
     "sketchCurve": "Sketch curve",
     "removeCurve": "Remove curve"
+  },
+  "transform": {
+    "targets": "Objects",
+    "pickTargets": "Pick objects",
+    "emptyTargets": "Pick the bodies and sketches to move.",
+    "pickTargetsHint": "Click bodies or sketches in the 3D view or the model tree.",
+    "position": "Position",
+    "positionHint": "Measured along the object’s own turned axes, so the arrows follow the rotation.",
+    "rotation": "Rotation",
+    "scale": "Scale",
+    "sketchHint": "A sketch moves as its result: its plane turns and its drawing scales, while the sketch itself stays editable."
   },
   "formula": {
     "variables": "Variables",

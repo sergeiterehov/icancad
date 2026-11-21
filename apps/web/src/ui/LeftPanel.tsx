@@ -35,7 +35,13 @@ import { useKernelStore, type PreviewBodyMark, type PreviewMarkKind } from '../s
 import { isDirectlySelected, linkedBodyIds } from '../stores/selection';
 import { useUiStore } from '../stores/uiStore';
 import { IconButton } from './Controls';
-import { colorMenuItem, deleteMenuItem, objectTargets, visibilityMenuItem } from './objectMenu';
+import {
+  colorMenuItem,
+  deleteMenuItem,
+  objectTargets,
+  transformMenuItem,
+  visibilityMenuItem,
+} from './objectMenu';
 import { showContextMenu, type ContextMenuItem } from './ContextMenu';
 import { FeatureIcon, SketchIcon } from './featureIcons';
 import { ModelSwitcher } from './ModelSwitcher';
@@ -129,6 +135,8 @@ export function LeftPanel() {
       show: t('tree.show'),
     });
     if (visibility) items.push(visibility);
+    const transform = transformMenuItem(targets, t('features.transform'));
+    if (transform) items.push(transform);
     const remove = deleteMenuItem(
       targets,
       single ? t('context.deleteObject') : t('context.deleteSelected', { count: targets.length }),

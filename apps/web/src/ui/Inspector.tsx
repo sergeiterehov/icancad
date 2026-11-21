@@ -101,6 +101,7 @@ import {
 } from './featureIcons';
 import { PickableSection, type PickableRow } from './PickableSection';
 import { ArraySection } from './ArraySection';
+import { TransformSection } from './TransformSection';
 import { VariablesSection } from './VariablesSection';
 import {
   constraintsGeometryIds,
@@ -205,6 +206,8 @@ function featureTypeLabel(t: (key: string) => string, feature: Feature): string 
       return t('features.boolean');
     case 'array':
       return t('features.array');
+    case 'transform':
+      return t('features.transform');
     default:
       return t('inspector.operation');
   }
@@ -602,6 +605,8 @@ export function Inspector() {
   const pickingShellFaces = useUiStore((state) => state.pickingShellFaces);
   const setPickingShellBodies = useUiStore((state) => state.setPickingShellBodies);
   const setPickingShellFaces = useUiStore((state) => state.setPickingShellFaces);
+  const pickingTransformTargets = useUiStore((state) => state.pickingTransformTargets);
+  const setPickingTransformTargets = useUiStore((state) => state.setPickingTransformTargets);
   const pickingBooleanBodies = useUiStore((state) => state.pickingBooleanBodies);
   const pickingBooleanTools = useUiStore((state) => state.pickingBooleanTools);
   const setPickingBooleanBodies = useUiStore((state) => state.setPickingBooleanBodies);
@@ -743,6 +748,12 @@ export function Inspector() {
   useEffect(() => {
     if (picking && picking !== feature?.id) setPickingExtrude(null);
     if (pickingBodies && pickingBodies !== feature?.id) setPickingExtrudeBodies(null);
+    if (
+      pickingTransformTargets &&
+      (pickingTransformTargets !== feature?.id || feature?.type !== 'transform')
+    ) {
+      setPickingTransformTargets(null);
+    }
     if (pickingShellBodies && (pickingShellBodies !== feature?.id || feature?.type !== 'shell')) {
       setPickingShellBodies(null);
     }
@@ -786,6 +797,8 @@ export function Inspector() {
   }, [
     picking,
     pickingBodies,
+    pickingTransformTargets,
+    setPickingTransformTargets,
     pickingShellBodies,
     pickingShellFaces,
     pickingBooleanBodies,
@@ -2218,6 +2231,7 @@ export function Inspector() {
             )}
 
             {feature.type === 'array' && <ArraySection feature={feature} />}
+            {feature.type === 'transform' && <TransformSection feature={feature} />}
 
             {treatmentFeature && (
               <>

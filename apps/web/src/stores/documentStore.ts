@@ -49,6 +49,7 @@ import {
   type ArrayPath,
   type ArrayRotationAxis,
   type ParamValue,
+  type TransformFeature,
 } from '@icancad/model';
 import { sketchTopology } from '@icancad/sketch';
 import { useMemo } from 'react';
@@ -56,6 +57,7 @@ import { create } from 'zustand';
 import { i18n } from '../i18n';
 import { defaultPrimitiveFeature } from '../primitive/params';
 import { arraySourceOperation } from '../quick/array';
+import { defaultTransform, type TransformInput } from '../quick/transform';
 import { useKernelStore, isModelRebuilding } from './kernelStore';
 import { useUiStore } from './uiStore';
 
@@ -148,6 +150,11 @@ interface DocumentState {
   /** Adds a body to one list and takes it out of the other. */
   toggleBooleanBody: (featureId: string, side: BooleanSide, bodyId: string) => void;
   setBooleanKeep: (featureId: string, side: BooleanSide, keep: boolean) => void;
+  addTransform: (name: string, input?: TransformInput) => string | null;
+  /** Adds a body to what the transform moves, or drops it when it is already there. */
+  toggleTransformBody: (featureId: string, bodyId: string) => void;
+  /** Adds a sketch whose result the transform moves, or drops it again. */
+  toggleTransformSketch: (featureId: string, sketchId: string) => void;
   addArray: (name: string, input?: ArrayInput) => string | null;
   setArrayTarget: (featureId: string, target: ArrayFeature['target']) => void;
   toggleArrayBody: (featureId: string, bodyId: string) => void;
@@ -364,6 +371,13 @@ function findArrayFeature(model: Model, featureId: string): ArrayFeature | undef
   );
 }
 
+function findTransformFeature(model: Model, featureId: string): TransformFeature | undefined {
+  return model.features.find(
+    (candidate): candidate is TransformFeature =>
+      candidate.id === featureId && candidate.type === 'transform',
+  );
+}
+
 function findBooleanFeature(model: Model, featureId: string): BooleanFeature | undefined {
   return model.features.find(
     (candidate): candidate is BooleanFeature =>
@@ -574,6 +588,8 @@ function nothingConfigured(feature: Feature): boolean {
       return feature.bodyIds.length === 0 || feature.toolIds.length === 0;
     case 'array':
       return feature.bodyIds.length === 0 && feature.featureIds.length === 0;
+    case 'transform':
+      return feature.bodyIds.length === 0 && feature.sketchIds.length === 0;
     default:
       return false;
   }
@@ -751,7 +767,8 @@ function openPicker(ui: ReturnType<typeof useUiStore.getState>): boolean {
     ui.pickingBooleanBodies ??
     ui.pickingBooleanTools ??
     ui.pickingArrayBodies ??
-    ui.pickingArrayOperations,
+    ui.pickingArrayOperations ??
+    ui.pickingTransformTargets,
   );
 }
 
@@ -998,6 +1015,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     if (ui.pickingBooleanTools) {
       if (item?.kind === 'body') {
         get().toggleBooleanBody(ui.pickingBooleanTools, 'tools', item.id);
+      }
+      return;
+    }
+    if (ui.pickingTransformTargets) {
+      if (item?.kind === 'body') {
+        get().toggleTransformBody(ui.pickingTransformTargets, item.id);
+      } else if (item?.kind === 'sketch') {
+        get().toggleTransformSketch(ui.pickingTransformTargets, item.id);
       }
       return;
     }
@@ -1473,6 +1498,68 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     const next =
       side === 'bodies' ? { ...feature, keepBodies: keep } : { ...feature, keepTools: keep };
     get().apply({ type: 'feature/replace', feature: next });
+  },
+
+  // A transform starts from the picked bodies and sketches; with nothing
+  // picked it opens its picker, because an empty operation moves nothing.
+  addTransform: (name, input) => {
+    get().endFeatureEdit();
+    const bodyIds = [...new Set(input?.bodyIds ?? [])];
+    const sketchIds = [...new Set(input?.sketchIds ?? [])];
+    const featureId = createId('feat');
+    const feature: TransformFeature = {
+      id: featureId,
+      name,
+      suppressed: false,
+      type: 'transform',
+      bodyIds,
+      sketchIds,
+      transform: defaultTransform(),
+    };
+    if (!get().apply(...addFeatureCommands(activeModel(get().project), feature))) return null;
+    selectFeatureForEditing(featureId, set);
+    if (bodyIds.length === 0 && sketchIds.length === 0) {
+      useUiStore.getState().setPickingTransformTargets(featureId);
+    }
+    return featureId;
+  },
+
+  toggleTransformBody: (featureId, bodyId) => {
+    const model = activeModel(get().project);
+    const feature = findTransformFeature(model, featureId);
+    if (!feature) return;
+    const body = model.bodies.find((candidate) => candidate.id === bodyId);
+    if (!body || body.kind === 'mesh') return;
+    const exists = feature.bodyIds.includes(bodyId);
+    get().apply({
+      type: 'feature/replace',
+      feature: {
+        ...feature,
+        bodyIds: exists
+          ? feature.bodyIds.filter((candidate) => candidate !== bodyId)
+          : [...feature.bodyIds, bodyId],
+      },
+    });
+  },
+
+  toggleTransformSketch: (featureId, sketchId) => {
+    const model = activeModel(get().project);
+    const feature = findTransformFeature(model, featureId);
+    if (!feature) return;
+    const sketch = model.features.some(
+      (candidate) => candidate.id === sketchId && candidate.type === 'sketch',
+    );
+    if (!sketch) return;
+    const exists = feature.sketchIds.includes(sketchId);
+    get().apply({
+      type: 'feature/replace',
+      feature: {
+        ...feature,
+        sketchIds: exists
+          ? feature.sketchIds.filter((candidate) => candidate !== sketchId)
+          : [...feature.sketchIds, sketchId],
+      },
+    });
   },
 
   // The array starts from the current selection: picked bodies, or picked

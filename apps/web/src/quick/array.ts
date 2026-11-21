@@ -9,7 +9,12 @@ import type { ArrayInput, SelectionItem } from '../stores/documentStore';
  */
 export function arraySourceOperation(feature: Feature): boolean {
   return (
-    feature.type !== 'sketch' && feature.type !== 'import-mesh' && feature.type !== 'delete-body'
+    feature.type !== 'sketch' &&
+    feature.type !== 'import-mesh' &&
+    feature.type !== 'delete-body' &&
+    // A transform is a pose, not material: repeating the difference between the
+    // shapes before and after it would copy the body and the space it left.
+    feature.type !== 'transform'
   );
 }
 

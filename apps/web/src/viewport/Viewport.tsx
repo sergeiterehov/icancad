@@ -56,6 +56,7 @@ import {
   colorMenuItem,
   deleteMenuItem,
   objectMenuTargets,
+  transformMenuItem,
   visibilityMenuItem,
 } from '../ui/objectMenu';
 import { SkeletonStage } from '../ui/Skeleton';
@@ -284,6 +285,7 @@ export function Viewport() {
   const pickingSectionFace = useUiStore((state) => state.pickingSectionFace);
   const pickingRevolveAxis = useUiStore((state) => state.pickingRevolveAxis);
   const pickingExtrudeToBody = useUiStore((state) => state.pickingExtrudeToBody);
+  const pickingTransformTargets = useUiStore((state) => state.pickingTransformTargets);
   const pickingArrayBodies = useUiStore((state) => state.pickingArrayBodies);
   const pickingArrayOperations = useUiStore((state) => state.pickingArrayOperations);
   const pickingArrayFace = useUiStore((state) => state.pickingArrayFace);
@@ -307,6 +309,7 @@ export function Viewport() {
   const preview = useKernelStore((state) => state.preview);
   const bodies = bodiesInHistory(project, consumedBodies);
   const sketchFrames = useKernelStore((state) => state.sketchFrames);
+  const sketchOverrides = useKernelStore((state) => state.sketchOverrides);
   const featureBodyErrors = useKernelStore((state) => state.featureBodyErrors);
   const featureErrors = useKernelStore((state) => state.featureErrors);
   const status = useKernelStore((state) => state.status);
@@ -407,6 +410,10 @@ export function Viewport() {
       sketchRotateX: t('handles.rotateX'),
       sketchRotateY: t('handles.rotateY'),
       sketchRotateZ: t('handles.rotateZ'),
+      transformRotateX: t('handles.rotateX'),
+      transformRotateY: t('handles.rotateY'),
+      transformRotateZ: t('handles.rotateZ'),
+      transformScale: t('handles.scale'),
     }),
     [t],
   );
@@ -425,6 +432,7 @@ export function Viewport() {
             bodies: quickBodies,
             labels: handleLabels,
             ...(preview?.arraySeed ? { arraySeed: preview.arraySeed } : {}),
+            ...(preview?.transformPivot ? { transformPivot: preview.transformPivot } : {}),
           }),
     [
       quickBlocked,
@@ -507,7 +515,7 @@ export function Viewport() {
     y: number;
     label: string;
     value: number;
-    unit: 'length' | 'angle' | 'count';
+    unit: 'length' | 'angle' | 'count' | 'number' | 'percent';
   } | null>(null);
   const [handleHover, setHandleHover] = useState<{
     x: number;
@@ -541,6 +549,16 @@ export function Viewport() {
         if (ui.pickingExtrudeBodies) {
           if (pick?.kind === 'body') {
             store.select({ kind: 'body', id: pick.id });
+          }
+          return;
+        }
+        if (ui.pickingTransformTargets) {
+          const featureId = ui.pickingTransformTargets;
+          if (pick?.kind === 'body') {
+            store.toggleTransformBody(featureId, pick.id);
+          } else if (pick?.kind === 'face') {
+            // A region of a sketch stands for the sketch the transform moves.
+            store.toggleTransformSketch(featureId, pick.sketchId);
           }
           return;
         }
@@ -896,6 +914,8 @@ export function Viewport() {
           show: labels('tree.show'),
         });
         if (visibility) items.push(visibility);
+        const transform = transformMenuItem(targets, labels('features.transform'));
+        if (transform) items.push(transform);
         const remove = deleteMenuItem(
           targets,
           targets.length > 1 ? labels('context.deleteSelected') : labels('context.deleteObject'),
@@ -1530,6 +1550,7 @@ export function Viewport() {
         Boolean(pickingArrayPath) ||
         sketchProjecting,
       bodyPicking:
+        Boolean(pickingTransformTargets) ||
         Boolean(pickingExtrudeBodies) ||
         Boolean(pickingShellBodies) ||
         Boolean(pickingBooleanBodies) ||
@@ -1552,6 +1573,7 @@ export function Viewport() {
     featureBodyErrors,
     pickingExtrude,
     pickingExtrudeBodies,
+    pickingTransformTargets,
     pickingSketchPlane,
     pickingSectionFace,
     pickingEdges,
@@ -1657,8 +1679,12 @@ export function Viewport() {
           sketchFrames[feature.id],
         );
         // Projected geometry follows the bodies as the rebuild sees them; the
-        // stored entities are the snapshot used when a link is gone.
-        const resolved = resolveSketchProjections(feature, frame, (bodyId) => meshes[bodyId]);
+        // stored entities are the snapshot used when a link is gone. A sketch
+        // an operation moved is drawn from that operation's own geometry.
+        const override = sketchOverrides[feature.id];
+        const resolved = override
+          ? { entities: override, lostEntityIds: [] }
+          : resolveSketchProjections(feature, frame, (bodyId) => meshes[bodyId]);
         const dimmed = (() => {
           if (feature.id !== activeSketchId) return [];
           const constraints = feature.constraints.filter((candidate) =>
@@ -1734,6 +1760,7 @@ export function Viewport() {
     pickingArrayFace,
     featureErrors,
     sketchFrames,
+    sketchOverrides,
     activeSketchReady,
     meshes,
     preview,
@@ -1767,9 +1794,19 @@ export function Viewport() {
             {formatNumber(
               Math.abs(quickChip.value),
               i18n.language,
-              quickChip.unit === 'count' ? 0 : 1,
+              quickChip.unit === 'count'
+                ? 0
+                : quickChip.unit === 'number' || quickChip.unit === 'percent'
+                  ? 2
+                  : 1,
             )}
-            {quickChip.unit === 'angle' ? '°' : quickChip.unit === 'count' ? '' : ' mm'}
+            {quickChip.unit === 'angle'
+              ? '°'
+              : quickChip.unit === 'percent'
+                ? '%'
+                : quickChip.unit === 'count' || quickChip.unit === 'number'
+                  ? ''
+                  : ' mm'}
           </span>
         </div>
       )}

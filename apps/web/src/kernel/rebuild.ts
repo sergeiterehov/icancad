@@ -30,8 +30,10 @@ import {
   type ResolvedModel,
   type RevolveSpec,
   type ShellFeature,
+  type SketchEntity,
   type SketchFeature,
   type SketchFrame,
+  type TransformFeature,
 } from '@icancad/model';
 import { computeSketchFrame, faceSketchValid } from '../sketch/sectionPlane';
 import { resolveRevolveAxis, revolveAngles } from '../sketch/revolveAxis';
@@ -74,6 +76,15 @@ import { addEmbedFor, UNION_EMBED } from './embed';
 import { splitAssignment, splitBodyId } from './splitBodies';
 import { RebuildCache, type RebuildCheckpoint } from './checkpoints';
 import { arrayPositionCount, IDENTITY_MATRIX, type Matrix3x4 } from './array';
+import {
+  meshBounds,
+  sketchBounds,
+  transformMatrix,
+  transformPivot,
+  transformRotation,
+  transformSketchGeometry,
+  type TargetBounds,
+} from './transformPlacement';
 import {
   arrayDirections,
   arrayPlacementMatrices as arrayPlacements,
@@ -215,6 +226,13 @@ interface RebuildState {
   /** Sketch id -> frame frozen when that operation was evaluated. */
   sketchFrames: Record<string, SketchFrame>;
   sketches: Map<string, Resolved<SketchFeature>>;
+  /**
+   * Sketches an operation moved: their geometry as it is from that point on.
+   * The frame lives in `sketchFrames`; this is what the 3D view draws.
+   */
+  sketchOverrides: Map<string, SketchEntity[]>;
+  /** Pivot a transform measured, so its handles start where the operation does. */
+  transformPivots: Map<string, { origin: Vec3; radius: number }>;
   /** Tools a modifying extrude applied, keyed by operation id, for arrays. */
   featureTools: Map<string, ArrayToolSource>;
   /** Bodies each operation changed in place: the shape before and after it. */
@@ -334,6 +352,8 @@ function emptyState(): RebuildState {
     consumedBodies: new Set(),
     sketchFrames: {},
     sketches: new Map(),
+    sketchOverrides: new Map(),
+    transformPivots: new Map(),
     featureTools: new Map(),
     featureChanges: new Map(),
     featureCreatedShapes: new Map(),
@@ -378,6 +398,8 @@ function cloneState(state: RebuildState): RebuildState {
     consumedBodies: new Set(state.consumedBodies),
     sketchFrames: { ...state.sketchFrames },
     sketches: new Map(state.sketches),
+    sketchOverrides: new Map(state.sketchOverrides),
+    transformPivots: new Map(state.transformPivots),
     featureTools: new Map(
       [...state.featureTools].map(([featureId, tool]) => [
         featureId,
@@ -569,6 +591,7 @@ function publishInterimState(state: RebuildState): boolean {
     null,
     state.consumedBodies,
   );
+  kernel.setSketchOverrides(Object.fromEntries(state.sketchOverrides));
   kernel.markInterimScene();
   return true;
 }
@@ -704,6 +727,7 @@ async function runRebuild(
     );
     store.setBodyOperations(Object.fromEntries(base.bodySource));
     store.setFaceOperations(Object.fromEntries(base.faceOwners));
+    store.setSketchOverrides(Object.fromEntries(base.sketchOverrides));
     store.setFeatureLimits(base.featureLimits);
     store.setInteractiveReady(true);
   };
@@ -818,6 +842,7 @@ async function runRebuild(
   const done = useKernelStore.getState();
   done.setBodyOperations(Object.fromEntries(scene.bodySource));
   done.setFaceOperations(Object.fromEntries(scene.faceOwners));
+  done.setSketchOverrides(Object.fromEntries(scene.sketchOverrides));
   done.setFeatureLimits(scene.featureLimits);
   done.setBuildProgress(null);
   done.setInteractiveReady(true);
@@ -881,10 +906,15 @@ function buildPreview(
   // An array keeps its bodies solid and shows the material it repeats as a
   // ghost per copy, so the seeds stay in their own style.
   const keepsBodySolid =
+    feature.type === 'transform' ||
     feature.type === 'array' ||
     feature.type === 'boolean' ||
     (feature.type === 'extrude' &&
       (feature.op === 'subtract' || feature.op === 'add' || feature.op === 'intersect'));
+  // A transform moves the bodies it owns: the moved shape is the real result,
+  // so it is drawn solid and picked where it now stands instead of at the pose
+  // it had before the operation.
+  const movedByTransform = feature.type === 'transform';
   // Meshes cover solid bodies and imported meshes alike.
   for (const bodyId of Object.keys(after.meshes)) {
     const before = base.meshes[bodyId];
@@ -918,7 +948,7 @@ function buildPreview(
       kind: 'modified',
       ...describe(bodyId),
       ...(renderBase ? { renderBase: true } : {}),
-      baseMesh: before,
+      ...(movedByTransform ? {} : { baseMesh: before }),
       // The mesh a pick lands on is the one before the operation, so its shape
       // is the one to measure when the operation has moved the body.
       ...(base.bodyShapes.get(bodyId) ? { baseShapeId: base.bodyShapes.get(bodyId)! } : {}),
@@ -993,6 +1023,9 @@ function buildPreview(
     ghosts,
     ...(ghost.arrayOrigin
       ? { arraySeed: { featureId: feature.id, origin: ghost.arrayOrigin } }
+      : {}),
+    ...(feature.type === 'transform' && after.transformPivots.has(feature.id)
+      ? { transformPivot: { featureId: feature.id, ...after.transformPivots.get(feature.id)! } }
       : {}),
     ...(after.featureFaceMarks[feature.id]
       ? { faceMarks: after.featureFaceMarks[feature.id] }
@@ -1207,6 +1240,18 @@ async function evaluateFeature(
     state.createdBodies.set(feature.id, []);
     try {
       await applyBoolean(feature, state, context);
+    } catch (error) {
+      state.featureErrors[feature.id] = kernelErrorCode(error);
+      state.blockedFeatureId = feature.id;
+      return;
+    }
+    if (state.featureErrors[feature.id]) state.blockedFeatureId = feature.id;
+    return;
+  }
+
+  if (feature.type === 'transform') {
+    try {
+      await applyTransform(feature, state, context);
     } catch (error) {
       state.featureErrors[feature.id] = kernelErrorCode(error);
       state.blockedFeatureId = feature.id;
@@ -3087,6 +3132,126 @@ function stampCenter(stamps: readonly ArrayStamp[]): Vec3 {
   }
   if (!Number.isFinite(min[0]) || !Number.isFinite(max[0])) return [0, 0, 0];
   return [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2];
+}
+
+/**
+ * Moves, turns and scales the picked bodies and sketches as one (ADR 0037).
+ * A body keeps its id and its face owners: the copy has the same topology at
+ * another pose, so later references to its faces and edges still resolve. A
+ * sketch is moved as its result — its frame turns and its geometry scales —
+ * and the sketch feature itself is left as the user drew it.
+ */
+async function applyTransform(
+  feature: Resolved<TransformFeature>,
+  state: RebuildState,
+  context: EvalContext,
+): Promise<void> {
+  const { client, epoch } = context;
+  const { bodyShapes, bodySource, meshes, bodyStats, sketchFrames, sketches } = state;
+  state.createdBodies.set(feature.id, []);
+
+  const bodyIds = [...new Set(feature.bodyIds)];
+  const sketchIds = [...new Set(feature.sketchIds)];
+  // Nothing picked yet is configuration in progress, not a failure.
+  if (bodyIds.length === 0 && sketchIds.length === 0) return;
+
+  const markBodyError = (bodyId: string, code: string) => {
+    const errors = state.featureBodyErrors[feature.id] ?? {};
+    errors[bodyId] = code;
+    state.featureBodyErrors[feature.id] = errors;
+  };
+  const markSketchError = (sketchId: string, code: string) => {
+    const errors = state.featureObjectErrors[feature.id] ?? {};
+    errors[`sketch:${sketchId}`] = code;
+    state.featureObjectErrors[feature.id] = errors;
+  };
+
+  // The pivot is measured on the state before the operation, so it does not
+  // drift while the transform itself is being dragged.
+  const bounds: TargetBounds[] = [];
+  const bodyTargets: Array<{ bodyId: string; shapeId: string }> = [];
+  for (const bodyId of bodyIds) {
+    const shapeId = bodyShapes.get(bodyId);
+    const mesh = meshes[bodyId];
+    if (!shapeId || !mesh) {
+      markBodyError(bodyId, mesh ? 'BODY_NOT_SOLID' : 'UNKNOWN_BODY');
+      continue;
+    }
+    bodyTargets.push({ bodyId, shapeId });
+    bounds.push(meshBounds(mesh));
+  }
+
+  const sketchTargets: Array<{ sketch: Resolved<SketchFeature>; frame: SketchFrame }> = [];
+  for (const sketchId of sketchIds) {
+    const sketch = sketches.get(sketchId);
+    const frame = sketchFrames[sketchId];
+    if (!sketch || !frame) {
+      markSketchError(sketchId, 'MISSING_SKETCH');
+      continue;
+    }
+    // An empty sketch has no result to move; it is not an error either.
+    const box = sketchBounds(frame, sketch.entities);
+    if (!box) continue;
+    sketchTargets.push({ sketch, frame });
+    bounds.push(box);
+  }
+
+  // The selection turns and scales around one point: the centre of everything
+  // it holds.
+  const pivot = transformPivot(bounds);
+  if (!pivot) {
+    state.featureErrors[feature.id] = 'NO_TARGET_BODY';
+    return;
+  }
+  state.transformPivots.set(feature.id, pivot);
+  const matrix = transformMatrix(feature.transform, pivot.origin);
+  const rotation = transformRotation(feature.transform.rotation);
+
+  let moved = 0;
+  for (const target of bodyTargets) {
+    const shapeId = trackShape(`${target.bodyId}:${feature.id}:transform`);
+    try {
+      const result = await client.request<MakeBoxResult>({
+        type: 'transform-shape',
+        params: { shapeId, sourceShapeId: target.shapeId, matrix: [...matrix] },
+      });
+      if (epoch !== rebuildEpoch) return;
+      const mesh = await client.request<TessellationResult>({ type: 'tessellate', shapeId });
+      if (epoch !== rebuildEpoch) return;
+      bodyShapes.set(target.bodyId, shapeId);
+      bodySource.set(target.bodyId, feature.id);
+      bodyStats[target.bodyId] = result.stats;
+      meshes[target.bodyId] = mesh;
+      // `bodyOwner` and `faceOwners` stay as they are: the moved copy has the
+      // same faces in the same order, so pictures of them still point at the
+      // operations that made them.
+      moved += 1;
+    } catch (error) {
+      markBodyError(target.bodyId, kernelErrorCode(error));
+    }
+  }
+
+  for (const target of sketchTargets) {
+    const result = transformSketchGeometry(
+      target.frame,
+      target.sketch.entities,
+      feature.transform.scale,
+      rotation,
+      matrix,
+    );
+    sketches.set(target.sketch.id, { ...target.sketch, entities: result.entities });
+    sketchFrames[target.sketch.id] = result.frame;
+    // The 3D view draws the sketch from the document, so the moved geometry is
+    // handed over explicitly; the frame alone would only move its plane.
+    state.sketchOverrides.set(target.sketch.id, result.entities);
+    moved += 1;
+  }
+
+  const bodyErrors = Object.values(state.featureBodyErrors[feature.id] ?? {});
+  const objectErrors = Object.values(state.featureObjectErrors[feature.id] ?? {});
+  if (moved === 0) state.featureErrors[feature.id] = 'NO_TARGET_BODY';
+  else if (bodyErrors.length > 0) state.featureErrors[feature.id] = bodyErrors[0]!;
+  else if (objectErrors.length > 0) state.featureErrors[feature.id] = objectErrors[0]!;
 }
 
 async function applyShell(

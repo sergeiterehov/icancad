@@ -4,7 +4,7 @@ import type {
   ShapeStats,
   TessellationResult,
 } from '@icancad/kernel';
-import type { SketchFrame, Vec3 } from '@icancad/model';
+import type { SketchEntity, SketchFrame, Vec3 } from '@icancad/model';
 import { create } from 'zustand';
 import type { MeshStats } from '@icancad/io';
 import type { Feature } from '@icancad/model';
@@ -105,6 +105,11 @@ export interface ScenePreview {
    * arrow grows along the repeat direction, the count grip moves by one step.
    */
   arraySeed?: { featureId: string; origin: Vec3 };
+  /**
+   * Where a transform turns and scales, measured on the state before it. Its
+   * handles start there, and the radius is what the scale grip counts against.
+   */
+  transformPivot?: { featureId: string; origin: Vec3; radius: number };
 }
 
 interface KernelState {
@@ -117,6 +122,12 @@ interface KernelState {
   meshes: Record<string, TessellationResult>;
   /** Frames computed when each sketch operation was evaluated. */
   sketchFrames: Record<string, SketchFrame>;
+  /**
+   * Geometry of sketches an operation moved, keyed by sketch feature. The
+   * document keeps what the user drew; this is the sketch's result from that
+   * point of the history on, which is also what the 3D view draws.
+   */
+  sketchOverrides: Record<string, SketchEntity[]>;
   /** Projected sketch entities whose source is gone, keyed by sketch feature. */
   projectionLost: Record<string, string[]>;
   /** Increments whenever a rebuild publishes a scene. */
@@ -212,6 +223,17 @@ interface KernelState {
    */
   clearPreview: () => void;
   setBodyOperations: (bodyOperations: Record<string, string>) => void;
+  /** Geometry of the sketches operations moved, as the scene draws them. */
+  setSketchOverrides: (sketchOverrides: Record<string, SketchEntity[]>) => void;
+  /**
+   * Moves what the edited transform shows before the kernel answers: a drag
+   * applies its difference to the meshes and sketch geometry already on screen.
+   * The following rebuild replaces all of it with the real result.
+   */
+  setPreviewPlacement: (
+    meshes?: Record<string, TessellationResult>,
+    sketches?: Record<string, { frame: SketchFrame; entities: SketchEntity[] }>,
+  ) => void;
   setFaceOperations: (faceOperations: Record<string, string[]>) => void;
   setFeatureLimits: (featureLimits: Record<string, { requested: number; applied: number }>) => void;
   clearScene: () => void;
@@ -227,6 +249,7 @@ export const useKernelStore = create<KernelState>((set) => ({
   error: null,
   meshes: {},
   sketchFrames: {},
+  sketchOverrides: {},
   projectionLost: {},
   sceneVersion: 0,
   operationMs: {},
@@ -320,6 +343,24 @@ export const useKernelStore = create<KernelState>((set) => ({
 
   setBodyOperations: (bodyOperations) => set({ bodyOperations }),
 
+  setSketchOverrides: (sketchOverrides) => set({ sketchOverrides }),
+
+  setPreviewPlacement: (meshes, sketches) =>
+    set((state) => {
+      const nextMeshes =
+        meshes && Object.keys(meshes).length > 0 ? { ...state.meshes, ...meshes } : state.meshes;
+      if (!sketches || Object.keys(sketches).length === 0) {
+        return nextMeshes === state.meshes ? state : { meshes: nextMeshes };
+      }
+      const sketchFrames = { ...state.sketchFrames };
+      const sketchOverrides = { ...state.sketchOverrides };
+      for (const [sketchId, value] of Object.entries(sketches)) {
+        sketchFrames[sketchId] = value.frame;
+        sketchOverrides[sketchId] = value.entities;
+      }
+      return { meshes: nextMeshes, sketchFrames, sketchOverrides };
+    }),
+
   setPreviewGhosts: (featureId, ghosts) =>
     set((state) =>
       state.preview && state.preview.featureId === featureId
@@ -337,6 +378,7 @@ export const useKernelStore = create<KernelState>((set) => ({
     set((state) => ({
       meshes: {},
       sketchFrames: {},
+      sketchOverrides: {},
       projectionLost: {},
       sceneVersion: state.sceneVersion + 1,
       operationMs: {},

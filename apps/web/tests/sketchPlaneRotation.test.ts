@@ -52,6 +52,10 @@ const labels = {
   sketchRotateX: 'Rotate X',
   sketchRotateY: 'Rotate Y',
   sketchRotateZ: 'Rotate Z',
+  transformRotateX: 'Rotate X',
+  transformRotateY: 'Rotate Y',
+  transformRotateZ: 'Rotate Z',
+  transformScale: 'Scale',
 };
 
 const close = (actual: readonly number[], expected: readonly number[]): void => {

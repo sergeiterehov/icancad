@@ -120,8 +120,9 @@ function referencedBodyIds(feature: Feature): string[] {
     case 'shell':
       return [...(feature.bodyIds ?? []), ...(feature.removeFaces ?? []).map((ref) => ref.bodyId)];
     case 'hole':
-    case 'transform':
       return [feature.bodyId];
+    case 'transform':
+      return feature.bodyIds;
     case 'edge-treatment':
       return [...feature.faceRefs, ...feature.edgeRefs].map((ref) => ref.bodyId);
     case 'array':
@@ -142,6 +143,11 @@ export function getFeatureDependencies(feature: Feature, project: Model): string
   }
   if (feature.type === 'rib') {
     dependencies.add(feature.sketchId);
+  }
+  if (feature.type === 'transform') {
+    // A sketch is moved as its result from this point on, so it has to exist
+    // before the operation that moves it.
+    for (const sketchId of feature.sketchIds) dependencies.add(sketchId);
   }
   if (feature.type === 'array') {
     // Repeating the bodies an operation made depends on that operation.

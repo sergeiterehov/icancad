@@ -41,6 +41,7 @@ import {
 import { primitiveHandles } from './primitiveHandles';
 import { arrayHandles } from './arrayHandles';
 import { sketchRotationHandles } from './sketchRotationHandles';
+import { transformHandles } from './transformHandles';
 import { quickTargetKey, type QuickTargetGeometry } from './types';
 
 /** A drag started by an operation handle. */
@@ -51,8 +52,8 @@ export interface OperationHandleDrag {
   readonly kind: EdgeTreatmentKind | null;
   /** Value the operation currently has: the distance or the treatment size. */
   readonly value: number;
-  /** Angle handles report degrees; every other handle reports millimetres. */
-  readonly unit?: 'length' | 'angle' | 'count';
+  /** Angle handles report degrees, a scale grip a percentage, the rest millimetres. */
+  readonly unit?: 'length' | 'angle' | 'count' | 'number' | 'percent';
   /** What the drag chip calls this gesture, e.g. a primitive size or an axis. */
   readonly label?: string;
   /** `shift` asks an edge treatment for the other kind while the grab lasts. */
@@ -87,8 +88,11 @@ export interface OperationHandle {
   orbit?: SceneArcHandle;
   /** A trajectory the grip slides along: the pointer is read along it. */
   trail?: Vec3[];
-  /** A move grip is a circle; every other handle is an arrow. */
-  kind?: 'arrow' | 'move' | 'ball';
+  /**
+   * A move grip is a circle, a scale grip a yellow square, a stepped grip a
+   * ball; every other handle is an arrow.
+   */
+  kind?: 'arrow' | 'move' | 'ball' | 'square';
   /** Translation arrows and rotation rings take the colour of their world axis. */
   axis?: 'x' | 'y' | 'z';
   /** A short translation arrow keeps its screen length instead of a model size. */
@@ -163,12 +167,22 @@ export interface OperationHandleContext {
     sketchRotateX: string;
     sketchRotateY: string;
     sketchRotateZ: string;
+    /** The three rings of a transform and its uniform scale grip. */
+    transformRotateX: string;
+    transformRotateY: string;
+    transformRotateZ: string;
+    transformScale: string;
   };
   /**
    * Centre of the volume the edited array repeats, named after the array it
    * belongs to. The array handles start there.
    */
   arraySeed?: { featureId: string; origin: Vec3 };
+  /**
+   * Where the edited transform turns and scales, and how much room its scale
+   * grip measures. The rebuild measures it on the state before the operation.
+   */
+  transformPivot?: { featureId: string; origin: Vec3; radius: number };
 }
 
 /**
@@ -188,6 +202,7 @@ export function operationHandles(context: OperationHandleContext): OperationHand
     ...primitiveHandles(context),
     ...arrayHandles(context),
     ...sketchRotationHandles(context),
+    ...transformHandles(context),
   ].filter((handle) => handle.enabled);
 }
 

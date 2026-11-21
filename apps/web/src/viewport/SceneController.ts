@@ -186,6 +186,8 @@ const GHOST_FADE_PX = 100;
 /** Length of the idle arrow, before an operation gives the handle a value. */
 const HANDLE_IDLE_PX = 48;
 const HANDLE_HIT_PX = 9;
+/** Edge of the square grip a uniform scale is dragged by, in screen pixels. */
+const SQUARE_SIZE_PX = 11;
 /** Overlays are lifted off the surface they annotate to avoid depth fighting. */
 const FACE_OVERLAY_LIFT = 0.01;
 /**
@@ -931,6 +933,9 @@ export class SceneController {
 
   /** Translation arrows follow the usual X/Y/Z colours. */
   private handleColorFor(handle: SceneHandle): number {
+    // The scale grip reads as its own kind of handle, so it keeps one colour on
+    // every axis and never borrows a translation one.
+    if (handle.kind === 'square') return this.theme === 'dark' ? 0xf5c542 : 0xd9a400;
     if (!handle.axis) return this.handleColor();
     switch (handle.axis) {
       case 'x':
@@ -1017,6 +1022,10 @@ export class SceneController {
         this.addMoveHandle(handle);
         continue;
       }
+      if (handle.kind === 'square') {
+        this.addSquareHandle(handle);
+        continue;
+      }
       if (handle.kind === 'ball') {
         this.addBallHandle(handle);
         continue;
@@ -1099,6 +1108,81 @@ export class SceneController {
       handle,
       objects: [guide, outlineBall, ball],
       colors: [guideMaterial, ballMaterial],
+    });
+  }
+
+  /**
+   * A uniform scale grip: a yellow square that faces the camera, riding a dashed
+   * guide from the pivot so the axis the drag follows stays readable at any zoom.
+   */
+  private addSquareHandle(handle: SceneHandle): void {
+    const worldPerPixel = 1 / this.pixelsPerWorldUnit();
+    const origin = new THREE.Vector3(...handle.origin);
+    const direction = new THREE.Vector3(...handle.direction);
+    if (direction.lengthSq() < 1e-12) return;
+    direction.normalize();
+    const arrowDirection = handle.value < 0 ? direction.clone().negate() : direction;
+    const length =
+      handle.value === 0
+        ? HANDLE_IDLE_PX * worldPerPixel
+        : Math.max(Math.abs(handle.value), 18 * worldPerPixel);
+    const grip = origin.clone().addScaledVector(arrowDirection, length);
+    const hovered = this.hoveredHandleId === handle.id;
+    const color = hovered ? 0xffffff : this.handleColorFor(handle);
+    const outlineColor = this.handleOutlineColor();
+    const half = Math.max(0.001, (SQUARE_SIZE_PX / 2) * worldPerPixel);
+    const halo = worldPerPixel;
+
+    const guideMaterial = new THREE.LineDashedMaterial({
+      color: this.handleColorFor(handle),
+      dashSize: 5 * worldPerPixel,
+      gapSize: 4 * worldPerPixel,
+      transparent: true,
+      opacity: 0.65,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const guide = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([origin, grip]),
+      guideMaterial,
+    );
+    guide.computeLineDistances();
+    guide.renderOrder = RenderOrder.handleOutline;
+    guide.userData.handleId = handle.id;
+
+    const outline = new THREE.Mesh(
+      new THREE.PlaneGeometry((half + halo) * 2, (half + halo) * 2),
+      new THREE.MeshBasicMaterial({
+        color: outlineColor,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        side: THREE.DoubleSide,
+      }),
+    );
+    outline.position.copy(grip);
+    outline.quaternion.copy(this.camera.quaternion);
+    outline.renderOrder = RenderOrder.handleOutline;
+    outline.userData.handleId = handle.id;
+
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+      side: THREE.DoubleSide,
+    });
+    const square = new THREE.Mesh(new THREE.PlaneGeometry(half * 2, half * 2), material);
+    square.position.copy(grip);
+    square.quaternion.copy(this.camera.quaternion);
+    square.renderOrder = RenderOrder.handle;
+    square.userData.handleId = handle.id;
+
+    this.handleGroup.add(guide, outline, square);
+    this.handleEntries.push({
+      handle,
+      objects: [guide, outline, square],
+      colors: [guideMaterial, material],
     });
   }
 
@@ -1636,6 +1720,46 @@ export class SceneController {
     return best;
   }
 
+  /** The square grip of a scale handle under the pointer. */
+  private handleSquareAt(local: { x: number; y: number }): {
+    handle: SceneHandle;
+    axisX: number;
+    axisY: number;
+    pixelsPerMm: number;
+    distance: number;
+  } | null {
+    let best: {
+      handle: SceneHandle;
+      axisX: number;
+      axisY: number;
+      pixelsPerMm: number;
+      distance: number;
+    } | null = null;
+    for (const handle of this.handleData) {
+      if (!handle.enabled || handle.kind !== 'square') continue;
+      const projected = this.handleScreenGeometry(handle);
+      if (!projected) continue;
+      const distance = Math.hypot(local.x - projected.tip.x, local.y - projected.tip.y);
+      // The square is a small target, so it takes a touch of reach around it.
+      if (distance > (SQUARE_SIZE_PX / 2 + 4) * this.pickReach()) continue;
+      const direction = new THREE.Vector3(...handle.direction).normalize();
+      const unit = this.projectWorld(new THREE.Vector3(...handle.origin).add(direction));
+      const axisX = unit.x - projected.origin.x;
+      const axisY = unit.y - projected.origin.y;
+      const pixelsPerMm = Math.hypot(axisX, axisY);
+      if (pixelsPerMm < 0.5) continue;
+      if (best && distance >= best.distance) continue;
+      best = {
+        handle,
+        axisX: axisX / pixelsPerMm,
+        axisY: axisY / pixelsPerMm,
+        pixelsPerMm,
+        distance,
+      };
+    }
+    return best;
+  }
+
   /** The circular grip of a radial orbit handle under the pointer. */
   private handleOrbitAt(local: { x: number; y: number }): {
     handle: SceneHandle;
@@ -1680,11 +1804,13 @@ export class SceneController {
       const radius = this.arcRadius(arc);
       const hitPx = (HANDLE_HIT_PX * (handle.thickness ?? 1) + 2) * this.pickReach();
       let distance = Math.hypot(local.x - projected.origin.x, local.y - projected.origin.y);
-      if (Math.abs(arc.angle) > 0.02) {
-        const steps = Math.max(2, Math.ceil(Math.abs(arc.angle) / (Math.PI / 36)));
+      // A ring without a swept angle is grabbable all the way round it.
+      const sweep = arc.fullCircle ? Math.PI * 2 : arc.angle;
+      if (Math.abs(sweep) > 0.02) {
+        const steps = Math.max(2, Math.ceil(Math.abs(sweep) / (Math.PI / 36)));
         let previous = this.projectWorld(arcGripPoint(arc, 0, radius));
         for (let index = 1; index <= steps; index += 1) {
-          const next = this.projectWorld(arcGripPoint(arc, (arc.angle * index) / steps, radius));
+          const next = this.projectWorld(arcGripPoint(arc, (sweep * index) / steps, radius));
           distance = Math.min(
             distance,
             pointSegmentDistance([local.x, local.y], [previous.x, previous.y], [next.x, next.y]),
@@ -1771,6 +1897,8 @@ export class SceneController {
     const local = this.localPoint(clientX, clientY);
     const moveHit = this.handleMoveAt(local);
     if (moveHit) return moveHit;
+    const squareHit = this.handleSquareAt(local);
+    if (squareHit) return squareHit;
     const orbitHit = this.handleOrbitAt(local);
     if (orbitHit) return orbitHit;
     const arcHit = this.handleArcAt(local);

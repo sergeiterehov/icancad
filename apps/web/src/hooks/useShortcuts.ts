@@ -48,7 +48,8 @@ export function useShortcuts(): void {
           ui.pickingBooleanTools ||
           ui.pickingSketchPlane ||
           ui.pickingSectionFace ||
-          ui.pickingExtrudeToBody
+          ui.pickingExtrudeToBody ||
+          ui.pickingTransformTargets
         ) {
           event.preventDefault();
           ui.endPicking();

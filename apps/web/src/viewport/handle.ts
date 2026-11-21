@@ -92,6 +92,11 @@ export interface SceneArcHandle {
    * it replaces `radius` for drawing and hit testing.
    */
   radiusPx?: number;
+  /**
+   * The whole circle is the grip, not just the swept arc. A rotation ring has no
+   * stored angle to sweep from, so it is grabbable anywhere around it.
+   */
+  fullCircle?: boolean;
 }
 
 /**
@@ -119,8 +124,11 @@ export interface SceneHandle {
    * along instead of a straight line from the seed.
    */
   trail?: [number, number, number][];
-  /** A move grip is a circle; every other handle is an arrow. */
-  kind?: 'arrow' | 'move' | 'ball';
+  /**
+   * A move grip is a circle, a scale grip a yellow square, a stepped grip a
+   * ball; every other handle is an arrow.
+   */
+  kind?: 'arrow' | 'move' | 'ball' | 'square';
   /** Translation arrows take the colour of their world axis. */
   axis?: 'x' | 'y' | 'z';
   /** A short translation arrow keeps its screen length instead of a model size. */
@@ -145,7 +153,7 @@ export interface SceneHandleScreen {
   tipY: number;
   value: number;
   enabled: boolean;
-  kind?: 'arrow' | 'move' | 'ball';
+  kind?: 'arrow' | 'move' | 'ball' | 'square';
 }
 
 /** A preview ghost as the scene draws it; exposed for tests and diagnostics. */

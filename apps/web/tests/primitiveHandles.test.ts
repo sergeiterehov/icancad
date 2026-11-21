@@ -47,6 +47,10 @@ const labels = {
   sketchRotateX: 'Rotate X',
   sketchRotateY: 'Rotate Y',
   sketchRotateZ: 'Rotate Z',
+  transformRotateX: 'Rotate X',
+  transformRotateY: 'Rotate Y',
+  transformRotateZ: 'Rotate Z',
+  transformScale: 'Scale',
 };
 
 function projectWith(feature: PrimitiveFeature): Project {

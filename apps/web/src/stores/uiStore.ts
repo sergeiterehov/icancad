@@ -130,6 +130,8 @@ interface UiState {
   pickingRevolveAxis: string | null;
   /** "To body" extent waiting for the body it stops at. */
   pickingExtrudeToBody: string | null;
+  /** Transform waiting for the bodies and sketches it should move. */
+  pickingTransformTargets: string | null;
   /** Array waiting for the bodies it should repeat. */
   pickingArrayBodies: string | null;
   /** Array waiting for the operations whose bodies it should repeat. */
@@ -177,6 +179,7 @@ interface UiState {
   setPickingSectionFace: (planeId: string | null) => void;
   setPickingRevolveAxis: (featureId: string | null) => void;
   setPickingExtrudeToBody: (featureId: string | null) => void;
+  setPickingTransformTargets: (featureId: string | null) => void;
   setPickingArrayBodies: (featureId: string | null) => void;
   setPickingArrayOperations: (featureId: string | null) => void;
   setPickingArrayFace: (picker: ArrayDirectionPicker | null) => void;
@@ -226,6 +229,7 @@ const PICKER_KEYS = [
   'pickingSectionFace',
   'pickingRevolveAxis',
   'pickingExtrudeToBody',
+  'pickingTransformTargets',
   'pickingArrayBodies',
   'pickingArrayOperations',
   'pickingArrayFace',
@@ -423,6 +427,7 @@ export const useUiStore = create<UiState>((set) => ({
   pickingSectionFace: null,
   pickingRevolveAxis: null,
   pickingExtrudeToBody: null,
+  pickingTransformTargets: null,
   pickingArrayBodies: null,
   pickingArrayOperations: null,
   pickingArrayFace: null,
@@ -471,6 +476,8 @@ export const useUiStore = create<UiState>((set) => ({
     set(onlyPicker('pickingRevolveAxis', pickingRevolveAxis)),
   setPickingExtrudeToBody: (pickingExtrudeToBody) =>
     set(onlyPicker('pickingExtrudeToBody', pickingExtrudeToBody)),
+  setPickingTransformTargets: (pickingTransformTargets) =>
+    set(onlyPicker('pickingTransformTargets', pickingTransformTargets)),
   setPickingArrayBodies: (pickingArrayBodies) =>
     set(onlyPicker('pickingArrayBodies', pickingArrayBodies)),
   setPickingArrayOperations: (pickingArrayOperations) =>

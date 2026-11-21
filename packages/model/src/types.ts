@@ -518,9 +518,18 @@ export interface DeleteBodyFeature extends FeatureBase {
   bodyId: string;
 }
 
+/**
+ * Moves, turns and scales picked objects as one, around the centre of their
+ * bounds. Bodies are transformed in place; a sketch is its result — the plane
+ * it lies on and its geometry — from this point of the history on, so the
+ * sketch itself stays parametric.
+ */
 export interface TransformFeature extends FeatureBase {
   type: 'transform';
-  bodyId: string;
+  /** Solid bodies to move. */
+  bodyIds: string[];
+  /** Sketches whose result to move; they must stand before the operation. */
+  sketchIds: string[];
   transform: Transform;
 }
 
