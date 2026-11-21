@@ -123,6 +123,7 @@ export function FeatureIcon({ feature, size = 16 }: { feature: Feature; size?: n
         />
       );
     case 'import-mesh':
+    case 'import-step':
       return <FileUp size={size} />;
     case 'delete-body':
       return <Trash2 size={size} />;

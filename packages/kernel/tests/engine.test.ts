@@ -2376,6 +2376,40 @@ describe('OCCT kernel engine', () => {
     expect(imported.bodies.every((body) => body.stats.solids === 1)).toBe(true);
   });
 
+  it('converts STEP lengths to millimetres', () => {
+    engine.makeBox({ shapeId: 'unit-box', dx: 20, dy: 20, dz: 20 });
+    const { data } = engine.exportStep({
+      bodies: [{ shapeId: 'unit-box', name: 'UnitBox', color: '#3366cc' }],
+    });
+    const text = new TextDecoder().decode(data);
+    const extent = (source: string, prefix: string) => {
+      const body = engine.importStep({
+        data: new TextEncoder().encode(source),
+        prefix,
+      }).bodies[0]!;
+      return engine.tessellate(body.shapeId).bbox.max[0]!;
+    };
+
+    expect(extent(text, 'feat:mm')).toBeCloseTo(20, 3);
+
+    const metre = text.replace('SI_UNIT(.MILLI.,.METRE.)', 'SI_UNIT($,.METRE.)');
+    expect(metre).not.toBe(text);
+    expect(extent(metre, 'feat:metre')).toBeCloseTo(20_000, 1);
+
+    const inch = text.replace(
+      /(#\d+) = \( LENGTH_UNIT\(\) NAMED_UNIT\(\*\) SI_UNIT\(\.MILLI\.,\.METRE\.\) \);/,
+      (_match: string, id: string) =>
+        [
+          `#${id} = ( CONVERSION_BASED_UNIT('INCH',#999901) LENGTH_UNIT() NAMED_UNIT(#999902) );`,
+          '#999901 = LENGTH_MEASURE_WITH_UNIT(LENGTH_MEASURE(25.4),#999903);',
+          '#999902 = DIMENSIONAL_EXPONENTS(1.,0.,0.,0.,0.,0.,0.);',
+          '#999903 = ( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) );',
+        ].join('\n'),
+    );
+    expect(inch).not.toBe(text);
+    expect(extent(inch, 'feat:inch')).toBeCloseTo(508, 3);
+  });
+
   it('rejects a file that is not STEP', () => {
     expect(() =>
       engine.inspectStep({ data: new TextEncoder().encode('not a step file') }),

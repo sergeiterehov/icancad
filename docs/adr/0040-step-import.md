@@ -29,6 +29,7 @@ paths longer than ten characters.
 | Kernel API | `inspect-step` reads the file and returns `{ name, color }` per body before the document changes. `import-step` reads it again and builds the kernel shapes, returning one `{ shapeId, stats }` per body. Both use the `import` queue key so they never interleave with a rebuild. |
 | Names | Read from the Part 21 `PRODUCT('...')` records in the file text, not from XCAF: `ToExtString` and `ToUTF8CString` are not bound. The parser decodes doubled quotes, `\X2\…\X0\` UTF-16 and `\X\hh`. Product order matched the simple-shape label order in every file produced by this app and the test fixtures. A missing name falls back to `Part N`. |
 | Colours | `XCAFDoc_ColorTool.GetColor_4` with the surface colour, then the curve colour, then the tool's generic lookup. Channels are 0..1 and become `#rrggbb`. A body without a colour gets the next entry of the body palette in the store. |
+| Units | The reader normalises lengths to millimetres from the file's `LENGTH_UNIT`, so an inch or metre file arrives in project units. This is OCCT's `xstep.cascade.unit` default of `MM`; the kernel tests cover millimetres, metres and inches. |
 | Bodies | One solid body per imported shape, with id `featureId:solid-N`, kind `solid`, the parsed name and the resolved colour in the metadata. All bodies, metadata and the feature are applied in one undo step. |
 | Selection | After a successful import the imported bodies are selected and no operation is left in edit mode. Nothing on an `import-step` feature is editable except its name, so an open editor would only hide the new bodies behind preview rows. |
 | Failure | A file the kernel cannot read, or one with no simple shapes, shows an error toast and leaves the document untouched. The asset is saved only after `inspect-step` succeeds. |
@@ -40,8 +41,9 @@ paths longer than ten characters.
 - A body modelled in Fusion, Onshape or FreeCAD opens as a real B-rep solid
   with its name and colour, and the rest of the modelling tool set (fillet,
   shell, booleans, export) works on it.
-- The file is imported in its own units. ICanCAD works in millimetres, and no
-  unit conversion is applied yet; an inch file will carry inch-length numbers.
+- STEP lengths arrive in project units: the reader uses the file's length unit
+  and converts to millimetres. A file with a missing or malformed unit falls
+  back to the reader's millimetre default.
 - A product containing several solids becomes several bodies with the same
   product name. There is no way to keep them as one assembly node.
 - Surface and sheet bodies are not filtered out: any simple shape becomes a
