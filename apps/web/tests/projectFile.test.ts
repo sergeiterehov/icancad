@@ -111,8 +111,8 @@ it('keeps projected geometry links through the archive', async () => {
           {
             id: 'proj_1',
             entityId: 'entity_p',
-            source: { kind: 'vertex', bodyId: 'body_1', elementId: 'v:1,2,0' },
-            faceId: '3',
+            source: { kind: 'vertex', bodyId: 'body_1', name: 'v:1,2,0' },
+            faceName: 'fixture/+z',
           },
         ],
       },
@@ -127,8 +127,8 @@ it('keeps projected geometry links through the archive', async () => {
     {
       id: 'proj_1',
       entityId: 'entity_p',
-      source: { kind: 'vertex', bodyId: 'body_1', elementId: 'v:1,2,0' },
-      faceId: '3',
+      source: { kind: 'vertex', bodyId: 'body_1', name: 'v:1,2,0' },
+      faceName: 'fixture/+z',
     },
   ]);
 });

@@ -25,6 +25,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { arcDraftEndAngle, arcStartAngle } from '../sketch/arcDraft';
 import { solveSketch } from '../sketch/client';
+import { faceIdByName } from '../kernel/topologyLookup';
 import { rebuildScene } from '../kernel/rebuild';
 import { autoConstraintsForEntity, isNearAxis, snapHighlightIds } from '../sketch/autoConstraints';
 import {
@@ -236,8 +237,8 @@ export function SketchEditor() {
   const faceOutline = useMemo((): Point2[] => {
     if (!sketch || sketch.plane.type !== 'face' || !frame) return [];
     const mesh = sketch.plane.bodyId ? meshes[sketch.plane.bodyId] : undefined;
-    const faceId = sketch.plane.topoId === undefined ? NaN : Number(sketch.plane.topoId);
-    return faceBoundsInFrame(mesh, faceId, frame);
+    const faceId = faceIdByName(mesh, sketch.plane.name);
+    return faceId === null ? [] : faceBoundsInFrame(mesh, faceId, frame);
   }, [meshes, sketch, frame]);
   const { run: runConstraintAction } = useApplyConstraintAction(sketch);
   const drivenSketches = useFormulaStore((state) => state.resolution?.drivenSketches);

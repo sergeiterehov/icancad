@@ -30,4 +30,4 @@ The sketch model must stay serializable and independent from the kernel, a proje
 - A sketch made only of projections extrudes like any other sketch: the topology and the profiles see projected entities as ordinary curves.
 - `Project` schema version 2 gains an optional `projections` array; old files load with an empty list.
 - The warning state is derived during the rebuild and published with the scene; it is not stored in the document.
-- Persistent naming for faces and edges would make links survive more edits; until then the id-based link plus snapshot is the contract.
+- Persistent names for faces, edges and vertices (ADR 0042) are the link; the snapshot remains the fallback when the source is gone.

@@ -266,7 +266,8 @@ export type SketchPlaneRef =
       type: 'face';
       /** Absent until a face is picked; such a sketch is invalid. */
       bodyId?: string;
-      topoId?: string;
+      /** Persistent name of the face the sketch stands on (ADR 0042). */
+      name?: string;
       /** Distance along the face normal, away from the face. */
       offset?: ParamValue;
       frame?: SketchFrame;
@@ -296,11 +297,11 @@ export interface SketchProjection {
   source: {
     kind: 'vertex' | 'edge' | 'silhouette';
     bodyId: string;
-    /** Vertex coordinate id, the kernel edge id, or `face#part`. */
-    elementId: string;
+    /** Persistent name of the vertex, edge or silhouette part (ADR 0042). */
+    name: string;
   };
-  /** Face the projection was taken from, when it came from a face. */
-  faceId?: string;
+  /** Persistent name of the face the projection was taken from, if any. */
+  faceName?: string;
 }
 
 export interface SketchFeature extends FeatureBase {
@@ -348,7 +349,7 @@ export type ExtrudeMethod = 'extrude' | 'revolve';
  */
 export type RevolveAxis =
   | { kind: 'world'; axis: 'x' | 'y' | 'z' }
-  | { kind: 'body-edge'; bodyId: string; edgeId: string; start: Vec3; end: Vec3 }
+  | { kind: 'body-edge'; bodyId: string; name: string; start: Vec3; end: Vec3 }
   | { kind: 'sketch-edge'; sketchId: string; entityId: string };
 
 export interface RevolveSpec {
@@ -360,17 +361,22 @@ export interface RevolveSpec {
   inverted: boolean;
 }
 
-// A face of a solid body used as an extrude input. The face id is the OCCT
-// traversal index, which is stable for as long as the body rebuilds the same
-// way (persistent naming arrives in M5). The normal is captured at pick time so
-// the operation keeps its direction when the body is rebuilt.
+// A face of a solid body used as a downstream input. `name` is the persistent
+// topology name the kernel gave the face (ADR 0042); the pose is a cache for
+// handles and for resolving the rare case of a split face.
 export interface BodyFaceRef {
   bodyId: string;
-  faceId: string;
+  name: string;
   normal: Vec3;
   origin: Vec3;
   /** Where the treatment handle sits, measured on the rim at pick time. */
   handle?: FaceTreatmentHandle;
+  /**
+   * The reference was written by schema 8, whose names could change when a
+   * parameter changed. The stored pose is used when the name no longer exists,
+   * so a project saved by that build keeps working (ADR 0042).
+   */
+  legacyPose?: boolean;
 }
 
 /** Arrow of an edge treatment on a face: it stands on the first rim edge. */
@@ -383,24 +389,20 @@ export interface FaceTreatmentHandle {
 }
 
 /**
- * An edge of a solid body used as an edge treatment input. Like a face ref it
- * keeps the pose it had when it was picked, so the edge can be found again
- * after a rebuild renumbers the traversal.
+ * An edge of a solid body used as a downstream input. `name` is the persistent
+ * topology name the kernel gave the edge (ADR 0042); the pose is a cache for the
+ * handle and for telling apart the pieces of a split edge.
  */
 export interface BodyEdgeRef {
   bodyId: string;
-  edgeId: string;
-  /** Faces on both sides of the edge, in tessellation order. */
-  faceIds: number[];
+  name: string;
   /** Start, middle and end of the edge polyline, in world space. */
   start: Vec3;
   mid: Vec3;
   end: Vec3;
-  /**
-   * Length and closure of the tessellated polyline. The traversal id stays the
-   * same when the geometry that made the edge moves, so these let the reference
-   * follow a shape whose pose changed (a sketch circle dragged sideways).
-   */
+  /** A schema 8 reference: the pose is used when the name is gone. */
+  legacyPose?: boolean;
+  /** Length and closure of the picked polyline, kept for the handle. */
   length?: number;
   closed?: boolean;
   /** Bisector of the two face normals, pointing away from the material. */
@@ -418,7 +420,7 @@ export interface ExtrudeFeature extends FeatureBase {
   regions: string[];
   /** Faces of solid bodies, used in addition to (or instead of) sketch faces. */
   faceRefs: BodyFaceRef[];
-  /** Picked objects in selection order: `s:<sketchId>#<regionId>` or `b:<bodyId>#<faceId>`. */
+  /** Picked objects in selection order: `s:<sketchId>#<regionId>` or `b:<faceName>`. */
   objectOrder: string[];
   method: ExtrudeMethod;
   /** Axis and angles of a revolve; absent until the method is a revolve. */
@@ -462,13 +464,8 @@ export interface ShellFeature extends FeatureBase {
 
 export interface EntityRef {
   bodyId: string;
-  topoId: string;
-  fingerprint?: {
-    surfaceType: string;
-    measure: number;
-    centroid: Vec3;
-    normal: Vec3;
-  };
+  /** Persistent topology name of the referenced face (ADR 0042). */
+  name: string;
 }
 
 export interface HoleSpec {
@@ -567,7 +564,7 @@ export type ArrayTarget = 'bodies' | 'geometry';
  * plane. Several of them make one path when they meet end to end.
  */
 export type ArrayPath =
-  | { kind: 'body-edge'; bodyId: string; edgeId: string }
+  | { kind: 'body-edge'; bodyId: string; name: string }
   | { kind: 'sketch-edge'; sketchId: string; entityId: string };
 /**
  * One step of an array. `count` includes the seed, so 1 leaves only the
@@ -614,7 +611,8 @@ export type ArrayRotationAxis =
   | {
       kind: 'face';
       bodyId: string;
-      faceId: string;
+      /** Persistent name of the face the rotation turns around (ADR 0042). */
+      name: string;
       /** Centre of the face: the point the copies turn around. */
       origin: Vec3;
       /** Normal of the face: the direction of the axis, right-handed. */
@@ -681,7 +679,8 @@ export interface ObjectMetadata {
 
 export interface SectionFaceRef {
   bodyId: string;
-  topoId: string;
+  /** Persistent topology name of the face the section follows (ADR 0042). */
+  name: string;
 }
 
 export interface SectionPlane {
@@ -744,7 +743,7 @@ export interface FeatureGroup {
 export type SuperObject = Model;
 
 export interface Project {
-  schemaVersion: 7;
+  schemaVersion: 9;
   id: string;
   name: string;
   units: 'mm';

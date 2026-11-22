@@ -70,7 +70,9 @@ export function samePoint(a: Vec3, b: Vec3, tolerance = PATH_JOIN_TOLERANCE): bo
 export function pathPolyline(path: ArrayPath, context: ArrayPlacementContext): PathPolyline {
   if (path.kind === 'body-edge') {
     const mesh = context.meshes[path.bodyId];
-    const edge = mesh?.edges?.find((candidate) => candidate.id === path.edgeId);
+    const edge = mesh?.edges?.find(
+      (candidate) => candidate.name === path.name || (candidate.aliases?.includes(path.name) ?? false),
+    );
     if (!edge || edge.points.length < 6) throw new Error('ARRAY_PATH_MISSING');
     const points: Vec3[] = [];
     for (let index = 0; index < edge.points.length; index += 3) {

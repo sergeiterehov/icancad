@@ -16,7 +16,7 @@ import { useDocumentStore, useViewModel } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { useUiStore } from '../stores/uiStore';
 import { IconButton, NumberField, ObjectPickerField } from './Controls';
-import { faceNumber, geometryName } from './geometryNames';
+import { bodyFaceNumber, geometryName } from './geometryNames';
 import { Tooltip } from './Tooltip';
 
 type Axis = 'x' | 'y' | 'z';
@@ -220,7 +220,7 @@ export function SectionPanel() {
                           face
                             ? geometryName(
                                 objectName(project, face.bodyId, 'Body'),
-                                faceNumber(face.topoId),
+                                bodyFaceNumber(meshes[face.bodyId], face.name),
                               )
                             : undefined
                         }

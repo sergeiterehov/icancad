@@ -177,20 +177,21 @@ export function primitiveKernelParams(
   shapeId: string,
 ): MakePrimitiveParams {
   const at = feature.transform.translation;
+  const name = feature.id;
   switch (feature.kind) {
     case 'box':
-      return { kind: 'box', shapeId, at, ...feature.params };
+      return { kind: 'box', shapeId, at, name, ...feature.params };
     case 'sphere':
-      return { kind: 'sphere', shapeId, at, ...feature.params };
+      return { kind: 'sphere', shapeId, at, name, ...feature.params };
     case 'cylinder':
-      return { kind: 'cylinder', shapeId, at, ...feature.params };
+      return { kind: 'cylinder', shapeId, at, name, ...feature.params };
     case 'cone':
-      return { kind: 'cone', shapeId, at, ...feature.params };
+      return { kind: 'cone', shapeId, at, name, ...feature.params };
     case 'torus':
-      return { kind: 'torus', shapeId, at, ...feature.params };
+      return { kind: 'torus', shapeId, at, name, ...feature.params };
     case 'pyramid':
-      return { kind: 'pyramid', shapeId, at, ...feature.params };
+      return { kind: 'pyramid', shapeId, at, name, ...feature.params };
     case 'capsule':
-      return { kind: 'capsule', shapeId, at, ...feature.params };
+      return { kind: 'capsule', shapeId, at, name, ...feature.params };
   }
 }

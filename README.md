@@ -2,7 +2,7 @@
 
 Browser CAD for 3D printing. The long-term goal is a Figma-like parametric modeler with a linear feature history, OpenCascade (OCCT) B-rep geometry and Blender mesh import.
 
-**Current status: M4 (modeling tool set).** The app shell, i18n, project/model document layer with undo/redo, IndexedDB autosave, `.icad` project files and the OCCT kernel pipeline are implemented. Modeling covers seven primitives, mesh import (STL/OBJ/PLY/GLB) with a source-unit setting, STEP import with product names and colours, a constrained sketcher, extrude/revolve with add/subtract/intersect, fillet/chamfer, shell/cavity, move/rotate/scale transforms, arrays, sections and STL/STEP export. The production build installs as a PWA and works offline once the kernel has been loaded. Persistent topological naming (M5) and mesh → solid conversion are still ahead; the feature backlog lives in [MEMO.md](MEMO.md).
+**Current status: M4 (modeling tool set).** The app shell, i18n, project/model document layer with undo/redo, IndexedDB autosave, `.icad` project files and the OCCT kernel pipeline are implemented. Modeling covers seven primitives, mesh import (STL/OBJ/PLY/GLB) with a source-unit setting, STEP import with product names and colours, a constrained sketcher, extrude/revolve with add/subtract/intersect, fillet/chamfer, shell/cavity, move/rotate/scale transforms, arrays, sections and STL/STEP export. The production build installs as a PWA and works offline once the kernel has been loaded. Persistent topological naming (M5) is implemented: faces and edges carry kernel-generated names through booleans, shells, treatments, imports and array stamps (ADR 0042). Mesh → solid conversion is still ahead; the feature backlog lives in [MEMO.md](MEMO.md).
 
 ## Quick start
 
@@ -44,7 +44,7 @@ STL/OBJ/PLY/GLB parsing; voxel remesh and decimation are still ahead
 ```
 
 - **Kernel is authoritative.** Main thread never owns `TopoDS_Shape`; it receives typed arrays only.
-- **Document is declarative.** `packages/model` holds the project's super-objects (models today, assemblies later), each with its own feature list, plus command validation and history checks. Geometry is rebuilt from features.
+- **Document is declarative.** `packages/model` holds the project's super-objects (models today, assemblies later), each with its own feature list, plus command validation and history checks. Geometry is rebuilt from features. References address persistent topology names, never traversal indexes (ADR 0042).
 - **Tessellation respects OCCT face orientation**; triangle winding and normals are normalized for WebGL (`packages/kernel/src/engine.ts`).
 - **Mesh import** parses STL/OBJ/PLY/GLB in the IO worker; an imported mesh becomes a body directly.
 - **Section view** is view state, not history: multiple clip planes with stencil caps and screen-space hatching.

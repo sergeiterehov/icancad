@@ -8,7 +8,7 @@ import { isPlanarFace } from '../viewport/planarFace';
 
 export interface SelectedFacePlane {
   bodyId: string;
-  faceId: string;
+  name: string;
   frame: SketchFrame;
 }
 
@@ -27,11 +27,12 @@ export function sketchPlaneFromSelection(
   const mesh = meshes[parsed.bodyId];
   const faceId = Number(parsed.faceId);
   if (!mesh || !Number.isInteger(faceId) || !isPlanarFace(mesh, faceId)) return null;
+  const name = mesh.faceNames?.[faceId];
   const normal = outwardNormal(mesh, faceId);
-  if (!normal) return null;
+  if (!name || !normal) return null;
   return {
     bodyId: parsed.bodyId,
-    faceId: parsed.faceId,
+    name,
     frame: faceFrame(normal.centroid, normal.normal),
   };
 }

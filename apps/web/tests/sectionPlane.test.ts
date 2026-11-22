@@ -18,6 +18,8 @@ function quad(z: number, faceId = 3): TessellationResult {
     triangleCount: 2,
     vertexCount: 4,
     bbox: { min: [0, 0, z], max: [1, 1, z] },
+    faceNames: Array.from({ length: faceId + 1 }, (_, index) => `fixture/face/${index}`),
+    faceAliases: Array.from({ length: faceId + 1 }, (_, index) => [`fixture/face/${index}`]),
   };
 }
 
@@ -49,7 +51,7 @@ describe('section plane resolution', () => {
 
   it('takes the pose of the linked face and cuts into the material', () => {
     const resolved = resolveSectionPlane(
-      plane({ face: { bodyId: 'body-1', topoId: '3' }, offset: 2 }),
+      plane({ face: { bodyId: 'body-1', name: 'fixture/face/3' }, offset: 2 }),
       { 'body-1': quad(0) },
     );
     expect(resolved.faceLinked).toBe(true);
@@ -60,14 +62,14 @@ describe('section plane resolution', () => {
   });
 
   it('follows the face when the body is rebuilt', () => {
-    const bound = plane({ face: { bodyId: 'body-1', topoId: '3' } });
+    const bound = plane({ face: { bodyId: 'body-1', name: 'fixture/face/3' } });
     expect(resolveSectionPlane(bound, { 'body-1': quad(0) }).origin[2]).toBe(0);
     expect(resolveSectionPlane(bound, { 'body-1': quad(10) }).origin[2]).toBe(10);
   });
 
   it('falls back to the stored pose when the face is gone', () => {
     const resolved = resolveSectionPlane(
-      plane({ origin: [0, 0, 7], normal: [0, 0, -1], face: { bodyId: 'body-1', topoId: '3' } }),
+      plane({ origin: [0, 0, 7], normal: [0, 0, -1], face: { bodyId: 'body-1', name: 'fixture/face/3' } }),
       {},
     );
     expect(resolved.faceLinked).toBe(false);
@@ -76,14 +78,14 @@ describe('section plane resolution', () => {
   });
 
   it('treats a lost face id as gone', () => {
-    expect(sectionFaceFrame(quad(0, 3), '9')).toBeNull();
-    expect(sectionFaceFrame(quad(0, 3), '3')).not.toBeNull();
+    expect(sectionFaceFrame(quad(0, 3), 'fixture/face/9')).toBeNull();
+    expect(sectionFaceFrame(quad(0, 3), 'fixture/face/3')).not.toBeNull();
   });
 
   it('only cuts once a plane waiting for a face has one', () => {
     expect(sectionPlaneActive(plane())).toBe(true);
     expect(sectionPlaneActive(plane({ face: null }))).toBe(false);
-    expect(sectionPlaneActive(plane({ face: { bodyId: 'b', topoId: '1' } }))).toBe(true);
+    expect(sectionPlaneActive(plane({ face: { bodyId: 'b', name: '1' } }))).toBe(true);
   });
 
   it('keeps the plane in place when the direction is inverted', () => {

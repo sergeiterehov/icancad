@@ -32,6 +32,8 @@ export type ProfileCurve = ProfileLineCurve | ProfileArcCurve | ProfileCircleCur
 
 export interface ProfileLoop {
   curves: ProfileCurve[];
+  /** Stable key of every curve, parallel to `curves` (ADR 0042). */
+  keys: string[];
 }
 
 export interface ProfileRegion {
@@ -59,15 +61,28 @@ export function sketchProfiles(entities: readonly SketchEntity[]): ProfileRegion
       id: face.id,
       area: face.area,
       depth: face.depth,
-      outer: { curves: outer },
+      outer: { curves: outer, keys: curveKeys(face.loops[0] ?? [], outer) },
       holes: face.loops
         .slice(1)
-        .map((loop) => ({ curves: loopCurves(loop, byId, 'backward') }))
+        .map((loop) => {
+          const curves = loopCurves(loop, byId, 'backward');
+          return { curves, keys: curveKeys(loop, curves) };
+        })
         .filter((loop) => loop.curves.length > 0),
       edges: [...new Set(face.loops.flat().map((entry) => entry.edgeKey))],
     });
   }
   return regions;
+}
+
+/**
+ * Edge keys for the curves of one loop. A run of a curve that falls back to a
+ * polyline becomes several curves with the same key; the kernel numbers those
+ * side faces by their own order.
+ */
+function curveKeys(loop: readonly SketchTopologyLoopCurve[], curves: readonly ProfileCurve[]): string[] {
+  const keys = loop.map((entry) => entry.edgeKey);
+  return curves.map((_, index) => keys[Math.min(index, keys.length - 1)] ?? `curve-${index}`);
 }
 
 interface EntityOrientations {

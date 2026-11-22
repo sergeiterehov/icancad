@@ -46,11 +46,9 @@ chord between them. Closed rims then resolve like any other edge.
 ## Open edges whose span changed
 
 A sketch change can shorten an open curved edge while its middle and direction
-stay on the same curve. The stored ends then lie beyond the rebuilt edge, so an
-exact pose match fails. The resolver accepts the edge when its middle and
-direction still match, which is the same temporary pose-based naming used for
-the other cases. This is a compatibility fallback, not a stable topology id;
-Persistent naming (M5) is still the proper fix.
+stay on the same curve. The stored ends then lie beyond the rebuilt edge, but
+the edge keeps its persistent name (ADR 0042), so the reference still resolves.
+The pose is only a cache for the handle.
 
 ## Kernel
 
@@ -116,6 +114,6 @@ shape, and the first names the face of the source that face came from.
   there is no room for a visible treatment.
 - A curved face has no rim rule of its own: its boundary edges are treated like
   any other, but a face whose tessellation has no edges yields no treatment.
-- Persistent naming (M5) still applies: an edge ref resolves by its pose, so it
-  survives renumbering, but a face the operation itself rebuilds cannot keep its
-  identity.
+- Persistent naming (ADR 0042) resolves an edge ref by name: it survives
+  renumbering, and a face the treatment trims keeps its identity; only the
+  surface the treatment creates belongs to the treatment.

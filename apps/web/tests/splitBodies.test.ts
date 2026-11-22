@@ -34,6 +34,8 @@ describe('split body assignment', () => {
   });
 
   it('builds a stable id from the operation and the source body', () => {
-    expect(splitBodyId('feat_1', 'body-2', 1)).toBe('feat_1:split:body-2:1');
+    expect(splitBodyId('feat_1', 'body-2', 'feat_1/+z')).toBe(
+      'feat_1:split:body-2:feat_1/+z',
+    );
   });
 });

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { TessellationResult } from '@icancad/kernel';
 import type { Model, Project, ShellFeature } from '@icancad/model';
-import { resolveFaceRef } from '../src/kernel/faceLookup';
+import { resolveFaceRef } from '../src/kernel/topologyLookup';
 import { resolveShellFaceRef, shellFaceRef, shellInputFromSelection } from '../src/quick/shell';
 import { useDocumentStore } from '../src/stores/documentStore';
 import { cubeMesh } from './cubeMesh';
@@ -47,7 +47,7 @@ describe('shell input', () => {
     expect(input?.bodyIds).toEqual([BODY]);
     expect(input?.faceRefs).toHaveLength(1);
     const ref = input!.faceRefs![0]!;
-    expect(ref.faceId).toBe('5');
+    expect(ref.name).toBe('fixture/+z');
     expect(ref.normal).toEqual([0, 0, 1]);
     expect(ref.origin[2]).toBeCloseTo(20, 6);
     expect(
@@ -89,6 +89,8 @@ describe('shell input', () => {
       vertexCount: 6,
       bbox: { min: [0, 0, 0], max: [1, 1, 0] },
       edges: [],
+      faceNames: ['fixture/face'],
+      faceAliases: [['fixture/face']],
     };
     const ref = shellFaceRef(curved, BODY, '0')!;
     expect(Number.isFinite(ref.normal[0])).toBe(true);
@@ -98,7 +100,8 @@ describe('shell input', () => {
       meshes: { [BODY]: curved },
       bodyStats: { [BODY]: { faces: 1, edges: 0, solids: 1 } },
     };
-    expect(resolveFaceRef(context, ref)).toBeNull();
+    // A curved face has a name even though it has no single normal.
+    expect(resolveFaceRef(context, ref)).toEqual({ bodyId: BODY, faceId: 0 });
     expect(resolveShellFaceRef(context, ref)).toEqual({ bodyId: BODY, faceId: 0 });
   });
 });

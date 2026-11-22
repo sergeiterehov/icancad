@@ -31,7 +31,7 @@ describe('sketch plane direction', () => {
   });
 
   it('turns a sketch on a face around without moving it', () => {
-    const plane = { type: 'face' as const, bodyId: 'body-1', topoId: '1', offset: 0 };
+    const plane = { type: 'face' as const, bodyId: 'body-1', name: 'fixture/+x', offset: 0 };
     const normal = computeSketchFrame(sketch(plane), cubeMesh());
     const inverted = computeSketchFrame(sketch({ ...plane, inverted: true }), cubeMesh());
 

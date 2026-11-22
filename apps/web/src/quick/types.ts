@@ -2,11 +2,12 @@ import type { ExtrudeFeature, Vec3 } from '@icancad/model';
 
 /** The element a quick operation is attached to. */
 export type QuickTarget =
-  | { kind: 'body-face'; bodyId: string; faceIds: string[] }
+  | { kind: 'body-face'; bodyId: string; faceIds: string[]; names: string[] }
   | { kind: 'sketch'; sketchId: string; /** Empty means the whole sketch. */ regions: string[] };
 
 export interface QuickFace {
   faceId: string;
+  name: string;
   centroid: Vec3;
   /** Outward normal, verified against the material. */
   normal: Vec3;

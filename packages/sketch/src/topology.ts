@@ -608,19 +608,24 @@ function findFaces(
       const startKey = nodeKey([from.x, from.y]);
       const endKey = nodeKey([to.x, to.y]);
       // Two arcs can share endpoints on the same circle (lens vs crescent), so
-      // the length is part of the edge identity.
+      // a partial run needs a geometry key to tell the pieces apart. A whole
+      // entity has exactly one run, and its id is the key: a width or height
+      // change must not rename a face that was never split.
       let runLength = 0;
       for (let step = 1; step < runPoints.length; step += 1) {
         const previous = runPoints[step - 1]!;
         const point = runPoints[step]!;
         runLength += Math.hypot(point[0] - previous[0], point[1] - previous[1]);
       }
+      const full = end - index + 1 === (segmentTotals.get(entityId) ?? -1);
       curves.push({
         entityId,
         reversed,
         points: runPoints,
-        full: end - index + 1 === (segmentTotals.get(entityId) ?? -1),
-        edgeKey: `${entityId}|${[startKey, endKey].sort().join('-')}|${runLength.toFixed(6)}`,
+        full,
+        edgeKey: full
+          ? entityId
+          : `${entityId}|${[startKey, endKey].sort().join('-')}|${runLength.toFixed(6)}`,
       });
       index = end + 1;
     }
@@ -642,14 +647,17 @@ function findFaces(
         }
         const startKey = nodeKey(mergedPoints[0]!);
         const endKey = nodeKey(mergedPoints[mergedPoints.length - 1]!);
+        const full = mergedPoints.length - 1 === (segmentTotals.get(first.entityId) ?? -1);
         curves.splice(0, 1);
         curves.pop();
         curves.unshift({
           entityId: first.entityId,
           reversed: last.reversed,
           points: mergedPoints,
-          full: mergedPoints.length - 1 === (segmentTotals.get(first.entityId) ?? -1),
-          edgeKey: `${first.entityId}|${[startKey, endKey].sort().join('-')}|${mergedLength.toFixed(6)}`,
+          full,
+          edgeKey: full
+            ? first.entityId
+            : `${first.entityId}|${[startKey, endKey].sort().join('-')}|${mergedLength.toFixed(6)}`,
         });
       }
     }

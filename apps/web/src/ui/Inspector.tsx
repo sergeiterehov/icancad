@@ -70,7 +70,7 @@ import {
   selectedSketchDetailId,
 } from '../stores/selection';
 import { findBoundExtrude, quickTargetFromSelection } from '../quick/target';
-import { bodyEdgeNumber, faceNumber, geometryName } from './geometryNames';
+import { bodyEdgeNumber, bodyFaceNumber, geometryName } from './geometryNames';
 import { PYRAMID_MAX_SIDES, PYRAMID_MIN_SIDES, type PrimitiveSizeKey } from '../primitive/params';
 import { isPlanarFace } from '../viewport/planarFace';
 import { useUiStore } from '../stores/uiStore';
@@ -664,7 +664,7 @@ export function Inspector() {
   const body = bodyRef ? resolveBody(project, bodyRef) : undefined;
   const detailFace = selection.length === 1 ? selectedBodyFaces(selection)[0] : undefined;
   const detailEdge = selection.length === 1 ? selectedEdges(selection)[0] : undefined;
-  const quickTarget = selection.length === 1 ? quickTargetFromSelection(project, selection) : null;
+  const quickTarget = selection.length === 1 ? quickTargetFromSelection(project, selection, meshes) : null;
   const quickExtrude = quickTarget ? findBoundExtrude(project, quickTarget) : undefined;
   const quickExtrudeResolved = quickExtrude ? resolvedFeatureFor(quickExtrude) : undefined;
   const detailMesh = detailBodyId ? meshes[detailBodyId] : undefined;
@@ -872,7 +872,7 @@ export function Inspector() {
           : (project.features.find((candidate) => candidate.id === edgeAxis.sketchId)?.name ??
               edgeAxis.sketchId),
         edgeAxis.kind === 'body-edge'
-          ? bodyEdgeNumber(meshes[edgeAxis.bodyId], edgeAxis.edgeId)
+          ? bodyEdgeNumber(meshes[edgeAxis.bodyId], edgeAxis.name)
           : null,
       )
     : undefined;
@@ -935,22 +935,22 @@ export function Inspector() {
   const treatmentRows: PickableRow[] = treatmentFeature
     ? [
         ...treatmentFeature.faceRefs.map((ref, index) => ({
-          key: `face:${ref.bodyId}#${ref.faceId}`,
+          key: `face:${ref.name}`,
           name: t('sketch.face', { index: index + 1 }),
           meta: bodyNameOf(ref.bodyId),
           icon: <Hexagon size={13} />,
           error: treatmentRowError(
-            featureObjectErrors[treatmentFeature.id]?.[`face:${ref.bodyId}#${ref.faceId}`],
+            featureObjectErrors[treatmentFeature.id]?.[`face:${ref.name}`],
           ),
           onRemove: () => toggleEdgeTreatmentFace(treatmentFeature.id, ref),
         })),
         ...treatmentFeature.edgeRefs.map((ref, index) => ({
-          key: `edge:${ref.bodyId}#${ref.edgeId}`,
+          key: `edge:${ref.name}`,
           name: t('sketch.edge', { index: index + 1 }),
           meta: bodyNameOf(ref.bodyId),
           icon: <Spline size={13} />,
           error: treatmentRowError(
-            featureObjectErrors[treatmentFeature.id]?.[`edge:${ref.bodyId}#${ref.edgeId}`],
+            featureObjectErrors[treatmentFeature.id]?.[`edge:${ref.name}`],
           ),
           onRemove: () => toggleEdgeTreatmentEdge(treatmentFeature.id, ref),
         })),
@@ -979,7 +979,7 @@ export function Inspector() {
     ? shellFeature.removeFaces.map((ref, index) => {
         const error = shellErrors[ref.bodyId];
         return {
-          key: `face:${ref.bodyId}#${ref.faceId}`,
+          key: `face:${ref.name}`,
           name: t('sketch.face', { index: index + 1 }),
           meta: bodyNameOf(ref.bodyId),
           icon: <Hexagon size={13} />,
@@ -1061,18 +1061,17 @@ export function Inspector() {
     }
     for (const ref of extrudeFeature.faceRefs ?? []) {
       const owner = project.bodies.find((candidate) => candidate.id === ref.bodyId);
-      const key = bodyFaceKey(ref.bodyId, ref.faceId);
+      const key = bodyFaceKey(ref.name);
       const error = targetErrors[ref.bodyId];
       entries.set(key, {
         key,
         kind: 'body-face',
         name: geometryName(
           owner ? objectName(project, owner.id, 'Body') : ref.bodyId,
-          faceNumber(ref.faceId),
+          bodyFaceNumber(meshes[ref.bodyId], ref.name),
         ),
         ...(error ? { error } : {}),
-        remove: () =>
-          toggleExtrudeBodyFace(extrudeFeature.id, ref.bodyId, ref.faceId, ref.normal, ref.origin),
+        remove: () => toggleExtrudeBodyFace(extrudeFeature.id, ref.bodyId, ref.name, ref.normal, ref.origin),
       });
     }
 
@@ -1792,7 +1791,11 @@ export function Inspector() {
                       value={
                         sketchPlaneReady(feature)
                           ? t('sketch.face', {
-                              index: Number(feature.plane.topoId) + 1,
+                              index:
+                                bodyFaceNumber(
+                                  meshes[feature.plane.bodyId ?? ''],
+                                  feature.plane.name ?? '',
+                                ) ?? 1,
                             })
                           : undefined
                       }

@@ -32,5 +32,5 @@ ICANCad targets browser-based modeling for 3D printing. The critical path is imp
 
 - OCCT WASM is large (about 63 MB uncompressed). It is lazy-loaded in a worker with a progress UI and cached by the browser; a trimmed custom build is a later optimization.
 - Faceted B-rep conversion needs decimation limits, fidelity reporting and clear failure messages because shell/fillet operations on dense triangle soups are fragile.
-- Persistent topological naming is a first-class subsystem, not an afterthought; M5 delivers ID propagation via OCCT operation history plus geometric fingerprint fallback.
+- Persistent topological naming is a first-class subsystem, not an afterthought; ADR 0042 delivers it through OCCT operation history.
 - WebGL2 is the baseline; WebGPU remains a future backend, not a dependency of the core design.

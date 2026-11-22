@@ -223,7 +223,8 @@ function featureGeometry(
     const target = {
       kind: 'body-face' as const,
       bodyId: feature.faceRefs[0]!.bodyId,
-      faceIds: feature.faceRefs.map((ref) => ref.faceId),
+      faceIds: [],
+      names: feature.faceRefs.map((ref) => ref.name),
     };
     return boundBodyFaceGeometry(feature, target);
   }
@@ -465,7 +466,7 @@ function extrudeHandles(context: OperationHandleContext): OperationHandle[] {
   // A selected face or sketch offers the operation that could be created from
   // it. If that input already belongs to an operation, its handle is offered
   // instead, so the method cannot be changed by dragging.
-  const target = quickTargetFromSelection(context.project, context.selection);
+  const target = quickTargetFromSelection(context.project, context.selection, context.meshes);
   if (!target) return [];
   const bound = findBoundExtrude(context.project, target);
   const boundResolved = bound ? resolvedFeature(bound) : undefined;
@@ -539,8 +540,8 @@ function treatmentHandle(
 function treatmentKey(geometry: EdgeTreatmentGeometry): string {
   const { target } = geometry;
   return [
-    ...target.faceRefs.map((ref) => `${ref.bodyId}#${ref.faceId}`),
-    ...target.edgeRefs.map((ref) => `${ref.bodyId}#${ref.edgeId}`),
+    ...target.faceRefs.map((ref) => `${ref.bodyId}#${ref.name}`),
+    ...target.edgeRefs.map((ref) => `${ref.bodyId}#${ref.name}`),
   ].join(',');
 }
 

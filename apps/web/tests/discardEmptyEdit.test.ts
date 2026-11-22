@@ -168,7 +168,7 @@ describe('discarding an operation that was never configured', () => {
       type: 'feature/replace',
       feature: {
         ...extrudeFeature(id),
-        faceRefs: [{ bodyId: 'b', faceId: '0', normal: [0, 0, 1], origin: [0, 0, 0] }],
+        faceRefs: [{ bodyId: 'b', name: 'fixture/+z', normal: [0, 0, 1], origin: [0, 0, 0] }],
       },
     });
     useDocumentStore.getState().endFeatureEdit();
@@ -182,7 +182,7 @@ describe('discarding an operation that was never configured', () => {
       type: 'feature/replace',
       feature: {
         ...extrudeFeature(id),
-        faceRefs: [{ bodyId: 'b', faceId: '0', normal: [0, 0, 1], origin: [0, 0, 0] }],
+        faceRefs: [{ bodyId: 'b', name: 'fixture/+z', normal: [0, 0, 1], origin: [0, 0, 0] }],
       },
     });
     // The first visit ends with an operation that has something to work on.
@@ -209,8 +209,7 @@ describe('discarding an operation that was never configured', () => {
     reset(box('b'));
     const ref: BodyEdgeRef = {
       bodyId: 'b',
-      edgeId: '1',
-      faceIds: [0, 1],
+      name: 'fixture/edge',
       start: [0, 0, 0],
       mid: [0, 0, 0],
       end: [0, 0, 0],

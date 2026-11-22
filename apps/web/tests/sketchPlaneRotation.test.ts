@@ -130,7 +130,7 @@ describe('sketch plane rotation', () => {
       sketch({
         type: 'face',
         bodyId: 'body-1',
-        topoId: '1',
+        name: '1',
         offset: 0,
         frame: storedFrame,
         rotation: [90, 0, 0],

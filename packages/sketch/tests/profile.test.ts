@@ -35,6 +35,22 @@ describe('sketch profiles', () => {
     }
   });
 
+  it('keeps curve keys when a dimension changes', () => {
+    const before = sketchProfiles(rectangle())[0]!;
+    const wider = [
+      line('l1', 0, 0, 30, 0),
+      line('l2', 30, 0, 30, 10),
+      line('l3', 30, 10, 0, 10),
+      line('l4', 0, 10, 0, 0),
+    ];
+    const after = sketchProfiles(wider)[0]!;
+    // A whole line is one run, so its key is its entity id. Coordinates and
+    // length in the key would rename the extrusion side whenever the sketch
+    // is resized (ADR 0042).
+    expect([...before.outer.keys].sort()).toEqual(['l1', 'l2', 'l3', 'l4']);
+    expect([...after.outer.keys].sort()).toEqual([...before.outer.keys].sort());
+  });
+
   it('keeps arcs as arcs and marks the ones walked backwards', () => {
     const entities: SketchEntity[] = [
       line('b1', 0, 0, 40, 0),

@@ -14,6 +14,7 @@ import {
   type Point2,
   type SketchRotationAngles,
 } from '@icancad/sketch';
+import { faceIdByName } from '../kernel/topologyLookup';
 import { isPlanarFace } from '../viewport/planarFace';
 
 export const SKETCH_SECTION_ID = '__sketch-plane__';
@@ -166,8 +167,8 @@ export function sketchFrameBasis(feature: SketchLike, faceMesh?: TessellationRes
       feature.plane.inverted,
     );
   }
-  const faceId = Number(feature.plane.topoId);
-  const dynamic = faceFrameFromMesh(faceMesh, faceId);
+  const faceId = faceIdByName(faceMesh, feature.plane.name);
+  const dynamic = faceId === null ? null : faceFrameFromMesh(faceMesh, faceId);
   const base = dynamic ?? feature.plane.frame ?? datumFrame('XY', 0);
   return withDirection(
     withSketchOffset(base, numeric(feature.plane.offset)),
@@ -192,7 +193,7 @@ export function sketchFrameOf(feature: SketchLike, frozenFrame?: SketchFrame): S
 // A face plane is usable only while it still has a picked face and a frame.
 export function sketchPlaneReady(feature: SketchFeature): boolean {
   if (feature.plane.type === 'datum') return true;
-  return Boolean(feature.plane.bodyId && feature.plane.topoId && feature.plane.frame);
+  return Boolean(feature.plane.bodyId && feature.plane.name && feature.plane.frame);
 }
 
 // True when the stored face still exists on the current body and is planar.
@@ -201,11 +202,12 @@ export function faceSketchValid(
   faceMesh: TessellationResult | undefined,
 ): boolean {
   if (feature.plane.type === 'datum') return true;
-  if (!feature.plane.bodyId || !feature.plane.topoId || !feature.plane.frame) return false;
-  const faceId = Number(feature.plane.topoId);
-  if (!Number.isInteger(faceId) || faceId < 0) return false;
+  if (!feature.plane.bodyId || !feature.plane.name || !feature.plane.frame) return false;
+  if (!faceMesh) return false;
+  const faceId = faceIdByName(faceMesh, feature.plane.name);
+  if (faceId === null) return false;
   if (!faceFrameFromMesh(faceMesh, faceId)) return false;
-  return isPlanarFace(faceMesh!, faceId);
+  return isPlanarFace(faceMesh, faceId);
 }
 
 export function canEditSketch(
@@ -245,13 +247,12 @@ export interface ResolvedSectionPlane extends SectionPlane {
 /** Centre and normal of a planar face, or null when the face is missing or curved. */
 export function sectionFaceFrame(
   mesh: TessellationResult | undefined,
-  topoId: string | undefined,
+  name: string | undefined,
 ): { origin: Vec3; normal: Vec3 } | null {
-  if (!mesh || !topoId) return null;
-  const faceId = Number(topoId);
-  if (!Number.isInteger(faceId) || faceId < 0) return null;
-  if (!isPlanarFace(mesh, faceId)) return null;
-  const frame = faceFrameFromMesh(mesh, faceId);
+  const faceId = faceIdByName(mesh, name);
+  if (faceId === null) return null;
+  if (!isPlanarFace(mesh!, faceId)) return null;
+  const frame = faceFrameFromMesh(mesh!, faceId);
   return frame ? { origin: frame.origin, normal: frame.normal } : null;
 }
 
@@ -277,7 +278,7 @@ export function resolveSectionPlane(
   plane: SectionPlane,
   meshes: Record<string, TessellationResult>,
 ): ResolvedSectionPlane {
-  const frame = plane.face ? sectionFaceFrame(meshes[plane.face.bodyId], plane.face.topoId) : null;
+  const frame = plane.face ? sectionFaceFrame(meshes[plane.face.bodyId], plane.face.name) : null;
   const base = frame ? flipNormal(frame.normal) : plane.normal;
   // Inverting swaps which side survives without moving the plane, so the offset
   // runs the other way as well.

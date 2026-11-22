@@ -83,7 +83,7 @@ import {
 } from '../quick/operationHandles';
 import { primitivePreview } from '../primitive/preview';
 import { primitiveParamsAreFinite } from '../primitive/params';
-import { resolveEdgeRef } from '../kernel/edgeLookup';
+import { faceIdByName, resolveEdgeRef } from '../kernel/topologyLookup';
 import { edgeTreatmentEdgeRef, edgeTreatmentFaceRef } from '../quick/edgeTreatment';
 import { outwardNormal } from '../quick/geometry';
 import { sketchRegionPlane } from '../sketch/regionPlane';
@@ -321,8 +321,8 @@ export function Viewport() {
   // A selected face or sketch opens one quick extrude handle. The handle is
   // derived from the operation, never stored as its own state.
   const quickTarget = useMemo(
-    () => quickTargetFromSelection(project, selection),
-    [project, selection],
+    () => quickTargetFromSelection(project, selection, meshes),
+    [project, selection, meshes],
   );
   const quickBodies = useMemo(
     () =>
@@ -613,6 +613,10 @@ export function Viewport() {
               candidate.id === ui.pickingSketchPlane && candidate.type === 'sketch',
           );
           if (!feature) return;
+          const faceName = useKernelStore
+            .getState()
+            .meshes[pick.bodyId]?.faceNames?.[Number(pick.faceId)];
+          if (!faceName) return;
           store.apply({
             type: 'feature/replace',
             feature: {
@@ -620,7 +624,7 @@ export function Viewport() {
               plane: {
                 type: 'face',
                 bodyId: pick.bodyId,
-                topoId: pick.faceId,
+                name: faceName,
                 offset: feature.plane.type === 'face' ? (feature.plane.offset ?? 0) : 0,
                 frame: faceFrame(pick.origin, pick.normal),
                 ...(feature.plane.rotation ? { rotation: feature.plane.rotation } : {}),
@@ -651,10 +655,10 @@ export function Viewport() {
           }
           // The face is remembered together with the pose it has right now, so a
           // face that later disappears still leaves the section where it was.
-          const frame = sectionFaceFrame(
-            useKernelStore.getState().meshes[pick.bodyId],
-            pick.faceId,
-          ) ?? {
+          const sectionMesh = useKernelStore.getState().meshes[pick.bodyId];
+          const faceName = sectionMesh?.faceNames?.[Number(pick.faceId)];
+          if (!faceName) return;
+          const frame = sectionFaceFrame(sectionMesh, faceName) ?? {
             origin: pick.origin,
             normal: pick.normal,
           };
@@ -663,7 +667,7 @@ export function Viewport() {
               candidate.id === plane.id
                 ? {
                     ...candidate,
-                    face: { bodyId: pick.bodyId, topoId: pick.faceId },
+                    face: { bodyId: pick.bodyId, name: faceName },
                     origin: frame.origin,
                     // The material behind the face is what stays, so the plane
                     // looks into the body and the offset cuts deeper.
@@ -731,13 +735,11 @@ export function Viewport() {
               return;
             }
             if (!mesh) return;
-            store.toggleEdgeTreatmentFace(
-              edgePicking,
-              edgeTreatmentFaceRef(mesh, pick.bodyId, pick.faceId, {
-                centroid: pick.origin,
-                normal: pick.normal,
-              }),
-            );
+            const ref = edgeTreatmentFaceRef(mesh, pick.bodyId, pick.faceId, {
+              centroid: pick.origin,
+              normal: pick.normal,
+            });
+            if (ref) store.toggleEdgeTreatmentFace(edgePicking, ref);
           }
           return;
         }
@@ -788,10 +790,14 @@ export function Viewport() {
           // The turn goes around the same middle the sketch tool uses when it
           // lands on a face: the area-weighted centroid of the tessellation.
           // It needs no kernel round trip, so arming the picker costs nothing.
+          const faceName = useKernelStore
+            .getState()
+            .meshes[pick.bodyId]?.faceNames?.[Number(pick.faceId)];
+          if (!faceName) return;
           store.setArrayAxisFace(picker.featureId, picker.index, {
             kind: 'face',
             bodyId: pick.bodyId,
-            faceId: pick.faceId,
+            name: faceName,
             origin: face.centroid,
             normal: face.normal,
           });
@@ -802,10 +808,14 @@ export function Viewport() {
           const picker = ui.pickingArrayPath;
           if (!pick) return;
           if (pick.kind === 'body-edge') {
+            const edge = useKernelStore
+              .getState()
+              .meshes[pick.bodyId]?.edges?.find((candidate) => candidate.id === pick.edgeId);
+            if (!edge?.name) return;
             store.toggleArrayPath(picker.featureId, picker.index, {
               kind: 'body-edge',
               bodyId: pick.bodyId,
-              edgeId: pick.edgeId,
+              name: edge.name,
             });
           } else if (pick.kind === 'sketch-edge') {
             store.toggleArrayPath(picker.featureId, picker.index, {
@@ -827,10 +837,12 @@ export function Viewport() {
               ui.showToast('errors.FACE_NOT_PLANAR', 'error');
               return;
             }
+            const name = meshes[pick.bodyId]?.faceNames?.[Number(pick.faceId)];
+            if (!name) return;
             store.toggleExtrudeBodyFace(
               picking,
               pick.bodyId,
-              pick.faceId,
+              name,
               pick.normal,
               pick.origin,
             );
@@ -1517,18 +1529,24 @@ export function Viewport() {
         for (const region of extrude.regions) selected.push(`s:${extrude.sketchId}#${region}`);
       }
       for (const ref of extrude.faceRefs ?? []) {
-        const key = `b:${ref.bodyId}#${ref.faceId}`;
+        const faceId = faceIdByName(meshes[ref.bodyId], ref.name);
+        if (faceId === null) continue;
+        const key = `b:${ref.bodyId}#${faceId}`;
         if (errors[ref.bodyId]) invalid.push(key);
         else selected.push(key);
       }
     }
     for (const ref of treatment?.faceRefs ?? []) {
-      const key = `b:${ref.bodyId}#${ref.faceId}`;
+      const faceId = faceIdByName(meshes[ref.bodyId], ref.name);
+      if (faceId === null) continue;
+      const key = `b:${ref.bodyId}#${faceId}`;
       if (errors[ref.bodyId]) invalid.push(key);
       else selected.push(key);
     }
     for (const ref of shell?.removeFaces ?? []) {
-      const key = `b:${ref.bodyId}#${ref.faceId}`;
+      const faceId = faceIdByName(meshes[ref.bodyId], ref.name);
+      if (faceId === null) continue;
+      const key = `b:${ref.bodyId}#${faceId}`;
       if (errors[ref.bodyId]) invalid.push(key);
       else selected.push(key);
     }
@@ -1540,9 +1558,10 @@ export function Viewport() {
       planeSketch.id !== activeSketchId &&
       planeSketch.plane.type === 'face' &&
       planeSketch.plane.bodyId &&
-      planeSketch.plane.topoId
+      planeSketch.plane.name
     ) {
-      selected.push(`b:${planeSketch.plane.bodyId}#${planeSketch.plane.topoId}`);
+      const faceId = faceIdByName(meshes[planeSketch.plane.bodyId], planeSketch.plane.name);
+      if (faceId !== null) selected.push(`b:${planeSketch.plane.bodyId}#${faceId}`);
     }
     controller.setFaceHighlights({
       selected,
@@ -1623,7 +1642,7 @@ export function Viewport() {
             { bodyShapes: new Map([[axis.bodyId, axis.bodyId]]), meshes: picked },
             {
               bodyId: axis.bodyId,
-              edgeId: axis.edgeId,
+              name: axis.name,
               start: axis.start,
               mid: [
                 (axis.start[0] + axis.end[0]) / 2,
@@ -1631,7 +1650,6 @@ export function Viewport() {
                 (axis.start[2] + axis.end[2]) / 2,
               ],
               end: axis.end,
-              faceIds: [],
               bisector: [0, 0, 1],
             },
           )

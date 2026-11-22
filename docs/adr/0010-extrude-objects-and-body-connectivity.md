@@ -48,10 +48,10 @@ pass through material.
 ## Consequences
 
 - Two disjoint sketch regions still become two bodies, while regions that touch along an edge fuse into one (ADR 0009).
-- Body face IDs are traversal indexes, so merging coplanar faces after a fuse changes the indexes of the resulting body. A stored reference first resolves by its captured pose, which survives a split or renumbering when the face itself survives; a face the operation rebuilt still needs re-picking.
+- Body faces are addressed by persistent names (ADR 0042), so merging coplanar faces after a fuse no longer invalidates a stored reference. A face the operation really removes still needs re-picking.
 - A cut that separates a body adds the new parts as ordinary bodies: they have their own names, colours and visibility, and they disappear again when the cut is removed or stops separating the body.
 - A quick operation whose face moved to another body follows the face for its tool and for a target body it named, so it keeps acting on the material it was built from.
-- Persistent topological naming (M5) is still needed for references to a face that an operation rebuilds or divides: the pose lookup cannot preserve identity for a face that no longer exists as one face.
+- Persistent topological naming (ADR 0042) keeps the identity of a face an operation trims, merges or splits: the pieces keep the source name as an alias.
 - Adding material is checked with one extra topology query per target body. A
   disjoint result is rejected before it replaces the body, so the model never
   gains a hidden second solid through "Add".
@@ -68,10 +68,10 @@ pass through material.
   click: entering the list's edit mode is an explicit action.
 - Stopping at the first failure means the timeline cursor never represents a
   state that contains geometry the kernel could not build.
-- Body face ids remain traversal indexes until persistent topological naming
-  lands in M5; an earlier operation that changes face order can invalidate a
-  body-face reference. Sketch face ids are derived from geometry and stay
-  stable when unrelated entities are added or the sketch is translated.
+- Body faces and edges are addressed by persistent names (ADR 0042), so an
+  earlier operation that changes face order no longer invalidates a reference.
+  Sketch face ids are derived from geometry and stay stable when unrelated
+  entities are added or the sketch is translated.
 - The pick-time planarity test is a tessellation heuristic, so the kernel check
   stays authoritative. A curved face that slips through is still rejected, and
   the user sees the same explanation.

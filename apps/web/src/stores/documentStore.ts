@@ -188,7 +188,7 @@ interface DocumentState {
   toggleExtrudeBodyFace: (
     featureId: string,
     bodyId: string,
-    faceId: string,
+    name: string,
     normal: [number, number, number],
     origin: [number, number, number],
   ) => void;
@@ -303,8 +303,8 @@ export function sketchFaceKey(sketchId: string, faceId: string): string {
   return `s:${sketchId}#${faceId}`;
 }
 
-export function bodyFaceKey(bodyId: string, faceId: string): string {
-  return `b:${bodyId}#${faceId}`;
+export function bodyFaceKey(name: string): string {
+  return `b:${name}`;
 }
 
 function withOrderKey(order: readonly string[] | undefined, key: string, add: boolean): string[] {
@@ -408,7 +408,7 @@ const MAX_ARRAY_DIRECTIONS = 3;
 /** A picked path named by what it points at, so a curve is in the list once. */
 export function pathKey(path: ArrayPath): string {
   return path.kind === 'body-edge'
-    ? `body:${path.bodyId}#${path.edgeId}`
+    ? `body:${path.bodyId}#${path.name}`
     : `sketch:${path.sketchId}#${path.entityId}`;
 }
 
@@ -1251,7 +1251,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
             ? regions.map((regionId) => sketchFaceKey(sketchId, regionId))
             : [`s:${sketchId}#*`]
           : []),
-        ...faceRefs.map((ref) => bodyFaceKey(ref.bodyId, ref.faceId)),
+        ...faceRefs.map((ref) => bodyFaceKey(ref.name)),
       ],
       end: 'blind',
       distance: 10,
@@ -1318,18 +1318,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         candidate.id === featureId && candidate.type === 'edge-treatment',
     );
     if (!feature) return;
-    const key = `${ref.bodyId}#${ref.faceId}`;
-    const exists = feature.faceRefs.some(
-      (candidate) => `${candidate.bodyId}#${candidate.faceId}` === key,
-    );
+    const key = ref.name;
+    const exists = feature.faceRefs.some((candidate) => candidate.name === key);
     get().apply({
       type: 'feature/replace',
       feature: {
         ...feature,
         faceRefs: exists
-          ? feature.faceRefs.filter(
-              (candidate) => `${candidate.bodyId}#${candidate.faceId}` !== key,
-            )
+          ? feature.faceRefs.filter((candidate) => candidate.name !== key)
           : [...feature.faceRefs, ref],
       },
     });
@@ -1341,18 +1337,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         candidate.id === featureId && candidate.type === 'edge-treatment',
     );
     if (!feature) return;
-    const key = `${ref.bodyId}#${ref.edgeId}`;
-    const exists = feature.edgeRefs.some(
-      (candidate) => `${candidate.bodyId}#${candidate.edgeId}` === key,
-    );
+    const key = ref.name;
+    const exists = feature.edgeRefs.some((candidate) => candidate.name === key);
     get().apply({
       type: 'feature/replace',
       feature: {
         ...feature,
         edgeRefs: exists
-          ? feature.edgeRefs.filter(
-              (candidate) => `${candidate.bodyId}#${candidate.edgeId}` !== key,
-            )
+          ? feature.edgeRefs.filter((candidate) => candidate.name !== key)
           : [...feature.edgeRefs, ref],
       },
     });
@@ -1421,10 +1413,8 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         candidate.id === featureId && candidate.type === 'shell',
     );
     if (!feature) return;
-    const key = `${ref.bodyId}#${ref.faceId}`;
-    const exists = feature.removeFaces.some(
-      (candidate) => `${candidate.bodyId}#${candidate.faceId}` === key,
-    );
+    const key = ref.name;
+    const exists = feature.removeFaces.some((candidate) => candidate.name === key);
     get().apply({
       type: 'feature/replace',
       feature: {
@@ -1434,9 +1424,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
             ? [...feature.bodyIds, ref.bodyId]
             : feature.bodyIds,
         removeFaces: exists
-          ? feature.removeFaces.filter(
-              (candidate) => `${candidate.bodyId}#${candidate.faceId}` !== key,
-            )
+          ? feature.removeFaces.filter((candidate) => candidate.name !== key)
           : [...feature.removeFaces, ref],
       },
     });
@@ -1825,23 +1813,23 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     });
   },
 
-  toggleExtrudeBodyFace: (featureId, bodyId, faceId, normal, origin) => {
+  toggleExtrudeBodyFace: (featureId, bodyId, name, normal, origin) => {
     const feature = activeModel(get().project).features.find(
       (candidate): candidate is ExtrudeFeature =>
         candidate.id === featureId && candidate.type === 'extrude',
     );
     if (!feature) return;
     const refs = feature.faceRefs ?? [];
-    const exists = refs.some((ref) => ref.bodyId === bodyId && ref.faceId === faceId);
+    const exists = refs.some((ref) => ref.bodyId === bodyId && ref.name === name);
     const faceRefs = exists
-      ? refs.filter((ref) => !(ref.bodyId === bodyId && ref.faceId === faceId))
-      : [...refs, { bodyId, faceId, normal, origin }];
+      ? refs.filter((ref) => !(ref.bodyId === bodyId && ref.name === name))
+      : [...refs, { bodyId, name, normal, origin }];
     get().apply({
       type: 'feature/replace',
       feature: {
         ...feature,
         faceRefs,
-        objectOrder: withOrderKey(feature.objectOrder, bodyFaceKey(bodyId, faceId), !exists),
+        objectOrder: withOrderKey(feature.objectOrder, bodyFaceKey(name), !exists),
       },
     });
   },

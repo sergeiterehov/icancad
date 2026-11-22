@@ -21,9 +21,25 @@ export function faceNumber(faceId: string | number): number | null {
 /** Position of a body edge in the edge list of its own body, from one. */
 export function bodyEdgeNumber(
   mesh: TessellationResult | undefined,
-  edgeId: string,
+  name: string,
 ): number | null {
-  const index = mesh?.edges?.findIndex((edge) => edge.id === edgeId) ?? -1;
+  const index =
+    mesh?.edges?.findIndex(
+      (edge) => edge.name === name || (edge.aliases?.includes(name) ?? false),
+    ) ?? -1;
+  return index >= 0 ? index + 1 : null;
+}
+
+/** Position of a named face in the face order of its body, from one. */
+export function bodyFaceNumber(
+  mesh: TessellationResult | undefined,
+  name: string,
+): number | null {
+  const index =
+    mesh?.faceNames?.findIndex(
+      (candidate, faceId) =>
+        candidate === name || (mesh.faceAliases?.[faceId]?.includes(name) ?? false),
+    ) ?? -1;
   return index >= 0 ? index + 1 : null;
 }
 

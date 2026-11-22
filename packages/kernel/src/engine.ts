@@ -37,6 +37,17 @@ import type {
   TessellationResult,
 } from './protocol';
 import { DEFAULT_TESSELLATION_QUALITY } from './protocol';
+import {
+  createShapeNames,
+  edgeAliasPaths,
+  edgePath,
+  prefixShapeNames,
+  propagateNames,
+  stableFacePath,
+  stableNameHash,
+  type NameContribution,
+  type ShapeNames,
+} from './naming';
 import type {
   OcctBindings,
   OcctBooleanMaker,
@@ -44,9 +55,12 @@ import type {
   OcctDocument,
   OcctEdgeMaker,
   OcctFaceMapper,
+  OcctThickSolidMaker,
+  OcctHistory,
   OcctLabel,
   OcctPolygonOnTriangulation,
   OcctShape,
+  OcctShapeList,
   OcctShapeTool,
   OcctTransformation,
   OcctTriangulation,
@@ -132,6 +146,29 @@ function polygonPoints(
     points.push(point.X(), point.Y(), point.Z());
   }
   return points;
+}
+
+/** Longest scope both names share, up to the last separator. */
+function commonScopePrefix(first: string, second: string): string {
+  let index = 0;
+  while (index < first.length && index < second.length && first[index] === second[index]) {
+    index += 1;
+  }
+  const shared = first.slice(0, index);
+  const cut = shared.lastIndexOf('/');
+  return cut >= 0 ? shared.slice(0, cut + 1) : '';
+}
+
+function polylineLength(points: readonly number[]): number {
+  let length = 0;
+  for (let index = 0; index + 5 < points.length; index += 3) {
+    length += Math.hypot(
+      points[index + 3]! - points[index]!,
+      points[index + 4]! - points[index + 1]!,
+      points[index + 5]! - points[index + 2]!,
+    );
+  }
+  return length;
 }
 
 function polygonClosed(points: readonly number[]): boolean {
@@ -250,6 +287,12 @@ interface TessellationBuffers {
   faceIds: number[];
 }
 
+/** A shape with the persistent names of its topology, when it has any yet. */
+interface NamedShape {
+  shape: OcctShape;
+  names?: ShapeNames;
+}
+
 /** B-rep edges of a shape, kept so an edge treatment can address them again. */
 interface ShapeEdges {
   edges: BodyEdge[];
@@ -279,6 +322,8 @@ export class KernelEngine {
   private loading: Promise<OcctBindings> | null = null;
   private loadMs = 0;
   private readonly shapes = new Map<string, OcctShape>();
+  /** Persistent names of each shape's topology (ADR 0042). */
+  private readonly shapeNames = new Map<string, ShapeNames>();
   /**
    * Edges each tessellated shape reported, with their B-rep counterparts. A
    * treatment reuses them instead of walking the shape again.
@@ -352,6 +397,291 @@ export class KernelEngine {
     return this.shapes.size;
   }
 
+  /** Stores a shape together with the names of its topology. */
+  private storeShape(shapeId: string, shape: OcctShape, names?: ShapeNames): void {
+    this.shapes.set(shapeId, shape);
+    if (names) this.shapeNames.set(shapeId, names);
+    else this.shapeNames.delete(shapeId);
+  }
+
+  private namesOf(shapeId: string): ShapeNames | undefined {
+    return this.shapeNames.get(shapeId);
+  }
+
+  /** Faces of a shape in traversal order, the order every face id refers to. */
+  private faceShapes(shape: OcctShape): OcctShape[] {
+    const oc = this.requireOc();
+    const faces: OcctShape[] = [];
+    const explorer = new oc.TopExp_Explorer_2(
+      shape,
+      oc.TopAbs_ShapeEnum.TopAbs_FACE,
+      oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+    );
+    while (explorer.More()) {
+      faces.push(explorer.Current());
+      explorer.Next();
+    }
+    return faces;
+  }
+
+  /** Area and centre of a face, the deterministic key used to order siblings. */
+  private faceMeasure(face: OcctShape): { area: number; centre: [number, number, number] } {
+    const oc = this.requireOc();
+    try {
+      const props = new oc.GProp_GProps_1();
+      oc.BRepGProp.SurfaceProperties_1(face, props, false, false);
+      const centre = props.CentreOfMass();
+      return {
+        area: props.Mass(),
+        centre: [centre.X(), centre.Y(), centre.Z()],
+      };
+    } catch {
+      return { area: 0, centre: [0, 0, 0] };
+    }
+  }
+
+  /** One key per face that depends only on the face, not on its traversal index. */
+  private faceKeys(faces: readonly OcctShape[]): string[] {
+    return faces.map((face) => {
+      const { area, centre } = this.faceMeasure(face);
+      const round = (value: number) => Math.round(value * 1e4) / 1e4;
+      return `${round(area)}|${round(centre[0])},${round(centre[1])},${round(centre[2])}`;
+    });
+  }
+
+  /** Drains a `TopTools_ListOfShape` into an array; the list is a copy. */
+  private drainShapes(list: {
+    Size(): number;
+    First_1(): OcctShape;
+    RemoveFirst(): void;
+  }): OcctShape[] {
+    const shapes: OcctShape[] = [];
+    let size: number;
+    try {
+      size = list.Size();
+    } catch {
+      return shapes;
+    }
+    for (let index = 0; index < size; index += 1) {
+      try {
+        shapes.push(list.First_1());
+        list.RemoveFirst();
+      } catch {
+        break;
+      }
+    }
+    return shapes;
+  }
+
+  private indexOfFace(faces: readonly OcctShape[], face: OcctShape): number {
+    for (let index = 0; index < faces.length; index += 1) {
+      if (faces[index]!.IsSame(face)) return index;
+    }
+    return -1;
+  }
+
+  private contribution(
+    names: ShapeNames,
+    index: number,
+    prefix?: string,
+  ): NameContribution {
+    const name = names.faces[index] ?? `face/${index}`;
+    const aliases = names.aliases[index] ?? [name];
+    const owner = names.owners[index] ?? '';
+    if (!prefix) return { name, aliases, owner };
+    return {
+      name: `${prefix}/${name}`,
+      aliases: aliases.map((alias) => `${prefix}/${alias}`),
+      owner,
+    };
+  }
+
+  /**
+   * What every result face inherited from one input. A face that a boolean only
+   * trimmed is reported by `Modified`; an untouched face is still the same
+   * B-rep face in the result.
+   */
+  private inheritedFrom(
+    mapper: OcctFaceMapper,
+    resultFaces: readonly OcctShape[],
+    source: { shape: OcctShape; names: ShapeNames; prefix?: string },
+    inherited: Map<number, NameContribution[]>,
+  ): void {
+    const sourceFaces = this.faceShapes(source.shape);
+    sourceFaces.forEach((face, sourceIndex) => {
+      let faces: OcctShape[];
+      try {
+        faces = this.drainShapes(mapper.Modified(face));
+      } catch {
+        faces = [];
+      }
+      if (faces.length === 0) {
+        const same = this.indexOfFace(resultFaces, face);
+        if (same >= 0) faces = [face];
+      }
+      const contribution = this.contribution(source.names, sourceIndex, source.prefix);
+      for (const resultFace of faces) {
+        const index = this.indexOfFace(resultFaces, resultFace);
+        if (index < 0) continue;
+        const list = inherited.get(index) ?? [];
+        list.push(contribution);
+        inherited.set(index, list);
+      }
+    });
+  }
+
+  /** Source faces a result face was generated from, used to name new surfaces. */
+  private generatedFrom(
+    mapper: OcctFaceMapper,
+    resultFaces: readonly OcctShape[],
+    source: { shape: OcctShape; names: ShapeNames; prefix?: string },
+    generated: Map<number, string[]>,
+  ): void {
+    const sourceFaces = this.faceShapes(source.shape);
+    if (!mapper.Generated) return;
+    sourceFaces.forEach((face, sourceIndex) => {
+      let faces: OcctShape[];
+      try {
+        faces = this.drainShapes(mapper.Generated!(face));
+      } catch {
+        faces = [];
+      }
+      if (faces.length === 0) return;
+      const name = this.contribution(source.names, sourceIndex, source.prefix).name;
+      for (const resultFace of faces) {
+        const index = this.indexOfFace(resultFaces, resultFace);
+        if (index < 0) continue;
+        const list = generated.get(index) ?? [];
+        list.push(name);
+        generated.set(index, list);
+      }
+    });
+  }
+
+  /**
+   * Names the faces of a result from the history of the maker that built it.
+   * New faces get a name from the source faces that generated them; when the
+   * maker reports no origin, their deterministic face key still keeps a replay
+   * stable.
+   */
+  private nameFromHistory(options: {
+    result: OcctShape;
+    mapper: OcctFaceMapper;
+    sources: Array<{ shape: OcctShape; names: ShapeNames; prefix?: string }>;
+    scope: string;
+    owner: string;
+    reown?: boolean;
+    createdPrefix?: string;
+  }): ShapeNames {
+    const resultFaces = this.faceShapes(options.result);
+    const inherited = new Map<number, NameContribution[]>();
+    const generated = new Map<number, string[]>();
+    for (const source of options.sources) {
+      this.inheritedFrom(options.mapper, resultFaces, source, inherited);
+      this.generatedFrom(options.mapper, resultFaces, source, generated);
+    }
+    const created = new Map<number, string>();
+    for (const [index, names] of generated) {
+      if (inherited.has(index)) continue;
+      const sorted = [...new Set(names)].sort();
+      created.set(
+        index,
+        `${options.createdPrefix ?? 'new'}/${stableNameHash(...sorted)}`,
+      );
+    }
+    return propagateNames({
+      faceCount: resultFaces.length,
+      inherited,
+      faceKeys: this.faceKeys(resultFaces),
+      created,
+      scope: options.scope,
+      owner: options.owner,
+      reown: options.reown,
+    });
+  }
+
+  /** Semantic face paths of a primitive: `+z`, `cap-top`, `side/2`, `surface`. */
+  private primitiveFacePaths(
+    kind: MakePrimitiveParams['kind'],
+    shape: OcctShape,
+    at: readonly number[],
+    height = 0,
+  ): string[] {
+    const oc = this.requireOc();
+    const faces = this.faceShapes(shape);
+    const measures = faces.map((face) => this.faceMeasure(face));
+    const planeNormal = (face: OcctShape): [number, number, number] => {
+      try {
+        const direction = new oc.BRepAdaptor_Surface_2(oc.TopoDS.Face_1(face), true)
+          .Plane()
+          .Position()
+          .Direction();
+        const sign = face.Orientation_1() === oc.TopAbs_Orientation.TopAbs_REVERSED ? -1 : 1;
+        return [direction.X() * sign, direction.Y() * sign, direction.Z() * sign];
+      } catch {
+        return [0, 0, 1];
+      }
+    };
+
+    if (kind === 'box') {
+      return faces.map((face, index) => {
+        let normal: [number, number, number];
+        try {
+          normal = planeNormal(face);
+        } catch {
+          return `face/${index}`;
+        }
+        const [x, y, z] = normal;
+        if (Math.abs(z) >= Math.abs(x) && Math.abs(z) >= Math.abs(y)) {
+          return z >= 0 ? '+z' : '-z';
+        }
+        if (Math.abs(y) >= Math.abs(x)) return y >= 0 ? '+y' : '-y';
+        return x >= 0 ? '+x' : '-x';
+      });
+    }
+
+    if (kind === 'sphere' || kind === 'torus') return faces.map(() => 'surface');
+
+    if (kind === 'pyramid') {
+      const sides: number[] = [];
+      const paths = faces.map((face, index) => {
+        const centre = measures[index]!.centre;
+        const nearBase = Math.abs(centre[2] - at[2]!) < 1e-6;
+        if (nearBase) return 'base';
+        sides.push(index);
+        return `side-pending/${index}`;
+      });
+      const angle = (index: number) => {
+        const centre = measures[index]!.centre;
+        return Math.atan2(centre[1] - at[1]!, centre[0] - at[0]!);
+      };
+      sides.sort((left, right) => angle(left) - angle(right) || left - right);
+      sides.forEach((index, rank) => {
+        paths[index] = `side/${rank}`;
+      });
+      return paths;
+    }
+
+    if (kind === 'cylinder' || kind === 'cone' || kind === 'capsule') {
+      const bottom = at[2]!;
+      const top = at[2]! + height;
+      const size = Math.max(1e-6, Math.abs(top - bottom));
+      return faces.map((face, index) => {
+        const centre = measures[index]!.centre;
+        if (kind === 'capsule') {
+          if (Math.abs(centre[2] - bottom) <= size * 0.25) return 'cap-bottom';
+          if (Math.abs(centre[2] - top) <= size * 0.25) return 'cap-top';
+          return 'side';
+        }
+        if (Math.abs(centre[2] - bottom) <= size * 1e-3) return 'cap-bottom';
+        if (Math.abs(centre[2] - top) <= size * 1e-3) return 'cap-top';
+        return 'side';
+      });
+    }
+
+    return faces.map((face, index) => `face/${index}`);
+  }
+
   makeBox(params: BoxParams): MakeBoxResult {
     const oc = this.requireOc();
     const { shapeId, dx, dy, dz } = params;
@@ -365,7 +695,16 @@ export class KernelEngine {
     const shape = at
       ? new oc.BRepPrimAPI_MakeBox_2(new oc.gp_Pnt_3(at[0], at[1], at[2]), dx, dy, dz).Shape()
       : new oc.BRepPrimAPI_MakeBox_1(dx, dy, dz).Shape();
-    this.shapes.set(shapeId, shape);
+    const anchor = at ?? [0, 0, 0];
+    this.storeShape(
+      shapeId,
+      shape,
+      createShapeNames(
+        this.primitiveFacePaths('box', shape, anchor),
+        params.name ?? 'primitive',
+        params.name ?? 'primitive',
+      ),
+    );
     return { shapeId, stats: this.countTopology(shape) };
   }
 
@@ -384,7 +723,14 @@ export class KernelEngine {
     let shape: OcctShape;
     switch (params.kind) {
       case 'box':
-        return this.makeBox({ shapeId, dx: params.dx, dy: params.dy, dz: params.dz, at });
+        return this.makeBox({
+          shapeId,
+          dx: params.dx,
+          dy: params.dy,
+          dz: params.dz,
+          at,
+          name: params.name,
+        });
       case 'sphere':
         this.primitiveLength('radius', params.radius);
         shape = new oc.BRepPrimAPI_MakeSphere_5(
@@ -478,7 +824,17 @@ export class KernelEngine {
       }
     }
 
-    this.shapes.set(shapeId, shape);
+    const height =
+      'height' in params && typeof params.height === 'number' ? params.height : 0;
+    this.storeShape(
+      shapeId,
+      shape,
+      createShapeNames(
+        this.primitiveFacePaths(params.kind, shape, at, height),
+        params.name ?? 'primitive',
+        params.name ?? 'primitive',
+      ),
+    );
     return { shapeId, stats: this.countTopology(shape) };
   }
 
@@ -505,25 +861,37 @@ export class KernelEngine {
       throw new KernelOpError('INVALID_PARAMS', 'Extrude distance must be a positive number');
     }
 
-    let shape: OcctShape | null = null;
-    for (const region of regions) {
+    const scope = params.name ?? 'extrude';
+    let solid: NamedShape | null = null;
+    for (const [regionIndex, region] of regions.entries()) {
+      const regionScope = `${scope}/r-${region.key ?? regionIndex}`;
       // Holes are removed with booleans: wire orientation inside a face is easy to
       // get wrong, while cutting the hole prisms is exact and orientation-free.
-      let solid: OcctShape | null = this.extrudeLoop(region.outer, params);
-      for (const hole of region.holes) {
-        const holeSolid = this.extrudeLoop(hole, params);
-        solid = this.boolean(solid, holeSolid, 'cut');
+      let regionSolid = this.extrudeLoop(region.outer, params, regionScope);
+      for (const [holeIndex, hole] of region.holes.entries()) {
+        const holeSolid = this.extrudeLoop(hole, params, `${regionScope}/h-${holeIndex}`);
+        regionSolid = this.booleanNamed(
+          regionSolid,
+          holeSolid,
+          'cut',
+          `${regionScope}/hole-${holeIndex}`,
+          scope,
+          false,
+          'hole',
+        );
       }
-      shape = shape ? this.boolean(shape, solid, 'fuse') : solid;
+      solid = solid
+        ? this.booleanNamed(solid, regionSolid, 'fuse', `${scope}/regions`, scope)
+        : regionSolid;
     }
-    if (!shape) throw new KernelOpError('OP_FAILED', 'Extrude produced no geometry');
+    if (!solid) throw new KernelOpError('OP_FAILED', 'Extrude produced no geometry');
 
     // Regions that touch are fused into one solid, but OCCT keeps their shared
     // boundaries as extra coplanar faces. Merge them so the top of a union is
     // one face, as a user expects when picking it again.
-    shape = this.unify(shape);
-    this.shapes.set(shapeId, shape);
-    return { shapeId, stats: this.countTopology(shape) };
+    const unified = this.unifyNamed(solid.shape, solid.names, scope, scope);
+    this.storeShape(shapeId, unified.shape, unified.names);
+    return { shapeId, stats: this.countTopology(unified.shape) };
   }
 
   // Extrudes one face of an existing solid. This is what the Objects panel
@@ -572,7 +940,9 @@ export class KernelEngine {
     // joining the tool to the body.
     const first = distances[0]!;
     const embedded = embed && first > 0;
-    let shape: OcctShape | null = null;
+    const scope = params.name ?? 'face-prism';
+    const sourceEdges = this.edgeSources(sourceShapeId, faceId);
+    let solid: NamedShape | null = null;
     for (const [index, distance] of distances.entries()) {
       // The overlap is part of the first prism, not a second prism stacked on
       // it: on a slanted face two stacked prisms have faces in the very planes
@@ -586,20 +956,49 @@ export class KernelEngine {
         throw new KernelOpError('OP_FAILED', 'Extrude failed for a body face');
       }
       let part = prism.Shape();
+      const partNames = this.prismFaceNames(
+        part,
+        prism,
+        sourceEdges,
+        scope,
+        index,
+        distances.length,
+      );
       if (overlap > 0) {
         // The part grew along the normal, so it moves back into the material
-        // by the overlap it was given.
+        // by the overlap it was given. The copy keeps the topology, so its
+        // names travel with it.
         const back = new oc.gp_Trsf_1();
         back.SetTranslation_1(new oc.gp_Vec_4(-nx * overlap, -ny * overlap, -nz * overlap));
         part = new oc.BRepBuilderAPI_Transform_2(part, back, true).Shape();
       }
-      shape = shape ? this.boolean(shape, part, 'fuse') : part;
+      const partShape: NamedShape = { shape: part, names: partNames };
+      solid = solid
+        ? this.booleanNamed(solid, partShape, 'fuse', `${scope}/sweep-${index}`, scope)
+        : partShape;
     }
-    if (!shape) throw new KernelOpError('OP_FAILED', 'Extrude produced no geometry');
+    if (!solid) throw new KernelOpError('OP_FAILED', 'Extrude produced no geometry');
+    const unified = this.unifyNamed(solid.shape, solid.names, scope, scope);
+    this.storeShape(shapeId, unified.shape, unified.names);
+    return { shapeId, stats: this.countTopology(unified.shape) };
+  }
 
-    shape = this.unify(shape);
-    this.shapes.set(shapeId, shape);
-    return { shapeId, stats: this.countTopology(shape) };
+  /**
+   * Boundary edges of one face, with the names they already carry. The
+   * tessellation is what records both, so a source that was never meshed is
+   * meshed on demand.
+   */
+  private edgeSources(shapeId: string, faceId: number): Array<{ shape: OcctShape; key: string }> {
+    if (!this.shapeEdges.has(shapeId)) this.tessellate(shapeId);
+    const cache = this.shapeEdges.get(shapeId);
+    if (!cache) return [];
+    const sources: Array<{ shape: OcctShape; key: string }> = [];
+    for (const edge of cache.edges) {
+      if (!edge.faceIds.includes(faceId)) continue;
+      const shape = cache.shapes.get(edge.id);
+      if (shape) sources.push({ shape, key: edge.name ?? `edge-${edge.id}` });
+    }
+    return sources;
   }
 
   /**
@@ -615,21 +1014,33 @@ export class KernelEngine {
       throw new KernelOpError('INVALID_PARAMS', 'A revolve needs at least one region');
     }
     const sweep = revolveSweep(params.startAngle, params.endAngle);
-    let shape: OcctShape | null = null;
-    for (const region of regions) {
+    const scope = params.name ?? 'revolve';
+    let solid: NamedShape | null = null;
+    for (const [regionIndex, region] of regions.entries()) {
+      const regionScope = `${scope}/r-${region.key ?? regionIndex}`;
       // Holes go the same way as a prism: cut the hole solid out of the outer
       // one, which needs no orientation of the contour.
-      let solid = this.revolveLoop(region.outer, params, sweep);
-      for (const hole of region.holes) {
-        solid = this.boolean(solid, this.revolveLoop(hole, params, sweep), 'cut');
+      let regionSolid = this.revolveLoop(region.outer, params, sweep, regionScope);
+      for (const [holeIndex, hole] of region.holes.entries()) {
+        regionSolid = this.booleanNamed(
+          regionSolid,
+          this.revolveLoop(hole, params, sweep, `${regionScope}/h-${holeIndex}`),
+          'cut',
+          `${regionScope}/hole-${holeIndex}`,
+          scope,
+          false,
+          'hole',
+        );
       }
-      shape = shape ? this.boolean(shape, solid, 'fuse') : solid;
+      solid = solid
+        ? this.booleanNamed(solid, regionSolid, 'fuse', `${scope}/regions`, scope)
+        : regionSolid;
     }
-    if (!shape) throw new KernelOpError('OP_FAILED', 'Revolve produced no geometry');
+    if (!solid) throw new KernelOpError('OP_FAILED', 'Revolve produced no geometry');
 
-    shape = this.unify(shape);
-    this.shapes.set(shapeId, shape);
-    return { shapeId, stats: this.countTopology(shape) };
+    const unified = this.unifyNamed(solid.shape, solid.names, scope, scope);
+    this.storeShape(shapeId, unified.shape, unified.names);
+    return { shapeId, stats: this.countTopology(unified.shape) };
   }
 
   /** Turns one face of an existing solid around an axis. */
@@ -644,9 +1055,12 @@ export class KernelEngine {
       throw new KernelOpError('INVALID_PARAMS', `Face ${faceId} does not exist on the body`);
     }
     const sweep = revolveSweep(params.startAngle, params.endAngle);
-    const shape = this.unify(this.revolveFace(face, axis, sweep));
-    this.shapes.set(shapeId, shape);
-    return { shapeId, stats: this.countTopology(shape) };
+    const scope = params.name ?? 'face-revolve';
+    const boundary = this.edgeSources(sourceShapeId, faceId);
+    const built = this.revolveFace(face, axis, sweep, scope, boundary);
+    const unified = this.unifyNamed(built.shape, built.names, scope, scope);
+    this.storeShape(shapeId, unified.shape, unified.names);
+    return { shapeId, stats: this.countTopology(unified.shape) };
   }
 
   booleanShape(params: BooleanParams): MakeBoxResult {
@@ -654,10 +1068,39 @@ export class KernelEngine {
     if (!shapeId) throw new KernelOpError('INVALID_PARAMS', 'shapeId is required');
     const base = this.getShape(baseShapeId);
     const tool = this.getShape(toolShapeId);
-    const maker = this.booleanMaker(base, tool, op);
+    const maker = this.booleanMaker(base, tool, op, true);
     const fused = maker.Shape();
-    const shape = op === 'fuse' ? this.unify(fused) : fused;
-    this.shapes.set(shapeId, shape);
+    const scope = params.name ?? 'boolean';
+    let history: OcctHistory | null;
+    try {
+      history = maker.History().get();
+    } catch {
+      history = null;
+    }
+    const baseNames = this.namesOf(baseShapeId);
+    const toolNames = this.namesOf(toolShapeId);
+    const sources = [
+      ...(baseNames ? [{ shape: base, names: baseNames }] : []),
+      ...(toolNames ? [{ shape: tool, names: toolNames, prefix: 'tool' }] : []),
+    ];
+    let shape = fused;
+    let names =
+      history && sources.length > 0
+        ? this.nameFromHistory({
+            result: shape,
+            mapper: history,
+            sources,
+            scope,
+            owner: scope,
+            reown: params.reown,
+          })
+        : undefined;
+    if (op === 'fuse') {
+      const unified = this.unifyNamed(shape, names, scope, scope);
+      shape = unified.shape;
+      names = unified.names;
+    }
+    this.storeShape(shapeId, shape, names);
     const result: MakeBoxResult = { shapeId, stats: this.countTopology(shape) };
     // A cut trims the faces around the tool and `IsSame` loses them, so the
     // boolean itself is asked where each face came from.
@@ -685,38 +1128,85 @@ export class KernelEngine {
     }
     const base = this.getShape(params.baseShapeId);
     const placed = params.tools.map((tool) => this.copyAt(tool.sourceShapeId, tool.matrix));
+    const scope = params.name ?? 'boolean';
+    const baseSource = this.namesOf(params.baseShapeId)
+      ? { shape: base, names: this.namesOf(params.baseShapeId)! }
+      : undefined;
+    const placedSources = params.tools.map((tool, index) => {
+      const names = this.namesOf(tool.sourceShapeId);
+      if (!names) return undefined;
+      const key =
+        tool.key ?? (params.tools.length > 1 ? `tool-${index}` : undefined);
+      return { shape: placed[index]!, names: key ? prefixShapeNames(names, key) : names };
+    });
 
     let shape: OcctShape;
+    let names: ShapeNames | undefined;
     let owners: number[] | undefined;
     if (this.apartFromEachOther(placed)) {
       const tool = placed.length === 1 ? placed[0]! : this.compound(placed);
-      const maker = this.booleanMaker(base, tool, op);
+      const maker = this.booleanMaker(base, tool, op, true);
       const fused = maker.Shape();
-      shape = op === 'fuse' ? this.unify(fused) : fused;
+      let history: OcctHistory | null;
+      try {
+        history = maker.History().get();
+      } catch {
+        history = null;
+      }
+      const sources = [
+        ...(baseSource ? [baseSource] : []),
+        ...placedSources.filter(
+          (source): source is { shape: OcctShape; names: ShapeNames } => Boolean(source),
+        ),
+      ];
+      names =
+        history && sources.length > 0
+          ? this.nameFromHistory({
+              result: fused,
+              mapper: history,
+              sources,
+              scope,
+              owner: scope,
+              reown: params.reown,
+            })
+          : undefined;
+      shape = fused;
       if (params.trackFaces) owners = this.mappedFaces(maker, shape, base);
     } else {
-      shape = base;
-      for (const tool of placed) {
-        const maker = this.booleanMaker(shape, tool, op);
-        const next = maker.Shape();
+      let current: NamedShape = { shape: base, names: baseSource?.names };
+      for (const [index, tool] of placed.entries()) {
+        const step = this.booleanNamed(
+          current,
+          placedSources[index] ?? { shape: tool },
+          op,
+          `${scope}/step-${index}`,
+          scope,
+          params.reown,
+        );
         if (params.trackFaces) {
           // Each step maps its own result onto what it was given, so the run is
           // walked back to the faces of the base the caller knows.
-          const step = this.mappedFaces(maker, next, shape);
-          owners = step.map((from) => (from >= 0 ? (owners ? (owners[from] ?? -1) : from) : -1));
+          const stepMap = this.mappedFaces(step.maker, step.shape, current.shape);
+          owners = stepMap.map((from) =>
+            from >= 0 ? (owners ? (owners[from] ?? -1) : from) : -1,
+          );
         }
-        shape = next;
+        current = step;
       }
-      if (op === 'fuse') {
-        const faces = owners?.length;
-        shape = this.unify(shape);
-        // A merge reorders faces; a mapping that no longer lines up would name
-        // the wrong operation for a face, so it is left out instead.
-        if (faces !== undefined && this.countTopology(shape).faces !== faces) owners = undefined;
-      }
+      shape = current.shape;
+      names = current.names;
+    }
+    if (op === 'fuse') {
+      const faces = owners?.length;
+      const unified = this.unifyNamed(shape, names, scope, scope);
+      shape = unified.shape;
+      names = unified.names;
+      // A merge reorders faces; a mapping that no longer lines up would name
+      // the wrong operation for a face, so it is left out instead.
+      if (faces !== undefined && this.countTopology(shape).faces !== faces) owners = undefined;
     }
 
-    this.shapes.set(shapeId, shape);
+    this.storeShape(shapeId, shape, names);
     const result: MakeBoxResult = { shapeId, stats: this.countTopology(shape) };
     if (owners) result.facesFromBase = owners;
     return result;
@@ -784,7 +1274,24 @@ export class KernelEngine {
     while (explorer.More()) {
       const solid = oc.TopoDS.Solid_1(explorer.Current());
       const shapeId = `${params.prefix}:solid-${index}`;
-      this.shapes.set(shapeId, solid);
+      const sourceNames = this.namesOf(params.shapeId);
+      let solidNames: ShapeNames | undefined;
+      if (sourceNames) {
+        const solidFaces = this.faceShapes(solid);
+        const inherited = new Map<number, NameContribution[]>();
+        solidFaces.forEach((face, faceIndex) => {
+          const from = this.indexOfFace(sourceFaces, face);
+          if (from >= 0) inherited.set(faceIndex, [this.contribution(sourceNames, from)]);
+        });
+        solidNames = propagateNames({
+          faceCount: solidFaces.length,
+          inherited,
+          faceKeys: this.faceKeys(solidFaces),
+          scope: `${params.prefix}/split-${index}`,
+          owner: sourceNames.owners[0] ?? params.prefix,
+        });
+      }
+      this.storeShape(shapeId, solid, solidNames);
 
       const facesFromShape: number[] = [];
       const solidFaces = new oc.TopExp_Explorer_2(
@@ -1009,6 +1516,7 @@ export class KernelEngine {
         edge.convex = corner.convex;
       }
     }
+    const names = this.assignEdgeNames(shapeId, keptEdges);
     this.shapeEdges.set(shapeId, {
       edges: keptEdges,
       shapes: new Map(keptEdges.map((edge) => [edge.id, edgeShapes.get(edge.id)!] as const)),
@@ -1028,7 +1536,69 @@ export class KernelEngine {
       // A seam inside one face has only one adjacent face and is not an edge
       // the user can pick or fillet.
       edges: keptEdges,
+      ...(names
+        ? {
+            faceNames: names.faces,
+            faceAliases: names.aliases,
+            faceOwners: names.owners,
+          }
+        : {}),
     };
+  }
+
+  /**
+   * Names the tessellated edges from the faces on both sides. An edge is
+   * identified by the pair of faces that meet along it; two edges between the
+   * same pair get a rank that depends only on their own geometry.
+   */
+  private assignEdgeNames(shapeId: string, edges: readonly BodyEdge[]): ShapeNames | undefined {
+    const names = this.namesOf(shapeId);
+    if (!names) return undefined;
+    const stableFace = (faceId: number): string =>
+      stableFacePath(names.faces[faceId] ?? `face/${faceId}`, names.aliases[faceId] ?? []);
+    const groups = new Map<string, BodyEdge[]>();
+    for (const edge of edges) {
+      const pair = edge.faceIds.map(stableFace).sort();
+      const key = pair.join('\u0001');
+      const group = groups.get(key);
+      if (group) group.push(edge);
+      else groups.set(key, [edge]);
+    }
+    const edgeNames: Record<string, string> = {};
+    const edgeAliases: Record<string, string[]> = {};
+    for (const group of groups.values()) {
+      const ordered = [...group].sort((left, right) => {
+        const leftLength = polylineLength(left.points);
+        const rightLength = polylineLength(right.points);
+        if (Math.abs(leftLength - rightLength) > 1e-9) return leftLength - rightLength;
+        return left.id.localeCompare(right.id);
+      });
+      ordered.forEach((edge, rank) => {
+        const qualifier = ordered.length > 1 ? `r${rank}` : undefined;
+        const [firstFace, secondFace] = edge.faceIds;
+        const first = stableFace(firstFace!);
+        const second = stableFace(secondFace!);
+        // Faces of one instance share a scope prefix. The edge name keeps that
+        // prefix and hashes only the relative paths, so prefixing a body for an
+        // array copy yields exactly the prefix of its edge name too.
+        const scope = commonScopePrefix(first, second);
+        const relative = (name: string) => (scope && name.startsWith(scope) ? name.slice(scope.length) : name);
+        const path = `${scope}${edgePath(relative(first), relative(second), qualifier)}`;
+        const firstAliases = names.aliases[firstFace!] ?? [first];
+        const secondAliases = names.aliases[secondFace!] ?? [second];
+        edge.name = path;
+        edge.aliases = edgeAliasPaths(
+          firstAliases.map(relative),
+          secondAliases.map(relative),
+          qualifier,
+        ).map((alias) => `${scope}${alias}`);
+        edgeNames[edge.id] = path;
+        edgeAliases[edge.id] = edge.aliases;
+      });
+    }
+    const updated: ShapeNames = { ...names, edges: edgeNames, edgeAliases };
+    this.shapeNames.set(shapeId, updated);
+    return updated;
   }
 
   shapeStats(shapeId: string): ShapeStats {
@@ -1136,7 +1706,6 @@ export class KernelEngine {
       );
     }
 
-    this.shapes.set(params.shapeId, shape);
     // A body built in passes went through two shapes, so where each face came
     // from is read through both maps: the second names a face of the shape the
     // first pass left behind, and the first names the face it came from.
@@ -1148,6 +1717,37 @@ export class KernelEngine {
         from >= 0 ? (passed[from] ?? -1) : -1,
       );
     })();
+    const sourceNames = this.namesOf(params.sourceShapeId);
+    if (sourceNames) {
+      const resultFaces = this.faceShapes(shape);
+      const inherited = new Map<number, NameContribution[]>();
+      facesFromBase.forEach((from, index) => {
+        if (from < 0) return;
+        inherited.set(index, [this.contribution(sourceNames, from)]);
+      });
+      const created = new Map<number, string>();
+      const edgeNames = [...new Set(chosen.map((edge) => edge.name ?? edge.id))].sort();
+      for (let index = 0; index < resultFaces.length; index += 1) {
+        if (!inherited.has(index)) {
+          created.set(index, `treat/${stableNameHash(...edgeNames)}`);
+        }
+      }
+      const scope = params.name ?? 'treatment';
+      this.storeShape(
+        params.shapeId,
+        shape,
+        propagateNames({
+          faceCount: resultFaces.length,
+          inherited,
+          faceKeys: this.faceKeys(resultFaces),
+          created,
+          scope,
+          owner: scope,
+        }),
+      );
+    } else {
+      this.storeShape(params.shapeId, shape);
+    }
     return {
       shapeId: params.shapeId,
       stats: this.countTopology(shape),
@@ -1184,10 +1784,21 @@ export class KernelEngine {
     });
     const offset = params.direction === 'outward' ? params.offset : 0;
     const requested = Math.max(MIN_SHELL_THICKNESS, params.thickness);
+    const sourceNames = this.namesOf(params.sourceShapeId);
+    const scope = params.name ?? 'shell';
     const key = `${params.sourceShapeId}|${params.direction}|${offset}|${[...params.removeFaceIds]
       .sort((a, b) => a - b)
       .join(',')}`;
-    const built = this.findShellBuild(source, closing, params.direction, offset, requested, key);
+    const built = this.findShellBuild(
+      source,
+      closing,
+      params.direction,
+      offset,
+      requested,
+      key,
+      sourceNames,
+      scope,
+    );
     if (!built) {
       throw new KernelOpError(
         'SHELL_FAILED',
@@ -1196,14 +1807,22 @@ export class KernelEngine {
           : 'This body cannot be wrapped with these settings',
       );
     }
-    this.shapes.set(params.shapeId, built.shape);
+    const facesFromBase = this.facesFromBase(built.shape, source);
+    if (built.names) {
+      const names = params.reown
+        ? { ...built.names, owners: built.names.faces.map(() => scope) }
+        : built.names;
+      this.storeShape(params.shapeId, built.shape, names);
+    } else {
+      this.storeShape(params.shapeId, built.shape);
+    }
     return {
       shapeId: params.shapeId,
       stats: this.countTopology(built.shape),
       applied: built.applied,
       // An inward shell keeps the outside faces of the body in place; a face it
       // only moved stays owned by the operation that made it.
-      facesFromBase: this.facesFromBase(built.shape, source),
+      facesFromBase,
     };
   }
 
@@ -1232,7 +1851,7 @@ export class KernelEngine {
       oc.GeomAbs_JoinType.GeomAbs_Arc,
     ]) {
       const offset = this.thickSolid(source, [], distance, join);
-      const solid = offset ? this.ensureSolid(this.positiveVolume(offset)) : null;
+      const solid = offset ? this.ensureSolid(this.positiveVolume(offset.shape)) : null;
       if (!solid) continue;
       const sourceVolume = this.shapeVolume(source);
       const volume = this.shapeVolume(solid);
@@ -1247,7 +1866,29 @@ export class KernelEngine {
       } catch {
         continue;
       }
-      this.shapes.set(params.shapeId, solid);
+      const sourceNames = this.namesOf(params.sourceShapeId);
+      const scope = params.name ?? 'offset';
+      if (sourceNames) {
+        const resultFaces = this.faceShapes(solid);
+        const mapping = this.facesFromBase(solid, source);
+        const inherited = new Map<number, NameContribution[]>();
+        mapping.forEach((from, index) => {
+          if (from >= 0) inherited.set(index, [this.contribution(sourceNames, from)]);
+        });
+        this.storeShape(
+          params.shapeId,
+          solid,
+          propagateNames({
+            faceCount: resultFaces.length,
+            inherited,
+            faceKeys: this.faceKeys(resultFaces),
+            scope,
+            owner: scope,
+          }),
+        );
+      } else {
+        this.storeShape(params.shapeId, solid);
+      }
       return { shapeId: params.shapeId, stats: this.countTopology(solid) };
     }
     throw new KernelOpError('OFFSET_FAILED', 'This body cannot be offset by that distance');
@@ -1260,7 +1901,14 @@ export class KernelEngine {
   transformShape(params: TransformShapeParams): MakeBoxResult {
     if (!params.shapeId) throw new KernelOpError('INVALID_PARAMS', 'shapeId is required');
     const shape = this.copyAt(params.sourceShapeId, params.matrix);
-    this.shapes.set(params.shapeId, shape);
+    const sourceNames = this.namesOf(params.sourceShapeId);
+    let names = sourceNames;
+    if (sourceNames && params.nameScope) {
+      names = prefixShapeNames(sourceNames, params.nameScope, params.owner);
+    } else if (sourceNames && params.owner) {
+      names = { ...sourceNames, owners: sourceNames.owners.map(() => params.owner!) };
+    }
+    this.storeShape(params.shapeId, shape, names);
     return { shapeId: params.shapeId, stats: this.countTopology(shape) };
   }
 
@@ -1407,27 +2055,29 @@ export class KernelEngine {
     offset: number,
     requested: number,
     key: string,
-  ): { shape: OcctShape; applied: number } | null {
-    const direct = this.attemptShell(source, closing, direction, offset, requested);
-    if (direct) return { shape: direct, applied: requested };
+    names: ShapeNames | undefined,
+    scope: string,
+  ): NamedShape & { applied: number } | null {
+    const direct = this.attemptShell(source, closing, direction, offset, requested, names, scope);
+    if (direct) return { ...direct, applied: requested };
 
     // A selection that failed at a known size does not have to be searched
     // again while the user drags the thickness up and down.
     const known = this.shellSplits.get(key);
     if (known && known.good < requested) {
-      const cached = this.attemptShell(source, closing, direction, offset, known.good);
-      if (cached) return { shape: cached, applied: known.good };
+      const cached = this.attemptShell(source, closing, direction, offset, known.good, names, scope);
+      if (cached) return { ...cached, applied: known.good };
       this.shellSplits.delete(key);
     }
 
     let low = 0;
     let high = requested;
-    let shape: OcctShape | null = null;
+    let shape: NamedShape | null = null;
     let applied = 0;
     for (let step = 0; step < SHELL_SEARCH_STEPS; step += 1) {
       const mid = (low + high) / 2;
       if (mid < MIN_SHELL_THICKNESS) break;
-      const attempt = this.attemptShell(source, closing, direction, offset, mid);
+      const attempt = this.attemptShell(source, closing, direction, offset, mid, names, scope);
       if (attempt) {
         low = mid;
         applied = mid;
@@ -1439,7 +2089,7 @@ export class KernelEngine {
     if (!shape) return null;
     if (this.shellSplits.size > 64) this.shellSplits.clear();
     this.shellSplits.set(key, { good: applied, bad: Math.max(high, applied) });
-    return { shape, applied };
+    return { ...shape, applied };
   }
 
   private attemptShell(
@@ -1448,37 +2098,57 @@ export class KernelEngine {
     direction: ShellParams['direction'],
     offset: number,
     thickness: number,
-  ): OcctShape | null {
+    sourceNames: ShapeNames | undefined,
+    scope: string,
+  ): NamedShape | null {
     const oc = this.requireOc();
     const distance = direction === 'inward' ? -thickness : offset + thickness;
-    let offsetShape: OcctShape | null = null;
+    let built: { shape: OcctShape; maker: OcctThickSolidMaker } | null = null;
     for (const join of [
       oc.GeomAbs_JoinType.GeomAbs_Intersection,
       oc.GeomAbs_JoinType.GeomAbs_Arc,
     ]) {
-      offsetShape = this.thickSolid(source, closing, distance, join);
-      if (offsetShape) break;
+      built = this.thickSolid(source, closing, distance, join);
+      if (built) break;
     }
-    offsetShape = offsetShape ? this.ensureSolid(this.positiveVolume(offsetShape)) : null;
-    if (!offsetShape) return null;
+    const offsetShape = built ? this.ensureSolid(this.positiveVolume(built.shape)) : null;
+    if (!built || !offsetShape) return null;
+    const offsetNames =
+      sourceNames !== undefined
+        ? this.nameFromHistory({
+            result: offsetShape,
+            mapper: built.maker,
+            sources: [{ shape: source, names: sourceNames }],
+            scope: `${scope}/offset`,
+            owner: scope,
+          })
+        : undefined;
+    const wall: NamedShape = { shape: offsetShape, names: offsetNames };
+    const original: NamedShape = { shape: source, names: sourceNames };
 
-    let result: OcctShape;
+    let result: NamedShape;
     try {
       if (direction === 'inward') {
-        result = closing.length > 0 ? offsetShape : this.boolean(source, offsetShape, 'cut');
+        result =
+          closing.length > 0
+            ? wall
+            : this.booleanNamed(original, wall, 'cut', `${scope}/wall`, scope);
       } else if (offset > 0) {
         const inner = this.shellInnerSolid(source, offset);
         if (!inner) return null;
-        result = this.boolean(offsetShape, inner, 'cut');
+        result = this.booleanNamed(wall, { shape: inner }, 'cut', `${scope}/wall`, scope);
       } else {
-        result = closing.length > 0 ? offsetShape : this.boolean(offsetShape, source, 'cut');
+        result =
+          closing.length > 0
+            ? wall
+            : this.booleanNamed(wall, original, 'cut', `${scope}/wall`, scope);
       }
     } catch {
       return null;
     }
 
     const sourceVolume = this.shapeVolume(source);
-    const volume = this.shapeVolume(result);
+    const volume = this.shapeVolume(result.shape);
     if (!Number.isFinite(volume)) return null;
     // An oversized offset can silently leave the body untouched; a wall has to
     // change what is there, and an outward wall has to be material of its own.
@@ -1487,7 +2157,7 @@ export class KernelEngine {
       return null;
     }
     try {
-      if (!new oc.BRepCheck_Analyzer(result, true).IsValid_2()) return null;
+      if (!new oc.BRepCheck_Analyzer(result.shape, true).IsValid_2()) return null;
     } catch {
       return null;
     }
@@ -1502,7 +2172,7 @@ export class KernelEngine {
       oc.GeomAbs_JoinType.GeomAbs_Arc,
     ]) {
       const shape = this.thickSolid(source, [], offset, join);
-      const solid = shape ? this.ensureSolid(this.positiveVolume(shape)) : null;
+      const solid = shape ? this.ensureSolid(this.positiveVolume(shape.shape)) : null;
       if (solid) return solid;
     }
     return null;
@@ -1513,7 +2183,7 @@ export class KernelEngine {
     closing: OcctShape[],
     distance: number,
     join: unknown,
-  ): OcctShape | null {
+  ): { shape: OcctShape; maker: OcctThickSolidMaker } | null {
     const oc = this.requireOc();
     try {
       const maker = new oc.BRepOffsetAPI_MakeThickSolid_1();
@@ -1533,7 +2203,7 @@ export class KernelEngine {
       maker.Build();
       if (!maker.IsDone()) return null;
       const shape = maker.Shape();
-      return shape.IsNull() ? null : shape;
+      return shape.IsNull() ? null : { shape, maker };
     } catch {
       // A rejected offset throws through the binding; the next size is tried.
       return null;
@@ -1903,7 +2573,17 @@ export class KernelEngine {
         throw new KernelOpError('OP_FAILED', `STEP body ${index + 1} has no shape`);
       }
       const shapeId = `${params.prefix}:step-${index}`;
-      this.shapes.set(shapeId, shape);
+      const faces = this.faceShapes(shape).length;
+      const scope = params.name ?? params.prefix;
+      this.storeShape(
+        shapeId,
+        shape,
+        createShapeNames(
+          Array.from({ length: faces }, (_, faceIndex) => `import/face/${faceIndex}`),
+          scope,
+          scope,
+        ),
+      );
       bodies.push({ shapeId, stats: this.shapeStats(shapeId) });
     });
     return { bodies };
@@ -1962,25 +2642,27 @@ export class KernelEngine {
 
   dispose(shapeId: string): boolean {
     this.shapeEdges.delete(shapeId);
+    this.shapeNames.delete(shapeId);
     return this.shapes.delete(shapeId);
   }
 
   clear(): void {
     this.shapes.clear();
     this.shapeEdges.clear();
+    this.shapeNames.clear();
   }
 
-  private extrudeLoop(loop: ProfileLoop, params: MakePrismParams): OcctShape {
+  private extrudeLoop(loop: ProfileLoop, params: MakePrismParams, scope: string): NamedShape {
     const oc = this.requireOc();
     const plane = profilePlane(params);
     const [nx, ny, nz] = plane.normal;
-    const wire = this.buildWire(loop, plane);
+    const { wire, edges } = this.buildWireWithKeys(loop, plane);
     const maker = new oc.BRepBuilderAPI_MakeFace_15(wire, false);
     if (!maker.IsDone()) {
       throw new KernelOpError('INVALID_PARAMS', 'Sketch region contour is not closed');
     }
     const face = maker.Face();
-    let solid: OcctShape | null = null;
+    let solid: NamedShape | null = null;
     for (const [index, distance] of params.distances.entries()) {
       // A union reaches a hair behind its plane so it shares material with the
       // body it joins: a tool that only touches a face stays a solid of its
@@ -1995,36 +2677,104 @@ export class KernelEngine {
         throw new KernelOpError('OP_FAILED', 'Extrude failed for a sketch region');
       }
       let part = prism.Shape();
+      const partNames = this.prismFaceNames(part, prism, edges, scope, index, params.distances.length);
       if (overlap > 0) {
         // The sweep grew along the normal, so it moves back into the material
-        // by the overlap it was given.
+        // by the overlap it was given. A transform keeps the topology, so the
+        // names travel with it unchanged.
         const back = new oc.gp_Trsf_1();
         back.SetTranslation_1(new oc.gp_Vec_4(-nx * overlap, -ny * overlap, -nz * overlap));
         part = new oc.BRepBuilderAPI_Transform_2(part, back, true).Shape();
       }
-      solid = solid ? this.boolean(solid, part, 'fuse') : part;
+      const partShape: NamedShape = { shape: part, names: partNames };
+      solid = solid
+        ? this.booleanNamed(solid, partShape, 'fuse', `${scope}/sweep-${index}`, scope)
+        : partShape;
     }
     if (!solid) throw new KernelOpError('OP_FAILED', 'Extrude produced no geometry');
     return solid;
+  }
+
+  /**
+   * Names of one prism: the two caps come from the faces the sweep starts and
+   * ends on, every side face from the profile edge that generated it.
+   */
+  private prismFaceNames(
+    part: OcctShape,
+    prism: {
+      FirstShape(): OcctShape;
+      LastShape(): OcctShape;
+      Generated(shape: OcctShape): OcctShapeList;
+    },
+    edges: ReadonlyArray<{ shape: OcctShape; key: string }>,
+    scope: string,
+    distanceIndex: number,
+    distanceCount: number,
+  ): ShapeNames {
+    const faces = this.faceShapes(part);
+    const created = new Map<number, string>();
+    const assign = (face: OcctShape, path: string) => {
+      const index = this.indexOfFace(faces, face);
+      if (index >= 0 && !created.has(index)) created.set(index, path);
+    };
+    const startPath = distanceCount > 1 ? `cap/start-${distanceIndex}` : 'cap/start';
+    const endPath = distanceCount > 1 ? `cap/end-${distanceIndex}` : 'cap/end';
+    try {
+      for (const face of this.faceShapes(prism.FirstShape())) assign(face, startPath);
+      for (const face of this.faceShapes(prism.LastShape())) assign(face, endPath);
+    } catch {
+      // A one-sided sweep still has a start; a maker that cannot say so leaves
+      // the cap to the fallback key below.
+    }
+    for (const edge of edges) {
+      let generated: OcctShape[] = [];
+      try {
+        generated = this.drainShapes(prism.Generated(edge.shape));
+      } catch {
+        generated = [];
+      }
+      const ranks = generated
+        .map((face) => ({ face, key: this.faceMeasure(face) }))
+        .sort((left, right) => left.key.area - right.key.area);
+      ranks.forEach(({ face }, rank) => {
+        assign(face, generated.length === 1 ? `side/${edge.key}` : `side/${edge.key}/${rank}`);
+      });
+    }
+    return propagateNames({
+      faceCount: faces.length,
+      inherited: new Map(),
+      faceKeys: this.faceKeys(faces),
+      created,
+      scope,
+      // The scope may name a region or a hole; the owner is the operation.
+      owner: scope.split('/')[0] ?? scope,
+    });
   }
 
   private revolveLoop(
     loop: ProfileLoop,
     params: MakeRevolveParams,
     sweep: RevolveSweep,
-  ): OcctShape {
+    scope: string,
+  ): NamedShape {
     const oc = this.requireOc();
     const plane = profilePlane(params);
-    const wire = this.buildWire(loop, plane);
+    const { wire, edges } = this.buildWireWithKeys(loop, plane);
     const maker = new oc.BRepBuilderAPI_MakeFace_15(wire, false);
     if (!maker.IsDone()) {
       throw new KernelOpError('INVALID_PARAMS', 'Sketch region contour is not closed');
     }
-    return this.revolveFace(maker.Face(), params.axis, sweep);
+    return this.revolveFace(maker.Face(), params.axis, sweep, scope, edges);
   }
 
   /** Places the face at the start of the sweep, then turns it to the end. */
-  private revolveFace(face: OcctShape, axis: RevolveAxisLine, sweep: RevolveSweep): OcctShape {
+  private revolveFace(
+    face: OcctShape,
+    axis: RevolveAxisLine,
+    sweep: RevolveSweep,
+    scope: string,
+    edges: ReadonlyArray<{ shape: OcctShape; key: string }>,
+  ): NamedShape {
     const oc = this.requireOc();
     const ax1 = revolveAxisLine(oc, axis);
     let placed = face;
@@ -2041,24 +2791,99 @@ export class KernelEngine {
     if (!maker.IsDone()) {
       throw new KernelOpError('OP_FAILED', 'Revolve failed for the profile');
     }
-    return maker.Shape();
+    const shape = maker.Shape();
+    return { shape, names: this.revolveFaceNames(shape, maker, edges, scope) };
+  }
+
+  /**
+   * Names of a revolve: caps start and end where the sweep opens the profile,
+   * every other face comes from the profile edge that generated it.
+   */
+  private revolveFaceNames(
+    shape: OcctShape,
+    maker: {
+      FirstShape(): OcctShape;
+      LastShape(): OcctShape;
+      Generated(shape: OcctShape): OcctShapeList;
+    },
+    edges: ReadonlyArray<{ shape: OcctShape; key: string }>,
+    scope: string,
+  ): ShapeNames {
+    const faces = this.faceShapes(shape);
+    const created = new Map<number, string>();
+    const assign = (face: OcctShape, path: string) => {
+      const index = this.indexOfFace(faces, face);
+      if (index >= 0 && !created.has(index)) created.set(index, path);
+    };
+    try {
+      for (const face of this.faceShapes(maker.FirstShape())) assign(face, 'cap/start');
+      for (const face of this.faceShapes(maker.LastShape())) assign(face, 'cap/end');
+    } catch {
+      // A full turn has no visible start or end cap.
+    }
+    for (const edge of edges) {
+      let generated: OcctShape[] = [];
+      try {
+        generated = this.drainShapes(maker.Generated(edge.shape));
+      } catch {
+        generated = [];
+      }
+      generated.forEach((face, rank) => {
+        assign(face, generated.length === 1 ? `side/${edge.key}` : `side/${edge.key}/${rank}`);
+      });
+    }
+    return propagateNames({
+      faceCount: faces.length,
+      inherited: new Map(),
+      faceKeys: this.faceKeys(faces),
+      created,
+      scope,
+      // The scope may name a region or a hole; the owner is the operation.
+      owner: scope.split('/')[0] ?? scope,
+    });
   }
 
   private buildWire(loop: ProfileLoop, plane: ProfilePlane): OcctShape {
+    return this.buildWireWithKeys(loop, plane).wire;
+  }
+
+  /** The wire of a contour, with the stable key of every edge it was built from. */
+  private buildWireWithKeys(
+    loop: ProfileLoop,
+    plane: ProfilePlane,
+  ): { wire: OcctShape; edges: Array<{ shape: OcctShape; key: string }> } {
     const oc = this.requireOc();
     if (loop.curves.length === 0) {
       throw new KernelOpError('INVALID_PARAMS', 'Sketch region contour is empty');
     }
     this.assertClosedLoop(loop);
-    const edges = loop.curves.map((curve) => this.buildEdge(curve, plane));
-    const maker = new oc.BRepBuilderAPI_MakeWire_2(edges[0]!);
+    const edges = loop.curves.map((curve, index) => ({
+      shape: this.buildEdge(curve, plane),
+      key: loop.keys?.[index] ?? `curve-${index}`,
+    }));
+    const maker = new oc.BRepBuilderAPI_MakeWire_2(edges[0]!.shape);
     for (const edge of edges.slice(1)) {
-      maker.Add_1(edge);
+      maker.Add_1(edge.shape);
     }
     if (!maker.IsDone()) {
       throw new KernelOpError('INVALID_PARAMS', 'Sketch region contour has open ends');
     }
-    return maker.Wire();
+    const wire = maker.Wire();
+    // The wire builder copies the edges it is given, so the copies are what a
+    // prism can report `Generated` faces for. The explorer walks them in the
+    // order the contour was built, which is what pairs each face with its key.
+    const explorer = new oc.BRepTools_WireExplorer_2(wire);
+    const ordered: Array<{ shape: OcctShape; key: string }> = [];
+    let index = 0;
+    while (explorer.More()) {
+      ordered.push({
+        shape: explorer.Current(),
+        key: edges[index]?.key ?? `curve-${index}`,
+      });
+      explorer.Next();
+      index += 1;
+    }
+    return { wire, edges: ordered.length === edges.length ? ordered : edges };
   }
 
   private assertClosedLoop(loop: ProfileLoop): void {
@@ -2109,6 +2934,20 @@ export class KernelEngine {
   // Coplanar faces produced by a fuse are one geometric face to the user, so
   // they must be one topological face for picking and for downstream features.
   private unify(shape: OcctShape): OcctShape {
+    return this.unifyNamed(shape, undefined, '', '').shape;
+  }
+
+  /**
+   * The same merge as `unify`, carrying names through the faces it joins.
+   * `UnifySameDomain` reports its history, so a merged face keeps every name it
+   * covers as an alias.
+   */
+  private unifyNamed(
+    shape: OcctShape,
+    names: ShapeNames | undefined,
+    scope: string,
+    owner: string,
+  ): { shape: OcctShape; names?: ShapeNames } {
     const oc = this.requireOc();
     // A shape with a face that only grazes another can make the merge give up,
     // and an unmerged body is still the right body — just with an extra seam.
@@ -2125,12 +2964,30 @@ export class KernelEngine {
         const result = unify.Shape();
         if (result.IsNull()) continue;
         if (unifyFaces && !this.mergedFacesValid(shape, result)) continue;
-        return result;
+        if (!names) return { shape: result };
+        let history: OcctHistory | null;
+        try {
+          history = unify.History_1().get();
+        } catch {
+          history = null;
+        }
+        if (!history) return { shape: result, names };
+        return {
+          shape: result,
+          names: this.nameFromHistory({
+            result,
+            mapper: history,
+            sources: [{ shape, names }],
+            scope,
+            owner,
+            createdPrefix: 'merge',
+          }),
+        };
       } catch {
         // Try the next mode, then keep the shape as it is.
       }
     }
-    return shape;
+    return { shape, names };
   }
 
   /**
@@ -2174,7 +3031,12 @@ export class KernelEngine {
     return this.booleanMaker(base, tool, op).Shape();
   }
 
-  private booleanMaker(base: OcctShape, tool: OcctShape, op: BooleanParams['op']): OcctBooleanMaker {
+  private booleanMaker(
+    base: OcctShape,
+    tool: OcctShape,
+    op: BooleanParams['op'],
+    fillHistory = false,
+  ): OcctBooleanMaker {
     const oc = this.requireOc();
     const maker =
       op === 'fuse'
@@ -2182,11 +3044,52 @@ export class KernelEngine {
         : op === 'cut'
           ? new oc.BRepAlgoAPI_Cut_3(base, tool)
           : new oc.BRepAlgoAPI_Common_3(base, tool);
+    if (fillHistory) maker.SetToFillHistory(true);
     maker.Build();
     if (maker.Shape().IsNull()) {
       throw new KernelOpError('OP_FAILED', `Boolean ${op} produced an empty shape`);
     }
     return maker;
+  }
+
+  /** A boolean that carries the names of the shapes it was made from. */
+  private booleanNamed(
+    base: { shape: OcctShape; names?: ShapeNames; prefix?: string },
+    tool: { shape: OcctShape; names?: ShapeNames; prefix?: string },
+    op: BooleanParams['op'],
+    scope: string,
+    owner: string,
+    reown = false,
+    createdPrefix = 'new',
+  ): { shape: OcctShape; names?: ShapeNames; maker: OcctBooleanMaker } {
+    const maker = this.booleanMaker(base.shape, tool.shape, op, true);
+    const shape = maker.Shape();
+    const sources = [base, tool]
+      .filter((source): source is { shape: OcctShape; names: ShapeNames; prefix?: string } =>
+        Boolean(source.names),
+      )
+      .map((source) => ({ shape: source.shape, names: source.names!, ...(source.prefix ? { prefix: source.prefix } : {}) }));
+    if (sources.length === 0) return { shape, maker };
+    let history: OcctHistory | null;
+    try {
+      history = maker.History().get();
+    } catch {
+      history = null;
+    }
+    if (!history) return { shape, maker };
+    return {
+      shape,
+      maker,
+      names: this.nameFromHistory({
+        result: shape,
+        mapper: history,
+        sources,
+        scope,
+        owner,
+        reown,
+        createdPrefix,
+      }),
+    };
   }
 
   /**

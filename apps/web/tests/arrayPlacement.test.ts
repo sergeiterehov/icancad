@@ -111,7 +111,7 @@ describe('array placements', () => {
   it('turns around the normal of a picked face, through its centre', () => {
     const direction: Resolved<ArrayDirection> = {
       kind: 'rotation',
-      axis: { kind: 'face', bodyId: 'body_1', faceId: '3', origin: [5, 0, 0], normal: [0, 0, 1] },
+      axis: { kind: 'face', bodyId: 'body_1', name: 'fixture/+z', origin: [5, 0, 0], normal: [0, 0, 1] },
       angle: 180,
       count: 2,
     };
@@ -190,7 +190,13 @@ describe('array placements', () => {
   });
 
   it('follows an edge of a body', () => {
-    const edge = { id: 'edge_0', faceIds: [0], points: [0, 0, 0, 0, 0, 20], closed: false };
+    const edge = {
+      id: 'edge_0',
+      name: 'edge_0',
+      faceIds: [0],
+      points: [0, 0, 0, 0, 0, 20],
+      closed: false,
+    };
     const mesh = {
       positions: new Float32Array(),
       normals: new Float32Array(),
@@ -204,7 +210,7 @@ describe('array placements', () => {
     const matrices = directionMatrices(
       {
         kind: 'path',
-        paths: [{ kind: 'body-edge', bodyId: 'body_1', edgeId: 'edge_0' }],
+        paths: [{ kind: 'body-edge', bodyId: 'body_1', name: 'edge_0' }],
         count: 2,
       },
       { meshes: { body_1: mesh }, sketches: [] },

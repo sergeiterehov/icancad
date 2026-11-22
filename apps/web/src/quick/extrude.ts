@@ -41,19 +41,21 @@ export function extrudeInputFromSelection(
     if (item.kind !== 'body-face') continue;
     const parsed = parseBodyFaceId(item.id);
     if (!parsed) continue;
-    const key = `${parsed.bodyId}#${parsed.faceId}`;
-    if (seenFaces.has(key)) continue;
     const body = model.bodies.find((candidate) => candidate.id === parsed.bodyId);
     if (!body || body.kind === 'mesh' || !isFeatureInHistory(model, body.createdBy)) continue;
     const mesh = meshes[parsed.bodyId];
     const faceId = Number(parsed.faceId);
     if (!mesh || !Number.isInteger(faceId) || !isPlanarFace(mesh, faceId)) continue;
+    const name = mesh.faceNames?.[faceId];
+    if (!name) continue;
+    const key = `${parsed.bodyId}#${name}`;
+    if (seenFaces.has(key)) continue;
     const pose = outwardNormal(mesh, faceId);
     if (!pose) continue;
     seenFaces.add(key);
     faceRefs.push({
       bodyId: parsed.bodyId,
-      faceId: parsed.faceId,
+      name,
       normal: pose.normal,
       origin: pose.centroid,
     });

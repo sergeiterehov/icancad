@@ -62,9 +62,9 @@ import { importStepToKernel, loadImportedStep } from './import';
 import { importedMeshScale, scaledMeshStats } from './importUnits';
 import { faceRegion, pointInMesh } from '../quick/geometry';
 import { resolveShellFaceRef } from '../quick/shell';
-import { resolveEdgeRef } from './edgeLookup';
+import { resolveEdgeRef } from './topologyLookup';
 import { edgeTreatmentLimit } from './edgeTreatment';
-import { resolveFaceRef } from './faceLookup';
+import { resolveFaceRef } from './topologyLookup';
 import {
   pickReferenceBody,
   profileSamples,
@@ -732,7 +732,7 @@ async function runRebuild(
       base.consumedBodies,
     );
     store.setBodyOperations(Object.fromEntries(base.bodySource));
-    store.setFaceOperations(Object.fromEntries(base.faceOwners));
+    store.setFaceOperations(faceOperationsOf(base));
     store.setSketchOverrides(Object.fromEntries(base.sketchOverrides));
     store.setFeatureLimits(base.featureLimits);
     store.setInteractiveReady(true);
@@ -847,7 +847,7 @@ async function runRebuild(
   // to the operation that made it.
   const done = useKernelStore.getState();
   done.setBodyOperations(Object.fromEntries(scene.bodySource));
-  done.setFaceOperations(Object.fromEntries(scene.faceOwners));
+  done.setFaceOperations(faceOperationsOf(scene));
   done.setSketchOverrides(Object.fromEntries(scene.sketchOverrides));
   done.setFeatureLimits(scene.featureLimits);
   done.setBuildProgress(null);
@@ -871,6 +871,15 @@ function withRemovedBodies(state: RebuildState, base: RebuildState): RebuildStat
     if (!merged.bodyStats[bodyId]) merged.bodyStats[bodyId] = stats;
   }
   return merged;
+}
+
+/** Which operation owns each face, read from the names the kernel gave it. */
+function faceOperationsOf(state: RebuildState): Record<string, string[]> {
+  const owners: Record<string, string[]> = {};
+  for (const [bodyId, mesh] of Object.entries(state.meshes)) {
+    owners[bodyId] = mesh.faceOwners ?? state.faceOwners.get(bodyId) ?? [];
+  }
+  return owners;
 }
 
 function aggregateStats(state: RebuildState): Record<string, ShapeStats> {
@@ -1156,7 +1165,7 @@ async function evaluateFeature(
     try {
       const data = await loadImportedStep(feature.assetId);
       if (epoch !== rebuildEpoch) return;
-      const result = await importStepToKernel(data, `feat:${feature.id}`);
+      const result = await importStepToKernel(data, `feat:${feature.id}`, feature.id);
       if (epoch !== rebuildEpoch) return;
       const bodyIds: string[] = [];
       for (let index = 0; index < result.bodies.length; index += 1) {
@@ -1396,10 +1405,12 @@ async function applyExtrude(
           type: 'make-revolve' as const,
           params: {
             shapeId,
+            name: feature.id,
             origin: plane.origin,
             xAxis: plane.xAxis,
             yAxis: plane.yAxis,
             regions: regions.map((profile) => ({
+              key: profile.id,
               outer: profile.outer,
               holes: profile.holes,
             })),
@@ -1411,10 +1422,12 @@ async function applyExtrude(
           type: 'make-prism' as const,
           params: {
             shapeId,
+            name: feature.id,
             origin: plane.origin,
             xAxis: plane.xAxis,
             yAxis: plane.yAxis,
             regions: regions.map((profile) => ({
+              key: profile.id,
               outer: profile.outer,
               holes: profile.holes,
             })),
@@ -1436,12 +1449,20 @@ async function applyExtrude(
     revolveAxis && revolveAnglesRad
       ? {
           type: 'make-face-revolve' as const,
-          params: { shapeId, sourceShapeId, faceId, axis: revolveAxis, ...revolveAnglesRad },
+          params: {
+            shapeId,
+            name: feature.id,
+            sourceShapeId,
+            faceId,
+            axis: revolveAxis,
+            ...revolveAnglesRad,
+          },
         }
       : {
           type: 'make-face-prism' as const,
           params: {
             shapeId,
+            name: feature.id,
             sourceShapeId,
             faceId,
             normal: pose.normal,
@@ -1517,7 +1538,7 @@ async function applyExtrude(
     ) => {
       await client.request({
         type: 'boolean',
-        params: { shapeId: resultId, baseShapeId, toolShapeId, op },
+        params: { shapeId: resultId, name: feature.id, baseShapeId, toolShapeId, op },
       });
     };
     /**
@@ -1530,7 +1551,12 @@ async function applyExtrude(
       const offsetId = trackShape(`${shapeId}:${suffix}`);
       await client.request({
         type: 'offset-shape',
-        params: { shapeId: offsetId, sourceShapeId: reference.shapeId, distance },
+        params: {
+          shapeId: offsetId,
+          name: `${feature.id}/${suffix}`,
+          sourceShapeId: reference.shapeId,
+          distance,
+        },
       });
       return offsetId;
     };
@@ -1675,7 +1701,7 @@ async function applyExtrude(
       ref?: BodyFaceRef;
     }
     const profileByRegion = new Map(selected.map((profile) => [profile.id, profile]));
-    const refByKey = new Map(faceRefs.map((ref) => [`b:${ref.bodyId}#${ref.faceId}`, ref]));
+    const refByKey = new Map(faceRefs.map((ref) => [`b:${ref.name}`, ref]));
     const parts: NewBodyPart[] = [];
     const usedProfiles = new Set<string>();
     const usedRefs = new Set<string>();
@@ -1699,7 +1725,7 @@ async function applyExtrude(
     if (sketch) {
       for (const profile of selected) addPart(`s:${sketch.id}#${profile.id}`);
     }
-    for (const ref of faceRefs) addPart(`b:${ref.bodyId}#${ref.faceId}`);
+    for (const ref of faceRefs) addPart(`b:${ref.name}`);
 
     // Faces touching along an edge belong to the same solid: extruding two
     // crescents and the lens between them must make one body, while the two
@@ -1755,7 +1781,12 @@ async function applyExtrude(
       }
 
       const ref = part.ref!;
-      const sourceShapeId = bodyShapes.get(ref.bodyId);
+      const resolved = resolveFaceRef({ bodyShapes, meshes, bodyStats }, ref);
+      if (!resolved) {
+        markBodyError(ref.bodyId, bodyErrorCode(ref.bodyId));
+        continue;
+      }
+      const sourceShapeId = bodyShapes.get(resolved.bodyId);
       if (!sourceShapeId) {
         markBodyError(ref.bodyId, bodyErrorCode(ref.bodyId));
         continue;
@@ -1764,10 +1795,10 @@ async function applyExtrude(
       const shapeId = await buildFaceShape(
         trackShape(`${feature.id}:face-${slot}`),
         sourceShapeId,
-        Number(ref.faceId),
+        resolved.faceId,
         ref,
         false,
-        ref.bodyId,
+        resolved.bodyId,
       );
       if (epoch !== rebuildEpoch) return;
       bodyShapes.set(bodyId, shapeId);
@@ -1846,7 +1877,7 @@ async function applyExtrude(
       resolved.bodyId,
     );
     if (epoch !== rebuildEpoch) return;
-    toolParts.push({ shapeId, key: `b:${ref.bodyId}#${ref.faceId}` });
+    toolParts.push({ shapeId, key: `b:${ref.name}` });
   }
   if (toolParts.length === 0) throw new Error('NO_PROFILE');
 
@@ -1863,6 +1894,7 @@ async function applyExtrude(
         type: 'boolean',
         params: {
           shapeId: fusedId,
+          name: feature.id,
           baseShapeId: toolShapeId,
           toolShapeId: part.shapeId,
           op: 'fuse',
@@ -2029,6 +2061,7 @@ async function applyExtrude(
           type: 'boolean',
           params: {
             shapeId: resultShapeId,
+            name: feature.id,
             baseShapeId: currentShapeId,
             toolShapeId: part.shapeId,
             op: 'fuse',
@@ -2087,7 +2120,14 @@ async function applyExtrude(
     const request = (shapeId: string, base: string, tool: string) =>
       client.request<MakeBoxResult>({
         type: 'boolean',
-        params: { shapeId, baseShapeId: base, toolShapeId: tool, op: booleanOp, trackFaces: true },
+        params: {
+          shapeId,
+          name: feature.id,
+          baseShapeId: base,
+          toolShapeId: tool,
+          op: booleanOp,
+          trackFaces: true,
+        },
       });
     let operated: MakeBoxResult;
     try {
@@ -2169,13 +2209,23 @@ async function applyExtrude(
     const assignment = split ? splitAssignment(split.solids) : null;
     const originalOwner = bodyOwner.get(bodyId) ?? feature.id;
     if (assignment) {
-      const pieces: Array<{ bodyId: string; solid: SplitSolid; created: boolean }> = [
-        { bodyId, solid: assignment.main, created: false },
-        ...assignment.extras.map((solid, index) => ({
-          bodyId: splitBodyId(feature.id, bodyId, index + 1),
+      const extras: Array<{ bodyId: string; solid: SplitSolid; created: boolean }> = [];
+      for (const solid of assignment.extras) {
+        const mesh = await client.request<TessellationResult>({
+          type: 'tessellate',
+          shapeId: solid.shapeId,
+        });
+        if (epoch !== rebuildEpoch) return;
+        const defining = [...(mesh.faceNames ?? [])].sort()[0] ?? 'piece';
+        extras.push({
+          bodyId: splitBodyId(feature.id, bodyId, defining),
           solid,
           created: true,
-        })),
+        });
+      }
+      const pieces: Array<{ bodyId: string; solid: SplitSolid; created: boolean }> = [
+        { bodyId, solid: assignment.main, created: false },
+        ...extras,
       ];
       for (const piece of pieces) {
         bodyShapes.set(piece.bodyId, piece.solid.shapeId);
@@ -2295,7 +2345,7 @@ async function applyEdgeTreatment(
     const resolved = resolveFaceRef({ bodyShapes, meshes, bodyStats }, ref);
     if (!resolved) {
       markObjectError(
-        `face:${ref.bodyId}#${ref.faceId}`,
+        `face:${ref.name}`,
         bodyShapes.has(ref.bodyId) ? 'TARGET_FAILED' : 'UNKNOWN_BODY',
       );
       continue;
@@ -2306,7 +2356,7 @@ async function applyEdgeTreatment(
     const resolved = resolveEdgeRef({ bodyShapes, meshes }, ref);
     if (!resolved) {
       markObjectError(
-        `edge:${ref.bodyId}#${ref.edgeId}`,
+        `edge:${ref.name}`,
         bodyShapes.has(ref.bodyId) ? 'TARGET_FAILED' : 'UNKNOWN_BODY',
       );
       continue;
@@ -2338,6 +2388,7 @@ async function applyEdgeTreatment(
         type: 'edge-treatment',
         params: {
           shapeId: resultShapeId,
+          name: feature.id,
           sourceShapeId,
           kind: feature.kind,
           faceIds: group.faceIds,
@@ -2545,7 +2596,13 @@ async function applyArray(
     try {
       const result = await client.request<MakeBoxResult>({
         type: 'transform-shape',
-        params: { shapeId: copyShapeId, sourceShapeId: shapeId, matrix: placement.matrix },
+        params: {
+          shapeId: copyShapeId,
+          sourceShapeId: shapeId,
+          matrix: placement.matrix,
+          nameScope: `${feature.id}/${placement.key}`,
+          owner: feature.id,
+        },
       });
       if (epoch !== rebuildEpoch) return;
       bodyOwner.set(copyId, feature.id);
@@ -2620,6 +2677,7 @@ async function applyArray(
           type: 'boolean',
           params: {
             shapeId: addedId,
+            name: feature.id,
             baseShapeId: change.after,
             toolShapeId: change.before,
             op: 'cut',
@@ -2630,6 +2688,7 @@ async function applyArray(
           type: 'boolean',
           params: {
             shapeId: removedId,
+            name: feature.id,
             baseShapeId: change.before,
             toolShapeId: change.after,
             op: 'cut',
@@ -2651,7 +2710,7 @@ async function applyArray(
     const deltas = await deltasOf(source, sourceIndex);
     if (deltas === null) return;
 
-    type PlacedTool = { sourceShapeId: string; matrix: Matrix3x4 };
+    type PlacedTool = { sourceShapeId: string; matrix: Matrix3x4; key: string };
     const collect = (map: Map<string, PlacedTool[]>, targetId: string, tool: PlacedTool): void => {
       const list = map.get(targetId) ?? [];
       list.push(tool);
@@ -2678,10 +2737,12 @@ async function applyArray(
           type: 'boolean-all',
           params: {
             shapeId: resultShapeId,
+            name: feature.id,
             baseShapeId: bodyShapes.get(targetId)!,
             tools: tools.map((tool) => ({
               sourceShapeId: tool.sourceShapeId,
               matrix: [...tool.matrix],
+              key: tool.key,
             })),
             op,
             trackFaces: true,
@@ -2722,13 +2783,20 @@ async function applyArray(
         try {
           await client.request({
             type: 'transform-shape',
-            params: { shapeId: toolId, sourceShapeId: tool.sourceShapeId, matrix: tool.matrix },
+            params: {
+              shapeId: toolId,
+              sourceShapeId: tool.sourceShapeId,
+              matrix: tool.matrix,
+              nameScope: `${feature.id}/${label}/${index}`,
+              owner: feature.id,
+            },
           });
           if (epoch !== rebuildEpoch) return;
           const result = await client.request<MakeBoxResult>({
             type: 'boolean',
             params: {
               shapeId: resultShapeId,
+              name: feature.id,
               baseShapeId: current,
               toolShapeId: toolId,
               op,
@@ -2795,6 +2863,7 @@ async function applyArray(
         const tools = placements.map((placement) => ({
           sourceShapeId: entry.shapeId,
           matrix: placement.matrix,
+          key: placement.key,
         }));
         const outcome = await applyBatch(seedId, tools, 'fuse', `repeat:${seedId}`, true);
         if (epoch !== rebuildEpoch) return;
@@ -2811,13 +2880,20 @@ async function applyArray(
           try {
             const placed = await client.request<MakeBoxResult>({
               type: 'transform-shape',
-              params: { shapeId: placedId, sourceShapeId: entry.shapeId, matrix: placement.matrix },
+              params: {
+                shapeId: placedId,
+                sourceShapeId: entry.shapeId,
+                matrix: placement.matrix,
+                nameScope: `${feature.id}/${placement.key}`,
+                owner: feature.id,
+              },
             });
             if (epoch !== rebuildEpoch) return;
             const fused = await client.request<MakeBoxResult>({
               type: 'boolean',
               params: {
                 shapeId: resultId,
+                name: feature.id,
                 baseShapeId: bodyShapes.get(seedId)!,
                 toolShapeId: placedId,
                 op: 'fuse',
@@ -2859,7 +2935,11 @@ async function applyArray(
             continue;
           }
           for (const part of source.tool.parts) {
-            collect(byTarget, targetId, { sourceShapeId: part, matrix: placement.matrix });
+            collect(byTarget, targetId, {
+              sourceShapeId: part,
+              matrix: placement.matrix,
+              key: placement.key,
+            });
           }
         }
       }
@@ -2886,12 +2966,14 @@ async function applyArray(
           collect(addedByTarget, targetId, {
             sourceShapeId: delta.added,
             matrix: placement.matrix,
+            key: placement.key,
           });
         }
         if (delta.removed) {
           collect(removedByTarget, targetId, {
             sourceShapeId: delta.removed,
             matrix: placement.matrix,
+            key: placement.key,
           });
         }
       }
@@ -3353,11 +3435,13 @@ async function applyShell(
         type: 'shell',
         params: {
           shapeId: resultShapeId,
+          name: feature.id,
           sourceShapeId,
           removeFaceIds: openings.get(bodyId) ?? [],
           thickness,
           offset: feature.direction === 'outward' ? Math.max(0, feature.offset ?? 0) : 0,
           direction: feature.direction,
+          reown: feature.direction === 'outward',
         },
       });
     } catch (error) {
@@ -3468,9 +3552,11 @@ async function applyBoolean(
     type: 'boolean-all',
     params: {
       shapeId: resultShapeId,
+      name: feature.id,
       baseShapeId: base.shapeId,
       tools: tools.map((tool) => ({ sourceShapeId: tool.shapeId, matrix: IDENTITY_MATRIX })),
       op,
+      reown: true,
     },
   });
   if (epoch !== rebuildEpoch) return;
@@ -3601,9 +3687,17 @@ async function applyBoolean(
     const targetId = base.bodyId;
     if (!(await registerPiece(targetId, pieces[0]!))) return;
     // A result that separated into several solids keeps the target for the
-    // largest piece; every other piece is a body of its own.
-    for (const [index, piece] of pieces.slice(1).entries()) {
-      const bodyId = splitBodyId(feature.id, targetId, index + 1);
+    // largest piece; every other piece is a body of its own. Its id follows the
+    // smallest face name the piece carries, so editing the operation does not
+    // renumber the pieces.
+    for (const piece of pieces.slice(1)) {
+      const mesh = await client.request<TessellationResult>({
+        type: 'tessellate',
+        shapeId: piece.shapeId,
+      });
+      if (epoch !== rebuildEpoch) return;
+      const defining = [...(mesh.faceNames ?? [])].sort()[0] ?? 'piece';
+      const bodyId = splitBodyId(feature.id, targetId, defining);
       bodyOwner.set(bodyId, feature.id);
       if (!(await registerPiece(bodyId, piece))) return;
       created.push(bodyId);

@@ -28,6 +28,6 @@ export function splitAssignment(solids: readonly SplitSolid[]): SplitAssignment 
 }
 
 /** Stable id of a body a boolean split off an existing body. */
-export function splitBodyId(featureId: string, sourceBodyId: string, slot: number): string {
-  return `${featureId}:split:${sourceBodyId}:${slot}`;
+export function splitBodyId(featureId: string, sourceBodyId: string, definingFace: string): string {
+  return `${featureId}:split:${sourceBodyId}:${definingFace}`;
 }

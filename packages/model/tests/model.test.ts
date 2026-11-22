@@ -14,7 +14,6 @@ import {
   nextModelName,
   parseProject,
   ProjectFileError,
-  PROJECT_SCHEMA_VERSION,
   solidBodiesInHistory,
   validateHistory,
   type BodyRef,
@@ -95,22 +94,11 @@ function withModel(patch: Partial<Model>, name = 'Test'): Project {
   return updateActiveModel(createProject(name), (model) => ({ ...model, ...patch }));
 }
 
-function legacyFile(features: Feature[] = []): Record<string, unknown> {
-  const project = createProject('Old project');
-  const model = activeModel(project);
-  return {
-    schemaVersion: 2,
-    id: project.id,
-    name: project.name,
-    units: project.units,
-    features,
-    bodies: [],
-    metadata: {},
-    view: model.view,
-    historyEnd: null,
-    createdAt: project.createdAt,
-    updatedAt: project.updatedAt,
-  };
+function projectFile(features: Feature[] = []): Record<string, unknown> {
+  const project = createProject('Test');
+  return JSON.parse(
+    JSON.stringify(updateActiveModel(project, (model) => ({ ...model, features }))),
+  ) as Record<string, unknown>;
 }
 
 function withBox(): Project {
@@ -202,23 +190,6 @@ describe('project model', () => {
     expect(nextModelName(project, 'Part')).toBe('Part');
   });
 
-  it('migrates a flat version 2 project into one model', () => {
-    const project = parseProject(legacyFile([boxFeature()]));
-    expect(project.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
-    expect(project.superObjects).toHaveLength(1);
-    expect(activeModel(project).name).toBe('Model');
-    expect(activeModel(project).features.map((feature) => feature.id)).toEqual(['feat_box']);
-    expect(activeModel(project).groups).toEqual([]);
-    // The migrated project is a normal current document that accepts edits.
-    const edited = applyCommand(project, { type: 'body/add', body: bodyFor('feat_box') });
-    expect(activeModel(edited).bodies).toHaveLength(1);
-  });
-
-  it('names the migrated model with the locale default', () => {
-    const project = parseProject(legacyFile(), { modelName: 'Модель' });
-    expect(activeModel(project).name).toBe('Модель');
-  });
-
   it('adds feature and body in a single command batch', () => {
     const project = withBox();
     expect(modelOf(project).features).toHaveLength(1);
@@ -232,7 +203,7 @@ describe('project model', () => {
     delete legacy.objectOrder;
     delete legacy.reversed;
     delete legacy.method;
-    const project = parseProject(legacyFile([legacy as unknown as Feature]));
+    const project = parseProject(projectFile([legacy as unknown as Feature]));
     const parsed = modelOf(project).features[0] as ExtrudeFeature;
     expect(parsed.faceRefs).toEqual([]);
     expect(parsed.objectOrder).toEqual([]);
@@ -250,7 +221,7 @@ describe('project model', () => {
         axis: {
           kind: 'body-edge',
           bodyId: 'body-1',
-          edgeId: '3',
+          name: 'feat_extrude/extrude/edge/1',
           start: [0, 0, 0],
           end: [0, 10, 0],
         },
@@ -259,7 +230,7 @@ describe('project model', () => {
         inverted: true,
       },
     };
-    const project = parseProject(legacyFile([feature]));
+    const project = parseProject(projectFile([feature]));
     expect((modelOf(project).features[0] as ExtrudeFeature).revolve).toEqual(feature.revolve);
   });
 
@@ -273,7 +244,7 @@ describe('project model', () => {
       removeFaces: [
         {
           bodyId: 'body-1',
-          faceId: '5',
+          name: 'feat_box/+z',
           normal: [0, 0, 1],
           origin: [10, 10, 20],
         },
@@ -282,7 +253,7 @@ describe('project model', () => {
       offset: 3,
       direction: 'outward',
     };
-    const project = parseProject(legacyFile([feature]));
+    const project = parseProject(projectFile([feature]));
     expect(modelOf(project).features[0]).toEqual(feature);
   });
 
@@ -422,36 +393,6 @@ describe('object metadata', () => {
     expect(body?.kind).toBe('mesh');
     expect(isMeshObject(body!)).toBe(true);
     expect(solidBodiesInHistory(modelOf(project))).toEqual([]);
-  });
-
-  it('gives imported meshes from older projects millimetre units', () => {
-    const project = applyCommands(createProject(), [
-      {
-        type: 'feature/add',
-        feature: {
-          id: 'feat_import',
-          name: 'Imported mesh',
-          suppressed: false,
-          type: 'import-mesh',
-          assetId: 'asset-1',
-          format: 'stl',
-          unit: 'mm',
-          transform,
-          scale: 1,
-        },
-      },
-      { type: 'body/add', body: { ...bodyFor('feat_import'), kind: 'mesh' } },
-    ]);
-    const legacy = JSON.parse(JSON.stringify(project)) as unknown as Record<string, unknown>;
-    legacy.schemaVersion = 6;
-    delete (activeModel(legacy as unknown as Project).features[0] as { unit?: string }).unit;
-
-    const parsed = parseProject(legacy);
-    expect(parsed.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
-    expect(activeModel(parsed).features[0]).toMatchObject({
-      type: 'import-mesh',
-      unit: 'mm',
-    });
   });
 
   it('recognises imported meshes saved without a kind', () => {
@@ -685,6 +626,33 @@ describe('project serialization', () => {
   it('rejects unsupported schema versions', () => {
     const project = { ...withBox(), schemaVersion: 99 };
     expect(() => parseProject(project)).toThrow(ProjectFileError);
+  });
+
+  it('marks schema 8 references for recovery by their stored pose', () => {
+    const bodyId = bodyFor('feat_box').id;
+    const shell: ShellFeature = {
+      id: 'feat_shell',
+      name: 'Shell',
+      suppressed: false,
+      type: 'shell',
+      bodyIds: [bodyId],
+      removeFaces: [
+        { bodyId, name: 'feat_box/+z', normal: [0, 0, 1], origin: [10, 5, 5] },
+      ],
+      thickness: 1,
+      offset: 0,
+      direction: 'inward',
+    };
+    const legacy = {
+      ...withModel({ features: [boxFeature(), shell], bodies: [bodyFor('feat_box')] }),
+      schemaVersion: 8,
+    };
+    const parsed = parseProject(JSON.parse(JSON.stringify(legacy)));
+    expect(parsed.schemaVersion).toBe(9);
+    const restored = modelOf(parsed).features.find(
+      (feature): feature is ShellFeature => feature.type === 'shell',
+    );
+    expect(restored?.removeFaces[0]?.legacyPose).toBe(true);
   });
 
   it('rejects structurally invalid projects', () => {

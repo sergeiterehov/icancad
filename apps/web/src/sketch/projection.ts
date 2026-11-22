@@ -18,6 +18,7 @@ import {
   type Point2,
   type SketchEntityDraft,
 } from '@icancad/sketch';
+import { faceIdByName } from '../kernel/topologyLookup';
 import { faceSilhouettes } from './silhouette';
 
 /** What a projection click in the 3D view landed on. */
@@ -27,11 +28,14 @@ export type ProjectionPick =
   | { kind: 'face'; bodyId: string; faceId: string };
 
 interface BodyElements {
-  /** Vertices by their stable id: the edges that meet there. */
+  /** Vertices by their stable name: the edges that meet there. */
   vertices: Map<string, Vec3>;
-  /** Position-based ids, which links written by older builds still use. */
+  /** Position-based ids of the tessellation, mapped to the stable vertex name. */
   vertexIds: Map<string, string>;
+  /** Edges by their persistent name. */
   edges: Map<string, BodyEdge>;
+  /** Edges by the tessellation id a pick carries. */
+  byId: Map<string, BodyEdge>;
 }
 
 const elementCache = new WeakMap<TessellationResult, BodyElements>();
@@ -55,11 +59,14 @@ export function bodyElements(mesh: TessellationResult): BodyElements {
   const cached = elementCache.get(mesh);
   if (cached) return cached;
   const edges = new Map<string, BodyEdge>();
+  const byId = new Map<string, BodyEdge>();
   const byPosition = new Map<string, Vec3>();
   const incident = new Map<string, string[]>();
   for (const edge of mesh.edges ?? []) {
-    edges.set(edge.id, edge);
-    if (edge.closed) continue;
+    byId.set(edge.id, edge);
+    // An edge without a name cannot be linked to; imported meshes have none.
+    if (edge.name) edges.set(edge.name, edge);
+    if (edge.closed || !edge.name) continue;
     const count = edge.points.length / 3;
     if (count < 2) continue;
     for (const index of [0, count - 1]) {
@@ -71,7 +78,7 @@ export function bodyElements(mesh: TessellationResult): BodyElements {
       const position = vertexElementId(point);
       byPosition.set(position, point);
       const list = incident.get(position) ?? [];
-      list.push(edge.id);
+      list.push(edge.name);
       incident.set(position, list);
     }
   }
@@ -82,7 +89,7 @@ export function bodyElements(mesh: TessellationResult): BodyElements {
     vertices.set(id, point);
     vertexIds.set(position, id);
   }
-  const elements = { vertices, vertexIds, edges };
+  const elements = { vertices, vertexIds, edges, byId };
   elementCache.set(mesh, elements);
   return elements;
 }
@@ -96,7 +103,7 @@ export function edgeWorldPoints(edge: BodyEdge): Vec3[] {
 }
 
 function sourceKey(source: SketchProjection['source']): string {
-  return `${source.bodyId}:${source.kind}:${source.elementId}`;
+  return `${source.bodyId}:${source.kind}:${source.name}`;
 }
 
 /**
@@ -133,10 +140,10 @@ function projectedCurve(frame: SketchFrame, edge: BodyEdge): SketchEntityDraft |
 function silhouetteCurves(
   mesh: TessellationResult,
   frame: SketchFrame,
-  faceId: string,
+  faceName: string,
 ): Array<{ elementId: string; curve: SketchEntityDraft }> {
-  const index = Number(faceId);
-  if (!Number.isFinite(index)) return [];
+  const index = faceIdByName(mesh, faceName);
+  if (index === null) return [];
   const projected = faceSilhouettes(mesh, index, frame.normal)
     .map((silhouette) => {
       const points = projectPolylineToFrame(frame, silhouette.points);
@@ -155,7 +162,7 @@ function silhouetteCurves(
   const curves: Array<{ elementId: string; curve: SketchEntityDraft }> = [];
   for (const entry of projected) {
     for (const curve of entry.curves) {
-      curves.push({ elementId: `${faceId}#${curves.length}`, curve });
+      curves.push({ elementId: `${faceName}#${curves.length}`, curve });
     }
   }
   return curves;
@@ -225,18 +232,18 @@ function curveSamples(curve: SketchEntityDraft): Point2[] {
 function faceContourCurves(
   mesh: TessellationResult,
   frame: SketchFrame,
-  faceId: string,
+  faceName: string,
 ): FaceCurve[] {
-  const index = Number(faceId);
-  if (!Number.isFinite(index)) return [];
+  const index = faceIdByName(mesh, faceName);
+  if (index === null) return [];
   const elements = bodyElements(mesh);
   const entries: FaceCurve[] = [];
   for (const edge of elements.edges.values()) {
-    if (!edge.faceIds.includes(index)) continue;
+    if (!edge.faceIds.includes(index) || !edge.name) continue;
     const curve = projectedCurve(frame, edge);
-    if (curve) entries.push({ elementId: edge.id, kind: 'edge', curve });
+    if (curve) entries.push({ elementId: edge.name, kind: 'edge', curve });
   }
-  for (const entry of silhouetteCurves(mesh, frame, faceId)) {
+  for (const entry of silhouetteCurves(mesh, frame, faceName)) {
     entries.push({ elementId: entry.elementId, kind: 'silhouette', curve: entry.curve });
   }
   if (entries.length < 2) return entries;
@@ -258,12 +265,12 @@ function faceCurveCache(
   mesh: TessellationResult,
   frame: SketchFrame,
   bodyId: string,
-  faceId: string,
+  faceName: string,
 ): FaceCurve[] {
-  const key = `${bodyId}|${faceId}|${frame.origin.join(',')}|${frame.normal.join(',')}`;
+  const key = `${bodyId}|${faceName}|${frame.origin.join(',')}|${frame.normal.join(',')}`;
   const cached = faceCurveCacheEntries.get(key);
   if (cached) return cached;
-  const curves = faceContourCurves(mesh, frame, faceId);
+  const curves = faceContourCurves(mesh, frame, faceName);
   if (faceCurveCacheEntries.size > 64) faceCurveCacheEntries.clear();
   faceCurveCacheEntries.set(key, curves);
   return curves;
@@ -313,18 +320,21 @@ export function addProjectionToSketch(
   const elements = bodyElements(mesh);
   let changed = false;
 
-  const stableVertexId = (point: Vec3): string => {
+  const stableVertexId = (point: Vec3, picked?: string): string | null => {
     const position = vertexElementId(point);
-    return elements.vertexIds.get(position) ?? position;
+    if (picked && elements.vertices.has(picked)) return picked;
+    return elements.vertexIds.get(position) ?? null;
   };
 
   const addVertex = (
     bodyId: string,
     point: Vec3,
-    elementId = stableVertexId(point),
-    faceId?: string,
+    picked?: string,
+    faceName?: string,
   ) => {
-    const key = `${bodyId}:vertex:${elementId}`;
+    const name = stableVertexId(point, picked);
+    if (!name) return;
+    const key = `${bodyId}:vertex:${name}`;
     if (known.has(key)) return;
     known.add(key);
     const entity: SketchEntity = {
@@ -335,17 +345,17 @@ export function addProjectionToSketch(
     projections.push({
       id: createStableId('proj', key),
       entityId: entity.id,
-      source: { kind: 'vertex', bodyId, elementId },
-      ...(faceId ? { faceId } : {}),
+      source: { kind: 'vertex', bodyId, name },
+      ...(faceName ? { faceName } : {}),
     });
     changed = true;
   };
 
-  const addEdge = (bodyId: string, edgeId: string, faceId?: string) => {
-    const key = `${bodyId}:edge:${edgeId}`;
+  const addEdge = (bodyId: string, picked: string, faceName?: string) => {
+    const edge = elements.byId.get(picked);
+    if (!edge?.name) return;
+    const key = `${bodyId}:edge:${edge.name}`;
     if (known.has(key)) return;
-    const edge = elements.edges.get(edgeId);
-    if (!edge) return;
     const curve = projectedCurve(frame, edge);
     if (!curve) return;
     known.add(key);
@@ -357,8 +367,8 @@ export function addProjectionToSketch(
     projections.push({
       id: createStableId('proj', key),
       entityId: entity.id,
-      source: { kind: 'edge', bodyId, elementId: edgeId },
-      ...(faceId ? { faceId } : {}),
+      source: { kind: 'edge', bodyId, name: edge.name },
+      ...(faceName ? { faceName } : {}),
     });
     changed = true;
   };
@@ -368,29 +378,13 @@ export function addProjectionToSketch(
   } else if (pick.kind === 'edge') {
     addEdge(pick.bodyId, pick.edgeId);
   } else {
-    const faceId = Number(pick.faceId);
-    const boundary = [...elements.edges.values()].filter((edge) => edge.faceIds.includes(faceId));
-    // Corners projected before vertices were named after their edges point at a
-    // position that a resize has moved away from. Projecting the face again
-    // replaces those broken links with the corners added below.
-    const replacesBrokenCorner = (projection: SketchProjection): boolean =>
-      projection.source.kind === 'vertex' &&
-      projection.source.bodyId === pick.bodyId &&
-      projection.faceId === pick.faceId &&
-      // Position-based ids are the ones older builds wrote.
-      projection.source.elementId.includes(',') &&
-      !elements.vertices.has(projection.source.elementId) &&
-      !elements.vertexIds.has(projection.source.elementId);
-    for (let index = projections.length - 1; index >= 0; index -= 1) {
-      const projection = projections[index]!;
-      if (!replacesBrokenCorner(projection)) continue;
-      known.delete(sourceKey(projection.source));
-      projections.splice(index, 1);
-      const entity = entities.findIndex((candidate) => candidate.id === projection.entityId);
-      if (entity >= 0) entities.splice(entity, 1);
-      changed = true;
-    }
-    for (const entry of faceContourCurves(mesh, frame, pick.faceId)) {
+    const faceIndex = Number(pick.faceId);
+    const faceName = mesh.faceNames?.[faceIndex];
+    if (!faceName) return null;
+    const boundary = [...elements.edges.values()].filter((edge) =>
+      edge.faceIds.includes(faceIndex),
+    );
+    for (const entry of faceContourCurves(mesh, frame, faceName)) {
       const key = `${pick.bodyId}:${entry.kind}:${entry.elementId}`;
       if (known.has(key)) continue;
       known.add(key);
@@ -402,8 +396,8 @@ export function addProjectionToSketch(
       projections.push({
         id: createStableId('proj', key),
         entityId: entity.id,
-        source: { kind: entry.kind, bodyId: pick.bodyId, elementId: entry.elementId },
-        faceId: pick.faceId,
+        source: { kind: entry.kind, bodyId: pick.bodyId, name: entry.elementId },
+        faceName,
       });
       changed = true;
     }
@@ -411,8 +405,8 @@ export function addProjectionToSketch(
       if (edge.closed) continue;
       const points = edgeWorldPoints(edge);
       if (points.length === 0) continue;
-      addVertex(pick.bodyId, points[0]!, undefined, pick.faceId);
-      addVertex(pick.bodyId, points[points.length - 1]!, undefined, pick.faceId);
+      addVertex(pick.bodyId, points[0]!, undefined, faceName);
+      addVertex(pick.bodyId, points[points.length - 1]!, undefined, faceName);
     }
   }
 
@@ -456,11 +450,7 @@ export function resolveSketchProjections(
     const elements = mesh ? bodyElements(mesh) : null;
     let entity: SketchEntity | null = null;
     if (elements && projection.source.kind === 'vertex') {
-      // Links written before vertices took their ids from the incident edges
-      // carry a position instead.
-      const point =
-        elements.vertices.get(projection.source.elementId) ??
-        elements.vertices.get(elements.vertexIds.get(projection.source.elementId) ?? '');
+      const point = elements.vertices.get(projection.source.name);
       if (point) {
         entity = {
           id: projection.entityId,
@@ -469,12 +459,11 @@ export function resolveSketchProjections(
           construction: snapshot.construction,
         };
       }
-    } else if (elements && projection.faceId) {
-      const curves = faceCurveCache(mesh!, frame, projection.source.bodyId, projection.faceId);
+    } else if (elements && projection.faceName) {
+      const curves = faceCurveCache(mesh!, frame, projection.source.bodyId, projection.faceName);
       const curve = curves.find(
         (entry) =>
-          entry.kind === projection.source.kind &&
-          entry.elementId === projection.source.elementId,
+          entry.kind === projection.source.kind && entry.elementId === projection.source.name,
       );
       if (curve) {
         entity = {
@@ -484,7 +473,7 @@ export function resolveSketchProjections(
         };
       }
     } else if (elements) {
-      const edge = elements.edges.get(projection.source.elementId);
+      const edge = elements.edges.get(projection.source.name);
       if (edge) {
         const curve = projectedCurve(frame, edge);
         if (curve) {

@@ -5,7 +5,15 @@ import { cubeMesh } from './cubeMesh';
 export function edgedCube(size = 20): TessellationResult {
   const edges: NonNullable<TessellationResult['edges']> = [];
   const add = (from: [number, number, number], to: [number, number, number], faceIds: number[]) => {
-    edges.push({ id: String(edges.length), faceIds, points: [...from, ...to], closed: false });
+    const name = faceIds.map((id) => `fixture/${['-x', '+x', '-y', '+y', '-z', '+z'][id]}`).sort().join('|');
+    edges.push({
+      id: String(edges.length),
+      faceIds,
+      points: [...from, ...to],
+      closed: false,
+      name,
+      aliases: [name],
+    });
   };
   for (const y of [0, size]) {
     for (const z of [0, size]) {

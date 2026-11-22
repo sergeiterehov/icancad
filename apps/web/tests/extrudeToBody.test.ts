@@ -72,6 +72,7 @@ function square(size: number): ProfileRegion {
         { type: 'line', x1: half, y1: half, x2: -half, y2: half },
         { type: 'line', x1: -half, y1: half, x2: -half, y2: -half },
       ],
+      keys: ['c0', 'c1', 'c2', 'c3'],
     },
     holes: [],
     edges: [],

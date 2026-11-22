@@ -64,6 +64,6 @@ set, so dragging the thickness past the limit does not rerun the search.
 - `BRepOffsetAPI_MakeThickSolid` is fragile on some fused compounds; a body it
   cannot offset at any thickness stays an error of the operation, as with a
   treatment whose edge set cannot be built.
-- Persistent naming (M5) still applies: a face with one stable normal survives
-  renumbering by its pose, a closed curved face only by its index, and a face
-  the shell itself rebuilds cannot keep its identity.
+- Persistent naming (ADR 0042) keeps the outside faces of an inward shell and
+  names the cavity faces; a reference to a cavity face resolves like any other
+  face instead of relying on its index.

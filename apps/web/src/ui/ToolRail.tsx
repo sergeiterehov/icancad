@@ -78,7 +78,7 @@ export function ToolRail() {
                 plane: {
                   type: 'face',
                   bodyId: plane.bodyId,
-                  topoId: plane.faceId,
+                  name: plane.name,
                   offset: 0,
                   frame: plane.frame,
                 },

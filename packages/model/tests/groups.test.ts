@@ -12,7 +12,6 @@ import {
   insertionPoint,
   nextGroupName,
   parseProject,
-  PROJECT_SCHEMA_VERSION,
   pruneEmptyGroups,
   timelineNodes,
   updateActiveModel,
@@ -359,17 +358,6 @@ describe('group serialization', () => {
       undefined,
     ]);
     expect(ids(parsed, 'g1')).toEqual(['a', 'b', 'g2']);
-  });
-
-  it('opens a version 3 document without folders', () => {
-    const project = projectWith([box('a'), box('b')]);
-    const document = JSON.parse(JSON.stringify(project));
-    delete document.superObjects[0].groups;
-    document.schemaVersion = 3;
-    const parsed = parseProject(document);
-    expect(parsed.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
-    expect(activeModel(parsed).groups).toEqual([]);
-    expect(activeModel(parsed).features.map((feature) => feature.id)).toEqual(['a', 'b']);
   });
 
   it('drops a folder saved without any operation', () => {

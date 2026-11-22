@@ -97,7 +97,7 @@ describe('extrude input from the selection', () => {
     expect(input?.faceRefs).toHaveLength(1);
     const ref = input!.faceRefs![0]!;
     expect(ref.bodyId).toBe(BODY);
-    expect(ref.faceId).toBe('5');
+    expect(ref.name).toBe('fixture/+z');
     // The +Z face of the cube: its normal points out of the material.
     expect(ref.normal[2]).toBeCloseTo(1, 9);
     expect(ref.origin[0]).toBeCloseTo(10, 6);
@@ -114,7 +114,7 @@ describe('extrude input from the selection', () => {
       ],
       meshes,
     );
-    expect(input?.faceRefs?.map((ref) => ref.faceId)).toEqual(['5', '2']);
+    expect(input?.faceRefs?.map((ref) => ref.name)).toEqual(['fixture/+z', 'fixture/-y']);
   });
 
   it('takes a sketch and a body face as one operation', () => {
@@ -127,7 +127,7 @@ describe('extrude input from the selection', () => {
         ],
         meshes,
       ),
-    ).toMatchObject({ sketchId: 's', faceRefs: [{ faceId: '5' }] });
+    ).toMatchObject({ sketchId: 's', faceRefs: [{ name: 'fixture/+z' }] });
   });
 
   it('leaves out a face it cannot turn into a profile', () => {
@@ -189,7 +189,7 @@ describe('an extrude opened on body faces', () => {
       .getState()
       .hydrate(modelProject({ features: [box()], bodies: [{ id: BODY, createdBy: 'box' }] }));
     const id = useDocumentStore.getState().addExtrude('Extrude', {
-      faceRefs: [{ bodyId: BODY, faceId: '5', normal: [0, 0, 1], origin: [10, 10, 20] }],
+      faceRefs: [{ bodyId: BODY, name: 'fixture/+z', normal: [0, 0, 1], origin: [10, 10, 20] }],
     });
     expect(id).toBeTruthy();
     const feature = activeModel(useDocumentStore.getState().project).features.find(
@@ -197,8 +197,8 @@ describe('an extrude opened on body faces', () => {
     );
     expect(feature).toMatchObject({
       type: 'extrude',
-      faceRefs: [{ bodyId: BODY, faceId: '5' }],
-      objectOrder: [`b:${BODY}#5`],
+      faceRefs: [{ bodyId: BODY, name: 'fixture/+z' }],
+      objectOrder: ['b:fixture/+z'],
       scope: 'all',
     });
 
@@ -221,12 +221,12 @@ describe('an extrude opened on body faces', () => {
     const id = useDocumentStore.getState().addExtrude('Extrude', {
       sketchId: 's',
       regions: ['f1'],
-      faceRefs: [{ bodyId: BODY, faceId: '5', normal: [0, 0, 1], origin: [10, 10, 20] }],
+      faceRefs: [{ bodyId: BODY, name: 'fixture/+z', normal: [0, 0, 1], origin: [10, 10, 20] }],
     })!;
     expect(
       activeModel(useDocumentStore.getState().project).features.find(
         (candidate) => candidate.id === id,
       ),
-    ).toMatchObject({ objectOrder: ['s:s#f1', `b:${BODY}#5`], scope: 'selected' });
+    ).toMatchObject({ objectOrder: ['s:s#f1', 'b:fixture/+z'], scope: 'selected' });
   });
 });

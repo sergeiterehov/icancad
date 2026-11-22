@@ -17,6 +17,8 @@ const frame: SketchFrame = {
 };
 
 function mesh(edges: BodyEdge[]): TessellationResult {
+  const count = Math.max(0, ...edges.flatMap((edge) => edge.faceIds)) + 1;
+  const faceNames = Array.from({ length: count }, (_, index) => `fixture/face/${index}`);
   return {
     positions: new Float32Array(),
     normals: new Float32Array(),
@@ -26,11 +28,14 @@ function mesh(edges: BodyEdge[]): TessellationResult {
     vertexCount: 0,
     bbox: { min: [0, 0, 0], max: [0, 0, 0] },
     edges,
+    faceNames,
+    faceAliases: faceNames.map((name) => [name]),
   };
 }
 
 const lineEdge: BodyEdge = {
   id: 'e-line',
+  name: 'fixture/line',
   faceIds: [1, 2],
   points: [0, 0, 5, 5, 0, 5, 10, 0, 5],
   closed: false,
@@ -38,6 +43,7 @@ const lineEdge: BodyEdge = {
 
 const secondEdge: BodyEdge = {
   id: 'e-side',
+  name: 'fixture/side',
   faceIds: [1],
   points: [10, 0, 5, 10, 6, 5, 10, 12, 5],
   closed: false,
@@ -67,11 +73,11 @@ describe('sketch projections', () => {
   it('names vertices after the edges that meet there', () => {
     const elements = bodyElements(mesh([lineEdge, secondEdge]));
     expect([...elements.vertices.keys()].sort()).toEqual([
-      'v:e-line',
-      'v:e-line+e-side',
-      'v:e-side',
+      'v:fixture/line',
+      'v:fixture/line+fixture/side',
+      'v:fixture/side',
     ]);
-    expect(elements.vertices.get('v:e-line+e-side')).toEqual([10, 0, 5]);
+    expect(elements.vertices.get('v:fixture/line+fixture/side')).toEqual([10, 0, 5]);
   });
 
   it('projects a vertex into a linked point', () => {
@@ -87,7 +93,7 @@ describe('sketch projections', () => {
     expect(next?.entities[0]).toMatchObject({ type: 'point', x: 10, y: 0 });
     expect(next?.projections?.[0]).toMatchObject({
       entityId: next?.entities[0]?.id,
-      source: { kind: 'vertex', bodyId: 'body-1', elementId },
+      source: { kind: 'vertex', bodyId: 'body-1', name: elementId },
     });
   });
 
@@ -98,7 +104,7 @@ describe('sketch projections', () => {
       edgeId: 'e-line',
     });
     expect(next?.entities[0]).toMatchObject({ type: 'line', x1: 0, y1: 0, x2: 10, y2: 0 });
-    expect(next?.projections?.[0]?.source.elementId).toBe('e-line');
+    expect(next?.projections?.[0]?.source.name).toBe('fixture/line');
   });
 
   it('projects the contour of a curved face as well as its boundary', () => {
@@ -143,9 +149,11 @@ describe('sketch projections', () => {
       vertexCount: positions.length / 3,
       bbox: { min: [-radius, -radius, 0], max: [radius, radius, height] },
       edges: [
-        { id: 'bottom', faceIds: [0], points: ring(0), closed: true },
-        { id: 'top', faceIds: [0], points: ring(height), closed: true },
+        { id: 'bottom', name: 'fixture/bottom', faceIds: [0], points: ring(0), closed: true },
+        { id: 'top', name: 'fixture/top', faceIds: [0], points: ring(height), closed: true },
       ],
+      faceNames: ['fixture/face/0'],
+      faceAliases: [['fixture/face/0']],
     };
     const yz: SketchFrame = {
       origin: [0, 0, 0],
@@ -230,10 +238,12 @@ describe('sketch projections', () => {
       vertexCount: positions.length / 3,
       bbox: { min: [-radius, -radius, 0], max: [radius, radius, height] },
       edges: [
-        { id: 'bottom', faceIds: [0], points: ring(0), closed: true },
-        { id: 'middle', faceIds: [0, 1], points: ring(rows / 2), closed: true },
-        { id: 'top', faceIds: [1], points: ring(rows), closed: true },
+        { id: 'bottom', name: 'fixture/bottom', faceIds: [0], points: ring(0), closed: true },
+        { id: 'middle', name: 'fixture/middle', faceIds: [0, 1], points: ring(rows / 2), closed: true },
+        { id: 'top', name: 'fixture/top', faceIds: [1], points: ring(rows), closed: true },
       ],
+      faceNames: ['fixture/face/0', 'fixture/face/1'],
+      faceAliases: [['fixture/face/0'], ['fixture/face/1']],
     };
     const yz: SketchFrame = {
       origin: [0, 0, 0],
@@ -275,6 +285,7 @@ describe('sketch projections', () => {
       [0, 10, 0, 0, 0, 0],
     ].map((points, index) => ({
       id: `e-${index}`,
+      name: `fixture/e-${index}`,
       faceIds: [1],
       points,
       closed: false,
@@ -300,6 +311,7 @@ describe('sketch projections', () => {
         [0, size, 0, 0, 0, 0],
       ].map((points, index) => ({
         id: `e-${index}`,
+        name: `fixture/e-${index}`,
         faceIds: [1],
         points,
         closed: false,
@@ -318,47 +330,6 @@ describe('sketch projections', () => {
     expect(points.map((entity) => (entity.type === 'point' ? entity.x : 0)).sort()).toEqual([
       0, 0, 40, 40,
     ]);
-  });
-
-  it('replaces a broken corner from an older build when the face is projected again', () => {
-    const square = (size: number): BodyEdge[] =>
-      [
-        [0, 0, 0, size, 0, 0],
-        [size, 0, 0, size, size, 0],
-        [size, size, 0, 0, size, 0],
-        [0, size, 0, 0, 0, 0],
-      ].map((points, index) => ({
-        id: `e-${index}`,
-        faceIds: [1],
-        points,
-        closed: false,
-      }));
-    const projected = addProjectionToSketch(sketch(), frame, mesh(square(20)), {
-      kind: 'face',
-      bodyId: 'body-1',
-      faceId: '1',
-    })!;
-    // What an older build wrote: a corner named after its position.
-    const legacy = {
-      ...projected,
-      projections: projected.projections!.map((projection, index) =>
-        index === 4 ? { ...projection, source: { ...projection.source, elementId: 'v:20,0,0' } } : projection,
-      ),
-    };
-    expect(resolveSketchProjections(legacy, frame, () => mesh(square(40))).lostEntityIds).toHaveLength(
-      1,
-    );
-
-    const repaired = addProjectionToSketch(legacy, frame, mesh(square(40)), {
-      kind: 'face',
-      bodyId: 'body-1',
-      faceId: '1',
-    })!;
-    expect(repaired.entities).toHaveLength(projected.entities.length);
-    expect(repaired.projections).toHaveLength(projected.projections!.length);
-    expect(resolveSketchProjections(repaired, frame, () => mesh(square(40))).lostEntityIds).toEqual(
-      [],
-    );
   });
 
   it('does not add the same source twice', () => {

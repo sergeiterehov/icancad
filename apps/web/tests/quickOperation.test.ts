@@ -17,6 +17,8 @@ import { useDocumentStore } from '../src/stores/documentStore';
 import { cubeMesh } from './cubeMesh';
 import { modelOf, modelProject } from './modelFixture';
 
+const meshes = { 'body-1': cubeMesh() };
+
 const box: PrimitiveFeature = {
   id: 'box',
   name: 'Box',
@@ -88,10 +90,10 @@ function revolveProject(): Model {
 
 function geometry(): QuickTargetGeometry {
   return {
-    target: { kind: 'body-face', bodyId: 'body-1', faceIds: ['1'] },
+    target: { kind: 'body-face', bodyId: 'body-1', faceIds: ['1'], names: ['fixture/+x'] },
     origin: [20, 10, 10],
     direction: [1, 0, 0],
-    faces: [{ faceId: '1', centroid: [20, 10, 10], normal: [1, 0, 0] }],
+    faces: [{ faceId: '1', name: 'fixture/+x', centroid: [20, 10, 10], normal: [1, 0, 0] }],
     samples: [],
   };
 }
@@ -157,10 +159,13 @@ function handles(context: {
 describe('quick operation targets and handles', () => {
   it('turns a body face selection into a target', () => {
     const project = baseProject();
-    expect(quickTargetFromSelection(project, [{ kind: 'body-face', id: 'body-1#1' }])).toEqual({
+    expect(
+      quickTargetFromSelection(project, [{ kind: 'body-face', id: 'body-1#1' }], meshes),
+    ).toEqual({
       kind: 'body-face',
       bodyId: 'body-1',
       faceIds: ['1'],
+      names: ['fixture/+x'],
     });
   });
 
@@ -178,12 +183,12 @@ describe('quick operation targets and handles', () => {
         references: [],
       },
     ]);
-    expect(quickTargetFromSelection(project, [{ kind: 'face', id: 'sketch#f1' }])).toEqual({
+    expect(quickTargetFromSelection(project, [{ kind: 'face', id: 'sketch#f1' }], meshes)).toEqual({
       kind: 'sketch',
       sketchId: 'sketch',
       regions: ['f1'],
     });
-    expect(quickTargetFromSelection(project, [{ kind: 'sketch', id: 'sketch' }])).toEqual({
+    expect(quickTargetFromSelection(project, [{ kind: 'sketch', id: 'sketch' }], meshes)).toEqual({
       kind: 'sketch',
       sketchId: 'sketch',
       regions: [],
@@ -199,8 +204,10 @@ describe('quick operation targets and handles', () => {
       reversed: false,
       scope: 'all',
       bodyIds: ['body-1'],
-      objectOrder: ['b:body-1#1'],
-      faceRefs: [{ bodyId: 'body-1', faceId: '1', normal: [1, 0, 0], origin: [20, 10, 10] }],
+      objectOrder: ['b:fixture/+x'],
+      faceRefs: [
+        { bodyId: 'body-1', name: 'fixture/+x', normal: [1, 0, 0], origin: [20, 10, 10] },
+      ],
     });
   });
 

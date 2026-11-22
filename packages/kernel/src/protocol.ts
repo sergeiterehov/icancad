@@ -21,6 +21,10 @@ export const DEFAULT_TESSELLATION_QUALITY: TessellationQuality = {
  */
 export interface BodyEdge {
   id: string;
+  /** Persistent name: the same edge keeps it across rebuilds (ADR 0042). */
+  name?: string;
+  /** Historical names the edge still answers to after a merge or a split. */
+  aliases?: string[];
   /** Face traversal indices on both sides of the edge, in tessellation order. */
   faceIds: number[];
   /** Flat world-space points of the polyline. */
@@ -42,6 +46,12 @@ export interface TessellationResult {
   bbox: { min: Vec3; max: Vec3 };
   /** Solid bodies only: imported meshes have no B-rep edges. */
   edges?: BodyEdge[];
+  /** Persistent name of every face, aligned with `faceIds` (ADR 0042). */
+  faceNames?: string[];
+  /** Historical names of every face, including its canonical one. */
+  faceAliases?: string[][];
+  /** Operation that owns every face, aligned with `faceIds`. */
+  faceOwners?: string[];
 }
 
 export interface ShapeStats {
@@ -63,12 +73,16 @@ export interface BoxParams {
   dz: number;
   /** Corner the box grows from; the origin when omitted. */
   at?: [number, number, number];
+  /** Scope of the operation that creates the body, used for face names. */
+  name?: string;
 }
 
 interface PrimitiveParamsBase {
   shapeId: string;
   /** Anchor of the primitive: a corner for a box, a centre otherwise. */
   at?: [number, number, number];
+  /** Scope of the operation that creates the body, used for face names. */
+  name?: string;
 }
 
 export type MakePrimitiveParams = PrimitiveParamsBase &
@@ -149,15 +163,24 @@ export type ProfileCurve = ProfileLine | ProfileArc | ProfileCircle;
 
 export interface ProfileLoop {
   curves: ProfileCurve[];
+  /**
+   * Stable key of every curve, parallel to `curves`. The key comes from the
+   * sketch topology and names the side face the curve sweeps into.
+   */
+  keys?: string[];
 }
 
 export interface ProfileRegion {
+  /** Stable key of the sketch region, used to scope the names it creates. */
+  key?: string;
   outer: ProfileLoop;
   holes: ProfileLoop[];
 }
 
 export interface MakePrismParams {
   shapeId: string;
+  /** Scope of the operation, used for cap and side names. */
+  name?: string;
   origin: Vec3;
   xAxis: Vec3;
   yAxis: Vec3;
@@ -174,6 +197,8 @@ export interface MakePrismParams {
 
 export interface MakeFacePrismParams {
   shapeId: string;
+  /** Scope of the operation, used for the names it creates. */
+  name?: string;
   sourceShapeId: string;
   /** OCCT face traversal index, the same one tessellation reports in `faceIds`. */
   faceId: number;
@@ -196,6 +221,8 @@ export interface RevolveAxisLine {
 
 export interface MakeRevolveParams {
   shapeId: string;
+  /** Scope of the operation, used for cap and side names. */
+  name?: string;
   origin: Vec3;
   xAxis: Vec3;
   yAxis: Vec3;
@@ -208,6 +235,8 @@ export interface MakeRevolveParams {
 
 export interface MakeFaceRevolveParams {
   shapeId: string;
+  /** Scope of the operation, used for the names it creates. */
+  name?: string;
   sourceShapeId: string;
   faceId: number;
   axis: RevolveAxisLine;
@@ -217,9 +246,13 @@ export interface MakeFaceRevolveParams {
 
 export interface BooleanParams {
   shapeId: string;
+  /** Scope of the operation, used for the faces it creates. */
+  name?: string;
   baseShapeId: string;
   toolShapeId: string;
   op: 'fuse' | 'cut' | 'common';
+  /** Give every result face this operation as its owner, as the app did before. */
+  reown?: boolean;
   /**
    * Report which base face every result face came from. Faces an operation does
    * not touch keep their identity, so this is what tells a created face from a
@@ -236,15 +269,23 @@ export interface BooleanParams {
  */
 export interface BooleanAllParams {
   shapeId: string;
+  /** Scope of the operation, used for the faces it creates. */
+  name?: string;
   baseShapeId: string;
-  /** Each tool copied to where it applies. */
-  tools: Array<{ sourceShapeId: string; matrix: number[] }>;
+  /**
+   * Each tool copied to where it applies. `key` scopes the names of the copy,
+   * which is what keeps the copies of one array apart.
+   */
+  tools: Array<{ sourceShapeId: string; matrix: number[]; key?: string }>;
   op: 'fuse' | 'cut' | 'common';
   trackFaces?: boolean;
+  reown?: boolean;
 }
 
 export interface EdgeTreatmentParams {
   shapeId: string;
+  /** Scope of the operation, used for the faces it creates. */
+  name?: string;
   /** Body the edges belong to. */
   sourceShapeId: string;
   kind: 'fillet' | 'chamfer';
@@ -270,8 +311,12 @@ export interface EdgeTreatmentResult {
 
 export interface ShellParams {
   shapeId: string;
+  /** Scope of the operation, used for the faces it creates. */
+  name?: string;
   /** Body to hollow or wrap. */
   sourceShapeId: string;
+  /** Give every result face this operation as its owner, as the app did before. */
+  reown?: boolean;
   /** Faces of the body left open. */
   removeFaceIds: number[];
   thickness: number;
@@ -283,6 +328,8 @@ export interface ShellParams {
 
 export interface OffsetShapeParams {
   shapeId: string;
+  /** Scope of the operation, used for the faces it creates. */
+  name?: string;
   /** Body whose surface is moved. */
   sourceShapeId: string;
   /**
@@ -313,6 +360,13 @@ export interface TransformShapeParams {
   shapeId: string;
   sourceShapeId: string;
   matrix: number[];
+  /**
+   * Instance scope prefixed to every name of the copy. An array stamp passes
+   * `<arrayId>/<stamp>` so the copy answers to its own scoped names.
+   */
+  nameScope?: string;
+  /** Owner to record on the copy; absent keeps the source owners. */
+  owner?: string;
 }
 
 /** Asks where the middle of one face of a body is. */
@@ -373,6 +427,8 @@ export interface ImportStepParams {
   data: Uint8Array;
   /** Kernel shape ids are `${prefix}:step-${index}`. */
   prefix: string;
+  /** Scope of the import operation, used for face names. */
+  name?: string;
 }
 
 export interface ImportStepBody {

@@ -88,6 +88,14 @@ export function cubeMesh(size = 20): TessellationResult {
     5,
   );
 
+  const faceNames = [
+    'fixture/-x',
+    'fixture/+x',
+    'fixture/-y',
+    'fixture/+y',
+    'fixture/-z',
+    'fixture/+z',
+  ];
   return {
     positions: new Float32Array(positions),
     normals: new Float32Array(normals),
@@ -97,6 +105,9 @@ export function cubeMesh(size = 20): TessellationResult {
     vertexCount: positions.length / 3,
     bbox: { min: [0, 0, 0], max: [size, size, size] },
     edges: [],
+    faceNames,
+    faceAliases: faceNames.map((name) => [name]),
+    faceOwners: faceNames.map(() => 'fixture'),
   };
 }
 

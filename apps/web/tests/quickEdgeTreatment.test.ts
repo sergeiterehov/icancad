@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { EdgeTreatmentFeature, Project } from '@icancad/model';
-import { edgeMatchDistance, resolveEdgeRef } from '../src/kernel/edgeLookup';
 import { edgePose } from '../src/kernel/edgeTreatment';
 import {
   edgeTreatmentGeometry,
@@ -38,8 +37,7 @@ function edgeTarget(mesh: ReturnType<typeof edgedCube>, ids: string[]) {
       const edge = mesh.edges!.find((candidate) => candidate.id === id)!;
       return {
         bodyId: BODY,
-        edgeId: edge.id,
-        faceIds: [...edge.faceIds],
+        name: edge.name!,
         ...edgePose(edge.points),
         bisector: [0, 0, 1] as [number, number, number],
         // A right-angled corner: the created face sits at cos(45°) of the size.
@@ -187,127 +185,5 @@ describe('treatment face offset', () => {
     expect(treatmentFaceOffset('chamfer', 4, Math.PI - 0.01)).toBeLessThan(0.05);
     expect(Number.isFinite(treatmentSizeForOffset('chamfer', 1, Math.PI - 0.01))).toBe(true);
     expect(Number.isFinite(treatmentFaceOffset('fillet', 4, 0.01))).toBe(true);
-  });
-});
-
-describe('edge ref lookup', () => {
-  it('matches a closed edge such as a cylinder rim', () => {
-    // A rim starts and ends at the same point, so the pose needs the middle.
-    const points = [5, 0, 0, 0, 5, 0, -5, 0, 0, 0, -5, 0, 5, 0, 0];
-    const mesh = {
-      ...edgedCube(),
-      edges: [{ id: 'rim', faceIds: [0, 1], points, closed: true }],
-    };
-    const ref = {
-      bodyId: BODY,
-      edgeId: 'renumbered',
-      faceIds: [0, 1],
-      start: [5, 0, 0] as [number, number, number],
-      mid: [-5, 0, 0] as [number, number, number],
-      end: [5, 0, 0] as [number, number, number],
-      bisector: [0, 0, 1] as [number, number, number],
-    };
-    expect(edgeMatchDistance({ points }, ref)).not.toBeNull();
-    expect(
-      resolveEdgeRef({ bodyShapes: new Map([[BODY, 'shape-1']]), meshes: { [BODY]: mesh } }, ref),
-    ).toEqual({ bodyId: BODY, edgeId: 'rim' });
-  });
-
-  it('matches an edge by its stored pose', () => {
-    const mesh = edgedCube();
-    const edge = mesh.edges![0]!;
-    const ref = {
-      bodyId: BODY,
-      edgeId: '99',
-      faceIds: [...edge.faceIds],
-      start: [0, 0, 0] as [number, number, number],
-      mid: [10, 0, 0] as [number, number, number],
-      end: [20, 0, 0] as [number, number, number],
-      bisector: [0, 0, 1] as [number, number, number],
-    };
-    expect(edgeMatchDistance(edge, ref)).not.toBeNull();
-    // The id was renumbered by a rebuild; the pose still finds the edge.
-    expect(
-      resolveEdgeRef({ bodyShapes: new Map([[BODY, 'shape-1']]), meshes: { [BODY]: mesh } }, ref),
-    ).toEqual({ bodyId: BODY, edgeId: edge.id });
-  });
-
-  it('rejects an edge that is not where the ref says', () => {
-    const mesh = edgedCube();
-    const edge = mesh.edges![0]!;
-    expect(
-      edgeMatchDistance(edge, {
-        mid: [10, 10, 10],
-        start: [0, 0, 0],
-        end: [20, 0, 0],
-      }),
-    ).toBeNull();
-    expect(
-      resolveEdgeRef(
-        { bodyShapes: new Map([[BODY, 'shape-1']]), meshes: { [BODY]: mesh } },
-        {
-          bodyId: BODY,
-          edgeId: '0',
-          faceIds: [],
-          start: [0, 0, 0],
-          mid: [10, 10, 10],
-          end: [20, 0, 0],
-          bisector: [0, 0, 1],
-        },
-      ),
-    ).toBeNull();
-  });
-});
-
-describe('edge ref lookup by pose', () => {
-  it('finds the edge when it was tessellated the other way round', () => {
-    const mesh = edgedCube();
-    const edge = mesh.edges![0]!;
-    // The same edge, listed from its far end: the stored start is now the end.
-    const reversed = {
-      ...edge,
-      points: [20, 0, 0, 0, 0, 0],
-    };
-    const ref = {
-      bodyId: BODY,
-      edgeId: '0',
-      faceIds: [...edge.faceIds],
-      start: [0, 0, 0] as [number, number, number],
-      mid: [10, 0, 0] as [number, number, number],
-      end: [20, 0, 0] as [number, number, number],
-      bisector: [0, 0, 1] as [number, number, number],
-    };
-    expect(edgeMatchDistance(reversed, ref)).not.toBeNull();
-    expect(
-      resolveEdgeRef(
-        {
-          bodyShapes: new Map([[BODY, 'shape-1']]),
-          meshes: { [BODY]: { ...mesh, edges: [reversed] } },
-        },
-        ref,
-      ),
-    ).toEqual({ bodyId: BODY, edgeId: edge.id });
-  });
-});
-
-describe('edge ref lookup by pose', () => {
-  it('matches a piece of a longer edge, as picked after an earlier round', () => {
-    const mesh = edgedCube();
-    const edge = mesh.edges![0]!;
-    // The reference remembers the part of the edge a previous round left over,
-    // which is still on the edge that the input has.
-    const ref = {
-      bodyId: BODY,
-      edgeId: '99',
-      faceIds: [...edge.faceIds],
-      start: [4, 0, 0] as [number, number, number],
-      mid: [10, 0, 0] as [number, number, number],
-      end: [16, 0, 0] as [number, number, number],
-      bisector: [0, 0, 1] as [number, number, number],
-    };
-    expect(edgeMatchDistance(edge, ref)).not.toBeNull();
-    expect(
-      resolveEdgeRef({ bodyShapes: new Map([[BODY, 'shape-1']]), meshes: { [BODY]: mesh } }, ref),
-    ).toEqual({ bodyId: BODY, edgeId: edge.id });
   });
 });

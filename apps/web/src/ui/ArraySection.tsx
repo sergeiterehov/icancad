@@ -40,7 +40,7 @@ import {
 import { FeatureIcon } from './featureIcons';
 import {
   bodyEdgeNumber,
-  faceNumber,
+  bodyFaceNumber,
   geometryName,
   sketchEdgeNumber,
   sketchFaceNumber,
@@ -68,7 +68,7 @@ function pathRow(
       icon: <Box size={14} style={{ color: resolved?.color }} />,
       name: geometryName(
         resolved?.name ?? path.bodyId,
-        bodyEdgeNumber(meshes[path.bodyId], path.edgeId),
+        bodyEdgeNumber(meshes[path.bodyId], path.name),
       ),
     };
   }
@@ -335,7 +335,7 @@ export function ArraySection({ feature }: { feature: ArrayFeature }) {
                         ? faceAxis.bodyId
                         : faceAxis.sketchId,
                   faceAxis.kind === 'face'
-                    ? faceNumber(faceAxis.faceId)
+                    ? bodyFaceNumber(meshes[faceAxis.bodyId], faceAxis.name)
                     : faceSketch
                       ? sketchFaceNumber(faceSketch, faceAxis.faceId)
                       : null,

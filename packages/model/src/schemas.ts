@@ -1,24 +1,10 @@
 import { z } from 'zod';
 import { pruneEmptyGroups } from './groups';
-import { createId } from './ids';
 import { DEFAULT_MESH_UNIT, MESH_UNITS, type Project } from './types';
 
-export const PROJECT_SCHEMA_VERSION = 7;
-
-/** Documents written before imported meshes kept the file's length unit. */
-const MESH_UNIT_LESS_SCHEMA_VERSION = 6;
-
-/** Documents written before model variables. */
-const MODEL_VARIABLE_LESS_SCHEMA_VERSION = 5;
-
-/** Documents written before project variables and formulas. */
-const FORMULA_LESS_SCHEMA_VERSION = 4;
-
-/** Models without timeline folders: a valid document, just one version behind. */
-const GROUP_LESS_SCHEMA_VERSION = 3;
-
-/** Projects written before super-objects kept the model at the top level. */
-const LEGACY_SCHEMA_VERSION = 2;
+export const PROJECT_SCHEMA_VERSION = 9;
+/** Names in version 8 could move with geometry; such refs keep a pose fallback. */
+const LEGACY_SCHEMA_VERSION = 8;
 
 const vec3 = z.tuple([z.number(), z.number(), z.number()]);
 
@@ -150,15 +136,7 @@ const convertToSolidFeature = z.object({
 
 const entityRef = z.object({
   bodyId: z.string().min(1),
-  topoId: z.string().min(1),
-  fingerprint: z
-    .object({
-      surfaceType: z.string(),
-      measure: z.number(),
-      centroid: vec3,
-      normal: vec3,
-    })
-    .optional(),
+  name: z.string().min(1),
 });
 
 const sketchEntity = z.discriminatedUnion('type', [
@@ -264,7 +242,7 @@ const sketchPlaneRef = z.union([
   z.object({
     type: z.literal('face'),
     bodyId: z.string().min(1).optional(),
-    topoId: z.string().min(1).optional(),
+    name: z.string().min(1).optional(),
     offset: param(z.number()).optional(),
     rotation: paramVec3.optional(),
     frame: z
@@ -291,9 +269,9 @@ const sketchProjection = z.object({
   source: z.object({
     kind: z.enum(['vertex', 'edge', 'silhouette']),
     bodyId: z.string().min(1),
-    elementId: z.string().min(1),
+    name: z.string().min(1),
   }),
-  faceId: z.string().min(1).optional(),
+  faceName: z.string().min(1).optional(),
 });
 
 const sketchFeature = z.object({
@@ -308,9 +286,10 @@ const sketchFeature = z.object({
 
 const bodyFaceRef = z.object({
   bodyId: z.string().min(1),
-  faceId: z.string().min(1),
+  name: z.string().min(1),
   normal: vec3,
   origin: vec3,
+  legacyPose: z.boolean().optional(),
 });
 
 const revolveAxis = z.discriminatedUnion('kind', [
@@ -318,7 +297,7 @@ const revolveAxis = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('body-edge'),
     bodyId: z.string().min(1),
-    edgeId: z.string().min(1),
+    name: z.string().min(1),
     start: vec3,
     end: vec3,
   }),
@@ -411,7 +390,7 @@ const edgeTreatmentFeature = z.object({
   faceRefs: z.array(
     z.object({
       bodyId: z.string().min(1),
-      faceId: z.string().min(1),
+      name: z.string().min(1),
       normal: vec3,
       origin: vec3,
       handle: z.object({ origin: vec3, direction: vec3, wedge: z.number().positive() }).optional(),
@@ -420,11 +399,11 @@ const edgeTreatmentFeature = z.object({
   edgeRefs: z.array(
     z.object({
       bodyId: z.string().min(1),
-      edgeId: z.string().min(1),
-      faceIds: z.array(z.number().int().nonnegative()),
+      name: z.string().min(1),
       start: vec3,
       mid: vec3,
       end: vec3,
+      legacyPose: z.boolean().optional(),
       length: z.number().nonnegative().optional(),
       closed: z.boolean().optional(),
       bisector: vec3,
@@ -439,7 +418,7 @@ const arrayPath = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('body-edge'),
     bodyId: z.string().min(1),
-    edgeId: z.string().min(1),
+    name: z.string().min(1),
   }),
   z.object({
     kind: z.literal('sketch-edge'),
@@ -469,7 +448,7 @@ const arrayAxis = z.preprocess(
     z.object({
       kind: z.literal('face'),
       bodyId: z.string().min(1),
-      faceId: z.string().min(1),
+      name: z.string().min(1),
       origin: vec3,
       normal: vec3,
     }),
@@ -602,7 +581,7 @@ const sectionPlane = z.object({
   normal: vec3,
   offset: z.number(),
   visible: z.boolean(),
-  face: z.object({ bodyId: z.string().min(1), topoId: z.string().min(1) }).nullish(),
+  face: z.object({ bodyId: z.string().min(1), name: z.string().min(1) }).nullish(),
   inverted: z.boolean().optional(),
 });
 
@@ -659,50 +638,37 @@ export const projectSchema = z
     { message: 'The active super-object is missing', path: ['activeSuperObjectId'] },
   );
 
-const legacyProjectSchema = z.object({
-  schemaVersion: z.literal(LEGACY_SCHEMA_VERSION),
-  id: z.string().min(1),
-  name: z.string().min(1),
-  units: z.literal('mm'),
-  features: z.array(featureSchema),
-  bodies: z.array(bodyRef),
-  metadata: z.record(z.string(), objectMetadata),
-  view: viewState,
-  historyEnd: z.string().nullable(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-});
-
-function migrateLegacyProject(
-  legacy: z.infer<typeof legacyProjectSchema>,
-  modelName: string,
-): unknown {
-  const model = {
-    type: 'model',
-    id: createId('model'),
-    name: modelName,
-    features: legacy.features,
-    bodies: legacy.bodies,
-    metadata: legacy.metadata,
-    view: legacy.view,
-    historyEnd: legacy.historyEnd,
-    variables: [],
-    groups: [],
-  };
-  return {
-    schemaVersion: PROJECT_SCHEMA_VERSION,
-    id: legacy.id,
-    name: legacy.name,
-    units: legacy.units,
-    superObjects: [model],
-    activeSuperObjectId: model.id,
-    createdAt: legacy.createdAt,
-    updatedAt: legacy.updatedAt,
-  };
+/**
+ * Marks topology references written by version 8. Their names were derived
+ * from face keys, so a parameter change could rename a face or an edge; the
+ * pose stored next to the name is what resolves them in that case.
+ */
+function markLegacyPose(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const item of value) markLegacyPose(item);
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  const record = value as Record<string, unknown>;
+  const hasPose =
+    typeof record.normal !== 'undefined' && typeof record.origin !== 'undefined';
+  const hasEdgePose =
+    typeof record.start !== 'undefined' &&
+    typeof record.mid !== 'undefined' &&
+    typeof record.end !== 'undefined';
+  if (
+    typeof record.bodyId === 'string' &&
+    typeof record.name === 'string' &&
+    typeof record.kind === 'undefined' &&
+    (hasPose || hasEdgePose)
+  ) {
+    record.legacyPose = true;
+  }
+  for (const item of Object.values(record)) markLegacyPose(item);
 }
 
 export interface ParseProjectOptions {
-  /** Name of the model a version 2 document is migrated into. */
+  /** Reserved for callers that name the model of a fresh document. */
   modelName?: string;
 }
 
@@ -718,7 +684,7 @@ export class ProjectFileError extends Error {
   }
 }
 
-export function parseProject(input: unknown, options: ParseProjectOptions = {}): Project {
+export function parseProject(input: unknown, _options: ParseProjectOptions = {}): Project {
   const envelope = z.object({ schemaVersion: z.number() }).passthrough().safeParse(input);
   if (!envelope.success) {
     throw new ProjectFileError('INVALID_PROJECT', 'Project file has no schemaVersion', {
@@ -726,38 +692,20 @@ export function parseProject(input: unknown, options: ParseProjectOptions = {}):
     });
   }
   const version = envelope.data.schemaVersion;
-  let candidate = input;
-  if (version === LEGACY_SCHEMA_VERSION) {
-    const legacy = legacyProjectSchema.safeParse(input);
-    if (!legacy.success) {
-      throw new ProjectFileError('INVALID_PROJECT', 'Project file is invalid', {
-        cause: legacy.error,
-      });
-    }
-    candidate = migrateLegacyProject(legacy.data, options.modelName ?? 'Model');
-  } else if (version === MODEL_VARIABLE_LESS_SCHEMA_VERSION) {
-    // Model variables arrived with version 6; the schema fills the list in.
-    candidate = { ...(input as Record<string, unknown>), schemaVersion: PROJECT_SCHEMA_VERSION };
-  } else if (version === MESH_UNIT_LESS_SCHEMA_VERSION) {
-    // Import units arrived with version 7; the schema defaults them to mm.
-    candidate = { ...(input as Record<string, unknown>), schemaVersion: PROJECT_SCHEMA_VERSION };
-  } else if (version === GROUP_LESS_SCHEMA_VERSION) {
-    // Folders arrived with version 4; variables with version 5. Every other
-    // field reads the same, and the schema fills the new lists in.
-    candidate = { ...(input as Record<string, unknown>), schemaVersion: PROJECT_SCHEMA_VERSION };
-  } else if (version === FORMULA_LESS_SCHEMA_VERSION) {
-    candidate = {
-      ...(input as Record<string, unknown>),
-      schemaVersion: PROJECT_SCHEMA_VERSION,
-      variables: [],
-    };
-  } else if (version !== PROJECT_SCHEMA_VERSION) {
+  // Version 8 wrote names that could move with geometry. Its references are
+  // read with a pose fallback so opening and editing such a project does not
+  // lose a fillet or a chamfer; version 9 writes names that do not move.
+  if (version !== PROJECT_SCHEMA_VERSION && version !== LEGACY_SCHEMA_VERSION) {
     throw new ProjectFileError(
       'UNSUPPORTED_SCHEMA_VERSION',
       `Unsupported project schema version: ${version}`,
     );
   }
-  const parsed = projectSchema.safeParse(candidate);
+  const inputObject = input as Record<string, unknown>;
+  const parsed = projectSchema.safeParse({
+    ...inputObject,
+    schemaVersion: PROJECT_SCHEMA_VERSION,
+  });
   if (!parsed.success) {
     throw new ProjectFileError('INVALID_PROJECT', 'Project file is invalid', {
       cause: parsed.error,
@@ -767,6 +715,7 @@ export function parseProject(input: unknown, options: ParseProjectOptions = {}):
   // meshes as bodies without a `kind`. Recognise them from their operation so
   // they never become solid-body targets after loading.
   const project = parsed.data as Project;
+  if (version === LEGACY_SCHEMA_VERSION) markLegacyPose(project);
   const importedFeatureIds = new Set(
     project.superObjects.flatMap((superObject) =>
       superObject.features

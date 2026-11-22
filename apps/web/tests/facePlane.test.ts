@@ -19,6 +19,8 @@ function quad(z: number): TessellationResult {
     triangleCount: 2,
     vertexCount: 6,
     bbox: { min: [-1, -1, z], max: [1, 1, z] },
+    faceNames: ['fixture/face'],
+    faceAliases: [['fixture/face']],
   };
 }
 
@@ -31,7 +33,7 @@ function faceSketch(): SketchFeature {
     plane: {
       type: 'face',
       bodyId: 'body',
-      topoId: '0',
+      name: 'fixture/face',
       frame: {
         origin: [0, 0, 1],
         xAxis: [1, 0, 0],
@@ -109,6 +111,8 @@ function lShape(): TessellationResult {
     triangleCount: indices.length / 3,
     vertexCount: points.length,
     bbox: { min: [0, 0, 0], max: [10, 10, 0] },
+    faceNames: ['fixture/face'],
+    faceAliases: [['fixture/face']],
   };
 }
 

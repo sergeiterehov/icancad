@@ -99,7 +99,7 @@ describe('edge treatment targets', () => {
       [{ kind: 'body-face', id: 'body-1#5' }],
       { 'body-1': mesh },
     );
-    const edges = treatedEdges(mesh, treatmentSelection(resolved!, 'body-1'));
+    const edges = treatedEdges(mesh, treatmentSelection(resolved!, 'body-1', mesh));
     // The top face has four boundary edges and shares none with another
     // selected face.
     expect(edges).toHaveLength(4);
@@ -292,15 +292,22 @@ describe('older references', () => {
   function legacyRef() {
     const mesh: TessellationResult = {
       ...notchMesh(SIZE),
-      edges: [{ id: '7', faceIds: [4, 5], points: [10, 10, 0, 10, 10, SIZE], closed: false }],
+      edges: [
+        {
+          id: '7',
+          name: 'fixture/edge',
+          faceIds: [4, 5],
+          points: [10, 10, 0, 10, 10, SIZE],
+          closed: false,
+        },
+      ],
     };
     const target: EdgeTreatmentTarget = {
       faceRefs: [],
       edgeRefs: [
         {
           bodyId: 'body-1',
-          edgeId: '7',
-          faceIds: [4, 5],
+          name: 'fixture/edge',
           start: [10, 10, 0],
           mid: [10, 10, SIZE / 2],
           end: [10, 10, SIZE],

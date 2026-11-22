@@ -9,7 +9,6 @@ import {
   getParameter,
   isDriven,
   parseProject,
-  PROJECT_SCHEMA_VERSION,
   setParameter,
   type BoxPrimitive,
   type Feature,
@@ -211,25 +210,6 @@ describe('variables', () => {
         variable: { id: 'var_3', name: 'math', type: 'number', source: '1' },
       }),
     ).toThrowError();
-  });
-
-  it('migrates a version 4 document into version 6', () => {
-    const raw = JSON.parse(JSON.stringify(createProject())) as Record<string, unknown>;
-    raw.schemaVersion = 4;
-    delete raw.variables;
-    const parsed = parseProject(raw);
-    expect(parsed.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
-    expect(parsed.variables).toEqual([]);
-    expect(activeModel(parsed).variables).toEqual([]);
-  });
-
-  it('migrates a version 5 document by adding model variables', () => {
-    const raw = JSON.parse(JSON.stringify(createProject())) as Record<string, unknown>;
-    raw.schemaVersion = 5;
-    delete (raw.superObjects as Record<string, unknown>[])[0]!.variables;
-    const parsed = parseProject(raw);
-    expect(parsed.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
-    expect(activeModel(parsed).variables).toEqual([]);
   });
 
   it('keeps model variables apart from project variables', () => {

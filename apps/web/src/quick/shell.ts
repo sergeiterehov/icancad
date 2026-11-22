@@ -2,7 +2,11 @@ import type { TessellationResult } from '@icancad/kernel';
 import type { BodyFaceRef, Model, Vec3 } from '@icancad/model';
 import type { SelectionItem, ShellInput } from '../stores/documentStore';
 import { parseBodyFaceId } from '../stores/selection';
-import { resolveFaceRef, type FaceLookupContext, type ResolvedFaceRef } from '../kernel/faceLookup';
+import {
+  resolveFaceRef,
+  type ResolvedFaceRef,
+  type TopologyLookupContext,
+} from '../kernel/topologyLookup';
 import { faceRegion } from './geometry';
 
 export interface FacePose {
@@ -54,37 +58,28 @@ export function shellFaceRef(
 ): BodyFaceRef | null {
   const id = Number(faceId);
   if (!Number.isInteger(id) || id < 0) return null;
+  const name = mesh.faceNames?.[id];
+  if (!name) return null;
   const region = faceRegion(mesh, id);
-  if (region) return { bodyId, faceId, normal: region.normal, origin: region.centroid };
+  if (region) return { bodyId, name, normal: region.normal, origin: region.centroid };
   const pose = picked ?? trianglePose(mesh, id);
   if (!pose) return null;
   const length = Math.hypot(pose.normal[0], pose.normal[1], pose.normal[2]);
   if (!Number.isFinite(length) || length <= 1e-9) return null;
   return {
     bodyId,
-    faceId,
+    name,
     normal: [pose.normal[0] / length, pose.normal[1] / length, pose.normal[2] / length],
     origin: pose.origin,
   };
 }
 
-/**
- * A face the shell leaves open. A face with a single stable normal resolves by
- * its stored pose; a closed curved face (a full cylinder, a sphere) has no such
- * normal, so its traversal index is the only description it can offer.
- */
+/** A face the shell leaves open, found by the name it was picked with. */
 export function resolveShellFaceRef(
-  context: FaceLookupContext,
+  context: TopologyLookupContext,
   ref: BodyFaceRef,
 ): ResolvedFaceRef | null {
-  const resolved = resolveFaceRef(context, ref);
-  if (resolved) return resolved;
-  const faceId = Number(ref.faceId);
-  const mesh = context.meshes[ref.bodyId];
-  if (!Number.isInteger(faceId) || faceId < 0 || !mesh) return null;
-  if (!context.bodyShapes.has(ref.bodyId)) return null;
-  if (faceId >= (context.bodyStats[ref.bodyId]?.faces ?? 0)) return null;
-  return faceRegion(mesh, faceId) ? null : { bodyId: ref.bodyId, faceId };
+  return resolveFaceRef(context, ref);
 }
 
 /**

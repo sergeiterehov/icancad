@@ -96,10 +96,9 @@ operation owns predictions, inputs and history.
 
 Edge polylines are produced by the kernel because the current OCCT build exposes
 `BRep_Tool.PolygonOnTriangulation`, `BRepAdaptor_Curve`, `GCPnts_*`,
-`BRepFilletAPI_MakeFillet` and `BRepFilletAPI_MakeChamfer`. Edge ids follow the
-deterministic face/edge traversal of a shape, which is the same order a future
-fillet or chamfer must use to address the edge; they are stable for as long as
-the body rebuilds the same way, just like face ids (persistent naming is M5).
+`BRepFilletAPI_MakeFillet` and `BRepFilletAPI_MakeChamfer`. Edges carry the
+persistent names ADR 0042 gives them, so a stored edge reference survives a
+rebuild that renumbers the traversal.
 
 A chamfer or fillet will be another `OperationHandle` provider:
 
@@ -115,9 +114,8 @@ A chamfer or fillet will be another `OperationHandle` provider:
 
 - Simple modelling stays in the viewport: select, drag, the operation is there.
 - Operations are the single source of handle state, undo and persistence.
-- Face ids are renumbered by booleans. A handle of a focused operation is built
-  from its stored `faceRefs`, so the handle stays correct; reselecting a
-  renumbered face can lead to a new operation. This is the known M5 limitation.
+- Booleans renumber the traversal, but persistent names keep a handle built
+  from the stored `faceRefs` on the same topology (ADR 0042).
 - Curved body faces still cannot be extruded, so they offer no handle; the
   inspector explains why.
 - The preview of a join needs one extra boolean per previewed add (tool minus

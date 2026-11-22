@@ -134,6 +134,27 @@ export interface OcctPrismMaker {
   IsDone(): boolean;
 }
 
+/** A sweep (prism or revolve) that can say where its input topology went. */
+export interface OcctSweepMaker extends OcctPrismMaker {
+  FirstShape(): OcctShape;
+  LastShape(): OcctShape;
+  Generated(shape: OcctShape): OcctShapeList;
+  Modified(shape: OcctShape): OcctShapeList;
+  IsDeleted(shape: OcctShape): boolean;
+}
+
+/** `BRepTools_History`: how a maker moved, merged and removed its input. */
+export interface OcctHistory {
+  Modified(shape: OcctShape): OcctShapeList;
+  Generated(shape: OcctShape): OcctShapeList;
+  IsRemoved(shape: OcctShape): boolean;
+}
+
+/** A handle to `BRepTools_History`; some makers return the object directly. */
+export interface OcctHistoryHandle {
+  get(): OcctHistory;
+}
+
 export interface OcctBooleanMaker {
   Build(): void;
   Shape(): OcctShape;
@@ -142,11 +163,16 @@ export interface OcctBooleanMaker {
    * cannot find them in the result; this is the only way to keep their identity.
    */
   Modified(shape: OcctShape): OcctShapeList;
+  /** Fills the history the boolean can report afterwards. */
+  SetToFillHistory(enabled: boolean): void;
+  History(): OcctHistoryHandle;
+  HasHistory(): boolean;
 }
 
 /** The part of a maker that maps the faces it touched, boolean or treatment. */
 export interface OcctFaceMapper {
   Modified(shape: OcctShape): OcctShapeList;
+  Generated?(shape: OcctShape): OcctShapeList;
 }
 
 export interface OcctShapeMaker {
@@ -189,7 +215,7 @@ export interface OcctShapeListMaker {
 }
 
 /** `BRepOffsetAPI_MakeThickSolid`: offsets a whole solid into a wall. */
-export interface OcctThickSolidMaker {
+export interface OcctThickSolidMaker extends OcctFaceMapper {
   MakeThickSolidByJoin(
     shape: OcctShape,
     closingFaces: OcctShapeListMaker,
@@ -385,7 +411,7 @@ export interface OcctBindings {
     ): void;
     SurfaceProperties_1(
       shape: OcctShape,
-      props: { Mass(): number },
+      props: { Mass(): number; CentreOfMass(): OcctPoint3 },
       skipShared: boolean,
       useTriangulation: boolean,
     ): void;
@@ -413,19 +439,24 @@ export interface OcctBindings {
     endAngle: number,
   ) => { Edge(): OcctShape };
   BRepBuilderAPI_MakeWire_2: new (edge: OcctShape) => OcctWireMaker;
+  BRepTools_WireExplorer_2: new (wire: OcctShape) => {
+    More(): boolean;
+    Next(): void;
+    Current(): OcctShape;
+  };
   BRepBuilderAPI_MakeFace_15: new (wire: OcctShape, onlyPlane: boolean) => OcctFaceMaker;
   BRepPrimAPI_MakePrism_1: new (
     shape: OcctShape,
     vector: unknown,
     copy: boolean,
     canonize: boolean,
-  ) => OcctPrismMaker;
+  ) => OcctSweepMaker;
   BRepPrimAPI_MakeRevol_1: new (
     shape: OcctShape,
     axis: unknown,
     angle: number,
     copy: boolean,
-  ) => OcctPrismMaker;
+  ) => OcctSweepMaker;
   gp_Ax1_2: new (origin: OcctPoint3, direction: unknown) => unknown;
   gp_Trsf_1: new () => OcctTransformation3;
   BRepBuilderAPI_Transform_2: new (
@@ -441,7 +472,7 @@ export interface OcctBindings {
     unifyEdges: boolean,
     unifyFaces: boolean,
     concatBSplines: boolean,
-  ) => { Build(): void; Shape(): OcctShape };
+  ) => { Build(): void; Shape(): OcctShape; History_1(): OcctHistoryHandle };
   ChFi3d_FilletShape: {
     ChFi3d_Rational: unknown;
     ChFi3d_QuasiAngular: unknown;

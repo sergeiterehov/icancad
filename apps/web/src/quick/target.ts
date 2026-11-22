@@ -29,6 +29,7 @@ export interface QuickTargetSource {
 export function quickTargetFromSelection(
   project: Model,
   selection: readonly SelectionItem[],
+  meshes: Record<string, TessellationResult>,
 ): QuickTarget | null {
   if (selection.length === 0) return null;
   if (selection.some((item) => item.kind === 'edge' || item.kind === 'sketch-edge')) return null;
@@ -40,7 +41,11 @@ export function quickTargetFromSelection(
     if (bodyFaces.some((face) => face.bodyId !== bodyId)) return null;
     const bodyRef = project.bodies.find((candidate) => candidate.id === bodyId);
     if (!bodyRef || bodyRef.kind === 'mesh') return null;
-    return { kind: 'body-face', bodyId, faceIds: bodyFaces.map((face) => face.faceId) };
+    const mesh = meshes[bodyId];
+    const faceIds = bodyFaces.map((face) => face.faceId);
+    const names = faceIds.map((faceId) => mesh?.faceNames?.[Number(faceId)]);
+    if (names.some((name) => !name)) return null;
+    return { kind: 'body-face', bodyId, faceIds, names: names as string[] };
   }
 
   const sketchIds = selectedSketchIds(selection);
@@ -79,18 +84,21 @@ export function boundBodyFaceGeometry(
   target: QuickTarget,
 ): QuickTargetGeometry | null {
   if (target.kind !== 'body-face') return null;
-  const refs = target.faceIds.map((faceId) =>
-    bound.faceRefs.find((ref) => ref.bodyId === target.bodyId && ref.faceId === faceId),
-  );
+  const refs =
+    bound.faceRefs.length === target.names.length
+      ? target.names.map((name) =>
+          bound.faceRefs.find((ref) => ref.bodyId === target.bodyId && ref.name === name),
+        )
+      : [];
   const primary = refs[refs.length - 1];
   if (!primary) return null;
   return {
     target,
     origin: primary.origin,
     direction: primary.normal,
-    faces: target.faceIds.flatMap((faceId, index) => {
+    faces: target.names.flatMap((name, index) => {
       const ref = refs[index];
-      return ref ? [{ faceId, centroid: ref.origin, normal: ref.normal }] : [];
+      return ref ? [{ faceId: target.faceIds[index] ?? '', name, centroid: ref.origin, normal: ref.normal }] : [];
     }),
     samples: [],
   };
@@ -99,7 +107,7 @@ export function boundBodyFaceGeometry(
 /** Which element the current selection opens a quick operation for. */
 export function resolveQuickTarget(source: QuickTargetSource): QuickTargetGeometry | null {
   const { project, selection, meshes, sketchFrames } = source;
-  const target = quickTargetFromSelection(project, selection);
+  const target = quickTargetFromSelection(project, selection, meshes);
   if (!target) return null;
 
   if (target.kind === 'body-face') {
@@ -113,7 +121,9 @@ export function resolveQuickTarget(source: QuickTargetSource): QuickTargetGeomet
       if (!Number.isInteger(faceId) || !isPlanarFace(mesh, faceId)) return null;
       const normal = outwardNormal(mesh, faceId);
       if (!normal) return null;
-      faces.push({ faceId: face, centroid: normal.centroid, normal: normal.normal });
+      const name = mesh.faceNames?.[faceId];
+      if (!name) return null;
+      faces.push({ faceId: face, name, centroid: normal.centroid, normal: normal.normal });
     }
     const primary = faces[faces.length - 1]!;
     return {
@@ -161,11 +171,11 @@ export function findBoundExtrude(project: Model, target: QuickTarget): ExtrudeFe
     if (!isFeatureInHistory(project, feature.id)) continue;
     if (target.kind === 'body-face') {
       const refs = feature.faceRefs ?? [];
-      if (feature.sketchId || refs.length !== target.faceIds.length) continue;
-      const keys = new Set(refs.map((ref) => `${ref.bodyId}#${ref.faceId}`));
+      if (feature.sketchId || refs.length !== target.names.length) continue;
+      const keys = new Set(refs.map((ref) => `${ref.bodyId}#${ref.name}`));
       if (
         refs.every((ref) => ref.bodyId === target.bodyId) &&
-        target.faceIds.every((faceId) => keys.has(`${target.bodyId}#${faceId}`))
+        target.names.every((name) => keys.has(`${target.bodyId}#${name}`))
       ) {
         return feature;
       }
@@ -208,11 +218,11 @@ export function buildQuickExtrude(
       regions: [],
       faceRefs: geometry.faces.map((face) => ({
         bodyId: target.bodyId,
-        faceId: face.faceId,
+        name: face.name,
         normal: face.normal,
         origin: face.centroid,
       })),
-      objectOrder: geometry.faces.map((face) => `b:${target.bodyId}#${face.faceId}`),
+      objectOrder: geometry.faces.map((face) => `b:${face.name}`),
       end: 'blind',
       distance,
       reversed,

@@ -10,7 +10,7 @@ import {
 } from '@icancad/model';
 import type { SelectionItem } from '../stores/documentStore';
 import { selectedBodyFaces, selectedEdges } from '../stores/selection';
-import { edgeMatchDistance } from '../kernel/edgeLookup';
+import { edgeByName, faceIdByName } from '../kernel/topologyLookup';
 import {
   edgeBisector,
   edgeCorner,
@@ -92,7 +92,9 @@ export function edgeTreatmentTargetFromSelection(
     const mesh = meshes[face.bodyId];
     const normal = mesh ? outwardNormal(mesh, Number(face.faceId)) : null;
     if (!mesh || !normal) return null;
-    faceRefs.push(edgeTreatmentFaceRef(mesh, face.bodyId, face.faceId, normal));
+    const ref = edgeTreatmentFaceRef(mesh, face.bodyId, face.faceId, normal);
+    if (!ref) return null;
+    faceRefs.push(ref);
   }
 
   const edgeRefs: BodyEdgeRef[] = [];
@@ -136,7 +138,9 @@ export function edgeTreatmentGeometry(
   const face = target.faceRefs[0];
   if (!face) return null;
   const mesh = meshes?.[face.bodyId];
-  const handle = face.handle ?? (mesh ? faceRimHandle(mesh, Number(face.faceId)) : null);
+  const faceId = faceIdByName(mesh, face.name);
+  const handle =
+    face.handle ?? (mesh && faceId !== null ? faceRimHandle(mesh, faceId) : null);
   if (!handle) return null;
   return { target, origin: handle.origin, direction: handle.direction, wedge: handle.wedge };
 }
@@ -147,12 +151,8 @@ export function edgeTreatmentGeometry(
  * so this is meant for the input of the operation.
  */
 function liveCorner(mesh: TessellationResult | undefined, ref: BodyEdgeRef): EdgeCorner | null {
-  if (!mesh) return null;
-  const edges = mesh.edges ?? [];
-  const edge =
-    edges.find((candidate) => edgeMatchDistance(candidate, ref) !== null) ??
-    edges.find((candidate) => candidate.id === ref.edgeId);
-  if (!edge) return null;
+  const edge = edgeByName(mesh, ref.name);
+  if (!edge || !mesh) return null;
   return edgeCorner(mesh, edge.faceIds, edgePose(edge.points).mid);
 }
 
@@ -181,11 +181,10 @@ export function edgeTreatmentEdgeRef(
   // The corner reads the two faces next to the edge; the face average is only
   // the fallback for an edge the tessellation cannot describe.
   const bisector = corner?.bisector ?? edgeBisector(mesh, edge.faceIds);
-  if (!bisector) return null;
+  if (!bisector || !edge.name) return null;
   return {
     bodyId,
-    edgeId,
-    faceIds: [...edge.faceIds],
+    name: edge.name,
     ...pose,
     length: polylineLength(edge.points),
     closed: edge.closed,
@@ -200,11 +199,13 @@ export function edgeTreatmentFaceRef(
   bodyId: string,
   faceId: string,
   pose: { centroid: Vec3; normal: Vec3 },
-): BodyFaceRef {
+): BodyFaceRef | null {
+  const name = mesh.faceNames?.[Number(faceId)];
+  if (!name) return null;
   const rim = faceRimHandle(mesh, Number(faceId));
   return {
     bodyId,
-    faceId,
+    name,
     normal: pose.normal,
     origin: pose.centroid,
     ...(rim ? { handle: rim } : {}),
@@ -244,7 +245,7 @@ export function edgeTreatmentLimit(
   for (const bodyId of bodyIds) {
     const mesh = meshes[bodyId];
     if (!mesh) return null;
-    const selection = treatmentSelection(target, bodyId);
+    const selection = treatmentSelection(target, bodyId, mesh);
     if (selection.faceIds.length === 0 && selection.edgeIds.length === 0) continue;
     const bodyLimit = meshTreatmentLimit(mesh, selection);
     if (bodyLimit === null) continue;
@@ -258,12 +259,17 @@ export function edgeTreatmentLimit(
 export function treatmentSelection(
   target: EdgeTreatmentTarget,
   bodyId: string,
+  mesh?: TessellationResult,
 ): { faceIds: number[]; edgeIds: string[] } {
+  const faceIds = target.faceRefs
+    .filter((ref) => ref.bodyId === bodyId)
+    .map((ref) => faceIdByName(mesh, ref.name));
+  const edgeIds = target.edgeRefs
+    .filter((ref) => ref.bodyId === bodyId)
+    .map((ref) => edgeByName(mesh, ref.name)?.id);
   return {
-    faceIds: target.faceRefs
-      .filter((ref) => ref.bodyId === bodyId)
-      .map((ref) => Number(ref.faceId)),
-    edgeIds: target.edgeRefs.filter((ref) => ref.bodyId === bodyId).map((ref) => ref.edgeId),
+    faceIds: faceIds.filter((id): id is number => id !== null),
+    edgeIds: edgeIds.filter((id): id is string => Boolean(id)),
   };
 }
 

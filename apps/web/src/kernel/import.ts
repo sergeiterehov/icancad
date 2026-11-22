@@ -33,9 +33,13 @@ export function loadImportedStep(assetId: string): Promise<Uint8Array> {
 }
 
 /** Builds a STEP file into kernel shapes; called by the rebuild. */
-export function importStepToKernel(data: Uint8Array, prefix: string): Promise<ImportStepResult> {
+export function importStepToKernel(
+  data: Uint8Array,
+  prefix: string,
+  name = prefix,
+): Promise<ImportStepResult> {
   return getKernelClient().request<ImportStepResult>({
     type: 'import-step',
-    params: { data, prefix },
+    params: { data, prefix, name },
   });
 }

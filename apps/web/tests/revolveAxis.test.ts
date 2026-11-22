@@ -35,7 +35,7 @@ describe('revolve axis', () => {
   it('reads a straight body edge from the current mesh', () => {
     const edge = meshes.body.edges![0]!;
     const resolved = resolveRevolveAxis(
-      { kind: 'body-edge', bodyId: 'body', edgeId: edge.id, start: [0, 0, 0], end: [1, 0, 0] },
+      { kind: 'body-edge', bodyId: 'body', name: edge.name!, start: [0, 0, 0], end: [1, 0, 0] },
       { meshes, sketches: [] },
     );
     expect(resolved?.attached).toBe(true);
@@ -54,7 +54,7 @@ describe('revolve axis', () => {
       {
         kind: 'body-edge',
         bodyId: 'body',
-        edgeId: 'missing',
+        name: 'missing',
         start: [1, 2, 3],
         end: [1, 12, 3],
       },
@@ -69,6 +69,7 @@ describe('revolve axis', () => {
       edges: [
         {
           id: 'curved',
+          name: 'curved',
           faceIds: [0, 1],
           points: [0, 0, 0, 5, 2, 0, 10, 0, 0],
           closed: false,
@@ -77,7 +78,7 @@ describe('revolve axis', () => {
     };
     expect(straightPolylineAxis(curved.edges[0]!.points)).toBeNull();
     const resolved = resolveRevolveAxis(
-      { kind: 'body-edge', bodyId: 'body', edgeId: 'curved', start: [0, 0, 0], end: [10, 0, 0] },
+      { kind: 'body-edge', bodyId: 'body', name: 'curved', start: [0, 0, 0], end: [10, 0, 0] },
       { meshes: { body: curved }, sketches: [] },
     );
     expect(resolved).toEqual({ origin: [0, 0, 0], direction: [1, 0, 0], attached: false });
@@ -117,7 +118,7 @@ describe('revolve axis', () => {
     expect(bodyEdgeAxisRef(meshes.body, 'body', edge.id)).toEqual({
       kind: 'body-edge',
       bodyId: 'body',
-      edgeId: edge.id,
+      name: edge.name,
       start: [edge.points[0], edge.points[1], edge.points[2]],
       end: [edge.points[3], edge.points[4], edge.points[5]],
     });

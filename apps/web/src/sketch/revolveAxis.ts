@@ -7,6 +7,7 @@ import type {
   SketchFrame,
   Vec3,
 } from '@icancad/model';
+import { edgeByName } from '../kernel/topologyLookup';
 import { sketchFrameOf } from './sectionPlane';
 
 /** A line in world space, ready to be handed to the kernel. */
@@ -76,7 +77,7 @@ function bodyEdgeAxis(
   meshes: Record<string, TessellationResult>,
 ): ResolvedRevolveAxis | null {
   const mesh = meshes[axis.bodyId];
-  const edge = mesh?.edges?.find((candidate) => candidate.id === axis.edgeId);
+  const edge = edgeByName(mesh, axis.name);
   if (edge) {
     const resolved = straightPolylineAxis(edge.points);
     // An edge that has become curved cannot carry a revolve anymore; the pose
@@ -135,12 +136,12 @@ export function bodyEdgeAxisRef(
   edgeId: string,
 ): Extract<RevolveAxis, { kind: 'body-edge' }> | null {
   const edge = mesh.edges?.find((candidate) => candidate.id === edgeId);
-  if (!edge || !straightPolylineAxis(edge.points)) return null;
+  if (!edge?.name || !straightPolylineAxis(edge.points)) return null;
   const last = edge.points.length - 3;
   return {
     kind: 'body-edge',
     bodyId,
-    edgeId,
+    name: edge.name,
     start: [edge.points[0]!, edge.points[1]!, edge.points[2]!],
     end: [edge.points[last]!, edge.points[last + 1]!, edge.points[last + 2]!],
   };
