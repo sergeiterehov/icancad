@@ -332,6 +332,40 @@ describe('sketch projections', () => {
     ]);
   });
 
+  it('re-reads a projected face after the body changed between rebuilds', () => {
+    const square = (size: number): BodyEdge[] =>
+      [
+        [0, 0, 0, size, 0, 0],
+        [size, 0, 0, size, size, 0],
+        [size, size, 0, 0, size, 0],
+        [0, size, 0, 0, 0, 0],
+      ].map((points, index) => ({
+        id: `e-${index}`,
+        name: `fixture/e-${index}`,
+        faceIds: [1],
+        points,
+        closed: false,
+      }));
+    const projected = addProjectionToSketch(sketch(), frame, mesh(square(20)), {
+      kind: 'face',
+      bodyId: 'body-stale',
+      faceId: '1',
+    })!;
+    // The first rebuild reads the contour; the body is resized afterwards and a
+    // later rebuild has to read the new one.
+    resolveSketchProjections(projected, frame, () => mesh(square(20)));
+    const resolved = resolveSketchProjections(projected, frame, () => mesh(square(40)));
+    const spans = resolved.entities
+      .filter((entity) => entity.type === 'line')
+      .map((entity) => Math.hypot(entity.x2 - entity.x1, entity.y2 - entity.y1) as number)
+      .sort((left, right) => left - right);
+    expect(spans).toEqual([40, 40, 40, 40]);
+    const points = resolved.entities.filter((entity) => entity.type === 'point');
+    expect(points.map((entity) => (entity.type === 'point' ? entity.x : 0)).sort()).toEqual([
+      0, 0, 40, 40,
+    ]);
+  });
+
   it('does not add the same source twice', () => {
     const once = addProjectionToSketch(sketch(), frame, mesh([lineEdge]), {
       kind: 'edge',

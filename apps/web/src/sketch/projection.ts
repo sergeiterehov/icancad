@@ -258,21 +258,26 @@ function faceContourCurves(
 }
 
 // Rebuilding a sketch resolves every link of a face separately, so the contour
-// is computed once per face and shared by its links.
-const faceCurveCacheEntries = new Map<string, FaceCurve[]>();
+// is computed once per face and shared by its links. The cache belongs to the
+// tessellation it was read from: a rebuild produces a new mesh, and a contour
+// taken from the old one would keep a resized body's projection where it was.
+const faceCurveCacheEntries = new WeakMap<TessellationResult, Map<string, FaceCurve[]>>();
 
 function faceCurveCache(
   mesh: TessellationResult,
   frame: SketchFrame,
-  bodyId: string,
   faceName: string,
 ): FaceCurve[] {
-  const key = `${bodyId}|${faceName}|${frame.origin.join(',')}|${frame.normal.join(',')}`;
-  const cached = faceCurveCacheEntries.get(key);
+  let entries = faceCurveCacheEntries.get(mesh);
+  if (!entries) {
+    entries = new Map();
+    faceCurveCacheEntries.set(mesh, entries);
+  }
+  const key = `${faceName}|${frame.origin.join(',')}|${frame.normal.join(',')}`;
+  const cached = entries.get(key);
   if (cached) return cached;
   const curves = faceContourCurves(mesh, frame, faceName);
-  if (faceCurveCacheEntries.size > 64) faceCurveCacheEntries.clear();
-  faceCurveCacheEntries.set(key, curves);
+  entries.set(key, curves);
   return curves;
 }
 
@@ -460,7 +465,7 @@ export function resolveSketchProjections(
         };
       }
     } else if (elements && projection.faceName) {
-      const curves = faceCurveCache(mesh!, frame, projection.source.bodyId, projection.faceName);
+      const curves = faceCurveCache(mesh!, frame, projection.faceName);
       const curve = curves.find(
         (entry) =>
           entry.kind === projection.source.kind && entry.elementId === projection.source.name,

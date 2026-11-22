@@ -37,28 +37,37 @@ export function projectionMoved(
   return false;
 }
 
+export interface ReprojectionSolve {
+  /** Solved geometry, or null when there is nothing to solve or no solution. */
+  entities: SketchEntity[] | null;
+  /**
+   * The constraints have a solution somewhere, but not with the geometry the
+   * body now gives the projections. The caller keeps the rebuilt entities and
+   * reports the sketch as broken instead of hiding the mismatch.
+   */
+  conflict: boolean;
+}
+
 /**
  * Solves a sketch again after its projections were rebuilt. The projected
  * curves are derived — they stay where the body puts them — and the rest of the
  * geometry follows the constraints that hold the sketch together, so changing a
  * projected feature earlier in the history moves the whole sketch instead of
  * leaving half of it behind.
- *
- * Null means the constraints cannot be honoured with the geometry the body now
- * has; the caller keeps the rebuilt entities and reports the sketch as it is.
  */
 export async function solveReprojectedSketch(
   feature: SketchFeature,
   entities: SketchEntity[],
-): Promise<SketchEntity[] | null> {
-  if (feature.constraints.length === 0) return null;
+): Promise<ReprojectionSolve> {
+  if (feature.constraints.length === 0) return { entities: null, conflict: false };
   try {
     const result = await solveSketch(entities, feature.constraints, [], {
       derived: [...projectionEntityIds(feature)],
     });
-    if (result.conflicting.length > 0) return null;
-    return result.entities;
+    if (result.conflicting.length > 0) return { entities: null, conflict: true };
+    return { entities: result.entities, conflict: false };
   } catch {
-    return null;
+    // A solver that could not run says nothing about the constraints.
+    return { entities: null, conflict: false };
   }
 }

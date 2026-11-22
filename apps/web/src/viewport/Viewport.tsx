@@ -26,6 +26,7 @@ import { problemGeometryIds } from '../sketch/problems';
 import { sketchHasFormulaError } from '../sketch/resolvedConstraints';
 import {
   computeSketchFrame,
+  faceFrameByName,
   flipNormal,
   resolveSectionPlane,
   sectionFaceFrame,
@@ -168,6 +169,18 @@ function chipLabel(drag: OperationHandleDrag, translate: (key: never) => string)
 
 /** How long the view must rest before its camera is written down. */
 const CAMERA_SAVE_DELAY_MS = 400;
+
+/**
+ * The mesh a pick was made on. While an operation is open its result is a
+ * preview and the published meshes belong to the model before it, so the input
+ * the pick really hit is read from the preview instead.
+ */
+function meshOfPick(bodyId: string | undefined): TessellationResult | undefined {
+  if (!bodyId) return undefined;
+  const kernelState = useKernelStore.getState();
+  const mark = kernelState.preview?.bodies.find((candidate) => candidate.id === bodyId);
+  return mark?.baseMesh ?? kernelState.meshes[bodyId];
+}
 
 export function Viewport() {
   const { t, i18n } = useTranslation();
@@ -613,9 +626,8 @@ export function Viewport() {
               candidate.id === ui.pickingSketchPlane && candidate.type === 'sketch',
           );
           if (!feature) return;
-          const faceName = useKernelStore
-            .getState()
-            .meshes[pick.bodyId]?.faceNames?.[Number(pick.faceId)];
+          const mesh = meshOfPick(pick.bodyId);
+          const faceName = mesh?.faceNames?.[Number(pick.faceId)];
           if (!faceName) return;
           store.apply({
             type: 'feature/replace',
@@ -626,7 +638,10 @@ export function Viewport() {
                 bodyId: pick.bodyId,
                 name: faceName,
                 offset: feature.plane.type === 'face' ? (feature.plane.offset ?? 0) : 0,
-                frame: faceFrame(pick.origin, pick.normal),
+                // The middle of the face, the same frame the rebuild and the
+                // editor place the sketch at; the click point would put the
+                // sketch somewhere else the moment the history is rebuilt.
+                frame: faceFrameByName(mesh, faceName) ?? faceFrame(pick.origin, pick.normal),
                 ...(feature.plane.rotation ? { rotation: feature.plane.rotation } : {}),
               },
             },
@@ -655,7 +670,7 @@ export function Viewport() {
           }
           // The face is remembered together with the pose it has right now, so a
           // face that later disappears still leaves the section where it was.
-          const sectionMesh = useKernelStore.getState().meshes[pick.bodyId];
+          const sectionMesh = meshOfPick(pick.bodyId);
           const faceName = sectionMesh?.faceNames?.[Number(pick.faceId)];
           if (!faceName) return;
           const frame = sectionFaceFrame(sectionMesh, faceName) ?? {
@@ -718,11 +733,7 @@ export function Viewport() {
           // reference has to be measured on that same mesh. Its own result has
           // renumbered faces and edges that no longer match the input. This
           // callback outlives a render, so the preview is read from the store.
-          const kernelState = useKernelStore.getState();
-          const mark = kernelState.preview?.bodies.find(
-            (candidate) => candidate.id === pick.bodyId,
-          );
-          const mesh = mark?.baseMesh ?? kernelState.meshes[pick.bodyId];
+          const mesh = meshOfPick(pick.bodyId);
           if (pick.kind === 'body-edge') {
             const ref = mesh ? edgeTreatmentEdgeRef(mesh, pick.bodyId, pick.edgeId) : null;
             if (!ref) return;
@@ -790,9 +801,7 @@ export function Viewport() {
           // The turn goes around the same middle the sketch tool uses when it
           // lands on a face: the area-weighted centroid of the tessellation.
           // It needs no kernel round trip, so arming the picker costs nothing.
-          const faceName = useKernelStore
-            .getState()
-            .meshes[pick.bodyId]?.faceNames?.[Number(pick.faceId)];
+          const faceName = meshOfPick(pick.bodyId)?.faceNames?.[Number(pick.faceId)];
           if (!faceName) return;
           store.setArrayAxisFace(picker.featureId, picker.index, {
             kind: 'face',
@@ -808,9 +817,9 @@ export function Viewport() {
           const picker = ui.pickingArrayPath;
           if (!pick) return;
           if (pick.kind === 'body-edge') {
-            const edge = useKernelStore
-              .getState()
-              .meshes[pick.bodyId]?.edges?.find((candidate) => candidate.id === pick.edgeId);
+            const edge = meshOfPick(pick.bodyId)?.edges?.find(
+              (candidate) => candidate.id === pick.edgeId,
+            );
             if (!edge?.name) return;
             store.toggleArrayPath(picker.featureId, picker.index, {
               kind: 'body-edge',
@@ -837,7 +846,7 @@ export function Viewport() {
               ui.showToast('errors.FACE_NOT_PLANAR', 'error');
               return;
             }
-            const name = meshes[pick.bodyId]?.faceNames?.[Number(pick.faceId)];
+            const name = meshOfPick(pick.bodyId)?.faceNames?.[Number(pick.faceId)];
             if (!name) return;
             store.toggleExtrudeBodyFace(
               picking,

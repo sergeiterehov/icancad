@@ -66,13 +66,44 @@ export function faceFrameFromMesh(
   mesh: TessellationResult | undefined,
   faceId: number,
 ): SketchFrame | null {
-  if (!mesh || !Number.isInteger(faceId) || faceId < 0) return null;
+  if (!Number.isInteger(faceId) || faceId < 0) return null;
+  return facesFrame(mesh, [faceId]);
+}
+
+/**
+ * The frame of the whole face a name stands for.
+ *
+ * A name can cover several pieces: a boolean splits a face and every piece
+ * keeps the name. The pieces tile the face the user picked, so their union is
+ * the face as it was drawn on, and its middle does not jump from piece to piece.
+ */
+export function faceFrameByName(
+  mesh: TessellationResult | undefined,
+  name: string | undefined,
+): SketchFrame | null {
+  if (!mesh || !name) return null;
+  const ids: number[] = [];
+  for (let index = 0; index < (mesh.faceNames?.length ?? 0); index += 1) {
+    const canonical = mesh.faceNames![index];
+    if (canonical === name || (mesh.faceAliases?.[index]?.includes(name) ?? false)) {
+      ids.push(index);
+    }
+  }
+  return facesFrame(mesh, ids);
+}
+
+function facesFrame(
+  mesh: TessellationResult | undefined,
+  wanted: readonly number[],
+): SketchFrame | null {
+  if (!mesh || wanted.length === 0) return null;
+  const ids = new Set(wanted);
   const { positions, indices, faceIds } = mesh;
   const centre: Vec3 = [0, 0, 0];
   const normal: Vec3 = [0, 0, 0];
   let area = 0;
   for (let triangle = 0; triangle < faceIds.length; triangle += 1) {
-    if (faceIds[triangle] !== faceId) continue;
+    if (!ids.has(faceIds[triangle]!)) continue;
     const a = indices[triangle * 3]!;
     const b = indices[triangle * 3 + 1]!;
     const c = indices[triangle * 3 + 2]!;
@@ -157,19 +188,27 @@ export function sketchRotationAngles(feature: SketchLike): SketchRotationAngles 
 
 /**
  * The frame before rotation: the pose of the datum or face, its offset and its
- * direction flip. A face follows its mesh when one is given; otherwise the pose
- * captured when it was picked is used.
+ * direction flip.
+ *
+ * A face sketch is placed at the middle of the whole face, not at the piece the
+ * name happens to match: a face cut into pieces would otherwise move the sketch
+ * to whichever piece came first. When the name is gone the last good frame is
+ * used, so a transient loss — a preview, an operation being edited — cannot
+ * move the sketch either.
  */
-export function sketchFrameBasis(feature: SketchLike, faceMesh?: TessellationResult): SketchFrame {
+export function sketchFrameBasis(
+  feature: SketchLike,
+  faceMesh?: TessellationResult,
+  previousFrame?: SketchFrame,
+): SketchFrame {
   if (feature.plane.type === 'datum') {
     return withDirection(
       datumFrame(feature.plane.plane, numeric(feature.plane.offset)),
       feature.plane.inverted,
     );
   }
-  const faceId = faceIdByName(faceMesh, feature.plane.name);
-  const dynamic = faceId === null ? null : faceFrameFromMesh(faceMesh, faceId);
-  const base = dynamic ?? feature.plane.frame ?? datumFrame('XY', 0);
+  const live = faceFrameByName(faceMesh, feature.plane.name);
+  const base = live ?? previousFrame ?? feature.plane.frame ?? datumFrame('XY', 0);
   return withDirection(
     withSketchOffset(base, numeric(feature.plane.offset)),
     feature.plane.inverted,
@@ -179,8 +218,12 @@ export function sketchFrameBasis(feature: SketchLike, faceMesh?: TessellationRes
 export function computeSketchFrame(
   feature: SketchLike,
   faceMesh?: TessellationResult,
+  previousFrame?: SketchFrame,
 ): SketchFrame {
-  return rotateFrame(sketchFrameBasis(feature, faceMesh), sketchRotationAngles(feature));
+  return rotateFrame(
+    sketchFrameBasis(feature, faceMesh, previousFrame),
+    sketchRotationAngles(feature),
+  );
 }
 
 // The frozen frame wins; without one (before the first rebuild) fall back to

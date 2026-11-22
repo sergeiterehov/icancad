@@ -41,6 +41,8 @@ project uses exposes `Modified`, `Generated`, `IsRemoved`, the sweep makers'
 - `faceLookup.ts` and `edgeLookup.ts` are deleted; `topologyLookup.ts` resolves by name and alias. Only a schema 8 reference whose name is gone falls back to its stored pose.
 - ADR 0010, 0014, 0015, 0019, 0023 and 0037 lose their "persistent naming is M5" caveats.
 - A reference to topology an operation really removed is an operation error, not a silent jump to another face.
+- A reference to a split face means the whole face: every piece a name covers counts. A sketch on a face is placed at the middle of that whole face, and keeps the frame the last rebuild used when the name is briefly gone, so a preview or an operation being edited cannot slide it.
+- Picking reads a name from the mesh the pick was made on. While an operation is open that mesh is the preview's input, not the published model, which belongs to the history before it.
 - A schema 8 reference recovers the face or edge it pointed at by its exact pose; a shortened arc is matched by the circle it lies on. A reference written by version 9 resolves by name only.
 - A face created by an operation whose maker reports no history still gets a deterministic name from its own key; it is stable for a replay but may not survive a parameter change that reshapes that particular face.
 - Components and assemblies can reuse the same scope mechanism: an instance is another scope prefix around a chain of operations.

@@ -1105,6 +1105,9 @@ async function evaluateFeature(
     const frame = computeSketchFrame(
       feature,
       feature.plane.type === 'face' ? state.meshes[feature.plane.bodyId ?? ''] : undefined,
+      // A name that is briefly gone — an operation being edited, a preview —
+      // keeps the frame the last rebuild used instead of jumping to a pose.
+      state.sketchFrames[feature.id],
     );
     state.sketchFrames[feature.id] = frame;
     // Projected geometry follows the bodies as they exist at this point of the
@@ -1117,7 +1120,8 @@ async function evaluateFeature(
     let entities = resolved.entities;
     if (projectionMoved(feature.entities, entities, new Set(projectionEntityIds(feature)))) {
       const solved = await solveReprojectedSketch(feature, entities);
-      if (solved) entities = solved;
+      if (solved.conflict) state.featureErrors[feature.id] = 'CONSTRAINT_CONFLICT';
+      else if (solved.entities) entities = solved.entities;
     }
     // A driven dimension is a number only after the formula resolves; the
     // stored entities are the snapshot from the last solve, so the sketch is
