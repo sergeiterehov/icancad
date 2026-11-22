@@ -5,9 +5,10 @@ import {
   type SketchMeasure,
 } from '@icancad/model';
 import { isFundamentalEntityId } from '@icancad/sketch';
-import { Ruler, Split, Trash2 } from 'lucide-react';
+import { LineStyle, Ruler, Split, Trash2 } from 'lucide-react';
 import type { ContextMenuItem } from '../ui/ContextMenu';
 import { referenceIcon } from '../ui/referenceCatalog';
+import { constructionSelection, toggleConstruction } from './construction';
 import { constraintIdsForEntities } from './constraintModel';
 import { measuresForEntity, referenceText } from './measure';
 
@@ -48,8 +49,22 @@ export function referenceMenuItems(
     ? options.selectedEntityIds
     : [entityId];
   const { onSelectConstraints, onDelete } = options;
+  const constructionTargets = constructionSelection(feature, targets);
+  if (constructionTargets.length > 0) {
+    items.push({
+      id: 'toggle-construction',
+      label: t('tools.construction'),
+      icon: <LineStyle size={14} />,
+      checked: constructionTargets.every((target) => target.construction),
+      onSelect: () => {
+        const next = toggleConstruction(feature, targets);
+        if (next) onChange(next);
+      },
+    });
+  }
   if (onSelectConstraints) {
     const constraintIds = constraintIdsForEntities(feature, targets);
+    if (items.length > 0) items.push({ id: 'constraint-separator', separator: true });
     items.push({
       id: 'select-constraints',
       label: t('sketch.selectRelatedConstraints'),

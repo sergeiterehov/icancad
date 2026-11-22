@@ -107,6 +107,18 @@ function loopPoints(loop: ProfileRegion['outer']): [number, number][] {
       }
       continue;
     }
+    if (curve.type === 'ellipse') {
+      const span = (curve.endAngle ?? Math.PI * 2) - (curve.startAngle ?? 0);
+      for (let index = 0; index <= 2; index += 1) {
+        const angle = (curve.startAngle ?? 0) + (span * index) / 2;
+        const x = curve.rx * Math.cos(angle);
+        const y = curve.ry * Math.sin(angle);
+        const cos = Math.cos(curve.rotation);
+        const sin = Math.sin(curve.rotation);
+        points.push([curve.cx + x * cos - y * sin, curve.cy + x * sin + y * cos]);
+      }
+      continue;
+    }
     const span = curve.endAngle - curve.startAngle;
     for (let index = 0; index <= 2; index += 1) {
       const angle = curve.startAngle + (span * index) / 2;

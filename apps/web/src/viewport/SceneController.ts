@@ -31,6 +31,7 @@ import {
   shortestAngle,
 } from './cameraFit';
 import { cameraDragMode, cameraScheme } from './cameraControls';
+import { cameraBasis, poseFromQuaternion, poseQuaternion } from './cameraOrientation';
 import { gridLineRange, niceGridStep, SKETCH_GRID_TARGET_PX } from './sketchGrid';
 import {
   isKeylessPointer,
@@ -333,20 +334,6 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-// Mirrors the basis three.js derives in `lookAt` for our orbit camera.
-function cameraBasis(azimuth: number, polar: number): { right: THREE.Vector3; up: THREE.Vector3 } {
-  const offset = new THREE.Vector3(
-    Math.sin(polar) * Math.cos(azimuth),
-    Math.sin(polar) * Math.sin(azimuth),
-    Math.cos(polar),
-  );
-  const upHint =
-    Math.abs(Math.cos(polar)) > 0.999 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
-  const right = new THREE.Vector3().crossVectors(upHint, offset).normalize();
-  const up = new THREE.Vector3().crossVectors(offset, right).normalize();
-  return { right, up };
-}
-
 function createCircleTexture(): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = 64;
@@ -538,7 +525,8 @@ export class SceneController {
     draftPoints: Point2[];
     highlight: boolean;
     marker: Point2 | null;
-  } = { preview: null, draftPoints: [], highlight: false, marker: null };
+    guides: SketchEntity[];
+  } = { preview: null, draftPoints: [], highlight: false, marker: null, guides: [] };
 
   private animationFrame = 0;
   private needsRender = true;
@@ -620,6 +608,8 @@ export class SceneController {
   private transition: {
     from: CameraPose;
     to: CameraPose;
+    fromQuaternion: THREE.Quaternion;
+    toQuaternion: THREE.Quaternion;
     azimuthDelta: number;
     rollDelta: number;
     startedAt: number;
@@ -2890,7 +2880,8 @@ export class SceneController {
         entity.type !== 'line' &&
         entity.type !== 'circle' &&
         entity.type !== 'arc' &&
-        entity.type !== 'ellipse'
+        entity.type !== 'ellipse' &&
+        entity.type !== 'elliptical-arc'
       ) {
         continue;
       }
@@ -2933,6 +2924,24 @@ export class SceneController {
     };
   }
 
+  /** The point of the edited sketch plane under the pointer, without a magnet. */
+  sketchPointAt(clientX: number, clientY: number): Point2 | null {
+    const active = this.sketchEntries.find((entry) => entry.active);
+    if (!active) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    const pointer = new THREE.Vector2(
+      ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+      -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(pointer, this.camera);
+    const normal = new THREE.Vector3(...active.frame.normal);
+    const origin = new THREE.Vector3(...active.frame.origin);
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, origin);
+    const world = new THREE.Vector3();
+    if (!this.raycaster.ray.intersectPlane(plane, world)) return null;
+    return worldToSketchPoint(active.frame, [world.x, world.y, world.z]);
+  }
+
   private sketchColor(): number {
     return this.theme === 'dark' ? 0x8fb4ff : 0x2f5fc4;
   }
@@ -2960,6 +2969,11 @@ export class SceneController {
 
   private sketchFrozenLineColor(): number {
     return this.theme === 'dark' ? 0x3fbf73 : 0x2b8f57;
+  }
+
+  /** Guides of a draft: visible under the preview, never mistaken for geometry. */
+  private sketchGuideColor(): number {
+    return this.theme === 'dark' ? 0x7f8b9c : 0x8a93a1;
   }
 
   private sketchFrozenPointColor(): number {
@@ -3067,6 +3081,8 @@ export class SceneController {
           sketch.error === true,
           sketch.active ? null : tint,
           sketch.onTop,
+          sketch.active,
+          sketch.fixedPointIds ?? [],
         );
       }
       this.addSketchFacePickers(group, sketch);
@@ -3162,8 +3178,9 @@ export class SceneController {
     draftPoints: Point2[],
     highlight = false,
     marker: Point2 | null = null,
+    guides: SketchEntity[] = [],
   ): void {
-    this.sketchOverlayState = { preview, draftPoints, highlight, marker };
+    this.sketchOverlayState = { preview, draftPoints, highlight, marker, guides };
     this.rebuildSketchOverlay();
     this.invalidate();
   }
@@ -3290,6 +3307,11 @@ export class SceneController {
     this.transition = {
       from,
       to: pose,
+      fromQuaternion: poseQuaternion(from),
+      // Slerping the orientation avoids the pole: interpolating azimuth, polar
+      // and roll separately makes the view arrive at the sketch already turned
+      // a quarter turn and then twist into place.
+      toQuaternion: poseQuaternion(pose),
       azimuthDelta: shortestAngle(from.azimuth, pose.azimuth),
       rollDelta: shortestAngle(from.roll ?? 0, pose.roll ?? 0),
       startedAt: performance.now(),
@@ -3310,10 +3332,21 @@ export class SceneController {
       from.distance > 0 && to.distance > 0
         ? from.distance * (to.distance / from.distance) ** eased
         : from.distance + (to.distance - from.distance) * eased;
-    this.azimuth = from.azimuth + transition.azimuthDelta * eased;
-    this.polar = from.polar + (to.polar - from.polar) * eased;
-    this.roll = (from.roll ?? 0) + transition.rollDelta * eased;
-    if (progress >= 1) this.transition = null;
+    const angle = from.azimuth + transition.azimuthDelta * eased;
+    if (progress >= 1) {
+      this.azimuth = to.azimuth;
+      this.polar = to.polar;
+      this.roll = to.roll ?? 0;
+      this.transition = null;
+    } else {
+      // The orientation takes the shortest arc through space; the turntable
+      // state follows it so an interrupted transition keeps the same view.
+      const orientation = transition.fromQuaternion.clone().slerp(transition.toQuaternion, eased);
+      const pose = poseFromQuaternion(orientation, angle);
+      this.azimuth = pose.azimuth;
+      this.polar = pose.polar;
+      this.roll = pose.roll;
+    }
     this.updateCamera();
   }
 
@@ -3571,7 +3604,7 @@ export class SceneController {
         map: this.pointTexture,
         alphaTest: 0.5,
         transparent: true,
-        size: originSelected ? 8 : originHovered ? 7 : originHighlighted ? 8 : 6,
+        size: originSelected ? 16 : originHovered ? 14 : originHighlighted ? 16 : 12,
         sizeAttenuation: false,
         depthTest: false,
         depthWrite: false,
@@ -3613,6 +3646,8 @@ export class SceneController {
     error: boolean,
     tint: number | null,
     onTop: boolean,
+    editing: boolean,
+    fixedPointKeys: readonly string[],
   ): void {
     // A problem replaces the ordinary blue. Every explicit state above it
     // (selection, hover, magnet highlight, frozen, projection) still wins.
@@ -3655,6 +3690,15 @@ export class SceneController {
         group.add(line);
       }
     }
+    // Points read as handles only while the sketch is edited; elsewhere they
+    // are markers on a drawing and shrink to half the size.
+    const small = editing ? 8 : 4;
+    const big = editing ? 12 : 8;
+    const fixedPoints = new Set(
+      fixedPointKeys
+        .filter((key) => key.startsWith(`${entity.id}#`))
+        .map((key) => Number(key.split('#')[1])),
+    );
     const controlPoints = this.sketchControlPoints(entity);
     controlPoints.forEach((point, index) => {
       const pointHighlighted = highlighted || highlightedPoints.has(index);
@@ -3672,12 +3716,12 @@ export class SceneController {
                 ? this.sketchLostProjectionColor()
                 : projected
                   ? this.sketchProjectionColor()
-                  : frozen
+                  : frozen || fixedPoints.has(index)
                     ? this.sketchFrozenPointColor()
                     : problem
                       ? this.sketchProblemColor()
                       : this.sketchPointColor();
-      const pointSize = selectedPoint ? 6 : pointHovered ? 5 : pointHighlighted ? 6 : 4;
+      const pointSize = selectedPoint || pointHighlighted ? big : pointHovered ? small + 2 : small;
       const geometry = new THREE.BufferGeometry().setFromPoints([this.sketchWorld(frame, point)]);
       const points = new THREE.Points(
         geometry,
@@ -3715,7 +3759,7 @@ export class SceneController {
     color: number,
     width: number,
     opacity: number,
-    dashed = false,
+    dashed: boolean | 'dot' = false,
     depthTest = false,
   ): Line2 | null {
     if (entity.type === 'point') return null;
@@ -3732,6 +3776,7 @@ export class SceneController {
     if (positions.length < 6) return null;
     const geometry = new LineGeometry();
     geometry.setPositions(positions);
+    const scale = this.pixelsPerWorldUnit();
     const material = new LineMaterial({
       color,
       linewidth: width,
@@ -3745,10 +3790,12 @@ export class SceneController {
       polygonOffsetFactor: depthTest ? -1 : 0,
       polygonOffsetUnits: depthTest ? -1 : 0,
       resolution: new THREE.Vector2(this.width, this.height),
-      dashed,
-      dashSize: 8,
-      gapSize: 8,
-      dashScale: this.pixelsPerWorldUnit(),
+      dashed: Boolean(dashed),
+      // A dotted guide marks a construction; the dashes of finished geometry are
+      // longer, because they have to read as an outline rather than as a hint.
+      dashSize: dashed === 'dot' ? 2 : 8,
+      gapSize: dashed === 'dot' ? 3 : 8,
+      dashScale: scale,
     });
     this.sketchLineMaterials.push(material);
     const line = new Line2(geometry, material);
@@ -3766,8 +3813,19 @@ export class SceneController {
     const active = this.sketchEntries.find((entry) => entry.active);
     if (!active) return;
     const group = new THREE.Group();
-    const { preview, draftPoints, highlight, marker } = this.sketchOverlayState;
+    const { preview, draftPoints, highlight, marker, guides } = this.sketchOverlayState;
     const previewColor = highlight ? this.sketchHighlightColor() : this.sketchColor();
+    for (const guide of guides) {
+      const line = this.createSketchLine(
+        guide,
+        active.frame,
+        this.sketchGuideColor(),
+        1,
+        0.8,
+        'dot',
+      );
+      if (line) group.add(line);
+    }
     if (preview) {
       const line = this.createSketchLine(preview, active.frame, previewColor, 2, 0.75);
       if (line) group.add(line);
@@ -3783,7 +3841,7 @@ export class SceneController {
           map: this.pointTexture,
           alphaTest: 0.5,
           transparent: true,
-          size: 4,
+          size: 8,
           sizeAttenuation: false,
           depthTest: false,
           depthWrite: false,
@@ -3804,7 +3862,7 @@ export class SceneController {
           alphaTest: 0.5,
           transparent: true,
           opacity: 0.9,
-          size: 7,
+          size: 14,
           sizeAttenuation: false,
           depthTest: false,
           depthWrite: false,

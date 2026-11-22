@@ -26,6 +26,8 @@ export interface SceneSketch {
   selectionKeys: string[];
   dimmedEntityIds: string[];
   frozenEntityIds: string[];
+  /** Fixed points, keyed `entityId#index`; they cannot move. */
+  fixedPointIds?: string[];
   /** Geometry of conflicting or redundant constraints; drawn as a warning. */
   problemEntityIds: string[];
   /** Entities projected from 3D geometry; they are drawn in violet. */
@@ -180,6 +182,8 @@ export interface ViewportHandle {
     draftPoints: Point2[],
     highlight?: boolean,
     marker?: Point2 | null,
+    /** Dotted construction the draft implies, such as the circle an arc cuts. */
+    guides?: SketchEntity[],
   ) => void;
   alignSketch: (
     frame: SketchFrame,
@@ -200,6 +204,8 @@ export interface ViewportHandle {
     entities?: readonly SketchEntity[],
   ) => SketchSnap | null;
   projectSketchPoint: (frame: SketchFrame, point: Point2) => { x: number; y: number } | null;
+  /** The point of the edited sketch plane under the pointer, without a magnet. */
+  sketchPointAt: (clientX: number, clientY: number) => Point2 | null;
 }
 
 let current: ViewportHandle | null = null;

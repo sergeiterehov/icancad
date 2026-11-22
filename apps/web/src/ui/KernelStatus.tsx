@@ -3,6 +3,7 @@ import { ThumbsUp, TriangleAlert, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import { useDebouncedFlag } from '../hooks/useDebouncedFlag';
 import { cancelKernelWork } from '../kernel/client';
 import { useViewModel } from '../stores/documentStore';
 import { useFormulaStore } from '../stores/formulaStore';
@@ -62,7 +63,9 @@ export function KernelStatus() {
       ? Math.min(100, Math.round((buildProgress.done / buildProgress.total) * 100))
       : null;
   const sketchSolving = sketchPending > 0;
-  const busy = status !== 'ready' || tasks.length > 0 || sketchSolving;
+  // A drag solves the sketch every frame, so the raw flag flickers at the speed
+  // of the pointer. The indicator waits for work that is worth showing.
+  const busy = useDebouncedFlag(status !== 'ready' || tasks.length > 0 || sketchSolving, 100);
   // A failed operation is as bad as a failed kernel: the model the user sees is
   // missing a step, so the indicator says so and the popover names the step.
   const failures: { feature: Feature; code: string }[] = project.features

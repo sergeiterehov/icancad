@@ -90,6 +90,7 @@ import { outwardNormal } from '../quick/geometry';
 import { sketchRegionPlane } from '../sketch/regionPlane';
 import { shellFaceRef } from '../quick/shell';
 import { findBoundExtrude, quickTargetFromSelection } from '../quick/target';
+import { fixedPointIds } from '../sketch/fixedPoints';
 import { bodyEdgeAxisRef } from '../sketch/revolveAxis';
 import { formatNumber } from '../ui/format';
 import { SceneController, type SceneBody } from './SceneController';
@@ -848,13 +849,7 @@ export function Viewport() {
             }
             const name = meshOfPick(pick.bodyId)?.faceNames?.[Number(pick.faceId)];
             if (!name) return;
-            store.toggleExtrudeBodyFace(
-              picking,
-              pick.bodyId,
-              name,
-              pick.normal,
-              pick.origin,
-            );
+            store.toggleExtrudeBodyFace(picking, pick.bodyId, name, pick.normal, pick.origin);
           }
           return;
         }
@@ -1257,8 +1252,8 @@ export function Viewport() {
       fit: () => controller.fit(),
       setView: (name) => controller.setView(name),
       setSketches: (sketches) => controller.setSketches(sketches),
-      setSketchOverlay: (preview, draftPoints, highlight, marker) =>
-        controller.setSketchOverlay(preview, draftPoints, highlight, marker),
+      setSketchOverlay: (preview, draftPoints, highlight, marker, guides) =>
+        controller.setSketchOverlay(preview, draftPoints, highlight, marker, guides),
       alignSketch: (frame, entities, extraPoints) =>
         controller.alignSketch(frame, entities, extraPoints),
       getCameraState: () => controller.getCameraState(),
@@ -1266,6 +1261,7 @@ export function Viewport() {
       pickSketch: (x, y) => controller.pickSketch(x, y),
       snapSketch: (x, y, tolerance) => controller.snapSketch(x, y, tolerance),
       projectSketchPoint: (frame, point) => controller.projectSketchPoint(frame, point),
+      sketchPointAt: (x, y) => controller.sketchPointAt(x, y),
       getHandles: () => controller.getHandles(),
       getGhosts: () => controller.getGhosts(),
     });
@@ -1759,6 +1755,7 @@ export function Viewport() {
           selectionKeys: feature.id === activeSketchId ? sketchSelectionIds : selectedEdgeKeys,
           dimmedEntityIds: dimmed,
           frozenEntityIds: feature.id === activeSketchId ? sketchFrozenEntityIds : [],
+          fixedPointIds: fixedPointIds(feature),
           problemEntityIds:
             feature.id === activeSketchId
               ? problemGeometryIds(feature, sketchProblemConstraintIds)

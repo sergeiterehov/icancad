@@ -16,6 +16,19 @@ export interface SketchDocument {
 
 export type Point2 = [number, number];
 
+/** A point of an arc of an ellipse at its own parameter angle. */
+export function ellipseArcPoint(
+  entity: Extract<SketchEntity, { type: 'elliptical-arc' }>,
+  angle: number,
+): Point2 {
+  const rotation = (entity.rotation * Math.PI) / 180;
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  const x = Math.cos(angle) * entity.rx;
+  const y = Math.sin(angle) * entity.ry;
+  return [entity.cx + x * cos - y * sin, entity.cy + x * sin + y * cos];
+}
+
 /**
  * Picks the representation of an angle that is closest to a reference one.
  * Angles are stored as plain numbers, so an angle recomputed with `atan2` jumps
@@ -103,6 +116,20 @@ export function tessellateEntity(entity: SketchEntity, segments = 32): Point2[] 
       }
       return points;
     }
+    case 'elliptical-arc': {
+      const rotation = (entity.rotation * Math.PI) / 180;
+      const cos = Math.cos(rotation);
+      const sin = Math.sin(rotation);
+      const sweep = entity.endAngle - entity.startAngle;
+      const points: Point2[] = [];
+      for (let i = 0; i <= segments; i += 1) {
+        const angle = entity.startAngle + (sweep * i) / segments;
+        const x = Math.cos(angle) * entity.rx;
+        const y = Math.sin(angle) * entity.ry;
+        points.push([entity.cx + x * cos - y * sin, entity.cy + x * sin + y * cos]);
+      }
+      return points;
+    }
     case 'bezier':
       return sampleBezier(entity.points, segments);
   }
@@ -126,6 +153,8 @@ export function entityEndpoints(entity: SketchEntity): [Point2, Point2] | null {
           entity.cy + Math.sin(entity.endAngle) * entity.r,
         ],
       ];
+    case 'elliptical-arc':
+      return [ellipseArcPoint(entity, entity.startAngle), ellipseArcPoint(entity, entity.endAngle)];
     case 'bezier': {
       const first = entity.points[0];
       const last = entity.points[entity.points.length - 1];
@@ -173,6 +202,18 @@ export function entityControlPoints(entity: SketchEntity): Point2[] {
         [entity.cx - sin * entity.ry, entity.cy + cos * entity.ry],
       ];
     }
+    case 'elliptical-arc': {
+      const angle = (entity.rotation * Math.PI) / 180;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      return [
+        [entity.cx, entity.cy],
+        [entity.cx + cos * entity.rx, entity.cy + sin * entity.rx],
+        [entity.cx - sin * entity.ry, entity.cy + cos * entity.ry],
+        ellipseArcPoint(entity, entity.startAngle),
+        ellipseArcPoint(entity, entity.endAngle),
+      ];
+    }
     case 'bezier':
       return entity.points;
   }
@@ -203,6 +244,7 @@ export function translateEntity(entity: SketchEntity, dx: number, dy: number): S
     case 'arc':
       return { ...entity, cx: entity.cx + dx, cy: entity.cy + dy };
     case 'ellipse':
+    case 'elliptical-arc':
       return { ...entity, cx: entity.cx + dx, cy: entity.cy + dy };
     case 'bezier':
       return {
@@ -252,6 +294,32 @@ export function moveEntityControlPoint(
       const angle = (entity.rotation * Math.PI) / 180;
       const localY = -Math.sin(angle) * dx + Math.cos(angle) * dy;
       return { ...entity, ry: Math.max(Math.abs(localY), 1e-4) };
+    }
+    case 'elliptical-arc': {
+      if (index === 0) return { ...entity, cx: point[0], cy: point[1] };
+      const angle = (entity.rotation * Math.PI) / 180;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      const dx = point[0] - entity.cx;
+      const dy = point[1] - entity.cy;
+      if (index === 1) {
+        const turn = Math.atan2(dy, dx);
+        return {
+          ...entity,
+          rx: Math.max(Math.hypot(dx, dy), 1e-4),
+          rotation: (turn * 180) / Math.PI,
+        };
+      }
+      if (index === 2) {
+        const localY = -sin * dx + cos * dy;
+        return { ...entity, ry: Math.max(Math.abs(localY), 1e-4) };
+      }
+      const localX = cos * dx + sin * dy;
+      const localY = -sin * dx + cos * dy;
+      const parameter = Math.atan2(localY / entity.ry, localX / entity.rx);
+      return index === 3
+        ? { ...entity, startAngle: unwrapAngle(parameter, entity.startAngle) }
+        : { ...entity, endAngle: unwrapAngle(parameter, entity.endAngle) };
     }
     case 'bezier':
       return {

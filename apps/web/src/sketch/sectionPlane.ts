@@ -166,7 +166,7 @@ function withDirection(frame: SketchFrame, inverted: boolean | undefined): Sketc
   if (!inverted) return frame;
   return {
     ...frame,
-    yAxis: flipNormal(frame.yAxis),
+    xAxis: flipNormal(frame.xAxis),
     normal: flipNormal(frame.normal),
   };
 }

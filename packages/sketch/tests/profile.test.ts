@@ -29,7 +29,7 @@ describe('sketch profiles', () => {
     expect(start.type).toBe('line');
     // The loop must be chained: every curve starts where the previous one ended.
     for (let index = 0; index < curves.length; index += 1) {
-      const current = curves[index]! as Extract<typeof curves[number], { type: 'line' }>;
+      const current = curves[index]! as Extract<(typeof curves)[number], { type: 'line' }>;
       const next = curves[(index + 1) % curves.length]! as typeof current;
       expect(Math.hypot(next.x1 - current.x2, next.y1 - current.y2)).toBeLessThan(1e-9);
     }
@@ -54,12 +54,45 @@ describe('sketch profiles', () => {
   it('keeps arcs as arcs and marks the ones walked backwards', () => {
     const entities: SketchEntity[] = [
       line('b1', 0, 0, 40, 0),
-      { id: 'a1', type: 'arc', construction: false, cx: 20, cy: 0, r: 20, startAngle: 0, endAngle: Math.PI },
+      {
+        id: 'a1',
+        type: 'arc',
+        construction: false,
+        cx: 20,
+        cy: 0,
+        r: 20,
+        startAngle: 0,
+        endAngle: Math.PI,
+      },
     ];
     const [region] = sketchProfiles(entities);
     const arc = region!.outer.curves.find((curve) => curve.type === 'arc');
     expect(arc).toBeDefined();
     expect(arc).toMatchObject({ cx: 20, cy: 0, r: 20 });
+  });
+
+  it('passes an ellipse as one exact curve instead of a polyline', () => {
+    const ellipse: SketchEntity = {
+      id: 'e1',
+      type: 'ellipse',
+      construction: false,
+      cx: 0,
+      cy: 0,
+      rx: 20,
+      ry: 10,
+      rotation: 30,
+    };
+    const [region] = sketchProfiles([ellipse]);
+    expect(region!.outer.curves).toEqual([
+      {
+        type: 'ellipse',
+        cx: 0,
+        cy: 0,
+        rx: 20,
+        ry: 10,
+        rotation: (30 * Math.PI) / 180,
+      },
+    ]);
   });
 
   it('moves a circle into the hole of its enclosing face', () => {
@@ -74,7 +107,9 @@ describe('sketch profiles', () => {
     const regions = sketchProfiles([...rectangle(), circle]);
     expect(regions).toHaveLength(2);
     const ring = regions.find((candidate) => candidate.holes.length === 1);
-    const disk = regions.find((candidate) => candidate.holes.length === 0 && candidate.outer.curves.length === 1);
+    const disk = regions.find(
+      (candidate) => candidate.holes.length === 0 && candidate.outer.curves.length === 1,
+    );
     expect(ring?.holes[0]!.curves[0]).toMatchObject({ type: 'circle', cx: 10, cy: 5, r: 3 });
     expect((ring?.holes[0]!.curves[0] as { reversed?: boolean }).reversed).toBe(true);
     expect(disk?.area).toBeCloseTo(Math.PI * 9, 0);
@@ -113,14 +148,22 @@ describe('sketch profiles of clockwise arcs', () => {
   it('keeps the geometry of a clockwise quarter arc', () => {
     const entities: SketchEntity[] = [
       line('l1', 0, 0, 10, 0),
-      { id: 'a1', type: 'arc', construction: false, cx: 0, cy: 0, r: 10, startAngle: 0, endAngle: -Math.PI / 2 },
+      {
+        id: 'a1',
+        type: 'arc',
+        construction: false,
+        cx: 0,
+        cy: 0,
+        r: 10,
+        startAngle: 0,
+        endAngle: -Math.PI / 2,
+      },
       line('l2', 0, -10, 0, 0),
     ];
     const regions = sketchProfiles(entities);
     expect(regions).toHaveLength(1);
     const arc = regions[0]!.outer.curves.find((curve) => curve.type === 'arc') as
-      | { startAngle: number; endAngle: number; reversed?: boolean }
-      | undefined;
+      { startAngle: number; endAngle: number; reversed?: boolean } | undefined;
     expect(arc).toBeDefined();
     expect(arc!.endAngle).toBeGreaterThan(arc!.startAngle);
     expect(arc!.endAngle - arc!.startAngle).toBeCloseTo(Math.PI / 2, 6);
@@ -140,9 +183,22 @@ describe('sketch profiles of a real drawing', () => {
   });
 });
 
+function ellipsePoint(
+  curve: Extract<ProfileCurve, { type: 'ellipse' }>,
+  angle = 0,
+): [number, number] {
+  const cos = Math.cos(curve.rotation);
+  const sin = Math.sin(curve.rotation);
+  const x = Math.cos(angle) * curve.rx;
+  const y = Math.sin(angle) * curve.ry;
+  return [curve.cx + x * cos - y * sin, curve.cy + x * sin + y * cos];
+}
+
 function curveStart(curve: ProfileCurve): [number, number] {
   if (curve.type === 'line') return [curve.x1, curve.y1];
   if (curve.type === 'circle') return [curve.cx + curve.r, curve.cy];
+  if (curve.type === 'ellipse')
+    return ellipsePoint(curve, curve.reversed ? curve.endAngle : curve.startAngle);
   const angle = curve.reversed ? curve.endAngle : curve.startAngle;
   return [curve.cx + Math.cos(angle) * curve.r, curve.cy + Math.sin(angle) * curve.r];
 }
@@ -150,6 +206,8 @@ function curveStart(curve: ProfileCurve): [number, number] {
 function curveEnd(curve: ProfileCurve): [number, number] {
   if (curve.type === 'line') return [curve.x2, curve.y2];
   if (curve.type === 'circle') return [curve.cx + curve.r, curve.cy];
+  if (curve.type === 'ellipse')
+    return ellipsePoint(curve, curve.reversed ? curve.startAngle : curve.endAngle);
   const angle = curve.reversed ? curve.startAngle : curve.endAngle;
   return [curve.cx + Math.cos(angle) * curve.r, curve.cy + Math.sin(angle) * curve.r];
 }

@@ -159,11 +159,39 @@ describe('automatic constraints', () => {
       fallback: [0, 5.5],
       alignment: 'vertical',
     };
-    const result = autoConstraintsForEntity(almostVertical, [{ ...input }, none]);
+    const result = autoConstraintsForEntity(almostVertical, [none, { ...input }]);
     expect(result.snapConstraints.map((constraint) => constraint.type)).toEqual(['coincident']);
     expect(result.constraints.map((constraint) => constraint.type)).toEqual([
       'coincident',
       'vertical',
     ]);
+  });
+});
+
+describe('automatic constraints with magnet targets', () => {
+  it('does not infer an axis from a point that is only near it', () => {
+    const offAxis: SketchEntity = {
+      id: 'line',
+      type: 'line',
+      construction: false,
+      x1: 0,
+      y1: 0,
+      x2: 0.2,
+      y2: 5,
+    };
+    const result = autoConstraintsForEntity(offAxis, [
+      none,
+      free(snap({ entityId: 'p', pointIndex: 0, point: [0.2, 5] })),
+    ]);
+    expect(result.constraints.map((constraint) => constraint.type)).toEqual(['coincident']);
+    expect(result.alignmentConstraints).toHaveLength(0);
+  });
+
+  it('marks generated constraints as automatic', () => {
+    const result = autoConstraintsForEntity(line, [
+      free(snap({ entityId: 'p', pointIndex: 0, point: [0, 0] })),
+      none,
+    ]);
+    expect(result.constraints.every((constraint) => constraint.auto)).toBe(true);
   });
 });

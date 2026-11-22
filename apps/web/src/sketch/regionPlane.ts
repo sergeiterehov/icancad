@@ -104,13 +104,12 @@ function includeEllipseCorners(
   };
   const xCorner = Math.atan2(-ry * sin, rx * cos);
   const yCorner = Math.atan2(ry * cos, rx * sin);
-  includeCorners(
-    extent,
-    run,
-    toParameter,
-    at,
-    [xCorner, yCorner, xCorner + Math.PI, yCorner + Math.PI],
-  );
+  includeCorners(extent, run, toParameter, at, [
+    xCorner,
+    yCorner,
+    xCorner + Math.PI,
+    yCorner + Math.PI,
+  ]);
 }
 
 /** The points of one loop curve, and the corners the curve hides between them. */
@@ -124,7 +123,7 @@ function includeCurve(
   if (!entity) return;
   if (entity.type === 'circle' || entity.type === 'arc') {
     includeRoundCorners(extent, curve.points, entity);
-  } else if (entity.type === 'ellipse') {
+  } else if (entity.type === 'ellipse' || entity.type === 'elliptical-arc') {
     includeEllipseCorners(extent, curve.points, entity);
   }
   // A bezier has no corner to solve for, and its run is sampled finely enough

@@ -93,6 +93,26 @@ export function showContextMenu(
   useContextMenuStore.getState().open(event.clientX, event.clientY, items);
 }
 
+/**
+ * Opens a menu owned by a trigger, or closes it when that same trigger is
+ * pressed again. Without the owner a press on the trigger would first close the
+ * menu as an outside click and then open it again, so it could never be hidden.
+ */
+export function toggleContextMenu(
+  owner: string,
+  x: number,
+  y: number,
+  items: ContextMenuItem[],
+): void {
+  const store = useContextMenuStore.getState();
+  if (store.menu?.owner === owner) {
+    store.close();
+    return;
+  }
+  if (items.length === 0) return;
+  store.open(x, y, items, owner);
+}
+
 type MenuActionItem = Extract<ContextMenuItem, { onSelect: () => void }>;
 
 /** Time a submenu survives after the pointer leaves it, so it can be crossed. */
@@ -311,6 +331,10 @@ export function ContextMenuHost() {
       // must not take the whole thing away before its row is pressed.
       const target = event.target as Element | null;
       if (target?.closest?.('[role="menu"]')) return;
+      // The trigger that owns this menu toggles it itself: closing here first
+      // would make a second press hide and show it again in one gesture.
+      const trigger = target?.closest?.('[data-menu-trigger]');
+      if (trigger && trigger.getAttribute('data-menu-trigger') === menu.owner) return;
       close();
     };
     const handleKeyDown = (event: KeyboardEvent) => {

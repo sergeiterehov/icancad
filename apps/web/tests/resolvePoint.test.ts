@@ -13,7 +13,8 @@ describe('snap modes', () => {
     expect(snapModeFor('circle', 0)).toBe('free');
     expect(snapModeFor('circle', 1)).toBe('tangent');
     expect(snapModeFor('arc', 1)).toBe('tangent');
-    expect(snapModeFor('ellipse', 1)).toBe('none');
+    expect(snapModeFor('ellipse', 1)).toBe('free');
+    expect(snapModeFor('ellipse', 2)).toBe('none');
     expect(snapModeFor('line', 1)).toBe('free');
   });
 
@@ -96,8 +97,21 @@ describe('resolveSketchPoint', () => {
     });
     expect(resolution.point).toEqual([1.37, 5.91]);
     expect(resolution.fallback).toEqual([1.5, 6]);
-    // The target is within the axis tolerance too, so the line keeps a vertical
-    // constraint even though the magnet chose the exact point.
+    // A coincidence cannot be made vertical when the target itself is off the
+    // axis, so the step must not promise an alignment.
+    expect(resolution.input.alignment).toBeUndefined();
+  });
+
+  it('keeps an alignment when the magnet target lies exactly on the axis', () => {
+    const resolution = resolveSketchPoint({
+      raw: [1.3, 5.88],
+      snap: snap({ entityId: 'p', pointIndex: 0, point: [1.24, 5.91] }),
+      tool: 'line',
+      mode: 'free',
+      magnet: true,
+      anchor: [1.24, 0.44],
+    });
+    expect(resolution.point).toEqual([1.24, 5.91]);
     expect(resolution.input.alignment).toBe('vertical');
   });
 

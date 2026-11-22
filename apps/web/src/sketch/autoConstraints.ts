@@ -7,10 +7,14 @@ import {
 import type { SketchSnap, SketchSnapInput } from './snap';
 
 const AXIS_TOLERANCE = (5 * Math.PI) / 180;
+/** A magnet target counts as aligned only when it is on the axis, not near it. */
+const EXACT_AXIS_EPSILON = 1e-9;
 
 export interface AutoConstraintResult {
   constraints: SketchConstraint[];
   snapConstraints: SketchConstraint[];
+  /** Horizontal or vertical constraints, which a fallback must not drop silently. */
+  alignmentConstraints: SketchConstraint[];
   highlightIds: string[];
 }
 
@@ -19,6 +23,7 @@ const CURVE_POINT_CONSTRAINTS: Partial<Record<SketchEntity['type'], SketchConstr
   circle: 'point-on-circle',
   arc: 'point-on-circle',
   ellipse: 'point-on-ellipse',
+  'elliptical-arc': 'point-on-ellipse',
 };
 
 function snapConstraint(
@@ -43,12 +48,14 @@ function snapConstraint(
     if (entity.type === 'circle' && pointIndex === 1) {
       return {
         id: createId('con'),
+        auto: true,
         type: 'point-on-circle',
         refs: [targetPointRef, { entityId: entity.id }],
       };
     }
     return {
       id: createId('con'),
+      auto: true,
       type: 'coincident',
       refs: [ref, targetPointRef],
     };
@@ -57,6 +64,7 @@ function snapConstraint(
   if (mode === 'free' && snap.midpointSnap) {
     return {
       id: createId('con'),
+      auto: true,
       type: 'symmetric',
       refs: [
         { entityId: snap.midpointSnap.entityId, pointIndex: 0 },
@@ -73,6 +81,7 @@ function snapConstraint(
     if (target.type === 'line' || target.type === 'circle' || target.type === 'arc') {
       return {
         id: createId('con'),
+        auto: true,
         type: 'tangent',
         refs: [{ entityId: entity.id }, { entityId: target.entityId }],
       };
@@ -83,6 +92,7 @@ function snapConstraint(
   if (!type) return null;
   return {
     id: createId('con'),
+    auto: true,
     type,
     refs: [ref, { entityId: snap.curveSnap.entityId }],
   };
@@ -109,12 +119,37 @@ export function orientationConstraint(
 ): SketchConstraint | null {
   const orientation = axisOrientation(line);
   return orientation
-    ? { id: createId('con'), type: orientation, refs: [{ entityId: line.id }] }
+    ? { id: createId('con'), auto: true, type: orientation, refs: [{ entityId: line.id }] }
     : null;
+}
+
+/**
+ * The axis a line lies on exactly, without the drawing tolerance. An alignment
+ * constraint may only accompany a magnet target this close: a target that is
+ * merely near an axis cannot satisfy both the coincidence and the orientation,
+ * and the sketch would keep only one of them.
+ */
+export function exactAxisOrientation(
+  line: Extract<SketchEntity, { type: 'line' }>,
+): 'horizontal' | 'vertical' | null {
+  const dx = line.x2 - line.x1;
+  const dy = line.y2 - line.y1;
+  const scale = Math.max(Math.abs(dx), Math.abs(dy));
+  if (!(scale > 0)) return null;
+  if (Math.abs(dy) <= EXACT_AXIS_EPSILON * scale) return 'horizontal';
+  if (Math.abs(dx) <= EXACT_AXIS_EPSILON * scale) return 'vertical';
+  return null;
 }
 
 export function isNearAxis(line: Extract<SketchEntity, { type: 'line' }>): boolean {
   return axisOrientation(line) !== null;
+}
+
+/** Whether a step took its point from a magnet target at all. */
+export function hasMagnetTarget(input: SketchSnapInput | undefined): boolean {
+  const snap = input?.snap;
+  if (!snap || input?.mode === 'none') return false;
+  return Boolean(snap.pointSnap || snap.curveSnap || snap.midpointSnap);
 }
 
 export function autoConstraintsForEntity(
@@ -122,6 +157,7 @@ export function autoConstraintsForEntity(
   inputs: SketchSnapInput[],
 ): AutoConstraintResult {
   const snapConstraints: SketchConstraint[] = [];
+  const alignmentConstraints: SketchConstraint[] = [];
   const highlightIds: string[] = [];
   inputs.forEach((input, index) => {
     const constraint = snapConstraint(entity, index, input);
@@ -130,21 +166,28 @@ export function autoConstraintsForEntity(
     highlightIds.push(...snapHighlightIds(input.snap));
   });
 
-  const constraints = [...snapConstraints];
   if (entity.type === 'line') {
-    // The step may have been aligned even when a magnet target won the point;
-    // that alignment is a constraint the sketch has to keep, not a one-off.
     // The last step is the one that gives the line its direction; the first
     // point may carry the alignment of the segment before it.
-    const aligned = inputs[inputs.length - 1]?.alignment;
-    const type = orientationConstraint(entity)?.type ?? aligned;
+    const last = inputs[inputs.length - 1];
+    // A magnet target fixes the point exactly, so it can only be aligned when
+    // the target itself lies on the axis. Inferring the axis from near-axis
+    // geometry would create a constraint the coincidence cannot satisfy.
+    const type = last?.alignment ?? (hasMagnetTarget(last) ? null : exactAxisOrientation(entity));
     if (type) {
-      constraints.push({ id: createId('con'), type, refs: [{ entityId: entity.id }] });
+      alignmentConstraints.push({
+        id: createId('con'),
+        auto: true,
+        type,
+        refs: [{ entityId: entity.id }],
+      });
     }
   }
+  const constraints = [...snapConstraints, ...alignmentConstraints];
   return {
     constraints,
     snapConstraints,
+    alignmentConstraints,
     highlightIds: constraints.length > 0 ? [entity.id, ...highlightIds] : [],
   };
 }

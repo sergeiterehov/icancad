@@ -159,7 +159,25 @@ export interface ProfileCircle {
   reversed?: boolean;
 }
 
-export type ProfileCurve = ProfileLine | ProfileArc | ProfileCircle;
+/**
+ * An exact ellipse on the sketch plane: the full curve when `startAngle` is
+ * absent, otherwise the arc between the two angles of the frame `rotation`
+ * describes.
+ */
+export interface ProfileEllipse {
+  type: 'ellipse';
+  cx: number;
+  cy: number;
+  rx: number;
+  ry: number;
+  /** Turn of the local X axis, in radians. */
+  rotation: number;
+  startAngle?: number;
+  endAngle?: number;
+  reversed?: boolean;
+}
+
+export type ProfileCurve = ProfileLine | ProfileArc | ProfileCircle | ProfileEllipse;
 
 export interface ProfileLoop {
   curves: ProfileCurve[];

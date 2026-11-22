@@ -38,18 +38,12 @@ const constraints: SketchConstraint[] = [
   {
     id: 'c0',
     type: 'point-on-line',
-    refs: [
-      { entityId: 'local', pointIndex: 0 },
-      { entityId: 'proj-top' },
-    ],
+    refs: [{ entityId: 'local', pointIndex: 0 }, { entityId: 'proj-top' }],
   },
   {
     id: 'c1',
     type: 'point-on-line',
-    refs: [
-      { entityId: 'local', pointIndex: 1 },
-      { entityId: 'proj-right' },
-    ],
+    refs: [{ entityId: 'local', pointIndex: 1 }, { entityId: 'proj-right' }],
   },
 ];
 
@@ -353,7 +347,7 @@ it('keeps a fully constrained slot point where it is instead of reporting a conf
     constraints: slotConstraints,
     pinSets: [[{ entityId: 'slot-outer', pointIndex: 0 }]],
     previous: slotEntities,
-    movedEntityId: 'slot-outer',
+    movedEntityIds: ['slot-outer'],
     maxMove: 5,
   });
   expect(result).not.toBeNull();
@@ -383,7 +377,7 @@ it('turns the slot by dragging an arc endpoint and keeps every constraint', asyn
     constraints: slotConstraints,
     pinSets: [[{ entityId: 'slot-outer', pointIndex: 1 }]],
     previous: slotEntities,
-    movedEntityId: 'slot-outer',
+    movedEntityIds: ['slot-outer'],
     maxMove: 5,
   });
   expect(result).not.toBeNull();

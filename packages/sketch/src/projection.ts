@@ -33,7 +33,10 @@ export function polylineSagitta(points: readonly Point2[]): number {
     const dy = after[1] - before[1];
     const length = Math.hypot(dx, dy);
     if (!(length > 0)) continue;
-    worst = Math.max(worst, Math.abs((point[0] - before[0]) * dy - (point[1] - before[1]) * dx) / length);
+    worst = Math.max(
+      worst,
+      Math.abs((point[0] - before[0]) * dy - (point[1] - before[1]) * dx) / length,
+    );
   }
   return worst;
 }
@@ -102,11 +105,7 @@ function flatSegment(
   // The same tolerance decides straight and curved: a polyline sampled from a
   // straight edge wobbles, and fitting that wobble as an arc turns a line into
   // a pair of arcs.
-  const tolerance = Math.max(
-    extent(points) * 1e-6,
-    1e-9,
-    options?.tolerance ?? 0,
-  );
+  const tolerance = Math.max(extent(points) * 1e-6, 1e-9, options?.tolerance ?? 0);
   const farthest = (from: Point2): Point2 => {
     let found = from;
     let best = 0;
@@ -397,7 +396,12 @@ function bezierFromPoints(points: readonly Point2[], closed: boolean): SketchEnt
     pole[1] >= Math.min(first[1], last[1]) - reach &&
     pole[1] <= Math.max(first[1], last[1]) + reach;
   const solvedPoles =
-    polesX && polesY ? ([[polesX[0], polesY[0]], [polesX[1], polesY[1]]] as Point2[]) : null;
+    polesX && polesY
+      ? ([
+          [polesX[0], polesY[0]],
+          [polesX[1], polesY[1]],
+        ] as Point2[])
+      : null;
   const usable = solvedPoles && inside(solvedPoles[0]!) && inside(solvedPoles[1]!);
   const firstPole: Point2 = usable
     ? solvedPoles[0]!
@@ -541,6 +545,11 @@ function openEnds(curve: SketchEntityDraft): [Point2, Point2] | null {
       ];
     case 'arc':
       return [arcPoint(curve, curve.startAngle), arcPoint(curve, curve.endAngle)];
+    case 'elliptical-arc':
+      return [
+        ellipseArcDraftPoint(curve, curve.startAngle),
+        ellipseArcDraftPoint(curve, curve.endAngle),
+      ];
     case 'bezier': {
       const first = curve.points[0];
       const last = curve.points[curve.points.length - 1];
@@ -551,21 +560,48 @@ function openEnds(curve: SketchEntityDraft): [Point2, Point2] | null {
   }
 }
 
-function withEnds(
-  curve: SketchEntityDraft,
-  start: Point2,
-  end: Point2,
-): SketchEntityDraft {
+function ellipseArcDraftPoint(
+  curve: Extract<SketchEntityDraft, { type: 'elliptical-arc' }>,
+  angle: number,
+): Point2 {
+  const rotation = (curve.rotation * Math.PI) / 180;
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  const x = Math.cos(angle) * curve.rx;
+  const y = Math.sin(angle) * curve.ry;
+  return [curve.cx + x * cos - y * sin, curve.cy + x * sin + y * cos];
+}
+
+function withEnds(curve: SketchEntityDraft, start: Point2, end: Point2): SketchEntityDraft {
   switch (curve.type) {
     case 'line':
       return { ...curve, x1: start[0], y1: start[1], x2: end[0], y2: end[1] };
+    case 'elliptical-arc': {
+      // The ellipse keeps its shape; only the parameter angles of the ends move.
+      const rotation = (curve.rotation * Math.PI) / 180;
+      const cos = Math.cos(rotation);
+      const sin = Math.sin(rotation);
+      const angleAt = (point: Point2): number => {
+        const dx = point[0] - curve.cx;
+        const dy = point[1] - curve.cy;
+        return Math.atan2((-sin * dx + cos * dy) / curve.ry, (cos * dx + sin * dy) / curve.rx);
+      };
+      return { ...curve, startAngle: angleAt(start), endAngle: angleAt(end) };
+    }
     case 'arc': {
       // Keep the sweep: the arc is refitted through its own middle, so only the
       // ends move and the curve keeps its shape.
       const middle = arcPoint(curve, (curve.startAngle + curve.endAngle) / 2);
       const circle = circleThrough(start, middle, end);
       if (!circle) {
-        return { type: 'line', construction: curve.construction, x1: start[0], y1: start[1], x2: end[0], y2: end[1] };
+        return {
+          type: 'line',
+          construction: curve.construction,
+          x1: start[0],
+          y1: start[1],
+          x2: end[0],
+          y2: end[1],
+        };
       }
       const startAngle = Math.atan2(start[1] - circle.cy, start[0] - circle.cx);
       const endAngle = Math.atan2(end[1] - circle.cy, end[0] - circle.cx);

@@ -209,7 +209,8 @@ function curveSamples(curve: SketchEntityDraft): Point2[] {
         [curve.cx - curve.r, curve.cy - curve.r],
         [curve.cx + curve.r, curve.cy + curve.r],
       ];
-    case 'ellipse': {
+    case 'ellipse':
+    case 'elliptical-arc': {
       const scale = Math.max(curve.rx, curve.ry);
       return [
         [curve.cx - scale, curve.cy - scale],
@@ -331,12 +332,7 @@ export function addProjectionToSketch(
     return elements.vertexIds.get(position) ?? null;
   };
 
-  const addVertex = (
-    bodyId: string,
-    point: Vec3,
-    picked?: string,
-    faceName?: string,
-  ) => {
+  const addVertex = (bodyId: string, point: Vec3, picked?: string, faceName?: string) => {
     const name = stableVertexId(point, picked);
     if (!name) return;
     const key = `${bodyId}:vertex:${name}`;
@@ -494,7 +490,11 @@ export function resolveSketchProjections(
     // Rebuilt geometry is joined the same way it was when it was projected.
     entities: stitchProjected(
       resolved,
-      new Set(projections.filter((projection) => !lostEntityIds.includes(projection.entityId)).map((projection) => projection.entityId)),
+      new Set(
+        projections
+          .filter((projection) => !lostEntityIds.includes(projection.entityId))
+          .map((projection) => projection.entityId),
+      ),
     ),
     lostEntityIds,
   };

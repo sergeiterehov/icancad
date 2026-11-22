@@ -5,17 +5,19 @@ export type SketchTool =
   | 'circle'
   | 'arc'
   | 'ellipse'
+  | 'elliptical-arc'
   | 'bezier'
   | 'project';
 
 /** Single-key shortcuts of the drawing tools, shown in the tool rail tooltips. */
 export const SKETCH_TOOL_SHORTCUTS: Partial<Record<SketchTool, string>> = {
-  point: 'P',
+  point: 'I',
   line: 'L',
   circle: 'C',
   arc: 'A',
   ellipse: 'E',
   bezier: 'B',
+  project: 'P',
 };
 
 /** Toggles construction on the selected geometry, like the tool rail button. */

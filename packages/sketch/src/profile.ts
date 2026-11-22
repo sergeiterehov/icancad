@@ -28,7 +28,26 @@ export interface ProfileCircleCurve {
   reversed?: boolean;
 }
 
-export type ProfileCurve = ProfileLineCurve | ProfileArcCurve | ProfileCircleCurve;
+/**
+ * An ellipse or an elliptical arc on the sketch plane. `startAngle` and
+ * `endAngle` are in the frame `rotation` describes, and a full ellipse has
+ * neither: the kernel builds the exact ellipse instead of a polyline of it.
+ */
+export interface ProfileEllipseCurve {
+  type: 'ellipse';
+  cx: number;
+  cy: number;
+  rx: number;
+  ry: number;
+  /** Turn of the local X axis, in radians. */
+  rotation: number;
+  startAngle?: number;
+  endAngle?: number;
+  reversed?: boolean;
+}
+
+export type ProfileCurve =
+  ProfileLineCurve | ProfileArcCurve | ProfileCircleCurve | ProfileEllipseCurve;
 
 export interface ProfileLoop {
   curves: ProfileCurve[];
@@ -47,9 +66,9 @@ export interface ProfileRegion {
   edges: string[];
 }
 
-// Sketch faces as extrusion profiles: exact lines, arcs and circles with the
-// direction the contour walks them, so the kernel rebuilds the same shape the
-// sketch shows. Ellipses and beziers are still passed as polylines.
+// Sketch faces as extrusion profiles: exact lines, arcs, circles and ellipses
+// with the direction the contour walks them, so the kernel rebuilds the same
+// shape the sketch shows. Beziers are still passed as polylines.
 export function sketchProfiles(entities: readonly SketchEntity[]): ProfileRegion[] {
   const topology = sketchTopology(entities);
   const byId = new Map(entities.map((entity) => [entity.id, entity]));
@@ -80,7 +99,10 @@ export function sketchProfiles(entities: readonly SketchEntity[]): ProfileRegion
  * polyline becomes several curves with the same key; the kernel numbers those
  * side faces by their own order.
  */
-function curveKeys(loop: readonly SketchTopologyLoopCurve[], curves: readonly ProfileCurve[]): string[] {
+function curveKeys(
+  loop: readonly SketchTopologyLoopCurve[],
+  curves: readonly ProfileCurve[],
+): string[] {
   const keys = loop.map((entry) => entry.edgeKey);
   return curves.map((_, index) => keys[Math.min(index, keys.length - 1)] ?? `curve-${index}`);
 }
@@ -141,8 +163,7 @@ function exactArc(
   const endAngle = Math.atan2(end[1] - entity.cy, end[0] - entity.cx);
   const next = points[1] ?? end;
   const alongTangent =
-    (next[0] - start[0]) * -Math.sin(startAngle) +
-    (next[1] - start[1]) * Math.cos(startAngle);
+    (next[0] - start[0]) * -Math.sin(startAngle) + (next[1] - start[1]) * Math.cos(startAngle);
   if (alongTangent >= 0) {
     let sweepEnd = endAngle;
     while (sweepEnd <= startAngle) sweepEnd += Math.PI * 2;
@@ -225,7 +246,10 @@ function snapChain(curves: readonly ProfileCurve[]): ProfileCurve[] {
   return result;
 }
 
-function orient(pairs: readonly EntityOrientations[], seed: 'forward' | 'backward'): ProfileCurve[] | null {
+function orient(
+  pairs: readonly EntityOrientations[],
+  seed: 'forward' | 'backward',
+): ProfileCurve[] | null {
   const curves: ProfileCurve[] = [];
   let point: Point2 | null = null;
   for (const pair of pairs) {
@@ -257,9 +281,22 @@ function chainEnd(curves: readonly ProfileCurve[]): Point2 {
   return curveEnd(curves[curves.length - 1]!);
 }
 
+/** A point on an ellipse of the contour, at the angle of its own frame. */
+function ellipsePoint(curve: ProfileEllipseCurve, angle: number): Point2 {
+  const cos = Math.cos(curve.rotation);
+  const sin = Math.sin(curve.rotation);
+  const x = Math.cos(angle) * curve.rx;
+  const y = Math.sin(angle) * curve.ry;
+  return [curve.cx + x * cos - y * sin, curve.cy + x * sin + y * cos];
+}
+
 function curveStart(curve: ProfileCurve): Point2 {
   if (curve.type === 'line') return [curve.x1, curve.y1];
   if (curve.type === 'circle') return [curve.cx + curve.r, curve.cy];
+  if (curve.type === 'ellipse') {
+    // A full ellipse joins itself at its first point, so both ends are angle 0.
+    return ellipsePoint(curve, (curve.reversed ? curve.endAngle : curve.startAngle) ?? 0);
+  }
   const angle = curve.reversed ? curve.endAngle : curve.startAngle;
   return [curve.cx + Math.cos(angle) * curve.r, curve.cy + Math.sin(angle) * curve.r];
 }
@@ -267,6 +304,9 @@ function curveStart(curve: ProfileCurve): Point2 {
 function curveEnd(curve: ProfileCurve): Point2 {
   if (curve.type === 'line') return [curve.x2, curve.y2];
   if (curve.type === 'circle') return [curve.cx + curve.r, curve.cy];
+  if (curve.type === 'ellipse') {
+    return ellipsePoint(curve, (curve.reversed ? curve.startAngle : curve.endAngle) ?? 0);
+  }
   const angle = curve.reversed ? curve.startAngle : curve.endAngle;
   return [curve.cx + Math.cos(angle) * curve.r, curve.cy + Math.sin(angle) * curve.r];
 }
@@ -308,16 +348,39 @@ function entityOrientations(entity: SketchEntity): EntityOrientations {
         backward: [{ type: 'circle', cx: entity.cx, cy: entity.cy, r: entity.r, reversed: true }],
       };
     case 'ellipse':
+    case 'elliptical-arc': {
+      const frame = {
+        type: 'ellipse' as const,
+        cx: entity.cx,
+        cy: entity.cy,
+        rx: entity.rx,
+        ry: entity.ry,
+        rotation: (entity.rotation * Math.PI) / 180,
+      };
+      if (entity.type === 'ellipse') {
+        return {
+          forward: [frame],
+          backward: [{ ...frame, reversed: true }],
+        };
+      }
+      // An elliptical arc, like a circular one, may have been drawn clockwise.
+      // The contour always walks it counter-clockwise, so the drawn direction
+      // becomes the `reversed` flag.
+      const naturalCcw = entity.endAngle >= entity.startAngle;
+      const arc = {
+        ...frame,
+        startAngle: naturalCcw ? entity.startAngle : entity.endAngle,
+        endAngle: naturalCcw ? entity.endAngle : entity.startAngle,
+      };
+      return {
+        forward: [{ ...arc, ...(naturalCcw ? {} : { reversed: true }) }],
+        backward: [{ ...arc, ...(naturalCcw ? { reversed: true } : {}) }],
+      };
+    }
     case 'bezier': {
       const points: Point2[] = tessellateEntity(entity);
-      const closed = entity.type === 'ellipse';
       const backwardPoints = [...points].reverse();
-      return {
-        forward: polylineCurves(closed ? [...points, points[0]!] : points),
-        backward: polylineCurves(
-          closed ? [...backwardPoints, backwardPoints[0]!] : backwardPoints,
-        ),
-      };
+      return { forward: polylineCurves(points), backward: polylineCurves(backwardPoints) };
     }
     case 'point':
       return { forward: [], backward: [] };

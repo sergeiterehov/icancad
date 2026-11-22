@@ -13,8 +13,8 @@ export interface DragSolveOptions {
   prefer?: string | null;
   /** Geometry before this frame's target, used to reject branch jumps. */
   previous?: SketchEntity[];
-  /** Entity the pointer moves directly; its own movement is expected. */
-  movedEntityId?: string;
+  /** Entities the pointer moves directly; their own movement is expected. */
+  movedEntityIds?: readonly string[];
   /** Largest movement the rest of the sketch may make in one frame. */
   maxMove?: number;
   /** Whether the drag may still change which coordinate it pins. */
@@ -77,11 +77,12 @@ const POSITION_TOLERANCE = 1e-4;
 function maxMovement(
   first: SketchEntity[],
   second: SketchEntity[],
-  ignoreEntityId: string | undefined,
+  ignoreEntityIds: readonly string[],
 ): number {
+  const ignored = new Set(ignoreEntityIds);
   let max = 0;
   for (const entity of first) {
-    if (entity.id === ignoreEntityId) continue;
+    if (ignored.has(entity.id)) continue;
     const other = second.find((candidate) => candidate.id === entity.id);
     if (!other) return Number.POSITIVE_INFINITY;
     const before = entityControlPoints(entity);
@@ -151,7 +152,7 @@ export async function solveDrag({
   derived,
   prefer,
   previous,
-  movedEntityId,
+  movedEntityIds,
   maxMove,
   allowAxisSwitch = true,
   axisHint = 'x',
@@ -177,7 +178,7 @@ export async function solveDrag({
       if (
         previous &&
         maxMove !== undefined &&
-        maxMovement(previous, result.entities, movedEntityId) > maxMove
+        maxMovement(previous, result.entities, movedEntityIds ?? []) > maxMove
       ) {
         continue;
       }
@@ -195,7 +196,7 @@ export async function solveDrag({
             constraints,
             derived,
             previous,
-            movedEntityId,
+            movedEntityIds,
             maxMove,
           );
           if (projected && projected.distance < currentDistance) {
@@ -250,7 +251,7 @@ async function projectNearest(
   constraints: SketchConstraint[],
   derived: readonly string[] | undefined,
   continuity: SketchEntity[] | undefined,
-  movedEntityId: string | undefined,
+  movedEntityIds: readonly string[] | undefined,
   maxMove: number | undefined,
 ): Promise<{ result: SketchSolveResult; distance: number } | null> {
   const first = previous ? pointOf(previous, pin) : null;
@@ -272,7 +273,7 @@ async function projectNearest(
     if (
       continuity &&
       maxMove !== undefined &&
-      maxMovement(continuity, result.entities, movedEntityId) > maxMove
+      maxMovement(continuity, result.entities, movedEntityIds ?? []) > maxMove
     ) {
       return null;
     }

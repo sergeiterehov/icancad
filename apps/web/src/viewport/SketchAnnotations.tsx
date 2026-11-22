@@ -1,4 +1,5 @@
 import { isFormula, type SketchFeature } from '@icancad/model';
+import { isFundamentalEntityId } from '@icancad/sketch';
 import { MousePointer2, Trash2 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -62,6 +63,8 @@ export function SketchAnnotations() {
   const selectConstraint = useUiStore((state) => state.selectSketchConstraint);
   const selectSketchConstraints = useUiStore((state) => state.selectSketchConstraints);
   const setSketchSelection = useUiStore((state) => state.setSketchSelection);
+  const setSketchHover = useUiStore((state) => state.setSketchHover);
+  const hoverKeys = useUiStore((state) => state.sketchHoverIds);
   const dimensionEditId = useUiStore((state) => state.sketchDimensionEditId);
   const setDimensionEdit = useUiStore((state) => state.setSketchDimensionEdit);
   const openMenu = useContextMenuStore((state) => state.open);
@@ -74,6 +77,15 @@ export function SketchAnnotations() {
   const meshes = useKernelStore((state) => state.meshes);
   const [positions, setPositions] = useState<Record<string, Position>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
+  /** Reference chip under the pointer, which also lights its geometry. */
+  const [referenceHover, setReferenceHover] = useState<string | null>(null);
+  /** Reference chip that actually owns the pointer, see the hit test below. */
+  const [hitReference, setHitReference] = useState<string | null>(null);
+  const chipNodes = useRef(new Map<string, HTMLDivElement>());
+  /** Entity whose hover the pointer on a chip is holding, if any. */
+  const chipHover = useRef<string | null>(null);
+  /** A press that began on the canvas: chips must not catch the pointer. */
+  const [dragging, setDragging] = useState(false);
   const [draft, setDraft] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const cancelled = useRef(false);
@@ -387,12 +399,93 @@ export function SketchAnnotations() {
     );
   };
 
+  // A reference describes geometry, so geometry under the pointer keeps it: a
+  // chip only takes the pointer where it covers empty space. The chips are DOM
+  // elements over the canvas, so the check is a hit test of the chip boxes and
+  // a pick through the viewport, not a browser hit test.
+  useEffect(() => {
+    if (!activeSketchReady) return;
+    const entities = feature?.entities ?? [];
+    const chipAt = (x: number, y: number): string | null => {
+      for (const [id, node] of chipNodes.current) {
+        const rect = node.getBoundingClientRect();
+        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return id;
+      }
+      return null;
+    };
+    // A chip lights its geometry only while it holds the pointer; letting go
+    // must drop that highlight, or it would stick when the pointer leaves the
+    // canvas over a panel.
+    const release = () => {
+      setHitReference(null);
+      setReferenceHover(null);
+      if (chipHover.current !== null) {
+        chipHover.current = null;
+        setSketchHover([]);
+      }
+    };
+    const onMove = (event: PointerEvent) => {
+      if (dragging) return;
+      const chip = chipAt(event.clientX, event.clientY);
+      if (!chip) {
+        release();
+        return;
+      }
+      const geometry = getViewport()?.pickSketch(event.clientX, event.clientY, entities);
+      // The origin and the axes are references of the sketch, not geometry a
+      // user points at: a chip over one of them still owns the pointer.
+      if (geometry?.entityId && !isFundamentalEntityId(geometry.entityId)) {
+        release();
+        return;
+      }
+      setHitReference(chip);
+      setReferenceHover(chip);
+      const reference = references.find((candidate) => candidate.id === chip);
+      if (reference) {
+        chipHover.current = reference.entityId;
+        setSketchHover([reference.entityId]);
+      }
+    };
+    const onLeave = release;
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerleave', onLeave);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerleave', onLeave);
+      onLeave();
+    };
+  }, [activeSketchReady, feature, references, dragging, setSketchHover]);
+
+  // A drag or a marquee begins on the canvas, and from then on the chips are
+  // transparent to the pointer: catching it would pause the gesture that is
+  // already running underneath.
+  useEffect(() => {
+    const onDown = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (!target?.closest?.('[data-testid="viewport-canvas"]')) return;
+      setDragging(true);
+    };
+    const onUp = () => setDragging(false);
+    window.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('pointerup', onUp, true);
+    window.addEventListener('pointercancel', onUp, true);
+    return () => {
+      window.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('pointerup', onUp, true);
+      window.removeEventListener('pointercancel', onUp, true);
+    };
+  }, []);
+
   // Every hook runs before this point, so entering or leaving the sketch does
   // not change the number of hooks the component calls.
   if (!feature || !activeSketchReady) return null;
 
   return (
-    <div className="sketch-annotations" data-testid="sketch-annotations">
+    <div
+      className="sketch-annotations"
+      data-transparent={dragging ? 'true' : undefined}
+      data-testid="sketch-annotations"
+    >
       <svg className="sketch-annotation-lines">
         {annotations.map((annotation) => {
           const position = positions[annotation.id];
@@ -409,6 +502,60 @@ export function SketchAnnotations() {
           );
         })}
       </svg>
+      {references.map((reference: ReferenceAnnotation) => {
+        const position = positions[reference.id];
+        if (!position) return null;
+        const entity = feature.entities.find((candidate) => candidate.id === reference.entityId);
+        const Icon = referenceIcon(entity, reference.measure);
+        const active = selectionKeys.some((key) => key.split('#')[0] === reference.entityId);
+        // The geometry under the pointer brings its references forward: a value
+        // belongs to what is being pointed at, not to a list of its own.
+        const hovered =
+          !active &&
+          (hoverKeys.some((key) => key.split('#')[0] === reference.entityId) ||
+            referenceHover === reference.id);
+        return (
+          <div
+            key={reference.id}
+            ref={(node) => {
+              if (node) chipNodes.current.set(reference.id, node);
+              else chipNodes.current.delete(reference.id);
+            }}
+            className="sketch-annotation sketch-reference"
+            role="button"
+            tabIndex={0}
+            aria-label={`${reference.text}. ${t(referenceLabelKey(reference.measure) as never)}`}
+            data-active={active ? 'true' : undefined}
+            data-hovered={hovered ? 'true' : undefined}
+            data-hit={hitReference === reference.id ? 'true' : undefined}
+            data-testid={`sketch-reference-${reference.id}`}
+            style={{ left: position.x, top: position.y }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              setSketchSelection([reference.entityId]);
+            }}
+            onContextMenu={(event) => openReferenceMenu(event, reference)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              event.preventDefault();
+              setSketchSelection([reference.entityId]);
+            }}
+          >
+            {/* The tooltip hangs off the chip's own content: a wrapper around an
+                absolutely positioned chip measures an empty box at the origin,
+                which put every bubble in the corner of the viewport. */}
+            <Tooltip content={t(referenceLabelKey(reference.measure) as never)}>
+              <span className="sketch-annotation-content">
+                <span className="sketch-annotation-icon" aria-hidden="true">
+                  <Icon size={12} />
+                </span>
+                <span>{reference.text}</span>
+              </span>
+            </Tooltip>
+          </div>
+        );
+      })}
       {annotations.map((annotation) => {
         const position = positions[annotation.id];
         if (!position) return null;
@@ -501,44 +648,6 @@ export function SketchAnnotations() {
               </Tooltip>
             )}
           </div>
-        );
-      })}
-      {references.map((reference: ReferenceAnnotation) => {
-        const position = positions[reference.id];
-        if (!position) return null;
-        const entity = feature.entities.find((candidate) => candidate.id === reference.entityId);
-        const Icon = referenceIcon(entity, reference.measure);
-        const active = selectionKeys.some((key) => key.split('#')[0] === reference.entityId);
-        return (
-          <Tooltip key={reference.id} content={t(referenceLabelKey(reference.measure) as never)}>
-            <div
-              className="sketch-annotation sketch-reference"
-              role="button"
-              tabIndex={0}
-              aria-label={`${reference.text}. ${t(referenceLabelKey(reference.measure) as never)}`}
-              data-active={active ? 'true' : undefined}
-              data-testid={`sketch-reference-${reference.id}`}
-              style={{ left: position.x, top: position.y }}
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={(event) => {
-                event.stopPropagation();
-                setSketchSelection([reference.entityId]);
-              }}
-              onContextMenu={(event) => openReferenceMenu(event, reference)}
-              onKeyDown={(event) => {
-                if (event.key !== 'Enter' && event.key !== ' ') return;
-                event.preventDefault();
-                setSketchSelection([reference.entityId]);
-              }}
-            >
-              <span className="sketch-annotation-content">
-                <span className="sketch-annotation-icon" aria-hidden="true">
-                  <Icon size={12} />
-                </span>
-                <span>{reference.text}</span>
-              </span>
-            </div>
-          </Tooltip>
         );
       })}
     </div>

@@ -24,6 +24,7 @@ import type {
   MakeRevolveParams,
   OffsetShapeParams,
   ProfileCurve,
+  ProfileEllipse,
   ProfileLoop,
   RevolveAxisLine,
   ShapeStats,
@@ -480,11 +481,7 @@ export class KernelEngine {
     return -1;
   }
 
-  private contribution(
-    names: ShapeNames,
-    index: number,
-    prefix?: string,
-  ): NameContribution {
+  private contribution(names: ShapeNames, index: number, prefix?: string): NameContribution {
     const name = names.faces[index] ?? `face/${index}`;
     const aliases = names.aliases[index] ?? [name];
     const owner = names.owners[index] ?? '';
@@ -584,10 +581,7 @@ export class KernelEngine {
     for (const [index, names] of generated) {
       if (inherited.has(index)) continue;
       const sorted = [...new Set(names)].sort();
-      created.set(
-        index,
-        `${options.createdPrefix ?? 'new'}/${stableNameHash(...sorted)}`,
-      );
+      created.set(index, `${options.createdPrefix ?? 'new'}/${stableNameHash(...sorted)}`);
     }
     return propagateNames({
       faceCount: resultFaces.length,
@@ -824,8 +818,7 @@ export class KernelEngine {
       }
     }
 
-    const height =
-      'height' in params && typeof params.height === 'number' ? params.height : 0;
+    const height = 'height' in params && typeof params.height === 'number' ? params.height : 0;
     this.storeShape(
       shapeId,
       shape,
@@ -1135,8 +1128,7 @@ export class KernelEngine {
     const placedSources = params.tools.map((tool, index) => {
       const names = this.namesOf(tool.sourceShapeId);
       if (!names) return undefined;
-      const key =
-        tool.key ?? (params.tools.length > 1 ? `tool-${index}` : undefined);
+      const key = tool.key ?? (params.tools.length > 1 ? `tool-${index}` : undefined);
       return { shape: placed[index]!, names: key ? prefixShapeNames(names, key) : names };
     });
 
@@ -1155,8 +1147,8 @@ export class KernelEngine {
       }
       const sources = [
         ...(baseSource ? [baseSource] : []),
-        ...placedSources.filter(
-          (source): source is { shape: OcctShape; names: ShapeNames } => Boolean(source),
+        ...placedSources.filter((source): source is { shape: OcctShape; names: ShapeNames } =>
+          Boolean(source),
         ),
       ];
       names =
@@ -1187,9 +1179,7 @@ export class KernelEngine {
           // Each step maps its own result onto what it was given, so the run is
           // walked back to the faces of the base the caller knows.
           const stepMap = this.mappedFaces(step.maker, step.shape, current.shape);
-          owners = stepMap.map((from) =>
-            from >= 0 ? (owners ? (owners[from] ?? -1) : from) : -1,
-          );
+          owners = stepMap.map((from) => (from >= 0 ? (owners ? (owners[from] ?? -1) : from) : -1));
         }
         current = step;
       }
@@ -1240,7 +1230,6 @@ export class KernelEngine {
     }
     return true;
   }
-
 
   /**
    * Extracts the solids of a shape as independent shapes. A cut that separates
@@ -1582,7 +1571,8 @@ export class KernelEngine {
         // prefix and hashes only the relative paths, so prefixing a body for an
         // array copy yields exactly the prefix of its edge name too.
         const scope = commonScopePrefix(first, second);
-        const relative = (name: string) => (scope && name.startsWith(scope) ? name.slice(scope.length) : name);
+        const relative = (name: string) =>
+          scope && name.startsWith(scope) ? name.slice(scope.length) : name;
         const path = `${scope}${edgePath(relative(first), relative(second), qualifier)}`;
         const firstAliases = names.aliases[firstFace!] ?? [first];
         const secondAliases = names.aliases[secondFace!] ?? [second];
@@ -1975,11 +1965,7 @@ export class KernelEngine {
       oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
     );
     while (edges.More()) {
-      const flat = new oc.BRepBuilderAPI_Transform_2(
-        oc.TopoDS.Edge_1(edges.Current()),
-        trsf,
-        true,
-      );
+      const flat = new oc.BRepBuilderAPI_Transform_2(oc.TopoDS.Edge_1(edges.Current()), trsf, true);
       if (flat.IsDone()) {
         oc.BRepBndLib.AddOptimal(flat.Shape(), box, false, false);
         measured += 1;
@@ -2057,7 +2043,7 @@ export class KernelEngine {
     key: string,
     names: ShapeNames | undefined,
     scope: string,
-  ): NamedShape & { applied: number } | null {
+  ): (NamedShape & { applied: number }) | null {
     const direct = this.attemptShell(source, closing, direction, offset, requested, names, scope);
     if (direct) return { ...direct, applied: requested };
 
@@ -2065,7 +2051,15 @@ export class KernelEngine {
     // again while the user drags the thickness up and down.
     const known = this.shellSplits.get(key);
     if (known && known.good < requested) {
-      const cached = this.attemptShell(source, closing, direction, offset, known.good, names, scope);
+      const cached = this.attemptShell(
+        source,
+        closing,
+        direction,
+        offset,
+        known.good,
+        names,
+        scope,
+      );
       if (cached) return { ...cached, applied: known.good };
       this.shellSplits.delete(key);
     }
@@ -2508,10 +2502,7 @@ export class KernelEngine {
       const label = shapeTool.AddShape(this.getShape(body.shapeId), false, true);
       // Names keep their UTF-8 bytes with the multibyte flag off; that is what
       // the STEP writer encodes, so a Cyrillic name survives the round trip.
-      oc.TDataStd_Name.Set_1(
-        label,
-        new oc.TCollection_ExtendedString_2(body.name, false),
-      );
+      oc.TDataStd_Name.Set_1(label, new oc.TCollection_ExtendedString_2(body.name, false));
       const [red, green, blue] = stepColor(body.color);
       colorTool.SetColor_2(
         label,
@@ -2677,7 +2668,14 @@ export class KernelEngine {
         throw new KernelOpError('OP_FAILED', 'Extrude failed for a sketch region');
       }
       let part = prism.Shape();
-      const partNames = this.prismFaceNames(part, prism, edges, scope, index, params.distances.length);
+      const partNames = this.prismFaceNames(
+        part,
+        prism,
+        edges,
+        scope,
+        index,
+        params.distances.length,
+      );
       if (overlap > 0) {
         // The sweep grew along the normal, so it moves back into the material
         // by the overlap it was given. A transform keeps the topology, so the
@@ -2914,18 +2912,53 @@ export class KernelEngine {
       const to = planePoint(oc, plane, curve.x2, curve.y2);
       return new oc.BRepBuilderAPI_MakeEdge_3(from, to).Edge();
     }
-    // Orienting the circle with the plane axes keeps sketch angles unchanged.
+    // Orienting the curve with the plane axes keeps sketch angles unchanged.
     const centre = planePoint(oc, plane, curve.cx, curve.cy);
+    const direction = (angle: number) =>
+      new oc.gp_Dir_4(
+        plane.xAxis[0] * Math.cos(angle) + plane.yAxis[0] * Math.sin(angle),
+        plane.xAxis[1] * Math.cos(angle) + plane.yAxis[1] * Math.sin(angle),
+        plane.xAxis[2] * Math.cos(angle) + plane.yAxis[2] * Math.sin(angle),
+      );
     const axis = new oc.gp_Ax2_2(
       centre,
       new oc.gp_Dir_4(plane.normal[0], plane.normal[1], plane.normal[2]),
-      new oc.gp_Dir_4(plane.xAxis[0], plane.xAxis[1], plane.xAxis[2]),
+      direction(curve.type === 'ellipse' ? curve.rotation : 0),
     );
-    const circle = new oc.gp_Circ_2(axis, curve.r);
-    const edge =
-      curve.type === 'circle'
-        ? new oc.BRepBuilderAPI_MakeEdge_8(circle).Edge()
-        : new oc.BRepBuilderAPI_MakeEdge_9(circle, curve.startAngle, curve.endAngle).Edge();
+    let edge: OcctShape;
+    if (curve.type === 'ellipse') {
+      // OCCT measures the ellipse from its longer axis, while a sketch may have
+      // drawn the shorter one first; the Y axis then becomes the reference and
+      // every angle a quarter turn back.
+      const swap = curve.ry > curve.rx;
+      const axis2 = swap
+        ? new oc.gp_Ax2_2(
+            centre,
+            new oc.gp_Dir_4(plane.normal[0], plane.normal[1], plane.normal[2]),
+            direction(curve.rotation + Math.PI / 2),
+          )
+        : axis;
+      const shape = new oc.gp_Elips_2(
+        axis2,
+        Math.max(curve.rx, curve.ry),
+        Math.min(curve.rx, curve.ry),
+      );
+      const shift = swap ? -Math.PI / 2 : 0;
+      edge =
+        curve.startAngle === undefined || curve.endAngle === undefined
+          ? new oc.BRepBuilderAPI_MakeEdge_12(shape).Edge()
+          : new oc.BRepBuilderAPI_MakeEdge_13(
+              shape,
+              curve.startAngle + shift,
+              curve.endAngle + shift,
+            ).Edge();
+    } else {
+      const circle = new oc.gp_Circ_2(axis, curve.r);
+      edge =
+        curve.type === 'circle'
+          ? new oc.BRepBuilderAPI_MakeEdge_8(circle).Edge()
+          : new oc.BRepBuilderAPI_MakeEdge_9(circle, curve.startAngle, curve.endAngle).Edge();
+    }
     if (!curve.reversed) return edge;
     // Reversed() returns a generic shape, but the wire builder needs an edge.
     return oc.TopoDS.Edge_1(edge.Reversed());
@@ -3068,7 +3101,11 @@ export class KernelEngine {
       .filter((source): source is { shape: OcctShape; names: ShapeNames; prefix?: string } =>
         Boolean(source.names),
       )
-      .map((source) => ({ shape: source.shape, names: source.names!, ...(source.prefix ? { prefix: source.prefix } : {}) }));
+      .map((source) => ({
+        shape: source.shape,
+        names: source.names!,
+        ...(source.prefix ? { prefix: source.prefix } : {}),
+      }));
     if (sources.length === 0) return { shape, maker };
     let history: OcctHistory | null;
     try {
@@ -3215,11 +3252,7 @@ function stepColor(value: string): [number, number, number] {
       : hex;
   if (!/^[0-9a-f]{6}$/i.test(full)) return [0.7, 0.7, 0.7];
   const number = Number.parseInt(full, 16);
-  return [
-    ((number >> 16) & 0xff) / 255,
-    ((number >> 8) & 0xff) / 255,
-    (number & 0xff) / 255,
-  ];
+  return [((number >> 16) & 0xff) / 255, ((number >> 8) & 0xff) / 255, (number & 0xff) / 255];
 }
 
 /** Colour of one STEP body, or null when the file carries none. */
@@ -3237,8 +3270,7 @@ function stepBodyColor(
     }
   };
   let found =
-    read(oc.XCAFDoc_ColorType.XCAFDoc_ColorSurf) ||
-    read(oc.XCAFDoc_ColorType.XCAFDoc_ColorCurv);
+    read(oc.XCAFDoc_ColorType.XCAFDoc_ColorSurf) || read(oc.XCAFDoc_ColorType.XCAFDoc_ColorCurv);
   if (!found) {
     try {
       found = colorTool.GetColor_1(label, color);
@@ -3352,9 +3384,20 @@ function planePoint(oc: OcctBindings, plane: ProfilePlane, x: number, y: number)
   return new oc.gp_Pnt_3(ox + xx * x + yx * y, oy + xy * x + yy * y, oz + xz * x + yz * y);
 }
 
+function ellipsePoint(curve: ProfileEllipse, angle: number): [number, number] {
+  const cos = Math.cos(curve.rotation);
+  const sin = Math.sin(curve.rotation);
+  const x = Math.cos(angle) * curve.rx;
+  const y = Math.sin(angle) * curve.ry;
+  return [curve.cx + x * cos - y * sin, curve.cy + x * sin + y * cos];
+}
+
 function curveStart(curve: ProfileCurve): [number, number] {
   if (curve.type === 'line') return [curve.x1, curve.y1];
   if (curve.type === 'circle') return [curve.cx + curve.r, curve.cy];
+  if (curve.type === 'ellipse') {
+    return ellipsePoint(curve, (curve.reversed ? curve.endAngle : curve.startAngle) ?? 0);
+  }
   const angle = curve.reversed ? curve.endAngle : curve.startAngle;
   return [curve.cx + Math.cos(angle) * curve.r, curve.cy + Math.sin(angle) * curve.r];
 }
@@ -3362,6 +3405,9 @@ function curveStart(curve: ProfileCurve): [number, number] {
 function curveEnd(curve: ProfileCurve): [number, number] {
   if (curve.type === 'line') return [curve.x2, curve.y2];
   if (curve.type === 'circle') return [curve.cx + curve.r, curve.cy];
+  if (curve.type === 'ellipse') {
+    return ellipsePoint(curve, (curve.reversed ? curve.startAngle : curve.endAngle) ?? 0);
+  }
   const angle = curve.reversed ? curve.startAngle : curve.endAngle;
   return [curve.cx + Math.cos(angle) * curve.r, curve.cy + Math.sin(angle) * curve.r];
 }

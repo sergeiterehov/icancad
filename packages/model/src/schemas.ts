@@ -186,6 +186,18 @@ const sketchEntity = z.discriminatedUnion('type', [
   }),
   z.object({
     id: z.string().min(1),
+    type: z.literal('elliptical-arc'),
+    construction: z.boolean(),
+    cx: z.number(),
+    cy: z.number(),
+    rx: z.number().positive(),
+    ry: z.number().positive(),
+    rotation: z.number(),
+    startAngle: z.number(),
+    endAngle: z.number(),
+  }),
+  z.object({
+    id: z.string().min(1),
     type: z.literal('bezier'),
     construction: z.boolean(),
     points: z.array(z.tuple([z.number(), z.number()])).min(2),
@@ -229,6 +241,7 @@ const sketchConstraint = z.object({
   x: z.number().optional(),
   y: z.number().optional(),
   side: z.number().optional(),
+  auto: z.boolean().optional(),
 });
 
 const sketchPlaneRef = z.union([
@@ -650,8 +663,7 @@ function markLegacyPose(value: unknown): void {
   }
   if (!value || typeof value !== 'object') return;
   const record = value as Record<string, unknown>;
-  const hasPose =
-    typeof record.normal !== 'undefined' && typeof record.origin !== 'undefined';
+  const hasPose = typeof record.normal !== 'undefined' && typeof record.origin !== 'undefined';
   const hasEdgePose =
     typeof record.start !== 'undefined' &&
     typeof record.mid !== 'undefined' &&

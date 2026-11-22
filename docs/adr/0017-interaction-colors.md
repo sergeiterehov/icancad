@@ -37,3 +37,8 @@ selection accent is.
 - The world grid and axes are opaque, draw before the model and write no depth. They
   therefore sit below every body even where a line and a face share the same depth;
   the grid stays the lowest layer. The sketch grid is below the sketch curves.
+
+- The CSS palette carries the same two accents: `--pick` is the selection purple
+  and `--hover` the pointer blue, so a DOM surface (a constraint chip, a row in
+  the inspector) and a curve in the viewport never disagree about what is being
+  pointed at.

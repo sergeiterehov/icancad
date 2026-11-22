@@ -523,6 +523,67 @@ describe('OCCT kernel engine', () => {
     expect(mesh.bbox.max[2]).toBeCloseTo(2, 5);
   });
 
+  it('extrudes a full ellipse into three faces instead of a polygon', () => {
+    const result = engine.makePrism({
+      shapeId: 'prism-ellipse',
+      origin: [0, 0, 0],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 1, 0],
+      regions: [
+        {
+          outer: {
+            curves: [{ type: 'ellipse', cx: 0, cy: 0, rx: 20, ry: 10, rotation: 0 }],
+          },
+          holes: [],
+        },
+      ],
+      distances: [5],
+    });
+    // Two caps and one smooth side: a polyline contour would add a face per
+    // segment, and the sides would then be visible as facets.
+    expect(result.stats.faces).toBe(3);
+    const mesh = engine.tessellate('prism-ellipse');
+    expect(mesh.bbox.max[0]).toBeCloseTo(20, 1);
+    expect(mesh.bbox.max[1]).toBeCloseTo(10, 1);
+  });
+
+  it('extrudes an elliptical arc with its axes turned and its Y axis longer', () => {
+    const result = engine.makePrism({
+      shapeId: 'prism-ellipse-arc',
+      origin: [0, 0, 0],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 1, 0],
+      regions: [
+        {
+          outer: {
+            curves: [
+              { type: 'line', x1: 0, y1: 0, x2: 12, y2: 0 },
+              {
+                type: 'ellipse',
+                cx: 0,
+                cy: 0,
+                rx: 12,
+                ry: 20,
+                rotation: 0,
+                startAngle: 0,
+                endAngle: Math.PI / 2,
+              },
+              { type: 'line', x1: 0, y1: 20, x2: 0, y2: 0 },
+            ],
+          },
+          holes: [],
+        },
+      ],
+      distances: [4],
+    });
+    expect(result.stats.faces).toBeGreaterThanOrEqual(3);
+    const mesh = engine.tessellate('prism-ellipse-arc');
+    expect(mesh.bbox.min[0]).toBeCloseTo(0, 1);
+    expect(mesh.bbox.max[0]).toBeCloseTo(12, 1);
+    expect(mesh.bbox.max[1]).toBeCloseTo(20, 1);
+    expect(meshSignedVolume(mesh)).toBeGreaterThan(0);
+  });
+
   it('extrudes a profile with a clockwise (reversed) arc', () => {
     const result = engine.makePrism({
       shapeId: 'prism-reversed',
@@ -2338,9 +2399,7 @@ describe('OCCT kernel engine', () => {
       bodies: [{ shapeId: 'import-box', name: 'FusionPart', color: '#3366cc' }],
     });
 
-    expect(engine.inspectStep({ data }).bodies).toEqual([
-      { name: 'FusionPart', color: '#3366cc' },
-    ]);
+    expect(engine.inspectStep({ data }).bodies).toEqual([{ name: 'FusionPart', color: '#3366cc' }]);
 
     const imported = engine.importStep({ data, prefix: 'feat:import' });
     expect(imported.bodies).toHaveLength(1);

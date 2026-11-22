@@ -187,7 +187,12 @@ function anchorPoint(
   }
   if (constraint.type === 'angle' && constraint.refs.length === 1) {
     const entity = entities.get(constraint.refs[0]!.entityId);
-    return entity?.type === 'arc' ? arcMidpoint(entity) : null;
+    if (entity?.type === 'arc') return arcMidpoint(entity);
+    if (entity?.type === 'elliptical-arc') {
+      const curve = tessellateEntity(entity, 32);
+      return curve[Math.floor(curve.length / 2)] ?? null;
+    }
+    return null;
   }
   if (constraint.type === 'angle') {
     const lines = constraint.refs
@@ -275,7 +280,7 @@ function referenceAnchor(entity: SketchEntity, measure: SketchMeasure): Point2 |
     case 'length':
       if (entity.type === 'line') return mid([entity.x1, entity.y1], [entity.x2, entity.y2]);
       if (entity.type === 'arc') return arcMidpoint(entity);
-      if (entity.type === 'bezier') {
+      if (entity.type === 'bezier' || entity.type === 'elliptical-arc') {
         const curve = tessellateEntity(entity, 32);
         return curve[Math.floor(curve.length / 2)] ?? null;
       }
@@ -285,6 +290,10 @@ function referenceAnchor(entity: SketchEntity, measure: SketchMeasure): Point2 |
       if (entity.type === 'arc') {
         const angle = entity.startAngle + (entity.endAngle - entity.startAngle) / 2;
         return [entity.cx + Math.cos(angle) * entity.r, entity.cy + Math.sin(angle) * entity.r];
+      }
+      if (entity.type === 'elliptical-arc') {
+        const curve = tessellateEntity(entity, 32);
+        return curve[Math.floor(curve.length / 2)] ?? null;
       }
       return null;
     case 'radius':
@@ -298,10 +307,18 @@ function referenceAnchor(entity: SketchEntity, measure: SketchMeasure): Point2 |
         return [entity.cx + Math.cos(angle) * entity.r, entity.cy + Math.sin(angle) * entity.r];
       }
       return null;
-    case 'rx':
-      return entity.type === 'ellipse' ? [entity.cx + entity.rx, entity.cy] : null;
-    case 'ry':
-      return entity.type === 'ellipse' ? [entity.cx, entity.cy + entity.ry] : null;
+    case 'rx': {
+      if (entity.type === 'ellipse') return [entity.cx + entity.rx, entity.cy];
+      if (entity.type !== 'elliptical-arc') return null;
+      const angle = (entity.rotation * Math.PI) / 180;
+      return [entity.cx + Math.cos(angle) * entity.rx, entity.cy + Math.sin(angle) * entity.rx];
+    }
+    case 'ry': {
+      if (entity.type === 'ellipse') return [entity.cx, entity.cy + entity.ry];
+      if (entity.type !== 'elliptical-arc') return null;
+      const angle = (entity.rotation * Math.PI) / 180;
+      return [entity.cx - Math.sin(angle) * entity.ry, entity.cy + Math.cos(angle) * entity.ry];
+    }
   }
 }
 

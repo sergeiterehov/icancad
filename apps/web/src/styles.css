@@ -18,6 +18,8 @@
   --text-faint: #6e7787;
   --accent: #5b8cff;
   --accent-soft: #1c2949;
+  /* Colour of the element under the pointer, shared with the 3D view. */
+  --hover: #62b0ff;
   /* Selection colour of the 3D view: faces, edges and picked operations. */
   --pick: #bb86fc;
   --danger: #f07171;
@@ -40,6 +42,7 @@
   --text-faint: #8a93a0;
   --accent: #2f6fed;
   --accent-soft: #e3ecff;
+  --hover: #0a66ff;
   --pick: #7c3aed;
   --danger: #d14343;
   --ok: #1f9d5a;
@@ -57,6 +60,12 @@ body,
 #root {
   height: 100%;
   margin: 0;
+}
+
+/* A horizontal swipe at the edge must not walk the browser history. */
+html,
+body {
+  overscroll-behavior-x: none;
 }
 
 body {
@@ -575,6 +584,13 @@ button:disabled {
 .icon-btn[data-active='true'] {
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+/* Leaving a sketch whose every degree of freedom is spent: the green the solver
+   paints the fully constrained geometry with. */
+.icon-btn.is-solved,
+.icon-btn.is-solved:hover:not(:disabled) {
+  color: var(--ok);
 }
 
 .icon-btn:disabled {
@@ -1344,8 +1360,8 @@ html[data-pointer='finger'] .tree-row .tree-eye {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  font-size: 11px;
-  color: var(--text);
+  font-size: 12px;
+  color: var(--row-color, var(--text));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1416,6 +1432,64 @@ html[data-pointer='finger'] .tree-row .tree-eye {
   display: flex;
   align-items: center;
   gap: 2px;
+}
+
+/* A tool with two variants: the icon runs the base tool, the slim chevron opens
+   the other one without adding a second full-width button to the rail. */
+.tool-split {
+  display: inline-flex;
+  align-items: center;
+}
+
+.tool-split-main {
+  border-radius: 6px 0 0 6px;
+}
+
+.tool-split-caret {
+  width: 11px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 0 6px 6px 0;
+  background: transparent;
+  color: var(--text-dim);
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+/* The group under the pointer is one surface: the half under the pointer takes
+   the ordinary hover, the other half a quieter share of it. */
+.tool-split:hover .tool-split-main,
+.tool-split:hover .tool-split-caret {
+  background: color-mix(in srgb, var(--panel-3) 50%, transparent);
+  color: var(--text-dim);
+}
+
+.tool-split .tool-split-main:hover,
+.tool-split .tool-split-caret:hover {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
+.tool-split:has(.tool-split-main[data-active='true']) .tool-split-caret {
+  color: var(--accent);
+}
+
+/* A chevron inside a button that opens a list, such as the constraints tool. The
+   button grows past the square rail size, and the chevron sits as far from the
+   glyph as the caret of a split button does. */
+.icon-btn:has(.button-caret) {
+  width: auto;
+  gap: 7px;
+  padding: 0 5px 0 6px;
+}
+
+.button-caret {
+  opacity: 0.7;
 }
 
 /* A narrow screen cannot hold the sketch tools in one line: the two groups
@@ -2345,8 +2419,11 @@ button.selection-item[data-active='true'][data-error='true'] {
   color: var(--text-faint);
 }
 
-.selection-item[data-active='true'] .entity-icon {
-  color: var(--accent);
+/* The geometry and the constraint list of a sketch read as one list: the text
+   size of the first, the selection highlight of the second, and the colour the
+   sketch is drawn with. Icons keep their own colour, which carries state. */
+.selection-item.sketch-entity-row .tree-name {
+  color: var(--row-color, var(--text));
 }
 
 /* Geometry state wins over the selection tint: derived geometry is violet and
@@ -2412,8 +2489,16 @@ html[data-pointer='finger'] .selection-item .icon-btn {
   background: var(--panel-3);
 }
 
-.sketch-entity-row[data-active='true'] {
-  background: var(--accent-soft);
+/* Selection speaks the violet of the constraint list, without a background. The
+   selector matches the weight of the generic `button.selection-item` rule that
+   paints the accent pill. */
+button.selection-item.sketch-entity-row[data-active='true'] {
+  background: transparent;
+}
+
+.sketch-entity-row[data-active='true'] .tree-name,
+.sketch-entity-row[data-active='true'] .tree-meta {
+  color: var(--pick);
 }
 
 .sketch-entity-row[data-dimmed='true'] {
@@ -3082,15 +3167,45 @@ html[data-pointer='finger'] .selection-item .icon-btn {
   opacity: 0.3;
 }
 
+/* A reference describes geometry instead of constraining it, so it reads
+   under the dimensions and under the geometry itself: it only takes the pointer
+   where it covers empty canvas, which the overlay decides per move. */
 .sketch-reference {
+  z-index: 1;
   border-style: dashed;
   border-color: var(--text-faint);
   color: var(--text-dim);
   background: transparent;
   cursor: pointer;
+  pointer-events: none;
 }
 
-.sketch-reference:hover,
+.sketch-reference[data-hit='true'] {
+  pointer-events: auto;
+}
+
+.sketch-annotation:not(.sketch-reference) {
+  z-index: 2;
+}
+
+/* A drag or a marquee begins on the canvas; from then on no chip may catch the
+   pointer, or the gesture stops the moment it passes over a value. */
+.sketch-annotations[data-transparent='true'] .sketch-annotation {
+  pointer-events: none;
+}
+
+/* The pointer brings a reference and its geometry up together, in the blue of
+   the pointer rather than the purple of a selection. The value also rises above
+   the other values so it can be read; the dimensions above it keep their plane,
+   and the geometry keeps the pick. */
+.sketch-reference[data-hovered='true'] {
+  z-index: 2;
+  border-style: solid;
+  border-color: var(--hover);
+  color: var(--hover);
+  background: color-mix(in srgb, var(--hover) 18%, transparent);
+}
+
 .sketch-reference[data-active='true'] {
   border-color: var(--pick);
   color: var(--pick);
@@ -3131,6 +3246,19 @@ html[data-pointer='finger'] .selection-item .icon-btn {
   text-align: center;
   outline: none;
   user-select: text;
+}
+
+.sketch-marquee {
+  position: absolute;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  pointer-events: none;
+}
+
+/* Right-to-left: the box takes everything it touches, so its edge is broken. */
+.sketch-marquee[data-mode='crossing'] {
+  border-style: dashed;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
 }
 
 .sketch-live-measure {

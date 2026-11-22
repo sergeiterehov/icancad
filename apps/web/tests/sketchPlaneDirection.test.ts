@@ -27,7 +27,8 @@ describe('sketch plane direction', () => {
     expect(normal.normal).toEqual([0, 0, 1]);
     expect(inverted.origin).toEqual([0, 0, 10]);
     expect(inverted.normal).toEqual([0, 0, -1]);
-    expect(inverted.yAxis).toEqual([0, -1, 0]);
+    expect(inverted.xAxis).toEqual([-1, 0, 0]);
+    expect(inverted.yAxis).toEqual([0, 1, 0]);
   });
 
   it('turns a sketch on a face around without moving it', () => {

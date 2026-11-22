@@ -120,9 +120,10 @@ describe('sketch plane rotation', () => {
     );
     expect(frame.origin).toEqual([0, 0, 10]);
     expect(frame.normal).toEqual([0, 0, -1]);
-    // The flip turns the sketch's own Z clockwise, so its X axis goes to -Y.
-    close(frame.xAxis, [0, -1, 0]);
-    close(frame.yAxis, [-1, 0, 0]);
+    // The flip turns the sketch around its Y axis, so a following quarter turn
+    // sends its X axis to +Y.
+    close(frame.xAxis, [0, 1, 0]);
+    close(frame.yAxis, [1, 0, 0]);
   });
 
   it('turns a face sketch from the pose captured when the face was picked', () => {

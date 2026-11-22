@@ -1,6 +1,6 @@
 import { isFormula, type SketchFeature } from '@icancad/model';
 import { AlertTriangle, MousePointer2, Trash2 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   constraintEntityIds,
@@ -13,6 +13,8 @@ import { resolvedFeatureFor, useFormulaStore } from '../stores/formulaStore';
 import { useUiStore } from '../stores/uiStore';
 import { CONSTRAINT_CATALOG, constraintLabel } from './constraintCatalog';
 import { useContextMenuStore } from './ContextMenu';
+import { useViewModel } from '../stores/documentStore';
+import { objectColor, SKETCH_COLOR, sketchObjectId } from '@icancad/model';
 import { PanelSection } from './Controls';
 import { formatNumber } from './format';
 import { formulaMessage } from './formulaMessage';
@@ -60,6 +62,11 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
   const problemIds = useUiStore((state) => state.sketchProblemConstraintIds);
   const openMenu = useContextMenuStore((state) => state.open);
   const [onlyProblems, setOnlyProblems] = useState(false);
+  const project = useViewModel();
+  // The list speaks in the colour the sketch is drawn with, like the geometry
+  // list above it; the default colour is left to the theme.
+  const objectTint = objectColor(project, sketchObjectId(feature.id), SKETCH_COLOR);
+  const rowTint = objectTint === SKETCH_COLOR ? undefined : objectTint;
   const resolution = useFormulaStore((state) => state.resolution);
   const formulaRevision = resolution?.revision ?? 0;
   const resolvedConstraints = useMemo(() => {
@@ -158,7 +165,10 @@ export function SketchConstraints({ feature }: { feature: SketchFeature }) {
       {feature.constraints.length === 0 ? (
         <p className="hint">{t('sketch.constraintsEmpty')}</p>
       ) : (
-        <div className="constraint-list">
+        <div
+          className="constraint-list"
+          style={rowTint ? ({ '--row-color': rowTint } as CSSProperties) : undefined}
+        >
           {visibleConstraints.map((constraint) => {
             const entityIds = constraintEntityIds(constraint);
             const relatedByElement = [...selectedEntityIds].some((id) => entityIds.has(id));

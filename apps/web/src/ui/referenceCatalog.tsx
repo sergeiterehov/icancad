@@ -29,7 +29,9 @@ export const REFERENCE_CATALOG: Record<SketchMeasure, ReferenceInfo> = {
 
 /** A reference follows the geometry: an arc length wears the arc-length icon. */
 export function referenceIcon(entity: SketchEntity | undefined, measure: SketchMeasure) {
-  if (measure === 'length' && entity?.type === 'arc') return Spline;
+  if (measure === 'length' && (entity?.type === 'arc' || entity?.type === 'elliptical-arc')) {
+    return Spline;
+  }
   return REFERENCE_CATALOG[measure].icon;
 }
 

@@ -401,6 +401,11 @@ export function ProjectMenu() {
   ]);
 
   const openProjectMenu = async (event: MouseEvent<HTMLButtonElement>) => {
+    const menu = useContextMenuStore.getState();
+    if (menu.menu?.owner === 'project') {
+      menu.close();
+      return;
+    }
     const rect = event.currentTarget.getBoundingClientRect();
     // The list has to show the name that was just typed, not the one from the
     // last autosave.
@@ -442,6 +447,7 @@ export function ProjectMenu() {
           className="project-button"
           aria-label={t('project.menu')}
           aria-haspopup="menu"
+          data-menu-trigger="project"
           data-testid="save-state"
           data-state={saveState}
           onClick={(event) => void openProjectMenu(event)}

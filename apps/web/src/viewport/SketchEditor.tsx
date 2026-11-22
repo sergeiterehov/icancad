@@ -12,22 +12,33 @@ import {
   type SketchFrame,
 } from '@icancad/model';
 import {
-  entityControlPointRefs,
-  entityControlPoints,
   isFundamentalEntityId,
   moveEntityControlPoint,
   sketchEntityIndex,
-  translateEntity,
   withFundamentalEntities,
   type Point2,
 } from '@icancad/sketch';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { arcDraftEndAngle, arcStartAngle } from '../sketch/arcDraft';
+import { arcDraftEndAngle, arcDraftPoints, arcStartAngle } from '../sketch/arcDraft';
+import { draftGuides } from '../sketch/draftGuides';
+import {
+  ellipseDraftPoints,
+  ellipseFrame,
+  ellipticalArcEndAngle,
+  ellipticalArcFrame,
+  ellipticalArcPoint,
+} from '../sketch/ellipticalArcDraft';
 import { solveSketch } from '../sketch/client';
 import { faceIdByName } from '../kernel/topologyLookup';
 import { rebuildScene } from '../kernel/rebuild';
-import { autoConstraintsForEntity, isNearAxis, snapHighlightIds } from '../sketch/autoConstraints';
+import {
+  autoConstraintsForEntity,
+  axisOrientation,
+  hasMagnetTarget,
+  snapHighlightIds,
+} from '../sketch/autoConstraints';
+import { applyAutoConstraints } from '../sketch/autoApply';
 import {
   buildConstraintActions,
   constraintsSatisfied,
@@ -53,6 +64,12 @@ import { resolveConstraintShortcut } from '../ui/constraintCatalog';
 import { isAdditiveClick } from '../ui/listSelection';
 import { canEditSketch, faceBoundsInFrame, sketchFrameOf } from '../sketch/sectionPlane';
 import { solveDrag } from '../sketch/dragSolve';
+import {
+  dragPinSets as pinsForDrag,
+  movableEntities,
+  isSelectionConstrained,
+  moveDraggedEntities,
+} from '../sketch/dragSelection';
 import { liveMeasures, measureInfo } from '../sketch/measure';
 import { sketchPickKey } from '../sketch/pickKey';
 import {
@@ -60,6 +77,7 @@ import {
   projectionEntityIds,
   resolveSketchProjections,
 } from '../sketch/projection';
+import { entitiesInMarquee, marqueeMode, marqueeRect } from '../sketch/regionSelect';
 import { referenceMenuItems } from '../sketch/referenceMenu';
 import { resolveSketchPoint, snapModeFor } from '../sketch/resolvePoint';
 import { constraintsForSolve, sketchHasFormulaError } from '../sketch/resolvedConstraints';
@@ -119,6 +137,8 @@ function currentSketchEntities(sketchId: string | null): readonly SketchEntity[]
 interface DragState {
   mode: 'point' | 'entity';
   entityId: string;
+  /** Every entity the pointer moves; one curve unless several are selected. */
+  movedIds: string[];
   pointIndex: number | null;
   startPoint: Point2;
   startX: number;
@@ -138,51 +158,57 @@ interface DragState {
   switchedAxis: boolean;
 }
 
-/** The sketch with the dragged entity moved to where the pointer asks. */
+/** The sketch with the dragged entities moved to where the pointer asks. */
 function dragEntities(drag: DragState, point: Point2, entities: SketchEntity[]): SketchEntity[] {
   // Building the target from the last solved geometry keeps the solver on the
   // branch the user already sees. Rebuilding it from the pre-drag entity makes
   // every frame jump back to the original configuration and lets the solver
   // flip between branches.
-  const base = entities.find((entity) => entity.id === drag.entityId) ?? drag.originalEntity;
-  const moved =
-    drag.mode === 'point'
-      ? moveEntityControlPoint(base, drag.pointIndex ?? 0, point)
-      : translateEntity(
-          base,
-          point[0] - (drag.solvedPoint ?? drag.startPoint)[0],
-          point[1] - (drag.solvedPoint ?? drag.startPoint)[1],
-        );
-  return entities.map((entity) => (entity.id === drag.entityId ? moved : entity));
-}
-
-/** Whether any constraint can move this entity, and with it, the rest. */
-function isDraggedEntityConstrained(constraints: SketchConstraint[], entityId: string): boolean {
-  return constraints.some((constraint) => constraint.refs.some((ref) => ref.entityId === entityId));
+  return moveDraggedEntities({
+    entities,
+    grabbed: {
+      id: drag.entityId,
+      mode: drag.mode,
+      pointIndex: drag.pointIndex,
+      original: drag.originalEntity,
+    },
+    movedIds: drag.mode === 'point' ? [drag.entityId] : drag.movedIds,
+    target: point,
+    reference: drag.solvedPoint ?? drag.startPoint,
+  });
 }
 
 function dragPinSets(drag: DragState): SketchConstraintRef[][] {
-  if (drag.mode === 'point') {
-    return [[{ entityId: drag.entityId, pointIndex: drag.pointIndex ?? 0 }]];
-  }
-  const refs = entityControlPointRefs(drag.originalEntity);
-  if (refs.length <= 1) return [refs];
-  let nearest = refs[0]!;
-  let best = Number.POSITIVE_INFINITY;
-  for (const ref of refs) {
-    const point = refPointOnEntity(drag.originalEntity, ref.pointIndex ?? 0);
-    if (!point) continue;
-    const distanceToGrab = Math.hypot(point[0] - drag.startPoint[0], point[1] - drag.startPoint[1]);
-    if (distanceToGrab < best) {
-      best = distanceToGrab;
-      nearest = ref;
-    }
-  }
-  return [refs, [nearest], []];
+  return pinsForDrag({
+    grabbed: {
+      id: drag.entityId,
+      mode: drag.mode,
+      pointIndex: drag.pointIndex,
+      original: drag.originalEntity,
+    },
+    movedIds: drag.mode === 'point' ? [drag.entityId] : drag.movedIds,
+    startPoint: drag.startPoint,
+    entities: drag.original.entities,
+  });
 }
 
-function refPointOnEntity(entity: SketchEntity, index: number): Point2 | null {
-  return entityControlPoints(entity)[index] ?? null;
+interface MarqueeState {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+  base: string[];
+  additive: boolean;
+  active: boolean;
+}
+
+interface MarqueeBox {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  crossing: boolean;
 }
 
 const frameKeyOf = (value: SketchFrame) =>
@@ -243,6 +269,8 @@ export function SketchEditor() {
   const { run: runConstraintAction } = useApplyConstraintAction(sketch);
   const drivenSketches = useFormulaStore((state) => state.resolution?.drivenSketches);
   const drag = useRef<DragState | null>(null);
+  const marquee = useRef<MarqueeState | null>(null);
+  const [marqueeBox, setMarqueeBox] = useState<MarqueeBox | null>(null);
 
   // Driven dimensions resolve to numbers, but the solver is what moves the
   // geometry: solving here writes the solved entities back, so the editor shows
@@ -297,6 +325,13 @@ export function SketchEditor() {
   };
   const [hover, setHover] = useState<Point2 | null>(null);
   const [hoverSnap, setHoverSnap] = useState<SketchSnap | null>(null);
+  // The whole resolution of the hovered step, so the preview can promise
+  // exactly the alignment the commit will create.
+  const [hoverInput, setHoverInput] = useState<SketchSnapInput | null>(null);
+  const setHoverPreview = (snap: SketchSnap | null, input: SketchSnapInput | null = null) => {
+    setHoverSnap(snap);
+    setHoverInput(input);
+  };
   const pointerDown = useRef<{ x: number; y: number } | null>(null);
   // A finger drops a set it built with a second tap in the same empty place.
   const lastEmptyTap = useRef<TapMark | null>(null);
@@ -334,7 +369,7 @@ export function SketchEditor() {
   useEffect(() => {
     updateDraft([]);
     setHover(null);
-    setHoverSnap(null);
+    setHoverPreview(null);
     polylineTail.current = null;
     draftToolRef.current = tool;
     applyAutoHighlight([]);
@@ -574,7 +609,7 @@ export function SketchEditor() {
     }
     const auto = magnetEnabled
       ? autoConstraintsForEntity(entity, inputs)
-      : { constraints: [], snapConstraints: [], highlightIds: [] };
+      : { constraints: [], snapConstraints: [], alignmentConstraints: [], highlightIds: [] };
     const currentFeature = currentSketch();
     if (!currentFeature) return;
     const entitiesMap = sketchEntityIndex(currentFeature.entities);
@@ -586,13 +621,23 @@ export function SketchEditor() {
       entitiesMap,
     );
     const attempts: SketchConstraint[][] = [base];
-    if (auto.snapConstraints.length > 0) {
-      const fallback = uniqueConstraints(
+    if (auto.alignmentConstraints.length > 0) {
+      // The step promised an alignment. The snap may be the part that cannot be
+      // kept, but dropping the alignment silently would leave a line that only
+      // looked straight while it was drawn.
+      const aligned = uniqueConstraints(
+        [...auto.alignmentConstraints, ...extra],
+        currentFeature.constraints,
+        entitiesMap,
+      );
+      if (aligned.length !== base.length) attempts.push(aligned);
+    } else if (auto.snapConstraints.length > 0) {
+      const snapOnly = uniqueConstraints(
         [...auto.snapConstraints, ...extra],
         currentFeature.constraints,
         entitiesMap,
       );
-      if (fallback.length !== base.length) attempts.push(fallback);
+      if (snapOnly.length !== base.length) attempts.push(snapOnly);
     }
     if (attempts.every((candidate) => candidate.length === 0)) {
       applyAutoHighlight([]);
@@ -602,51 +647,46 @@ export function SketchEditor() {
       if (constraints.length === 0) continue;
       const latest = currentSketch();
       if (!latest) return;
-      try {
-        const result = await solveSketch(
-          latest.entities,
-          [...constraintsForSolve(latest), ...constraints],
-          [],
-          { diagnose: true, derived: [...projectionEntityIds(latest)] },
-        );
-        if (result.conflicting.length > 0) continue;
-        if (!result.entities.some((candidate) => candidate.id === entity.id)) continue;
-        const current = currentSketch();
-        if (!current) return;
-        // The solver may also move existing geometry to satisfy the new
-        // constraint, so the whole solution has to be merged back.
-        const solvedById = new Map(result.entities.map((candidate) => [candidate.id, candidate]));
-        const currentEntities = current.entities.map(
-          (candidate) => solvedById.get(candidate.id) ?? candidate,
-        );
-        for (const candidate of result.entities) {
-          if (!currentEntities.some((existing) => existing.id === candidate.id)) {
-            currentEntities.push(candidate);
-          }
+      const applied = await applyAutoConstraints({
+        entities: latest.entities,
+        constraints: constraintsForSolve(latest),
+        added: constraints,
+        derived: [...projectionEntityIds(latest)],
+      }).catch(() => null);
+      if (!applied || applied.conflicting.length > 0) continue;
+      if (!applied.entities.some((candidate) => candidate.id === entity.id)) continue;
+      const current = currentSketch();
+      if (!current) return;
+      // The solver may also move existing geometry to satisfy the new
+      // constraint, so the whole solution has to be merged back.
+      const solvedById = new Map(applied.entities.map((candidate) => [candidate.id, candidate]));
+      const currentEntities = current.entities.map(
+        (candidate) => solvedById.get(candidate.id) ?? candidate,
+      );
+      for (const candidate of applied.entities) {
+        if (!currentEntities.some((existing) => existing.id === candidate.id)) {
+          currentEntities.push(candidate);
         }
-        // A constraint the solver calls redundant is already implied; adding it
-        // would only make the next solve report the same thing again.
-        const redundant = new Set(result.redundant);
-        const appliedConstraints = constraints.filter(
-          (constraint) =>
-            !redundant.has(constraint.id) &&
-            !current.constraints.some((candidate) => candidate.id === constraint.id),
-        );
-        preview({
-          type: 'feature/replace',
-          feature: {
-            ...current,
-            entities: currentEntities,
-            constraints: [...current.constraints, ...appliedConstraints],
-          },
-        });
-        setSketchFrozen(result.frozenEntityIds);
-        setSketchProblems([...new Set(result.conflicting)]);
-        applyAutoHighlight(auto.highlightIds);
-        return;
-      } catch {
-        // Try the next fallback below.
       }
+      const redundant = new Set(applied.removed);
+      preview({
+        type: 'feature/replace',
+        feature: {
+          ...current,
+          entities: currentEntities,
+          constraints: [
+            ...current.constraints.filter((constraint) => !redundant.has(constraint.id)),
+            ...applied.added.filter(
+              (constraint) =>
+                !current.constraints.some((existing) => existing.id === constraint.id),
+            ),
+          ],
+        },
+      });
+      setSketchFrozen(applied.frozenEntityIds);
+      setSketchProblems([...new Set(applied.conflicting)]);
+      applyAutoHighlight(auto.highlightIds);
+      return;
     }
     // No attempt could keep the magnet target attached. Leave the geometry
     // where the pointer was instead of at a point it is not constrained to.
@@ -689,13 +729,13 @@ export function SketchEditor() {
       );
     }
     updateDraft([]);
-    setHoverSnap(null);
+    setHoverPreview(null);
   };
 
   // Ends a polyline but keeps the line tool active for the next chain.
   const finishLine = () => {
     updateDraft([]);
-    setHoverSnap(null);
+    setHoverPreview(null);
     polylineTail.current = null;
   };
 
@@ -707,7 +747,7 @@ export function SketchEditor() {
       draftToolRef.current = activeTool;
       updateDraft([]);
       setHover(null);
-      setHoverSnap(null);
+      setHoverPreview(null);
       polylineTail.current = null;
     }
     if (activeTool === 'point') {
@@ -747,6 +787,7 @@ export function SketchEditor() {
         ? [
             {
               id: createId('con'),
+              auto: true,
               type: 'coincident',
               refs: [
                 { entityId: polylineTail.current, pointIndex: 1 },
@@ -762,7 +803,7 @@ export function SketchEditor() {
       const nextStart: DraftPoint[] = [{ point, input }];
       updateDraft(nextStart);
       setHover(null);
-      setHoverSnap(null);
+      setHoverPreview(null);
       // A coincidence can move the endpoint the solver just placed. The next
       // segment must start where the committed one actually ends, not where the
       // pointer was, or the preview grows out of thin air until the next solve.
@@ -790,7 +831,7 @@ export function SketchEditor() {
           void commitNewEntity(entity, [currentDraft[0]!.input, input]);
         }
         updateDraft([]);
-        setHoverSnap(null);
+        setHoverPreview(null);
       }
       return;
     }
@@ -825,31 +866,69 @@ export function SketchEditor() {
           void commitNewEntity(entity, [origin!.input, start!.input, input]);
         }
         updateDraft([]);
-        setHoverSnap(null);
+        setHoverPreview(null);
       }
       return;
     }
-    if (activeTool === 'ellipse') {
-      if (currentDraft.length === 0) updateDraft([{ point, input }]);
-      else {
-        const rx = Math.abs(point[0] - currentDraft[0]!.point[0]);
-        const ry = Math.abs(point[1] - currentDraft[0]!.point[1]);
-        if (rx > 0.01 && ry > 0.01) {
-          const entity: SketchEntity = {
-            id: createId('entity'),
-            type: 'ellipse',
-            construction: false,
-            cx: currentDraft[0]!.point[0],
-            cy: currentDraft[0]!.point[1],
-            rx,
-            ry,
-            rotation: 0,
-          };
-          void commitNewEntity(entity, [currentDraft[0]!.input, input]);
-        }
-        updateDraft([]);
-        setHoverSnap(null);
+    if (activeTool === 'elliptical-arc') {
+      if (currentDraft.length < 4) {
+        const next = [...currentDraft, { point, input }];
+        if (next.length === 4) draftArcEnd.current = null;
+        updateDraft(next);
+        return;
       }
+      const frame = ellipticalArcFrame(
+        currentDraft[0]!.point,
+        currentDraft[1]!.point,
+        currentDraft[2]!.point,
+        currentDraft[3]!.point,
+      );
+      if (frame) {
+        const entity: SketchEntity = {
+          id: createId('entity'),
+          type: 'elliptical-arc',
+          construction: false,
+          cx: frame.cx,
+          cy: frame.cy,
+          rx: frame.rx,
+          ry: frame.ry,
+          rotation: (frame.rotation * 180) / Math.PI,
+          startAngle: frame.startAngle,
+          endAngle: ellipticalArcEndAngle(frame, point, draftArcEnd.current),
+        };
+        void commitNewEntity(entity, [
+          currentDraft[0]!.input,
+          currentDraft[1]!.input,
+          currentDraft[2]!.input,
+          currentDraft[3]!.input,
+          input,
+        ]);
+      }
+      updateDraft([]);
+      setHoverPreview(null);
+      return;
+    }
+    if (activeTool === 'ellipse') {
+      if (currentDraft.length < 2) {
+        updateDraft([...currentDraft, { point, input }]);
+        return;
+      }
+      const frame = ellipseFrame(currentDraft[0]!.point, currentDraft[1]!.point, point);
+      if (frame) {
+        const entity: SketchEntity = {
+          id: createId('entity'),
+          type: 'ellipse',
+          construction: false,
+          cx: frame.cx,
+          cy: frame.cy,
+          rx: frame.rx,
+          ry: frame.ry,
+          rotation: (frame.rotation * 180) / Math.PI,
+        };
+        void commitNewEntity(entity, [currentDraft[0]!.input, currentDraft[1]!.input, input]);
+      }
+      updateDraft([]);
+      setHoverPreview(null);
     }
   };
 
@@ -892,9 +971,37 @@ export function SketchEditor() {
       });
     };
 
+    /**
+     * The box the pointer has swept: left to right takes only what fits in it,
+     * right to left everything it touches.
+     */
+    const updateMarquee = (state: MarqueeState) => {
+      const from = getViewport()?.sketchPointAt(state.startX, state.startY);
+      const to = getViewport()?.sketchPointAt(state.currentX, state.currentY);
+      if (!from || !to) return;
+      const rect = marqueeRect(from, to);
+      const mode = marqueeMode(state.startX, state.currentX);
+      const hits = entitiesInMarquee(currentSketchEntities(activeSketchId), rect, mode);
+      setSketchSelection(state.additive ? [...new Set([...state.base, ...hits])] : hits);
+      const box = canvas.getBoundingClientRect();
+      setMarqueeBox({
+        left: Math.min(state.startX, state.currentX) - box.left,
+        top: Math.min(state.startY, state.currentY) - box.top,
+        width: Math.abs(state.currentX - state.startX),
+        height: Math.abs(state.currentY - state.startY),
+        crossing: mode === 'crossing',
+      });
+    };
     const onPointerDown = (event: PointerEvent) => {
+      // A second finger takes the gesture for the camera; the box it interrupts
+      // must not keep growing under a pinch.
+      if (!event.isPrimary) {
+        marquee.current = null;
+        setMarqueeBox(null);
+      }
       if (event.button !== 0) return;
       skipClick.current = false;
+      marquee.current = null;
       pointerDown.current = { x: event.clientX, y: event.clientY };
       const activeTool = useUiStore.getState().sketchTool;
       if (activeTool !== 'select') {
@@ -922,7 +1029,19 @@ export function SketchEditor() {
         event.clientY,
         currentSketchEntities(activeSketchId),
       );
-      if (!pick?.entityId) return;
+      if (!pick?.entityId) {
+        marquee.current = {
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          currentX: event.clientX,
+          currentY: event.clientY,
+          base: selectionIds,
+          additive: isAdditiveClick(event),
+          active: false,
+        };
+        return;
+      }
       const entity = sketchEntityIndex(sketch.entities).get(pick.entityId);
       if (!entity) return;
       // Fundamental geometry is fixed: it can be selected but not dragged.
@@ -930,8 +1049,10 @@ export function SketchEditor() {
       setSketchHover([]);
       const pointIndex = pick.pointIndex ?? (entity.type === 'point' ? 0 : null);
       const key = pointIndex === null ? entity.id : `${entity.id}#${pointIndex}`;
-      if (!additive) setSketchSelection([key]);
-      else if (isKeylessPointer(event.pointerType)) {
+      // Pressing one object of a set keeps the set: the drag moves all of it.
+      const preservesSelection = !additive && selectionIds.length > 1 && selectionIds.includes(key);
+      if (!additive && !preservesSelection) setSketchSelection([key]);
+      else if (additive && isKeylessPointer(event.pointerType)) {
         // A finger or a pen has no key to hold and no hover to read: its tap is
         // taken here, on the press, and the click the browser sends after the
         // release must not read the same tap a second time. This is what makes
@@ -948,13 +1069,27 @@ export function SketchEditor() {
       if (isProjectedEntity(sketch, entity.id)) return;
       // Geometry without degrees of freedom has nowhere to go; solving it would
       // only let an unrelated free branch of the sketch wander.
-      if (useUiStore.getState().sketchFrozenEntityIds.includes(entity.id)) return;
+      const frozenIds = useUiStore.getState().sketchFrozenEntityIds;
+      if (frozenIds.includes(entity.id)) return;
       // A sketch with a formula error keeps its last solved geometry until the
       // formula is fixed; no solver may move it meanwhile.
       if (sketchHasFormulaError(sketch.id)) return;
+      // A frozen member of the selection keeps its place: it has no degree of
+      // freedom to spend, and translating it would only last until the next
+      // solve.
+      const selectedEntityIds = preservesSelection
+        ? movableEntities(
+            selectionIds.filter((candidate) => !isFundamentalEntityId(candidate.split('#')[0]!)),
+            frozenIds,
+          )
+        : [];
       drag.current = {
         mode: pointIndex === null ? 'entity' : 'point',
         entityId: entity.id,
+        movedIds:
+          pointIndex === null && preservesSelection
+            ? [...new Set([entity.id, ...selectedEntityIds])]
+            : [entity.id],
         pointIndex,
         startPoint: pick.point,
         startX: event.clientX,
@@ -998,7 +1133,8 @@ export function SketchEditor() {
             derived: [...projectionEntityIds(current)],
             prefer: activeDrag.attempt,
             previous: current.entities,
-            movedEntityId: activeDrag.entityId,
+            movedEntityIds:
+              activeDrag.mode === 'point' ? [activeDrag.entityId] : activeDrag.movedIds,
             maxMove: 1.5 + 5 * delta,
             allowAxisSwitch: !activeDrag.switchedAxis,
             axisHint,
@@ -1032,6 +1168,29 @@ export function SketchEditor() {
       // The projection tool aims at the 3D scene, so the sketch has no hover.
       if (activeTool === 'project') return;
       if (activeTool === 'select') {
+        const activeMarquee = marquee.current;
+        if (activeMarquee) {
+          if (activeMarquee.pointerId !== event.pointerId) return;
+          const slop = isKeylessPointer(event.pointerType) ? TAP_SLOP_PX : 3;
+          if (
+            !activeMarquee.active &&
+            Math.hypot(
+              event.clientX - activeMarquee.startX,
+              event.clientY - activeMarquee.startY,
+            ) <= slop
+          ) {
+            return;
+          }
+          if (!activeMarquee.active) {
+            activeMarquee.active = true;
+            canvas.setPointerCapture(event.pointerId);
+            setSketchHover([]);
+          }
+          activeMarquee.currentX = event.clientX;
+          activeMarquee.currentY = event.clientY;
+          updateMarquee(activeMarquee);
+          return;
+        }
         const activeDrag = drag.current;
         if (!activeDrag) {
           // Preview what a click would take. A tool that creates geometry has
@@ -1072,7 +1231,12 @@ export function SketchEditor() {
         activeDrag.target = point;
         // Nothing depends on a free entity, so it can follow the pointer right
         // away instead of waiting for a round trip.
-        if (!isDraggedEntityConstrained(current.constraints, activeDrag.entityId)) {
+        if (
+          !isSelectionConstrained(
+            current.constraints,
+            activeDrag.mode === 'point' ? [activeDrag.entityId] : activeDrag.movedIds,
+          )
+        ) {
           preview({
             type: 'feature/replace',
             feature: { ...current, entities: dragEntities(activeDrag, point, current.entities) },
@@ -1106,7 +1270,7 @@ export function SketchEditor() {
       );
       if (!snap) {
         setHover(null);
-        setHoverSnap(null);
+        setHoverPreview(null);
         return;
       }
       const resolved = resolveSketchPoint({
@@ -1125,8 +1289,19 @@ export function SketchEditor() {
           draftArcEnd.current,
         );
       }
+      if (activeTool === 'elliptical-arc' && draft.length >= 4) {
+        const frame = ellipticalArcFrame(
+          draft[0]!.point,
+          draft[1]!.point,
+          draft[2]!.point,
+          draft[3]!.point,
+        );
+        if (frame) {
+          draftArcEnd.current = ellipticalArcEndAngle(frame, resolved.point, draftArcEnd.current);
+        }
+      }
       setHover(resolved.point);
-      setHoverSnap(resolved.input.snap);
+      setHoverPreview(resolved.input.snap, resolved.input);
     };
     /**
      * A stretch ends where the finger lifts. That point is the one the next click
@@ -1150,7 +1325,7 @@ export function SketchEditor() {
         else finishBezier();
       }
       setHover(null);
-      setHoverSnap(null);
+      setHoverPreview(null);
     };
     const finishDrag = () => {
       const activeDrag = drag.current;
@@ -1187,7 +1362,7 @@ export function SketchEditor() {
         derived: [...projectionEntityIds(latest)],
         prefer: activeDrag.attempt,
         previous: latest.entities,
-        movedEntityId: activeDrag.entityId,
+        movedEntityIds: activeDrag.mode === 'point' ? [activeDrag.entityId] : activeDrag.movedIds,
         maxMove: 1.5 + 5 * delta,
         allowAxisSwitch: !activeDrag.switchedAxis,
         axisHint,
@@ -1268,7 +1443,11 @@ export function SketchEditor() {
           // a row to toggle than empty space is.
           setSketchSelection([]);
         } else if (!additive) {
-          setSketchSelection([key]);
+          // A click on one object of a set leaves the set alone, so the next
+          // drag still moves all of it. A click on another object takes over.
+          if (!(selectionIds.length > 1 && selectionIds.includes(key))) {
+            setSketchSelection([key]);
+          }
         } else {
           setSketchSelection(
             selectionIds.includes(key)
@@ -1334,6 +1513,16 @@ export function SketchEditor() {
     // known place.
     const onPointerCancel = () => {
       createPress.current = null;
+      marquee.current = null;
+      setMarqueeBox(null);
+    };
+    const finishMarquee = () => {
+      const active = marquee.current;
+      marquee.current = null;
+      setMarqueeBox(null);
+      if (!active?.active) return;
+      // The tap the browser sends after the sweep must not clear the set.
+      skipClick.current = true;
     };
 
     canvas.addEventListener('pointerdown', onPointerDown);
@@ -1345,6 +1534,7 @@ export function SketchEditor() {
     canvas.addEventListener('pointercancel', onPointerCancel);
     window.addEventListener('pointerup', finishDrag);
     window.addEventListener('pointerup', finishCreate);
+    window.addEventListener('pointerup', finishMarquee);
     return () => {
       canvas.style.cursor = '';
       canvas.removeEventListener('pointerdown', onPointerDown);
@@ -1356,6 +1546,7 @@ export function SketchEditor() {
       canvas.removeEventListener('pointercancel', onPointerCancel);
       window.removeEventListener('pointerup', finishDrag);
       window.removeEventListener('pointerup', finishCreate);
+      window.removeEventListener('pointerup', finishMarquee);
     };
   }, [
     activeSketchId,
@@ -1417,16 +1608,61 @@ export function SketchEditor() {
       };
     }
     if (tool === 'ellipse' && draft[0]) {
+      const center = draft[0].point;
+      const frame = ellipseFrame(center, draft[1]?.point ?? hover, hover);
+      if (frame) {
+        return {
+          id: 'preview',
+          type: 'ellipse',
+          construction: false,
+          cx: frame.cx,
+          cy: frame.cy,
+          rx: frame.rx,
+          ry: frame.ry,
+          rotation: (frame.rotation * 180) / Math.PI,
+        };
+      }
+      // The first radius is the pointer distance; the second one has no other
+      // source yet, so a half of it shows the ellipse the click is starting.
+      const rx = Math.max(distance(center, hover), 0.01);
       return {
         id: 'preview',
         type: 'ellipse',
         construction: false,
-        cx: draft[0].point[0],
-        cy: draft[0].point[1],
-        rx: Math.max(Math.abs(hover[0] - draft[0].point[0]), 0.01),
-        ry: Math.max(Math.abs(hover[1] - draft[0].point[1]), 0.01),
-        rotation: 0,
+        cx: center[0],
+        cy: center[1],
+        rx,
+        ry: rx * 0.5,
+        rotation: (Math.atan2(hover[1] - center[1], hover[0] - center[0]) * 180) / Math.PI,
       };
+    }
+    if (tool === 'elliptical-arc' && draft.length >= 2) {
+      const frame = ellipticalArcFrame(
+        draft[0]!.point,
+        draft[1]!.point,
+        draft.length >= 3 ? draft[2]!.point : hover,
+        draft.length >= 4 ? draft[3]!.point : hover,
+      );
+      if (frame) {
+        // Before the start is picked the whole ellipse is shown, so the two
+        // axes can be judged before the arc is cut out of it.
+        const endAngle =
+          draft.length >= 4
+            ? ellipticalArcEndAngle(frame, hover, draftArcEnd.current)
+            : frame.startAngle + Math.PI * 2;
+        return {
+          id: 'preview',
+          type: 'elliptical-arc',
+          construction: false,
+          cx: frame.cx,
+          cy: frame.cy,
+          rx: frame.rx,
+          ry: frame.ry,
+          rotation: (frame.rotation * 180) / Math.PI,
+          startAngle: frame.startAngle,
+          endAngle,
+        };
+      }
     }
     if (tool === 'bezier' && draft.length > 0) {
       return {
@@ -1441,32 +1677,35 @@ export function SketchEditor() {
     return null;
   };
 
-  const previewAuto =
-    magnetEnabled &&
-    (draft.some(({ input }) => Boolean(input.snap)) ||
-      Boolean(hoverSnap?.pointSnap ?? hoverSnap?.curveSnap) ||
-      (tool === 'line' &&
-        draft[0] !== undefined &&
-        hover !== null &&
-        isNearAxis({
-          id: 'preview',
-          type: 'line',
-          construction: false,
-          x1: draft[0].point[0],
-          y1: draft[0].point[1],
-          x2: hover[0],
-          y2: hover[1],
-        })));
+  // Purple means "a constraint will be created". Alignment counts only when the
+  // resolution actually planned it, never because the pointer is merely near an
+  // axis: a magnet target a few degrees off cannot keep both constraints. Such
+  // a step keeps its purple target, but its line is not painted as aligned.
+  const previewShape = previewEntity();
+  const previewAlignment = Boolean(hoverInput?.alignment);
+  const previewSnap =
+    draft.some(({ input }) => hasMagnetTarget(input)) ||
+    Boolean(hoverSnap?.pointSnap ?? hoverSnap?.curveSnap);
+  const previewNearAxis =
+    previewShape?.type === 'line' ? axisOrientation(previewShape) !== null : false;
+  const previewAuto = magnetEnabled && (previewAlignment || (previewSnap && !previewNearAxis));
 
   useEffect(() => {
     if (!activeSketchId) return;
     const midpointMarker =
       magnetEnabled && hoverSnap?.midpointSnap ? hoverSnap.midpointSnap.point : null;
+    const draftPoints = draftMarkers(
+      tool,
+      draft.map(({ point }) => point),
+      hover,
+    );
+    const previewGuides = draftGuides(tool, draftPoints, hover, () => createId('guide'));
     getViewport()?.setSketchOverlay(
       previewEntity(),
-      draft.map(({ point }) => point),
+      draftPoints,
       previewAuto,
       midpointMarker,
+      previewGuides,
     );
   }, [activeSketchId, tool, draft, hover, previewAuto, hoverSnap, magnetEnabled]);
 
@@ -1489,7 +1728,7 @@ export function SketchEditor() {
         if (draftRef.current.length > 0) {
           updateDraft([]);
           setHover(null);
-          setHoverSnap(null);
+          setHoverPreview(null);
           setSketchSelection([]);
           polylineTail.current = null;
           return;
@@ -1581,23 +1820,34 @@ export function SketchEditor() {
           : tool === 'ellipse'
             ? draft.length === 0
               ? t('sketch.centerEllipse')
-              : t('sketch.cornerEllipse')
-            : tool === 'bezier'
-              ? draft.length > 0
-                ? t('sketch.finishBezier')
-                : t('sketch.addBezier')
-              : tool === 'project'
-                ? t('sketch.projectionPickHint')
-                : '';
+              : draft.length === 1
+                ? t('sketch.majorEllipse')
+                : t('sketch.minorEllipse')
+            : tool === 'elliptical-arc'
+              ? draft.length === 0
+                ? t('sketch.centerEllipseArc')
+                : draft.length === 1
+                  ? t('sketch.majorEllipseArc')
+                  : draft.length === 2
+                    ? t('sketch.minorEllipseArc')
+                    : draft.length === 3
+                      ? t('sketch.startEllipseArc')
+                      : t('sketch.endEllipseArc')
+              : tool === 'bezier'
+                ? draft.length > 0
+                  ? t('sketch.finishBezier')
+                  : t('sketch.addBezier')
+                : tool === 'project'
+                  ? t('sketch.projectionPickHint')
+                  : '';
 
   const liveMeasure = (() => {
-    const preview = previewEntity();
-    if (!preview || !frame) return null;
-    const infos = liveMeasures(preview)
-      .map((measure) => measureInfo(preview, measure, locale, 'mm'))
+    if (!previewShape || !frame) return null;
+    const infos = liveMeasures(previewShape)
+      .map((measure) => measureInfo(previewShape, measure, locale, 'mm'))
       .filter((info): info is NonNullable<typeof info> => info !== null);
     if (infos.length === 0) return null;
-    const anchor = liveAnchor(preview);
+    const anchor = liveAnchor(previewShape);
     const projected = anchor ? getViewport()?.projectSketchPoint(frame, anchor) : null;
     return {
       text: infos.map((info) => info.text).join(' · '),
@@ -1608,6 +1858,18 @@ export function SketchEditor() {
 
   return (
     <div className="sketch-overlay" data-sketch-hover={sketchHoverIds.join(' ') || undefined}>
+      {marqueeBox && (
+        <div
+          className="sketch-marquee"
+          data-mode={marqueeBox.crossing ? 'crossing' : 'window'}
+          style={{
+            left: marqueeBox.left,
+            top: marqueeBox.top,
+            width: marqueeBox.width,
+            height: marqueeBox.height,
+          }}
+        />
+      )}
       {liveMeasure && liveMeasure.x !== null && liveMeasure.y !== null && (
         <div
           className="sketch-live-measure"
@@ -1624,6 +1886,30 @@ export function SketchEditor() {
   );
 }
 
+/**
+ * The points the draft markers sit on. A click on a curve tool names a centre,
+ * an axis or an angle, so a marker left where the pointer was would float off
+ * the shape being drawn; it is moved onto the shape instead.
+ */
+function draftMarkers(tool: SketchTool, points: readonly Point2[], hover: Point2 | null): Point2[] {
+  if (tool === 'arc') {
+    if (points.length < 2) return [...points];
+    const endAngle = points[2] ? arcDraftEndAngle(points[0]!, points[1]!, points[2]!, null) : null;
+    return arcDraftPoints(points[0]!, points[1]!, endAngle);
+  }
+  if (tool === 'ellipse' || tool === 'elliptical-arc') {
+    if (points.length < 2) return [...points];
+    const frame = ellipticalArcFrame(
+      points[0]!,
+      points[1]!,
+      points[2] ?? hover ?? points[1]!,
+      points[3] ?? points[2] ?? hover ?? points[1]!,
+    );
+    return ellipseDraftPoints(points, frame);
+  }
+  return [...points];
+}
+
 function liveAnchor(entity: SketchEntity): Point2 | null {
   switch (entity.type) {
     case 'line':
@@ -1637,6 +1923,20 @@ function liveAnchor(entity: SketchEntity): Point2 | null {
       ];
     case 'ellipse':
       return [entity.cx + entity.rx, entity.cy + entity.ry];
+    case 'elliptical-arc': {
+      const mid = (entity.startAngle + entity.endAngle) / 2;
+      return ellipticalArcPoint(
+        {
+          cx: entity.cx,
+          cy: entity.cy,
+          rx: entity.rx,
+          ry: entity.ry,
+          rotation: (entity.rotation * Math.PI) / 180,
+          startAngle: entity.startAngle,
+        },
+        mid,
+      );
+    }
     case 'bezier': {
       const last = entity.points[entity.points.length - 1];
       return last ?? null;

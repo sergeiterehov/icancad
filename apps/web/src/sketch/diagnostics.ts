@@ -54,6 +54,17 @@ function sameEntity(first: SketchEntity, second: SketchEntity): boolean {
         nearlyEqual(first.ry, second.ry) &&
         angleEqual((first.rotation * Math.PI) / 180, (second.rotation * Math.PI) / 180)
       );
+    case 'elliptical-arc':
+      return (
+        second.type === 'elliptical-arc' &&
+        nearlyEqual(first.cx, second.cx) &&
+        nearlyEqual(first.cy, second.cy) &&
+        nearlyEqual(first.rx, second.rx) &&
+        nearlyEqual(first.ry, second.ry) &&
+        angleEqual((first.rotation * Math.PI) / 180, (second.rotation * Math.PI) / 180) &&
+        angleEqual(first.startAngle, second.startAngle) &&
+        angleEqual(first.endAngle, second.endAngle)
+      );
     case 'bezier':
       return (
         second.type === 'bezier' &&
@@ -105,9 +116,13 @@ function candidateHasMotion(
   const directTarget = direct?.find((entity) => entity.id === target.id);
   if (directTarget && !sameEntity(directTarget, target)) return true;
 
-  const first = solveEntities(gcs, entities, constraints, [
-    { entityId: target.id, pointIndex, axis },
-  ], derived);
+  const first = solveEntities(
+    gcs,
+    entities,
+    constraints,
+    [{ entityId: target.id, pointIndex, axis }],
+    derived,
+  );
   if (!first) return false;
   const firstTarget = first.find((entity) => entity.id === target.id);
   if (!firstTarget || sameEntity(firstTarget, target)) return false;

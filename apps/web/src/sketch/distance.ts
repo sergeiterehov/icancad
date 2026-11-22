@@ -2,7 +2,10 @@ import type { SketchConstraintRef, SketchEntity } from '@icancad/model';
 import { entityControlPoints, tessellateEntity, type Point2 } from '@icancad/sketch';
 
 export type SketchLine = Extract<SketchEntity, { type: 'line' }>;
-export type SketchCurve = Extract<SketchEntity, { type: 'circle' | 'arc' | 'ellipse' }>;
+export type SketchCurve = Extract<
+  SketchEntity,
+  { type: 'circle' | 'arc' | 'ellipse' | 'elliptical-arc' }
+>;
 export type DistanceAxis = 0 | 1;
 
 export interface ClosestPoint {
@@ -21,7 +24,10 @@ export function isLineRef(ref: SketchConstraintRef, entity: SketchEntity | undef
 export function isCurveRef(ref: SketchConstraintRef, entity: SketchEntity | undefined): boolean {
   return (
     ref.pointIndex === undefined &&
-    (entity?.type === 'circle' || entity?.type === 'arc' || entity?.type === 'ellipse')
+    (entity?.type === 'circle' ||
+      entity?.type === 'arc' ||
+      entity?.type === 'ellipse' ||
+      entity?.type === 'elliptical-arc')
   );
 }
 

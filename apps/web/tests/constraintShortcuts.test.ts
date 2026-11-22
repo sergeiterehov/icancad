@@ -198,7 +198,8 @@ describe('sketch constraint shortcuts', () => {
   });
 
   it('maps bare letters to drawing tools', () => {
-    expect(sketchToolFromShortcut(key('p'))).toBe('point');
+    expect(sketchToolFromShortcut(key('i'))).toBe('point');
+    expect(sketchToolFromShortcut(key('p'))).toBe('project');
     expect(sketchToolFromShortcut(key('l'))).toBe('line');
     expect(sketchToolFromShortcut(key('c'))).toBe('circle');
     expect(sketchToolFromShortcut(key('a'))).toBe('arc');
@@ -210,7 +211,7 @@ describe('sketch constraint shortcuts', () => {
 
   it('reads the physical key so a non-Latin layout still matches', () => {
     expect(sketchToolFromShortcut(key('з'))).toBeNull();
-    expect(sketchToolFromShortcut({ ...key('p'), key: 'з' } as KeyboardEvent)).toBe('point');
+    expect(sketchToolFromShortcut({ ...key('i'), key: 'ш' } as KeyboardEvent)).toBe('point');
     expect(
       constraintsFromShortcut({ ...key('f'), key: 'а', shiftKey: true } as KeyboardEvent),
     ).toEqual(['fix']);

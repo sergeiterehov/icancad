@@ -21,3 +21,19 @@ export function arcDraftEndAngle(
   const sweep = Math.max(-Math.PI * 2, Math.min(Math.PI * 2, unwrapped - startAngle));
   return startAngle + sweep;
 }
+
+/**
+ * Where the clicks of an arc land on the circle. The centre and the start point
+ * are already on it, and the end click only names an angle, so its marker moves
+ * onto the rim instead of staying where the pointer was.
+ */
+export function arcDraftPoints(origin: Point2, start: Point2, endAngle: number | null): Point2[] {
+  const radius = Math.hypot(start[0] - origin[0], start[1] - origin[1]);
+  const points: Point2[] = [origin, start];
+  if (endAngle !== null && radius > 1e-4) points.push(rimPoint(origin, radius, endAngle));
+  return points;
+}
+
+function rimPoint(origin: Point2, radius: number, angle: number): Point2 {
+  return [origin[0] + Math.cos(angle) * radius, origin[1] + Math.sin(angle) * radius];
+}

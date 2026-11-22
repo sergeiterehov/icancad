@@ -61,7 +61,7 @@ it('rejects a same-axis solution that jumps the rest of the sketch', async () =>
     prefer: 'one:y',
     allowAxisSwitch: false,
     previous,
-    movedEntityId: 'a',
+    movedEntityIds: ['a'],
     maxMove: 2,
   });
 
@@ -85,7 +85,7 @@ it('accepts a continuous axis solution', async () => {
     prefer: 'one:y',
     allowAxisSwitch: false,
     previous,
-    movedEntityId: 'a',
+    movedEntityIds: ['a'],
     maxMove: 2,
   });
 
@@ -106,7 +106,7 @@ it('stays on the pinned axis after the one allowed switch', async () => {
     prefer: 'one:x',
     allowAxisSwitch: false,
     previous,
-    movedEntityId: 'a',
+    movedEntityIds: ['a'],
     maxMove: 2,
   });
 
@@ -128,7 +128,7 @@ it('switches the pinned axis while the drag still allows it', async () => {
     prefer: 'one:x',
     allowAxisSwitch: true,
     previous,
-    movedEntityId: 'a',
+    movedEntityIds: ['a'],
     maxMove: 2,
   });
 

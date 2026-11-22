@@ -1,11 +1,5 @@
 import type { TessellationResult } from '@icancad/kernel';
-import type {
-  Resolved,
-  SketchEntity,
-  SketchFrame,
-  Transform,
-  Vec3,
-} from '@icancad/model';
+import type { Resolved, SketchEntity, SketchFrame, Transform, Vec3 } from '@icancad/model';
 import { sketchPointToWorld, tessellateEntity } from '@icancad/sketch';
 import type { Matrix3x4 } from './array';
 
@@ -250,6 +244,7 @@ export function scaleSketchEntity(entity: SketchEntity, factor: number): SketchE
     case 'arc':
       return { ...entity, cx: scale(entity.cx), cy: scale(entity.cy), r: scale(entity.r) };
     case 'ellipse':
+    case 'elliptical-arc':
       return {
         ...entity,
         cx: scale(entity.cx),

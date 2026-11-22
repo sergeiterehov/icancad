@@ -1,5 +1,5 @@
 import type { Point2 } from '@icancad/sketch';
-import { axisOrientation } from './autoConstraints';
+import { axisOrientation, exactAxisOrientation } from './autoConstraints';
 import type { SketchSnap, SketchSnapInput, SketchSnapMode } from './snap';
 import type { SketchTool } from './tool';
 
@@ -38,7 +38,11 @@ export function snapTargetPoint(snap: SketchSnap | null, mode: SketchSnapMode): 
 export function snapModeFor(tool: SketchTool, draftLength: number): SketchSnapMode {
   if (tool === 'circle') return draftLength === 0 ? 'free' : 'tangent';
   if (tool === 'arc') return draftLength === 0 ? 'free' : draftLength === 1 ? 'tangent' : 'free';
-  if (tool === 'ellipse') return draftLength === 0 ? 'free' : 'none';
+  if (tool === 'ellipse') return draftLength <= 1 ? 'free' : 'none';
+  // The centre and the major half-axis can land on existing geometry; the minor
+  // half-axis and the two ends only define lengths and angles of the new arc,
+  // so a magnet target there would not become a constraint.
+  if (tool === 'elliptical-arc') return draftLength <= 1 ? 'free' : 'none';
   return 'free';
 }
 
@@ -86,10 +90,25 @@ export function resolveSketchPoint({
           y2: point[1],
         })
       : null;
+  const exactOrientationOf = (point: Point2) =>
+    tool === 'line' && anchor
+      ? exactAxisOrientation({
+          id: 'resolve',
+          type: 'line',
+          construction: false,
+          x1: anchor[0],
+          y1: anchor[1],
+          x2: point[0],
+          y2: point[1],
+        })
+      : null;
 
   const target = magnet ? snapTargetPoint(snap, mode) : null;
   if (target) {
-    const alignment = orientationOf(target);
+    // A magnet target is taken as it is, so it is aligned only when it lies on
+    // the axis exactly. A target a few degrees off its axis cannot be both
+    // coincident and vertical, and a promised alignment would be lost.
+    const alignment = exactOrientationOf(target);
     return {
       point: target,
       fallback,

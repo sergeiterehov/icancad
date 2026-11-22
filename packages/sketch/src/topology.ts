@@ -160,7 +160,7 @@ function circleOf(entity: SketchEntity): CircleLike | null {
   const { cx, cy, r, startAngle, endAngle } = entity;
   const naturalCcw = endAngle >= startAngle;
   const from = naturalCcw ? startAngle : endAngle;
-  const sweep = normalizeAngle((naturalCcw ? endAngle - startAngle : startAngle - endAngle));
+  const sweep = normalizeAngle(naturalCcw ? endAngle - startAngle : startAngle - endAngle);
   return {
     cx,
     cy,
@@ -186,7 +186,9 @@ function exactIntersections(first: SketchEntity, second: SketchEntity): Point2[]
     ) {
       return [];
     }
-    const along = (distance * distance + firstCircle.r * firstCircle.r - secondCircle.r * secondCircle.r) / (2 * distance);
+    const along =
+      (distance * distance + firstCircle.r * firstCircle.r - secondCircle.r * secondCircle.r) /
+      (2 * distance);
     const height = Math.sqrt(Math.max(0, firstCircle.r * firstCircle.r - along * along));
     const mx = firstCircle.cx + (along * dx) / distance;
     const my = firstCircle.cy + (along * dy) / distance;
@@ -233,8 +235,6 @@ function lineCircle(circle: CircleLike, line: SketchEntity): Point2[] {
     });
 }
 
-
-
 // Sketch geometry as the object it becomes after the sketch is finished: points,
 // edges and the faces bounded by those edges. Construction geometry is ignored.
 export function sketchTopology(entities: readonly SketchEntity[]): SketchTopology {
@@ -266,9 +266,7 @@ export function sketchTopology(entities: readonly SketchEntity[]): SketchTopolog
 
   const controlIndexOf = (entity: SketchEntity, point: Point2): number => {
     const key = nodeKey(point);
-    const index = entityControlPoints(entity).findIndex(
-      (candidate) => nodeKey(candidate) === key,
-    );
+    const index = entityControlPoints(entity).findIndex((candidate) => nodeKey(candidate) === key);
     return index < 0 ? 0 : index;
   };
 
@@ -327,11 +325,7 @@ export function sketchTopology(entities: readonly SketchEntity[]): SketchTopolog
   // instead of becoming three faces.
   const segmentCount = (curve: CurveData) =>
     curve.closed ? curve.polyline.length : curve.polyline.length - 1;
-  const addSplit = (
-    curve: CurveData,
-    index: number,
-    split: { t: number; point: Point2 },
-  ) => {
+  const addSplit = (curve: CurveData, index: number, split: { t: number; point: Point2 }) => {
     const list = curve.splits.get(index) ?? [];
     list.push(split);
     curve.splits.set(index, list);
@@ -352,7 +346,10 @@ export function sketchTopology(entities: readonly SketchEntity[]): SketchTopolog
       const t =
         length2 === 0
           ? 0
-          : Math.min(1, Math.max(0, ((point[0] - from[0]) * dx + (point[1] - from[1]) * dy) / length2));
+          : Math.min(
+              1,
+              Math.max(0, ((point[0] - from[0]) * dx + (point[1] - from[1]) * dy) / length2),
+            );
       const x = from[0] + dx * t;
       const y = from[1] + dy * t;
       const distance = (point[0] - x) ** 2 + (point[1] - y) ** 2;
@@ -421,13 +418,14 @@ export function sketchTopology(entities: readonly SketchEntity[]): SketchTopolog
     const endpoints = entityEndpoints(entity);
     if (endpoints) {
       registerRef(nodeIds[0]!, entity.id, controlIndexOf(entity, endpoints[0]));
-      registerRef(
-        nodeIds[nodeIds.length - 1]!,
-        entity.id,
-        controlIndexOf(entity, endpoints[1]),
-      );
+      registerRef(nodeIds[nodeIds.length - 1]!, entity.id, controlIndexOf(entity, endpoints[1]));
     }
-    if (entity.type === 'circle' || entity.type === 'arc' || entity.type === 'ellipse') {
+    if (
+      entity.type === 'circle' ||
+      entity.type === 'arc' ||
+      entity.type === 'ellipse' ||
+      entity.type === 'elliptical-arc'
+    ) {
       registerRef(resolveNode([entity.cx, entity.cy]), entity.id, 0);
     }
   }
@@ -447,7 +445,12 @@ export function sketchTopology(entities: readonly SketchEntity[]): SketchTopolog
       addPoint(resolveNode(endpoints[0]), 'end');
       addPoint(resolveNode(endpoints[1]), 'end');
     }
-    if (entity.type === 'circle' || entity.type === 'arc' || entity.type === 'ellipse') {
+    if (
+      entity.type === 'circle' ||
+      entity.type === 'arc' ||
+      entity.type === 'ellipse' ||
+      entity.type === 'elliptical-arc'
+    ) {
       addPoint(resolveNode([entity.cx, entity.cy]), 'center');
     }
   }
@@ -463,9 +466,7 @@ export function sketchTopology(entities: readonly SketchEntity[]): SketchTopolog
     const polyline = edge.points;
     if (polyline.length === 0) continue;
     edge.start = stableNodeId(resolveNode(polyline[0]!));
-    edge.end = edge.closed
-      ? edge.start
-      : stableNodeId(resolveNode(polyline[polyline.length - 1]!));
+    edge.end = edge.closed ? edge.start : stableNodeId(resolveNode(polyline[polyline.length - 1]!));
   }
 
   const polylines = new Map<string, Point2[]>();
@@ -487,8 +488,7 @@ function findFaces(
   // Drop dangling segments so open chains never take part in face detection.
   const live = segments.map(() => true);
   const degree = new Map<number, number>();
-  const bump = (node: number, delta: number) =>
-    degree.set(node, (degree.get(node) ?? 0) + delta);
+  const bump = (node: number, delta: number) => degree.set(node, (degree.get(node) ?? 0) + delta);
   for (const segment of segments) {
     bump(segment.from, 1);
     bump(segment.to, 1);
@@ -524,8 +524,18 @@ function findFaces(
     if (!live[index]) continue;
     const segment = segments[index]!;
     segmentTotals.set(segment.entityId, (segmentTotals.get(segment.entityId) ?? 0) + 1);
-    halfEdges.push({ segment: index, from: segment.from, to: segment.to, angle: angleAt(segment.from, segment.to) });
-    halfEdges.push({ segment: index, from: segment.to, to: segment.from, angle: angleAt(segment.to, segment.from) });
+    halfEdges.push({
+      segment: index,
+      from: segment.from,
+      to: segment.to,
+      angle: angleAt(segment.from, segment.to),
+    });
+    halfEdges.push({
+      segment: index,
+      from: segment.to,
+      to: segment.from,
+      angle: angleAt(segment.to, segment.from),
+    });
   }
   halfEdges.forEach((halfEdge, index) => {
     const list = outgoing.get(halfEdge.from) ?? [];

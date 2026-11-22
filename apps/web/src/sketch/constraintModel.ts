@@ -1,5 +1,6 @@
 import {
   createId,
+  isFormula,
   type ConstraintType,
   type ParamValue,
   type SketchConstraint,
@@ -196,6 +197,20 @@ function directionAngle(first: Line, second: Line): number | undefined {
   return angle === undefined ? undefined : Math.min(angle, 180 - angle);
 }
 
+/**
+ * The angle a line is turned by from the first segment to the second, in
+ * degrees in (-180, 180]. `segmentAngle` loses the direction, and the direction
+ * is what decides which side of the first line the second one lands on.
+ */
+function signedSegmentAngle(first: Line, second: Line): number | undefined {
+  const ax = first.x2 - first.x1;
+  const ay = first.y2 - first.y1;
+  const bx = second.x2 - second.x1;
+  const by = second.y2 - second.y1;
+  if (Math.hypot(ax, ay) === 0 || Math.hypot(bx, by) === 0) return undefined;
+  return (Math.atan2(ax * by - ay * bx, ax * bx + ay * by) * 180) / Math.PI;
+}
+
 /** Distance from a point to the infinite line through the segment. */
 export function pointToLineDistance(point: Point2, line: Line): number | undefined {
   const dx = line.x2 - line.x1;
@@ -280,6 +295,10 @@ export function buildConstraintActions(
     selectedEntities.every((entity) => entity.type === 'circle' || entity.type === 'arc');
   const onlyOwnLines = onlyLines && ownRefs.length === refs.length;
   const actions: ConstraintAction[] = [];
+  const hasConstraint = (type: ConstraintType, actionRefs: SketchConstraintRef[]) => {
+    const key = constraintKey({ id: '', type, refs: actionRefs }, entities);
+    return feature.constraints.some((constraint) => constraintKey(constraint, entities) === key);
+  };
   const push = (type: ConstraintType, actionRefs: SketchConstraintRef[], value?: number) => {
     // A dimension is created from the current geometry, so its prefilled value
     // is rounded to hundredths; the solver then adopts exactly what the user sees.
@@ -304,12 +323,20 @@ export function buildConstraintActions(
         push('vertical-distance', pointRefs, Math.abs(second[1] - first[1]));
       }
     }
-    push('horizontal', pointRefs);
-    push('vertical', pointRefs);
+    // Two points cannot be both horizontal and vertical: the second relation
+    // would fold them into one point.
+    if (refs.length !== 2 || !hasConstraint('vertical', pointRefs)) {
+      push('horizontal', pointRefs);
+    }
+    if (refs.length !== 2 || !hasConstraint('horizontal', pointRefs)) {
+      push('vertical', pointRefs);
+    }
   }
   if (onlyOwnLines) {
-    push('horizontal', entityRefs);
-    push('vertical', entityRefs);
+    const anyVertical = entityRefs.some((ref) => hasConstraint('vertical', [ref]));
+    const anyHorizontal = entityRefs.some((ref) => hasConstraint('horizontal', [ref]));
+    if (!anyVertical) push('horizontal', entityRefs);
+    if (!anyHorizontal) push('vertical', entityRefs);
     if (refs.length === 1) {
       const line = selectedEntities[0] as Extract<SketchEntity, { type: 'line' }>;
       push('distance', entityRefs, Math.hypot(line.x2 - line.x1, line.y2 - line.y1));
@@ -345,6 +372,10 @@ export function buildConstraintActions(
         push('radius', entityRefs, target.r);
         push('diameter', entityRefs, target.r * 2);
       }
+    }
+    if (target?.type === 'elliptical-arc') {
+      const sweep = Math.abs(target.endAngle - target.startAngle);
+      push('angle', entityRefs, (sweep * 180) / Math.PI);
     }
   }
   if (onlyCurves && ownRefs.length === refs.length && refs.length >= 2) {
@@ -432,9 +463,18 @@ function actionSide(
   refs: readonly SketchConstraintRef[],
   entities: Map<string, SketchEntity>,
 ): number | undefined {
-  if (type === 'angle' && refs.length === 1) {
-    const entity = entities.get(refs[0]!.entityId);
-    return entity?.type === 'arc' ? (entity.endAngle >= entity.startAngle ? 1 : -1) : undefined;
+  if (type === 'angle') {
+    if (refs.length === 1) {
+      const entity = entities.get(refs[0]!.entityId);
+      return entity?.type === 'arc' ? (entity.endAngle >= entity.startAngle ? 1 : -1) : undefined;
+    }
+    // The value of an angle is a magnitude; which side of the first line the
+    // second one sits on is kept here, so the solver is not free to mirror it.
+    const first = entities.get(refs[0]!.entityId);
+    const second = entities.get(refs[1]!.entityId);
+    if (first?.type !== 'line' || second?.type !== 'line') return undefined;
+    const signed = signedSegmentAngle(first, second);
+    return signed === undefined ? undefined : signed < 0 ? -1 : 1;
   }
   if (type !== 'distance' && type !== 'horizontal-distance' && type !== 'vertical-distance') {
     return undefined;
@@ -599,8 +639,22 @@ export function applyConstraintAction(
   action: ConstraintAction,
 ): Promise<ConstraintApplication> {
   const entities = sketchEntityIndex(feature.entities);
-  const expanded = constraintsForAction(action, entities);
-  if (expanded.length === 0) return Promise.reject(new ConstraintSolveError('failed'));
+  const rawExpanded = constraintsForAction(action, entities);
+  const expanded = rawExpanded.filter((constraint) => {
+    // A line cannot be horizontal and vertical at once. The menu hides this,
+    // and a direct caller gets the same protection here.
+    if (constraint.type !== 'horizontal' && constraint.type !== 'vertical') return true;
+    const opposite = constraint.type === 'horizontal' ? 'vertical' : 'horizontal';
+    const key = constraintKey({ ...constraint, type: opposite }, entities);
+    return !feature.constraints.some((existing) => constraintKey(existing, entities) === key);
+  });
+  if (expanded.length === 0) {
+    // The action was valid but only asked for the opposite of an orientation
+    // the sketch already has; there is nothing to add and nothing to solve.
+    return rawExpanded.length > 0
+      ? Promise.resolve({ feature, editConstraintId: null })
+      : Promise.reject(new ConstraintSolveError('failed'));
+  }
   const constraints = uniqueConstraints(expanded, feature.constraints, entities);
   if (constraints.length === 0) {
     // The sketch already says all of this; adding a second copy would only
@@ -610,6 +664,12 @@ export function applyConstraintAction(
   const authored = [...feature.constraints, ...constraints];
   const editConstraintId =
     isNumericConstraintType(action.type) && constraints.length === 1 ? constraints[0]!.id : null;
+  // A relation the geometry already satisfies is stored without a solve: the
+  // solver may otherwise pick another valid branch (two already vertical
+  // corners once collapsed a rectangle) that also satisfies it.
+  if (constraints.every((constraint) => constraintHolds(constraint, entities))) {
+    return Promise.resolve({ feature: { ...feature, constraints: authored }, editConstraintId });
+  }
   // The solver has no numbers to work with while a formula is broken. The new
   // constraint still belongs to the sketch, so it waits for the fix with the
   // rest of the authored constraints untouched.
@@ -744,6 +804,151 @@ function axisDistanceMeasurement(
   return crossing ? axisDistance(points[0]!, crossing, axis) : undefined;
 }
 
+/** Distance under which two pieces of geometry count as already related. */
+const HOLDS_TOLERANCE = 1e-6;
+
+function distancePoints(first: Point2, second: Point2): number {
+  return Math.hypot(second[0] - first[0], second[1] - first[1]);
+}
+
+function lineOf(ref: SketchConstraintRef, entities: Map<string, SketchEntity>): Line | null {
+  const entity = entities.get(ref.entityId);
+  return entity?.type === 'line' && ref.pointIndex === undefined ? entity : null;
+}
+
+/**
+ * Whether a constraint already holds for the current geometry. Applying a
+ * relation the sketch already has must not go through the solver: an
+ * under-constrained sketch may reach a different, degenerate branch that also
+ * satisfies it (a rectangle once collapsed when two already vertical corners
+ * received a vertical constraint).
+ */
+export function constraintHolds(
+  constraint: SketchConstraint,
+  entities: Map<string, SketchEntity>,
+): boolean {
+  if (typeof constraint.value === 'number') {
+    return constraintsSatisfied([constraint], [...entities.values()]);
+  }
+  const refs = constraint.refs;
+  switch (constraint.type) {
+    case 'coincident': {
+      if (refs.length !== 2) return false;
+      const first = refPoint(refs[0]!, entities);
+      const second = refPoint(refs[1]!, entities);
+      return first !== null && second !== null && distancePoints(first, second) <= HOLDS_TOLERANCE;
+    }
+    case 'horizontal':
+    case 'vertical': {
+      if (refs.length === 1) {
+        const line = lineOf(refs[0]!, entities);
+        if (!line) return false;
+        return constraint.type === 'horizontal'
+          ? Math.abs(line.y2 - line.y1) <= HOLDS_TOLERANCE
+          : Math.abs(line.x2 - line.x1) <= HOLDS_TOLERANCE;
+      }
+      if (refs.length !== 2) return false;
+      const first = refPoint(refs[0]!, entities);
+      const second = refPoint(refs[1]!, entities);
+      if (!first || !second) return false;
+      return constraint.type === 'horizontal'
+        ? Math.abs(first[1] - second[1]) <= HOLDS_TOLERANCE
+        : Math.abs(first[0] - second[0]) <= HOLDS_TOLERANCE;
+    }
+    case 'parallel':
+    case 'perpendicular': {
+      if (refs.length !== 2) return false;
+      const first = lineOf(refs[0]!, entities);
+      const second = lineOf(refs[1]!, entities);
+      if (!first || !second) return false;
+      const angle = segmentAngle(first, second);
+      if (angle === undefined) return false;
+      return constraint.type === 'parallel'
+        ? Math.min(angle, 180 - angle) <= PARALLEL_TOLERANCE_DEGREES
+        : Math.abs(angle - 90) <= PARALLEL_TOLERANCE_DEGREES;
+    }
+    case 'equal': {
+      if (refs.length !== 2) return false;
+      const first = entities.get(refs[0]!.entityId);
+      const second = entities.get(refs[1]!.entityId);
+      if (!first || !second) return false;
+      if (first.type === 'line' && second.type === 'line') {
+        return (
+          Math.abs(
+            Math.hypot(first.x2 - first.x1, first.y2 - first.y1) -
+              Math.hypot(second.x2 - second.x1, second.y2 - second.y1),
+          ) <= HOLDS_TOLERANCE
+        );
+      }
+      const radius = (entity: SketchEntity): number | null =>
+        entity.type === 'circle' || entity.type === 'arc' ? entity.r : null;
+      const firstRadius = radius(first);
+      const secondRadius = radius(second);
+      return (
+        firstRadius !== null &&
+        secondRadius !== null &&
+        Math.abs(firstRadius - secondRadius) <= HOLDS_TOLERANCE
+      );
+    }
+    case 'tangent': {
+      if (refs.length !== 2) return false;
+      const first = entities.get(refs[0]!.entityId);
+      const second = entities.get(refs[1]!.entityId);
+      if (!first || !second) return false;
+      const gap = curveCurveGap(first, second);
+      return gap !== null && gap.distance <= HOLDS_TOLERANCE;
+    }
+    case 'point-on-line':
+    case 'point-on-circle':
+    case 'point-on-ellipse': {
+      const pointRef = refs.find((ref) => isPointRef(ref, entities.get(ref.entityId)));
+      const targetRef = refs.find(
+        (ref) => ref !== pointRef && isCurveRef(ref, entities.get(ref.entityId)),
+      );
+      if (!pointRef || !targetRef) return false;
+      const point = refPoint(pointRef, entities);
+      const target = entities.get(targetRef.entityId);
+      if (!point || !target) return false;
+      const gap = pointCurveDistance(point, target);
+      return gap !== undefined && gap <= HOLDS_TOLERANCE;
+    }
+    case 'symmetric': {
+      if (refs.length !== 3) return false;
+      const lineRef = refs.find((ref) => lineOf(ref, entities) !== null);
+      if (lineRef) {
+        const points = refs.filter((ref) => ref !== lineRef).map((ref) => refPoint(ref, entities));
+        const line = lineOf(lineRef, entities)!;
+        if (points.some((point) => point === null)) return false;
+        const [first, second] = points as [Point2, Point2];
+        const middle: Point2 = [(first[0] + second[0]) / 2, (first[1] + second[1]) / 2];
+        const gap = pointToLineDistance(middle, line);
+        if (gap === undefined || gap > HOLDS_TOLERANCE) return false;
+        const dx = second[0] - first[0];
+        const dy = second[1] - first[1];
+        const along = dx * (line.x2 - line.x1) + dy * (line.y2 - line.y1);
+        const lengths = Math.hypot(dx, dy) * Math.hypot(line.x2 - line.x1, line.y2 - line.y1);
+        return lengths === 0 || Math.abs(along) <= HOLDS_TOLERANCE * lengths;
+      }
+      const points = refs.map((ref) => refPoint(ref, entities));
+      if (points.some((point) => point === null)) return false;
+      const [first, middle, second] = points as [Point2, Point2, Point2];
+      const expected: Point2 = [(first[0] + second[0]) / 2, (first[1] + second[1]) / 2];
+      return distancePoints(middle, expected) <= HOLDS_TOLERANCE;
+    }
+    case 'fix': {
+      return refs.every((ref) => {
+        if (constraint.x === undefined || constraint.y === undefined) return false;
+        const point = refPoint(ref, entities);
+        return (
+          point !== null && distancePoints(point, [constraint.x, constraint.y]) <= HOLDS_TOLERANCE
+        );
+      });
+    }
+    default:
+      return false;
+  }
+}
+
 /**
  * Whether the geometry already satisfies every numeric constraint. A sketch
  * solved for a literal keeps that solution when a formula resolves to the same
@@ -773,7 +978,7 @@ export function constraintsSatisfied(
       case 'angle': {
         if (constraint.refs.length === 1) {
           const arc = map.get(constraint.refs[0]!.entityId);
-          if (arc?.type !== 'arc') return false;
+          if (arc?.type !== 'arc' && arc?.type !== 'elliptical-arc') return false;
           const measured = (Math.abs(arc.endAngle - arc.startAngle) * 180) / Math.PI;
           return almostEqual(measured, constraint.value);
         }
@@ -781,8 +986,12 @@ export function constraintsSatisfied(
           .map((ref) => map.get(ref.entityId))
           .filter((entity): entity is Line => entity?.type === 'line');
         if (lines.length !== 2) return false;
-        const measured = segmentAngle(lines[0]!, lines[1]!);
-        return measured !== undefined && almostEqual(measured, constraint.value);
+        // The stored value is a magnitude, so the side has to be checked too:
+        // a line turned the other way by the same angle does not satisfy it.
+        const signed = signedSegmentAngle(lines[0]!, lines[1]!);
+        if (signed === undefined) return false;
+        const expected = (constraint.side === -1 ? -1 : 1) * Math.abs(constraint.value ?? 0);
+        return almostEqual(signed, expected);
       }
       case 'arc-length': {
         const arc = map.get(constraint.refs[0]?.entityId ?? '');
@@ -803,6 +1012,29 @@ export function constraintsSatisfied(
   });
 }
 
+/**
+ * An angle is a magnitude: it is stored in [0, 180] between two lines and in
+ * [0, 360] for an arc, and the turn it takes is the constraint's hidden side.
+ * Typing a negative number turns the side over instead of storing a negative
+ * angle, so the label never shows a minus sign.
+ */
+function normalizedAngle(
+  constraint: SketchConstraint,
+  value: ParamValue,
+): { value: ParamValue; side?: number } {
+  if (isFormula(value)) return { value };
+  const magnitude = Math.abs(value);
+  const limit = constraint.refs.length === 1 ? 360 : 180;
+  const wrapped = magnitude > limit ? magnitude % limit : magnitude;
+  const side =
+    magnitude !== value && constraint.refs.length === 2
+      ? constraint.side === -1
+        ? 1
+        : -1
+      : constraint.side;
+  return { value: wrapped, side };
+}
+
 export function applyConstraintValue(
   feature: SketchFeature,
   constraintId: string,
@@ -810,14 +1042,18 @@ export function applyConstraintValue(
   /** Resolved constraints: a driven dimension reaches the solver as a number. */
   solved: SketchConstraint[] = constraintsForSolve(feature),
 ): Promise<SketchFeature> {
+  const angle = (constraint: SketchConstraint): SketchConstraint =>
+    constraint.type === 'angle'
+      ? { ...constraint, ...normalizedAngle(constraint, value) }
+      : { ...constraint, value };
   const authored = feature.constraints.map((constraint) =>
-    constraint.id === constraintId ? { ...constraint, value } : constraint,
+    constraint.id === constraintId ? angle(constraint) : constraint,
   );
   if (sketchHasFormulaError(feature.id)) {
     return Promise.resolve({ ...feature, constraints: authored });
   }
   const forSolve = solved.map((constraint) =>
-    constraint.id === constraintId ? { ...constraint, value } : constraint,
+    constraint.id === constraintId ? angle(constraint) : constraint,
   );
   if (constraintsSatisfied(forSolve, feature.entities)) {
     return Promise.resolve({ ...feature, constraints: authored });

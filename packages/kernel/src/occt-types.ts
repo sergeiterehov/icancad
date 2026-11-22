@@ -369,7 +369,10 @@ export interface OcctBindings {
   GeomAbs_SurfaceType: {
     GeomAbs_Plane: unknown;
   };
-  BRepAdaptor_Surface_2: new (face: OcctShape, restriction: boolean) => {
+  BRepAdaptor_Surface_2: new (
+    face: OcctShape,
+    restriction: boolean,
+  ) => {
     GetType(): unknown;
     Plane(): OcctPlane;
   };
@@ -431,10 +434,17 @@ export interface OcctBindings {
   gp_Vec_4: new (x: number, y: number, z: number) => unknown;
   gp_Ax2_2: new (origin: OcctPoint3, direction: unknown, xDirection: unknown) => unknown;
   gp_Circ_2: new (axis: unknown, radius: number) => unknown;
+  gp_Elips_2: new (axis: unknown, majorRadius: number, minorRadius: number) => unknown;
   BRepBuilderAPI_MakeEdge_3: new (from: OcctPoint3, to: OcctPoint3) => { Edge(): OcctShape };
   BRepBuilderAPI_MakeEdge_8: new (circle: unknown) => { Edge(): OcctShape };
   BRepBuilderAPI_MakeEdge_9: new (
     circle: unknown,
+    startAngle: number,
+    endAngle: number,
+  ) => { Edge(): OcctShape };
+  BRepBuilderAPI_MakeEdge_12: new (ellipse: unknown) => { Edge(): OcctShape };
+  BRepBuilderAPI_MakeEdge_13: new (
+    ellipse: unknown,
     startAngle: number,
     endAngle: number,
   ) => { Edge(): OcctShape };
@@ -531,12 +541,7 @@ export interface OcctBindings {
   TDataStd_Name: {
     Set_1(label: OcctLabel, name: unknown): void;
   };
-  Quantity_Color_3: new (
-    red: number,
-    green: number,
-    blue: number,
-    colorType: number,
-  ) => OcctColor;
+  Quantity_Color_3: new (red: number, green: number, blue: number, colorType: number) => OcctColor;
   STEPCAFControl_Writer_1: new () => OcctStepWriter;
   FS: OcctFileSystem;
 }

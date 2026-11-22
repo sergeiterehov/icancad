@@ -24,7 +24,7 @@ import { shellInputFromSelection } from '../quick/shell';
 import { sketchPlaneFromSelection } from '../sketch/facePlane';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKernelStore } from '../stores/kernelStore';
-import { useContextMenuStore } from './ContextMenu';
+import { toggleContextMenu } from './ContextMenu';
 import { useUiStore } from '../stores/uiStore';
 import { IconButton } from './Controls';
 import { EdgeToolIcon } from './edgeIcons';
@@ -44,12 +44,10 @@ export function ToolRail() {
   const addBoolean = useDocumentStore((state) => state.addBoolean);
   const addArray = useDocumentStore((state) => state.addArray);
   const addPrimitive = useDocumentStore((state) => state.addPrimitive);
-  const openMenu = useContextMenuStore((state) => state.open);
-
   const openSketchMenu = (event: MouseEvent<HTMLButtonElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const sideHint = { XY: 'sideTop', XZ: 'sideFront', YZ: 'sideRight' } as const;
-    openMenu(rect.left, rect.bottom + 6, [
+    toggleContextMenu('sketch-menu', rect.left, rect.bottom + 6, [
       {
         id: 'face',
         label: t('sketch.chooseFace'),
@@ -121,7 +119,7 @@ export function ToolRail() {
     ) => {
       addPrimitive(t(labelKey), kind);
     };
-    openMenu(rect.left, rect.bottom + 6, [
+    toggleContextMenu('primitive-menu', rect.left, rect.bottom + 6, [
       {
         id: 'box',
         label: t('features.cube'),
@@ -174,6 +172,7 @@ export function ToolRail() {
       <IconButton
         label={t('tools.sketch')}
         active={Boolean(activeSketchId)}
+        data-menu-trigger="sketch-menu"
         onClick={openSketchMenu}
       >
         <SketchIcon size={17} />
@@ -184,6 +183,7 @@ export function ToolRail() {
       <IconButton
         label={t('tools.primitives')}
         tooltip={t('tools.primitives')}
+        data-menu-trigger="primitive-menu"
         onClick={openPrimitiveMenu}
       >
         <Shapes size={17} />

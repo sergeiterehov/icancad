@@ -6,10 +6,12 @@ import {
   defaultRevolve,
   featureBodyId,
   groupFeatureIds,
+  objectColor,
   objectName,
   objectShowConstruction,
   objectVisible,
   resolveBody,
+  SKETCH_COLOR,
   sketchObjectId,
   solidBodiesInHistory,
   timelineNodes,
@@ -31,6 +33,7 @@ import {
   ArrowLeftFromLine,
   ArrowLeftRight,
   ArrowLeftToLine,
+  RefreshCw,
   ArrowRightFromLine,
   ArrowRightToLine,
   ArrowUp,
@@ -53,7 +56,7 @@ import {
   Spline,
   SquareArrowRightExit,
 } from 'lucide-react';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   bodyFaceKey,
@@ -132,6 +135,8 @@ function sketchEntityLabel(t: (key: string) => string, entity: SketchEntity): st
       return t('sketch.entityArc');
     case 'ellipse':
       return t('sketch.entityEllipse');
+    case 'elliptical-arc':
+      return t('sketch.entityEllipticalArc');
     case 'bezier':
       return t('sketch.entityBezier');
   }
@@ -148,6 +153,8 @@ function sketchEntityMeta(entity: SketchEntity, locale: string): string {
     case 'arc':
       return `r ${formatNumber(entity.r, locale, 1)} mm`;
     case 'ellipse':
+      return `${formatNumber(entity.rx, locale, 1)} × ${formatNumber(entity.ry, locale, 1)} mm`;
+    case 'elliptical-arc':
       return `${formatNumber(entity.rx, locale, 1)} × ${formatNumber(entity.ry, locale, 1)} mm`;
     case 'bezier':
       return `${entity.points.length}`;
@@ -367,6 +374,11 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
   const selectSketchConstraints = useUiStore((state) => state.selectSketchConstraints);
   const setSketchSelection = useUiStore((state) => state.setSketchSelection);
   const openMenu = useContextMenuStore((state) => state.open);
+  const project = useViewModel();
+  // A sketch drawn in its own colour lists its geometry in that colour; the
+  // default one is left to the theme, which is what the rest of the list reads.
+  const objectTint = objectColor(project, sketchObjectId(feature.id), SKETCH_COLOR);
+  const rowTint = objectTint === SKETCH_COLOR ? undefined : objectTint;
 
   const selectedConstraints = feature.constraints.filter((constraint) =>
     sketchConstraintIds.includes(constraint.id),
@@ -390,7 +402,10 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
       {feature.entities.length === 0 ? (
         <p className="hint">{t('sketch.empty')}</p>
       ) : (
-        <div className="selection-list">
+        <div
+          className="selection-list"
+          style={rowTint ? ({ '--row-color': rowTint } as CSSProperties) : undefined}
+        >
           {feature.entities.map((entity) => {
             const dimmed = selectedConstraints.length > 0 && !constraintEntityIds.has(entity.id);
             const active = selectedEntityIds.has(entity.id);
@@ -664,7 +679,8 @@ export function Inspector() {
   const body = bodyRef ? resolveBody(project, bodyRef) : undefined;
   const detailFace = selection.length === 1 ? selectedBodyFaces(selection)[0] : undefined;
   const detailEdge = selection.length === 1 ? selectedEdges(selection)[0] : undefined;
-  const quickTarget = selection.length === 1 ? quickTargetFromSelection(project, selection, meshes) : null;
+  const quickTarget =
+    selection.length === 1 ? quickTargetFromSelection(project, selection, meshes) : null;
   const quickExtrude = quickTarget ? findBoundExtrude(project, quickTarget) : undefined;
   const quickExtrudeResolved = quickExtrude ? resolvedFeatureFor(quickExtrude) : undefined;
   const detailMesh = detailBodyId ? meshes[detailBodyId] : undefined;
@@ -939,9 +955,7 @@ export function Inspector() {
           name: t('sketch.face', { index: index + 1 }),
           meta: bodyNameOf(ref.bodyId),
           icon: <Hexagon size={13} />,
-          error: treatmentRowError(
-            featureObjectErrors[treatmentFeature.id]?.[`face:${ref.name}`],
-          ),
+          error: treatmentRowError(featureObjectErrors[treatmentFeature.id]?.[`face:${ref.name}`]),
           onRemove: () => toggleEdgeTreatmentFace(treatmentFeature.id, ref),
         })),
         ...treatmentFeature.edgeRefs.map((ref, index) => ({
@@ -949,9 +963,7 @@ export function Inspector() {
           name: t('sketch.edge', { index: index + 1 }),
           meta: bodyNameOf(ref.bodyId),
           icon: <Spline size={13} />,
-          error: treatmentRowError(
-            featureObjectErrors[treatmentFeature.id]?.[`edge:${ref.name}`],
-          ),
+          error: treatmentRowError(featureObjectErrors[treatmentFeature.id]?.[`edge:${ref.name}`]),
           onRemove: () => toggleEdgeTreatmentEdge(treatmentFeature.id, ref),
         })),
       ]
@@ -1071,7 +1083,8 @@ export function Inspector() {
           bodyFaceNumber(meshes[ref.bodyId], ref.name),
         ),
         ...(error ? { error } : {}),
-        remove: () => toggleExtrudeBodyFace(extrudeFeature.id, ref.bodyId, ref.name, ref.normal, ref.origin),
+        remove: () =>
+          toggleExtrudeBodyFace(extrudeFeature.id, ref.bodyId, ref.name, ref.normal, ref.origin),
       });
     }
 
@@ -1782,7 +1795,7 @@ export function Inspector() {
                         })
                       }
                     >
-                      <ArrowLeftRight size={14} />
+                      <RefreshCw size={14} />
                     </IconButton>
                   </div>
                   {feature.plane.type === 'face' && (

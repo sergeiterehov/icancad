@@ -461,7 +461,8 @@
     "startArc": "Click the arc start",
     "endArc": "Click the arc end",
     "centerEllipse": "Click the ellipse center",
-    "cornerEllipse": "Click the opposite corner",
+    "majorEllipse": "Click the end of the first half-axis",
+    "minorEllipse": "Click the length of the other half-axis",
     "addBezier": "Click points of the curve",
     "empty": "Draw the first sketch entity",
     "noGeometry": "No geometry yet",
@@ -492,7 +493,15 @@
     "detachProjection": "Detach from source",
     "projectionLost": "The source is gone — the last known position is shown",
     "projectionPickHint": "Click a point, an edge or a face in 3D",
-    "invert": "Flip sketch direction"
+    "invert": "Flip the sketch around its Y axis",
+    "toolEllipticalArc": "Elliptical arc",
+    "entityEllipticalArc": "Elliptical arc",
+    "centerEllipseArc": "Click the arc center",
+    "majorEllipseArc": "Click the end of the major half-axis",
+    "minorEllipseArc": "Click the end of the minor half-axis",
+    "startEllipseArc": "Click the arc start",
+    "endEllipseArc": "Click the arc end",
+    "toolMore": "{{tool}}: other options"
   },
   "constraint": {
     "fix": "Fix",

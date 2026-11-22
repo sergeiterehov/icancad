@@ -202,6 +202,20 @@ export type SketchEntity =
       ry: number;
       rotation: number;
     }
+  | {
+      id: string;
+      type: 'elliptical-arc';
+      construction: boolean;
+      cx: number;
+      cy: number;
+      rx: number;
+      ry: number;
+      /** Turn of the local X axis, in degrees, like an ellipse. */
+      rotation: number;
+      /** Angles in the ellipse's own frame, in radians, like an arc. */
+      startAngle: number;
+      endAngle: number;
+    }
   | { id: string; type: 'bezier'; construction: boolean; points: Array<[number, number]> };
 
 export type ConstraintType =
@@ -238,9 +252,17 @@ export interface SketchConstraint {
   x?: number;
   y?: number;
   /**
-   * The side a distance was created on: `1` or `-1`. It keeps a point from
-   * crossing to the other side of a line or a circle when the referenced
-   * geometry is rebuilt elsewhere.
+   * Created automatically from a snap or an alignment. Such a constraint may be
+   * dropped when the solver shows that another one already implies it; an
+   * authored constraint stays even when it is redundant.
+   */
+  auto?: boolean;
+  /**
+   * The side a distance was created on, or the way round an angle turns: `1` or
+   * `-1`. It keeps a point from crossing to the other side of a line or a
+   * circle when the referenced geometry is rebuilt elsewhere, and it lets an
+   * angle keep a magnitude in the document while the solver still knows which
+   * side of the first line the second one sits on.
    */
   side?: number;
 }

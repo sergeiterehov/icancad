@@ -169,7 +169,8 @@ describe('duplicate constraints', () => {
     const feature = sketch([line('l')], [{ id: 'v', type: 'vertical', refs: [{ entityId: 'l' }] }]);
     const types = buildConstraintActions(feature, ['l']).map((candidate) => candidate.type);
     expect(types).not.toContain('vertical');
-    expect(types).toContain('horizontal');
+    // A line cannot be both vertical and horizontal, so the opposite is hidden too.
+    expect(types).not.toContain('horizontal');
     expect(types).toContain('distance');
   });
 

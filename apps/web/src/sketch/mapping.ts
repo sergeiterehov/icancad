@@ -32,12 +32,30 @@ import type { SolverPin } from './protocol';
 
 const pointId = (entityId: string, index: number): string => `${entityId}~p${index}`;
 
-function ellipseFocus(entity: Extract<SketchEntity, { type: 'ellipse' }>): Point2 {
-  const major = Math.max(entity.rx, entity.ry);
-  const minor = Math.min(entity.rx, entity.ry);
+/** A focus of an ellipse, which sits on its longer axis, a quarter turn on when Y is longer. */
+function ellipseFocusOf(
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  rotationDegrees: number,
+): Point2 {
+  const major = Math.max(rx, ry);
+  const minor = Math.min(rx, ry);
   const distance = Math.sqrt(Math.max(0, major * major - minor * minor));
-  const angle = entity.rotation + (entity.rx >= entity.ry ? 0 : Math.PI / 2);
-  return [entity.cx + Math.cos(angle) * distance, entity.cy + Math.sin(angle) * distance];
+  const angle = ((rotationDegrees + (rx >= ry ? 0 : 90)) * Math.PI) / 180;
+  return [cx + Math.cos(angle) * distance, cy + Math.sin(angle) * distance];
+}
+
+function ellipseFocus(entity: Extract<SketchEntity, { type: 'ellipse' }>): Point2 {
+  return ellipseFocusOf(entity.cx, entity.cy, entity.rx, entity.ry, entity.rotation);
+}
+
+/** How far the focus (major) axis is turned from the entity's own X axis. */
+function ellipticalArcFocusShift(
+  entity: Extract<SketchEntity, { type: 'elliptical-arc' }>,
+): number {
+  return entity.rx >= entity.ry ? 0 : Math.PI / 2;
 }
 
 function refKey(ref: SketchConstraintRef): string {
@@ -264,6 +282,94 @@ export function buildSolverPrimitives(
         } as Constraint);
         break;
       }
+      case 'elliptical-arc': {
+        const center = point(0);
+        const major = point(1);
+        const minor = point(2);
+        const start = point(3);
+        const end = point(4);
+        const focus = ellipseFocusOf(entity.cx, entity.cy, entity.rx, entity.ry, entity.rotation);
+        const focusId = pointId(entity.id, 5);
+        const focusAnchor = anchors.get(focusId);
+        primitives.push({
+          id: focusId,
+          type: 'point',
+          x: focusAnchor?.[0] ?? focus[0],
+          y: focusAnchor?.[1] ?? focus[1],
+          fixed: fixed.has(focusId),
+        } as SketchPrimitive);
+        primitives.push({
+          id: entity.id,
+          type: 'ellipse',
+          c_id: center,
+          focus1_id: focusId,
+          radmin: Math.min(entity.rx, entity.ry),
+        } as SketchPrimitive);
+        const majorLine = `${entity.id}~major-line`;
+        const minorLine = `${entity.id}~minor-line`;
+        primitives.push({
+          id: majorLine,
+          type: 'line',
+          p1_id: center,
+          p2_id: major,
+        } as SketchPrimitive);
+        primitives.push({
+          id: minorLine,
+          type: 'line',
+          p1_id: center,
+          p2_id: minor,
+        } as SketchPrimitive);
+        primitives.push({
+          id: `${entity.id}~axes`,
+          type: 'perpendicular_ll',
+          l1_id: majorLine,
+          l2_id: minorLine,
+        } as Constraint);
+        // Both semi-axis handles are points on the ellipse, so coincidence,
+        // fixation and dragging work without an arc-specific primitive.
+        for (const [id, pointIdValue] of [
+          ['~major-handle', major],
+          ['~minor-handle', minor],
+        ] as const) {
+          primitives.push({
+            id: `${entity.id}${id}`,
+            type: 'point_on_ellipse',
+            p_id: pointIdValue,
+            e_id: entity.id,
+          } as Constraint);
+        }
+        // The arc carries the two end points and the angle parameters the
+        // sketch's angle constraint can drive. Its counter-clockwise pair
+        // matches the ellipse primitive through the shared focus and radmin.
+        const arcId = `${entity.id}~arc`;
+        const angleShift = ellipticalArcFocusShift(entity);
+        const arcStart = entity.startAngle - angleShift;
+        const arcEnd = entity.endAngle - angleShift;
+        const reversed = arcEnd < arcStart;
+        primitives.push({
+          id: arcId,
+          type: 'arc_of_ellipse',
+          c_id: center,
+          focus1_id: focusId,
+          radmin: Math.min(entity.rx, entity.ry),
+          start_angle: reversed ? arcEnd : arcStart,
+          end_angle: reversed ? arcStart : arcEnd,
+          start_id: reversed ? end : start,
+          end_id: reversed ? start : end,
+        } as SketchPrimitive);
+        primitives.push({
+          id: `${entity.id}~arc-rules`,
+          type: 'arc_of_ellipse_rules',
+          a_id: arcId,
+        } as Constraint);
+        primitives.push({
+          id: `${entity.id}~arc-radmin`,
+          type: 'equal',
+          param1: { o_id: arcId, prop: 'radmin' },
+          param2: { o_id: entity.id, prop: 'radmin' },
+        } as unknown as Constraint);
+        break;
+      }
       case 'bezier': {
         const poles = entity.points.map((_, index) => point(index));
         const degree = Math.max(1, poles.length - 1);
@@ -344,6 +450,7 @@ function onCurveConstraint(id: string, entity: SketchEntity, pointId: string): C
     case 'arc':
       return { id, type: 'point_on_arc', p_id: pointId, a_id: entity.id } as Constraint;
     case 'ellipse':
+    case 'elliptical-arc':
       return { id, type: 'point_on_ellipse', p_id: pointId, e_id: entity.id } as Constraint;
     default:
       return { id, type: 'point_on_line_pl', p_id: pointId, l_id: entity.id } as Constraint;
@@ -712,6 +819,20 @@ function arcAnglePrimitives(
 ): SketchPrimitive[] | null {
   if (constraint.type !== 'angle' || constraint.refs.length !== 1) return null;
   const arc = entityMap.get(constraint.refs[0]!.entityId);
+  if (arc?.type === 'elliptical-arc') {
+    const magnitude = Math.abs((valueOf(constraint.value) * Math.PI) / 180);
+    // The solver arc is built counter-clockwise, and `difference` measures
+    // start minus end, so the sweep is its negation.
+    return [
+      {
+        id: constraint.id,
+        type: 'difference',
+        param1: { o_id: `${arc.id}~arc`, prop: 'end_angle' },
+        param2: { o_id: `${arc.id}~arc`, prop: 'start_angle' },
+        difference: -magnitude,
+      } as unknown as Constraint,
+    ];
+  }
   if (arc?.type !== 'arc') return null;
   const magnitude = Math.abs((valueOf(constraint.value) * Math.PI) / 180);
   // The sketch draws the signed sweep. planegcs measures the counter-clockwise
@@ -787,12 +908,17 @@ function mapConstraint(
       return null;
     case 'angle': {
       if (entity(0)?.type !== 'line' || entity(1)?.type !== 'line') return null;
+      // The value is a magnitude in [0, 180]; the side says which way round the
+      // second line goes. planegcs turns the first line onto the second by the
+      // signed angle, so a magnitude alone would let it pick the mirror image.
+      const magnitude = Math.abs(valueOf(constraint.value));
+      const side = constraint.side === -1 ? -1 : 1;
       return {
         id,
         type: 'l2l_angle_ll',
         l1_id: refs[0]!.entityId,
         l2_id: refs[1]!.entityId,
-        angle: (valueOf(constraint.value) * Math.PI) / 180,
+        angle: (side * magnitude * Math.PI) / 180,
       } as Constraint;
     }
     case 'parallel':
@@ -943,9 +1069,10 @@ function mapConstraint(
     }
     case 'point-on-ellipse': {
       const pointRef = refs.find((ref) => pointRefId(ref, entityMap.get(ref.entityId)));
-      const ellipseRef = refs.find(
-        (ref) => ref !== pointRef && entityMap.get(ref.entityId)?.type === 'ellipse',
-      );
+      const ellipseRef = refs.find((ref) => {
+        const type = entityMap.get(ref.entityId)?.type;
+        return ref !== pointRef && (type === 'ellipse' || type === 'elliptical-arc');
+      });
       if (!pointRef || !ellipseRef) return null;
       return {
         id,
@@ -1076,18 +1203,61 @@ export function applySolverSolution(
       }
       case 'ellipse': {
         const center = point(pointId(entity.id, 0));
-        const focus = point(pointId(entity.id, 3));
-        const primitive = map.get(entity.id);
-        if (!center || !focus || primitive?.type !== 'ellipse') return entity;
-        const distance = Math.hypot(focus[0] - center[0], focus[1] - center[1]);
-        const major = Math.sqrt(distance * distance + primitive.radmin * primitive.radmin);
+        const axisX = point(pointId(entity.id, 1));
+        const axisY = point(pointId(entity.id, 2));
+        if (!center || !axisX || !axisY) return entity;
+        // Both handles sit on the solved ellipse on perpendicular axes, so they
+        // are its two semi-axes. Reading them back instead of the focus keeps
+        // the authored frame, where the longer axis need not be the X one.
+        const rx = Math.hypot(axisX[0] - center[0], axisX[1] - center[1]);
+        const ry = Math.hypot(axisY[0] - center[0], axisY[1] - center[1]);
+        if (!(rx > 1e-9) || !(ry > 1e-9)) return entity;
         return {
           ...entity,
           cx: center[0],
           cy: center[1],
-          rx: major,
-          ry: primitive.radmin,
-          rotation: (Math.atan2(focus[1] - center[1], focus[0] - center[0]) * 180) / Math.PI,
+          rx,
+          ry,
+          rotation: (Math.atan2(axisX[1] - center[1], axisX[0] - center[0]) * 180) / Math.PI,
+        };
+      }
+      case 'elliptical-arc': {
+        const center = point(pointId(entity.id, 0));
+        const axisX = point(pointId(entity.id, 1));
+        const axisY = point(pointId(entity.id, 2));
+        const focus = point(pointId(entity.id, 5));
+        if (!center || !axisX || !axisY || !focus) return entity;
+        const rx = Math.hypot(axisX[0] - center[0], axisX[1] - center[1]);
+        const ry = Math.hypot(axisY[0] - center[0], axisY[1] - center[1]);
+        if (!(rx > 1e-9) || !(ry > 1e-9)) return entity;
+        const rotation = Math.atan2(axisX[1] - center[1], axisX[0] - center[0]);
+        // The arc primitive measures from the focus (major) axis; the entity
+        // keeps the handle frame, which is a quarter turn away when the second
+        // handle is the longer one.
+        const focusRotation = Math.atan2(focus[1] - center[1], focus[0] - center[0]);
+        const rawShift = focusRotation - rotation;
+        const shift =
+          Math.round(Math.atan2(Math.sin(rawShift), Math.cos(rawShift)) / (Math.PI / 2)) *
+          (Math.PI / 2);
+        const arc = map.get(`${entity.id}~arc`);
+        const reversed = entity.endAngle < entity.startAngle;
+        let startAngle = entity.startAngle;
+        let endAngle = entity.endAngle;
+        if (arc?.type === 'arc_of_ellipse') {
+          const fromArc = reversed ? arc.end_angle : arc.start_angle;
+          const toArc = reversed ? arc.start_angle : arc.end_angle;
+          startAngle = unwrapAngle(fromArc + shift, entity.startAngle);
+          endAngle = unwrapAngle(toArc + shift, entity.endAngle);
+        }
+        return {
+          ...entity,
+          cx: center[0],
+          cy: center[1],
+          rx,
+          ry,
+          rotation: (rotation * 180) / Math.PI,
+          startAngle,
+          endAngle,
         };
       }
       case 'bezier': {

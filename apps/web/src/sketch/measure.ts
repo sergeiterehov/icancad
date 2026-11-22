@@ -20,6 +20,8 @@ export function measuresForEntity(entity: SketchEntity): SketchMeasure[] {
       return ['angle', 'length', 'radius', 'diameter'];
     case 'ellipse':
       return ['rx', 'ry'];
+    case 'elliptical-arc':
+      return ['angle', 'length', 'rx', 'ry'];
     case 'bezier':
       return ['length'];
   }
@@ -46,6 +48,7 @@ export function measureValue(entity: SketchEntity, measure: SketchMeasure): numb
         return entity.r * Math.abs(entity.endAngle - entity.startAngle);
       }
       if (entity.type === 'bezier') return polylineLength(tessellateEntity(entity, 64));
+      if (entity.type === 'elliptical-arc') return polylineLength(tessellateEntity(entity, 64));
       return null;
     case 'angle':
       if (entity.type === 'line') {
@@ -55,7 +58,7 @@ export function measureValue(entity: SketchEntity, measure: SketchMeasure): numb
         while (degrees <= -90) degrees += 180;
         return Math.round(degrees * 100) / 100;
       }
-      if (entity.type === 'arc') {
+      if (entity.type === 'arc' || entity.type === 'elliptical-arc') {
         // The arc is drawn with the signed sweep, so a clockwise arc is its
         // short self, not the reflex complement of the same endpoints.
         const sweep = Math.abs(entity.endAngle - entity.startAngle);
@@ -71,9 +74,9 @@ export function measureValue(entity: SketchEntity, measure: SketchMeasure): numb
     case 'y':
       return entity.type === 'point' ? entity.y : null;
     case 'rx':
-      return entity.type === 'ellipse' ? entity.rx : null;
+      return entity.type === 'ellipse' || entity.type === 'elliptical-arc' ? entity.rx : null;
     case 'ry':
-      return entity.type === 'ellipse' ? entity.ry : null;
+      return entity.type === 'ellipse' || entity.type === 'elliptical-arc' ? entity.ry : null;
   }
 }
 
@@ -113,6 +116,8 @@ export function liveMeasures(entity: SketchEntity): SketchMeasure[] {
       return ['radius'];
     case 'arc':
       return ['angle', 'radius'];
+    case 'elliptical-arc':
+      return ['rx', 'ry'];
     case 'bezier':
       return ['length'];
     default:

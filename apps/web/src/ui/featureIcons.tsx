@@ -38,6 +38,30 @@ export function SketchIcon({ size = 16 }: { size?: number }) {
   return <DraftingCompass size={size} />;
 }
 
+/**
+ * An arc of an ellipse. Lucide has no such glyph, so it is drawn here: a wide
+ * arc between two ends, which reads differently from the circular arc.
+ */
+export function EllipticalArcIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 17a9 6 0 0 1 18 0" />
+      <circle cx="3" cy="17" r="1" fill="currentColor" stroke="none" />
+      <circle cx="21" cy="17" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 /** Experimental Lucide Lab point marker. */
 export function PointIcon({ size = 16 }: { size?: number }) {
   return <Icon iconNode={crosshairPlusDot} size={size} />;
@@ -65,6 +89,8 @@ export function SketchEntityIcon({
       return <LoaderCircle size={size} />;
     case 'ellipse':
       return <Ellipse size={size} />;
+    case 'elliptical-arc':
+      return <EllipticalArcIcon size={size} />;
     case 'bezier':
       return <LineSquiggle size={size} />;
   }
