@@ -37,12 +37,15 @@ export function snapTargetPoint(snap: SketchSnap | null, mode: SketchSnapMode): 
  */
 export function snapModeFor(tool: SketchTool, draftLength: number): SketchSnapMode {
   if (tool === 'circle') return draftLength === 0 ? 'free' : 'tangent';
-  if (tool === 'arc') return draftLength === 0 ? 'free' : draftLength === 1 ? 'tangent' : 'free';
+  // An arc takes its radius from the start point, so a target there belongs to
+  // that point: a tangency would leave the point free to slide along the curve
+  // and the solver would then move the whole arc.
+  if (tool === 'arc') return 'free';
   if (tool === 'ellipse') return draftLength <= 1 ? 'free' : 'none';
-  // The centre and the major half-axis can land on existing geometry; the minor
-  // half-axis and the two ends only define lengths and angles of the new arc,
-  // so a magnet target there would not become a constraint.
-  if (tool === 'elliptical-arc') return draftLength <= 1 ? 'free' : 'none';
+  // The centre, the major half-axis and both ends are points of the finished
+  // arc, so a target they land on becomes a constraint. The minor half-axis only
+  // names a length across the major one, so nothing there could be constrained.
+  if (tool === 'elliptical-arc') return draftLength === 2 ? 'none' : 'free';
   return 'free';
 }
 

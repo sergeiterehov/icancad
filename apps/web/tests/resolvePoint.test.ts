@@ -12,9 +12,15 @@ describe('snap modes', () => {
   it('reads the magnet differently at each step of a tool', () => {
     expect(snapModeFor('circle', 0)).toBe('free');
     expect(snapModeFor('circle', 1)).toBe('tangent');
-    expect(snapModeFor('arc', 1)).toBe('tangent');
+    expect(snapModeFor('arc', 1)).toBe('free');
+    expect(snapModeFor('circle', 1)).toBe('tangent');
     expect(snapModeFor('ellipse', 1)).toBe('free');
     expect(snapModeFor('ellipse', 2)).toBe('none');
+    // Both ends of an elliptical arc are points of the arc, so they snap; the
+    // click that names the minor half-axis only gives a length.
+    expect(snapModeFor('elliptical-arc', 2)).toBe('none');
+    expect(snapModeFor('elliptical-arc', 3)).toBe('free');
+    expect(snapModeFor('elliptical-arc', 4)).toBe('free');
     expect(snapModeFor('line', 1)).toBe('free');
   });
 

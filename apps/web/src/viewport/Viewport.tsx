@@ -1252,8 +1252,8 @@ export function Viewport() {
       fit: () => controller.fit(),
       setView: (name) => controller.setView(name),
       setSketches: (sketches) => controller.setSketches(sketches),
-      setSketchOverlay: (preview, draftPoints, highlight, marker, guides) =>
-        controller.setSketchOverlay(preview, draftPoints, highlight, marker, guides),
+      setSketchOverlay: (preview, draftPoints, highlight, marker, guides, cursor) =>
+        controller.setSketchOverlay(preview, draftPoints, highlight, marker, guides, cursor),
       alignSketch: (frame, entities, extraPoints) =>
         controller.alignSketch(frame, entities, extraPoints),
       getCameraState: () => controller.getCameraState(),

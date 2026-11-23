@@ -20,10 +20,10 @@ import {
 } from '@icancad/sketch';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { arcDraftEndAngle, arcDraftPoints, arcStartAngle } from '../sketch/arcDraft';
+import { arcDraftEndAngle, arcStartAngle } from '../sketch/arcDraft';
+import { draftMarkers } from '../sketch/draftMarkers';
 import { draftGuides } from '../sketch/draftGuides';
 import {
-  ellipseDraftPoints,
   ellipseFrame,
   ellipticalArcEndAngle,
   ellipticalArcFrame,
@@ -345,6 +345,12 @@ export function SketchEditor() {
     active: boolean;
   } | null>(null);
   const skipClick = useRef(false);
+  /**
+   * The object a finger pressed, kept until it lifts. Its tap is applied on the
+   * release, so a press that travels is a drag of the set and not a toggle that
+   * takes the object out of it.
+   */
+  const pendingTap = useRef<{ key: string; pointerId: number } | null>(null);
   const highlightKey = useRef('');
   const commitQueue = useRef<Promise<void>>(Promise.resolve());
   // Last line of a polyline, so the next segment can be joined to it.
@@ -994,10 +1000,29 @@ export function SketchEditor() {
     };
     const onPointerDown = (event: PointerEvent) => {
       // A second finger takes the gesture for the camera; the box it interrupts
-      // must not keep growing under a pinch.
+      // must not keep growing under a pinch, and the set that box had already
+      // built goes back to what it was before the pinch began.
       if (!event.isPrimary) {
+        const interrupted = marquee.current;
         marquee.current = null;
         setMarqueeBox(null);
+        pendingTap.current = null;
+        if (interrupted?.active) setSketchSelection(interrupted.base);
+        // A pinch is a camera gesture: the geometry a first finger had begun to
+        // drag goes back where it was instead of following that finger.
+        const interruptedDrag = drag.current;
+        drag.current = null;
+        if (interruptedDrag?.active) {
+          preview({ type: 'feature/replace', feature: interruptedDrag.original });
+        }
+        if (interrupted?.active) {
+          // The gesture became a pinch, so the tap the browser sends when the
+          // fingers lift belongs to the camera, not to the canvas.
+          skipClick.current = true;
+        }
+        // Only the first finger of a gesture can start a box or a drag: the
+        // second one is the camera's.
+        return;
       }
       if (event.button !== 0) return;
       skipClick.current = false;
@@ -1050,19 +1075,19 @@ export function SketchEditor() {
       const pointIndex = pick.pointIndex ?? (entity.type === 'point' ? 0 : null);
       const key = pointIndex === null ? entity.id : `${entity.id}#${pointIndex}`;
       // Pressing one object of a set keeps the set: the drag moves all of it.
-      const preservesSelection = !additive && selectionIds.length > 1 && selectionIds.includes(key);
-      if (!additive && !preservesSelection) setSketchSelection([key]);
-      else if (additive && isKeylessPointer(event.pointerType)) {
-        // A finger or a pen has no key to hold and no hover to read: its tap is
-        // taken here, on the press, and the click the browser sends after the
-        // release must not read the same tap a second time. This is what makes
-        // a selection grow press by press on a tablet.
+      const keyless = isKeylessPointer(event.pointerType);
+      const inSelection = selectionIds.includes(key);
+      const preservesSelection = (keyless || !additive) && selectionIds.length > 1 && inSelection;
+      if (keyless) {
+        // A finger or a pen has no key to hold and no hover to read, so its tap
+        // is the additive one: it toggles the object it lands on. That tap is
+        // taken when the pointer lifts, not when it lands — otherwise pressing
+        // one member of a set to drag it would take that member out of the set
+        // first and the rest would stay behind.
         skipClick.current = true;
-        setSketchSelection(
-          selectionIds.includes(key)
-            ? selectionIds.filter((candidate) => candidate !== key)
-            : [...selectionIds, key],
-        );
+        pendingTap.current = { key, pointerId: event.pointerId };
+      } else if (!additive && !preservesSelection) {
+        setSketchSelection([key]);
       }
       // Projected geometry is derived: it can be selected and detached, but the
       // next rebuild would overwrite whatever a drag does to it.
@@ -1218,6 +1243,12 @@ export function SketchEditor() {
             return;
           }
           activeDrag.active = true;
+          const pending = pendingTap.current;
+          pendingTap.current = null;
+          // A finger that travels is moving, not tapping: an object it pressed
+          // outside the set becomes the set, and a member it pressed keeps the
+          // set it belongs to, which is what the drag carries.
+          if (pending && !selectionIds.includes(pending.key)) setSketchSelection([pending.key]);
         }
         const pick = getViewport()?.pickSketch(event.clientX, event.clientY);
         if (!pick) return;
@@ -1328,9 +1359,23 @@ export function SketchEditor() {
       setHoverPreview(null);
     };
     const finishDrag = () => {
+      const pending = pendingTap.current;
+      pendingTap.current = null;
       const activeDrag = drag.current;
       drag.current = null;
-      if (!activeDrag?.active) return;
+      if (!activeDrag?.active) {
+        // The pointer never travelled: a finger's tap, which toggles the object
+        // it landed on, exactly as a click with a modifier does.
+        if (pending) {
+          const current = useUiStore.getState().sketchSelectionIds;
+          setSketchSelection(
+            current.includes(pending.key)
+              ? current.filter((candidate) => candidate !== pending.key)
+              : [...current, pending.key],
+          );
+        }
+        return;
+      }
       const latest = activeModel(useDocumentStore.getState().project).features.find(
         (feature): feature is SketchFeature =>
           feature.id === activeDrag.original.id && feature.type === 'sketch',
@@ -1514,6 +1559,7 @@ export function SketchEditor() {
     const onPointerCancel = () => {
       createPress.current = null;
       marquee.current = null;
+      pendingTap.current = null;
       setMarqueeBox(null);
     };
     const finishMarquee = () => {
@@ -1636,20 +1682,16 @@ export function SketchEditor() {
         rotation: (Math.atan2(hover[1] - center[1], hover[0] - center[0]) * 180) / Math.PI,
       };
     }
-    if (tool === 'elliptical-arc' && draft.length >= 2) {
+    // Until both ends are named there is no arc yet: the ellipse it will be cut
+    // from is the dotted guide, and only the arc itself is drawn solid.
+    if (tool === 'elliptical-arc' && draft.length >= 4) {
       const frame = ellipticalArcFrame(
         draft[0]!.point,
         draft[1]!.point,
-        draft.length >= 3 ? draft[2]!.point : hover,
-        draft.length >= 4 ? draft[3]!.point : hover,
+        draft[2]!.point,
+        draft[3]!.point,
       );
       if (frame) {
-        // Before the start is picked the whole ellipse is shown, so the two
-        // axes can be judged before the arc is cut out of it.
-        const endAngle =
-          draft.length >= 4
-            ? ellipticalArcEndAngle(frame, hover, draftArcEnd.current)
-            : frame.startAngle + Math.PI * 2;
         return {
           id: 'preview',
           type: 'elliptical-arc',
@@ -1660,7 +1702,7 @@ export function SketchEditor() {
           ry: frame.ry,
           rotation: (frame.rotation * 180) / Math.PI,
           startAngle: frame.startAngle,
-          endAngle,
+          endAngle: ellipticalArcEndAngle(frame, hover, draftArcEnd.current),
         };
       }
     }
@@ -1690,24 +1732,50 @@ export function SketchEditor() {
     previewShape?.type === 'line' ? axisOrientation(previewShape) !== null : false;
   const previewAuto = magnetEnabled && (previewAlignment || (previewSnap && !previewNearAxis));
 
+  // A creating tool names its points one click at a time, and an arc or an
+  // ellipse preview carries no marker of its own until the shape exists. The
+  // point the next click would place is drawn under the pointer, in the magnet
+  // colour when it comes from a snap, so both the point and the snap are seen
+  // before the click.
+  const markers = useMemo(
+    () =>
+      draftMarkers(
+        tool,
+        draft.map(({ point }) => point),
+        hover,
+      ),
+    [tool, draft, hover],
+  );
+  const cursorMarker =
+    hover && markers.cursorAtPointer && tool !== 'select' && tool !== 'project'
+      ? { point: hover, snapped: magnetEnabled && hasMagnetTarget(hoverInput ?? undefined) }
+      : null;
+
   useEffect(() => {
     if (!activeSketchId) return;
     const midpointMarker =
       magnetEnabled && hoverSnap?.midpointSnap ? hoverSnap.midpointSnap.point : null;
-    const draftPoints = draftMarkers(
-      tool,
-      draft.map(({ point }) => point),
-      hover,
-    );
-    const previewGuides = draftGuides(tool, draftPoints, hover, () => createId('guide'));
+    const previewGuides = draftGuides(tool, markers.markers, hover, () => createId('guide'));
     getViewport()?.setSketchOverlay(
       previewEntity(),
-      draftPoints,
+      markers.markers,
       previewAuto,
       midpointMarker,
       previewGuides,
+      cursorMarker,
     );
-  }, [activeSketchId, tool, draft, hover, previewAuto, hoverSnap, magnetEnabled]);
+  }, [
+    activeSketchId,
+    tool,
+    draft,
+    hover,
+    previewAuto,
+    hoverSnap,
+    magnetEnabled,
+    hoverInput,
+    markers,
+    cursorMarker,
+  ]);
 
   useEffect(() => {
     if (!magnetEnabled || tool === 'select') {
@@ -1884,30 +1952,6 @@ export function SketchEditor() {
       </div>
     </div>
   );
-}
-
-/**
- * The points the draft markers sit on. A click on a curve tool names a centre,
- * an axis or an angle, so a marker left where the pointer was would float off
- * the shape being drawn; it is moved onto the shape instead.
- */
-function draftMarkers(tool: SketchTool, points: readonly Point2[], hover: Point2 | null): Point2[] {
-  if (tool === 'arc') {
-    if (points.length < 2) return [...points];
-    const endAngle = points[2] ? arcDraftEndAngle(points[0]!, points[1]!, points[2]!, null) : null;
-    return arcDraftPoints(points[0]!, points[1]!, endAngle);
-  }
-  if (tool === 'ellipse' || tool === 'elliptical-arc') {
-    if (points.length < 2) return [...points];
-    const frame = ellipticalArcFrame(
-      points[0]!,
-      points[1]!,
-      points[2] ?? hover ?? points[1]!,
-      points[3] ?? points[2] ?? hover ?? points[1]!,
-    );
-    return ellipseDraftPoints(points, frame);
-  }
-  return [...points];
 }
 
 function liveAnchor(entity: SketchEntity): Point2 | null {

@@ -184,6 +184,8 @@ export interface ViewportHandle {
     marker?: Point2 | null,
     /** Dotted construction the draft implies, such as the circle an arc cuts. */
     guides?: SketchEntity[],
+    /** Where the next point of a creation tool would land, and whether it snaps. */
+    cursor?: { point: Point2; snapped: boolean } | null,
   ) => void;
   alignSketch: (
     frame: SketchFrame,

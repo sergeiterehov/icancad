@@ -311,6 +311,62 @@ test('turns the finish button green when the sketch is fully constrained', async
   await expect(page.locator('.tool-rail-sketch .is-solved')).toHaveCount(1);
 });
 
+test('anchors both ends of an arc that snap to an axis', async ({ page }) => {
+  await openApp(page);
+  const sketchId = await openSketch(page);
+  await page.getByRole('button', { name: 'Arc', exact: true }).click();
+
+  for (const point of [
+    [0, 18],
+    [-14, 0.6],
+    [15, -0.6],
+  ] as Array<[number, number]>) {
+    const at = await screenPoint(page, sketchId, point);
+    await page.mouse.click(at.x, at.y);
+    await page.waitForTimeout(250);
+  }
+  await page.waitForTimeout(900);
+
+  const state = await page.evaluate(async (id) => {
+    const url = (name: string) =>
+      performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .find((entry) => entry.includes(name));
+    const doc = await import(url('/src/stores/documentStore.ts') ?? '/src/stores/documentStore.ts');
+    const store = doc.useDocumentStore.getState();
+    const model = store.project.superObjects.find(
+      (candidate: { id: string }) => candidate.id === store.project.activeSuperObjectId,
+    ) as { features: Array<{ id: string; entities: unknown[]; constraints: unknown[] }> };
+    const feature = model.features.find((candidate) => candidate.id === id)!;
+    return feature as unknown as {
+      entities: Array<Record<string, number | string>>;
+      constraints: Array<{ type: string; refs: Array<{ entityId: string; pointIndex?: number }> }>;
+    };
+  }, sketchId);
+
+  const arc = state.entities.find((entity) => entity.type === 'arc')!;
+  expect(arc).toBeDefined();
+  // Both ends sit on the axis they snapped to, and each carries its own
+  // constraint: a tangency would have let one of them slide away.
+  const onAxis = state.constraints.filter(
+    (constraint) =>
+      constraint.type === 'point-on-line' &&
+      constraint.refs.some(
+        (ref) => ref.entityId === arc.id && (ref.pointIndex === 1 || ref.pointIndex === 2),
+      ) &&
+      constraint.refs.some((ref) => ref.entityId === 'sketch:x-axis'),
+  );
+  expect(onAxis).toHaveLength(2);
+  const cx = Number(arc.cx);
+  const cy = Number(arc.cy);
+  const r = Number(arc.r);
+  for (const angle of [Number(arc.startAngle), Number(arc.endAngle)]) {
+    expect(Math.abs(cy + Math.sin(angle) * r)).toBeLessThan(0.05);
+    expect(Math.abs(cx + Math.cos(angle) * r)).toBeGreaterThan(5);
+  }
+});
+
 test('draws an ellipse from three points', async ({ page }) => {
   await openApp(page);
   const sketchId = await openSketch(page);
@@ -426,6 +482,63 @@ test('draws an elliptical arc from the arc menu', async ({ page }) => {
   expect(Number(arc.ry)).toBeCloseTo(10, 1);
 });
 
+test('snaps the ends of an elliptical arc to geometry', async ({ page }) => {
+  await openApp(page);
+  const sketchId = await openSketch(page);
+  // A line for the arc end to land on.
+  await replaceEntities(page, sketchId, [line('edge', 16, 2, 24, 12)]);
+  await page.waitForTimeout(400);
+
+  await page.getByTestId('sketch-tool-more-arc').click();
+  await page.getByRole('menuitem', { name: 'Elliptical arc' }).click();
+  for (const point of [
+    [-2, 2],
+    [18, 2],
+    [4, 9],
+    [12, 5],
+  ] as Array<[number, number]>) {
+    const at = await screenPoint(page, sketchId, point);
+    await page.mouse.click(at.x, at.y);
+    await page.waitForTimeout(250);
+  }
+  // The end lands on the line, so a point-on-line constraint should follow it.
+  // The click is a quarter of the way along, away from the midpoint the magnet
+  // would otherwise name.
+  const end = await screenPoint(page, sketchId, [18.1, 4.6]);
+  await page.mouse.move(end.x, end.y);
+  await page.waitForTimeout(300);
+  await page.mouse.click(end.x, end.y);
+  await page.waitForTimeout(1200);
+
+  const constraints = await page.evaluate(async (id) => {
+    const url = (name: string) =>
+      performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .find((entry) => entry.includes(name));
+    const doc = await import(url('/src/stores/documentStore.ts') ?? '/src/stores/documentStore.ts');
+    const store = doc.useDocumentStore.getState();
+    const model = store.project.superObjects.find(
+      (candidate: { id: string }) => candidate.id === store.project.activeSuperObjectId,
+    ) as { features: Array<{ id: string; entities: unknown[]; constraints: unknown[] }> };
+    const feature = model.features.find((candidate) => candidate.id === id)!;
+    return feature as unknown as {
+      entities: Array<{ id: string; type: string }>;
+      constraints: Array<{ type: string; refs: Array<{ entityId: string; pointIndex?: number }> }>;
+    };
+  }, sketchId);
+
+  const arc = constraints.entities.find((entity) => entity.type === 'elliptical-arc')!;
+  expect(arc).toBeDefined();
+  const onEnd = constraints.constraints.filter(
+    (constraint) =>
+      constraint.type === 'point-on-line' &&
+      constraint.refs.some((ref) => ref.entityId === arc.id && ref.pointIndex === 4) &&
+      constraint.refs.some((ref) => ref.entityId === 'edge'),
+  );
+  expect(onEnd).toHaveLength(1);
+});
+
 test('keeps the circle and arc variants behind their chevrons', async ({ page }) => {
   await openApp(page);
   await openSketch(page);
@@ -450,7 +563,64 @@ test('keeps the circle and arc variants behind their chevrons', async ({ page })
       }),
     )
     .toBe('ellipse');
-  // The main part still starts the base tool.
+  // The main part keeps the variant it shows; the base tool is what an idle
+  // group starts, which the next test covers.
+  await page.getByTestId('sketch-tool-circle').click();
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const url = (name: string) =>
+          performance
+            .getEntriesByType('resource')
+            .map((entry) => entry.name)
+            .find((entry) => entry.includes(name));
+        const ui = await import(url('/src/stores/uiStore.ts') ?? '/src/stores/uiStore.ts');
+        return ui.useUiStore.getState().sketchTool as string;
+      }),
+    )
+    .toBe('ellipse');
+});
+
+test('keeps the variant a tool group shows when the group is pressed', async ({ page }) => {
+  await openApp(page);
+  await openSketch(page);
+  await page.getByTestId('sketch-tool-more-circle').click();
+  await page.getByRole('menuitem', { name: 'Ellipse' }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const url = (name: string) =>
+          performance
+            .getEntriesByType('resource')
+            .map((entry) => entry.name)
+            .find((entry) => entry.includes(name));
+        const ui = await import(url('/src/stores/uiStore.ts') ?? '/src/stores/uiStore.ts');
+        return ui.useUiStore.getState().sketchTool as string;
+      }),
+    )
+    .toBe('ellipse');
+
+  // The button shows the ellipse, so pressing it keeps the ellipse: it only
+  // starts the base tool while the group shows that base tool.
+  await expect(page.getByTestId('sketch-tool-circle')).toHaveAttribute('aria-label', 'Ellipse');
+  await page.getByTestId('sketch-tool-circle').click();
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const url = (name: string) =>
+          performance
+            .getEntriesByType('resource')
+            .map((entry) => entry.name)
+            .find((entry) => entry.includes(name));
+        const ui = await import(url('/src/stores/uiStore.ts') ?? '/src/stores/uiStore.ts');
+        return ui.useUiStore.getState().sketchTool as string;
+      }),
+    )
+    .toBe('ellipse');
+
+  // Another tool hands the group back to its base tool.
+  await page.getByRole('button', { name: 'Line', exact: true }).click();
+  await expect(page.getByTestId('sketch-tool-circle')).toHaveAttribute('aria-label', 'Circle');
   await page.getByTestId('sketch-tool-circle').click();
   await expect
     .poll(() =>

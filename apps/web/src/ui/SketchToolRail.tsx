@@ -8,7 +8,7 @@ import {
   Presentation,
   Ruler,
 } from 'lucide-react';
-import type { MouseEvent } from 'react';
+import { useRef, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { buildConstraintActions } from '../sketch/constraintModel';
 import { constructionSelection, toggleConstruction } from '../sketch/construction';
@@ -27,6 +27,7 @@ import {
   constraintShortcutLabel,
 } from './constraintCatalog';
 import { toggleContextMenu, useContextMenuStore } from './ContextMenu';
+import { useLongPress } from './useLongPress';
 import { IconButton } from './Controls';
 import { SketchEntityIcon } from './featureIcons';
 import { SectionTool } from './SectionTool';
@@ -74,6 +75,103 @@ const SPLIT_TOOLS: {
 
 function toolShortcutLabel(tool: SketchTool): string | undefined {
   return SKETCH_TOOL_SHORTCUTS[tool];
+}
+
+/**
+ * A tool with variants behind a chevron. Its main half starts the base tool and
+ * opens the list when a finger holds it; the chevron opens the list for every
+ * pointer.
+ */
+function SplitTool({
+  group,
+  activeTool,
+  onPick,
+  label,
+  moreLabel,
+}: {
+  group: (typeof SPLIT_TOOLS)[number];
+  activeTool: SketchTool;
+  onPick: (tool: SketchTool) => void;
+  label: (key: ToolLabel) => string;
+  /** Name of the chevron, which names the tool whose list it opens. */
+  moreLabel: string;
+}) {
+  const openOwner = useContextMenuStore((state) => state.menu?.owner ?? null);
+  const owner = `sketch-tool-${group.base}`;
+  const active = group.options.find((option) => option.tool === activeTool);
+  const shown = active ?? group.options[0]!;
+
+  const openList = (rect: DOMRect) =>
+    toggleContextMenu(
+      owner,
+      rect.left,
+      rect.bottom + 6,
+      group.options.map((option) => ({
+        id: option.tool,
+        label: label(option.label),
+        icon: <SketchEntityIcon type={option.tool} size={14} />,
+        hint: toolShortcutLabel(option.tool),
+        checked: activeTool === option.tool,
+        onSelect: () => onPick(option.tool),
+      })),
+    );
+
+  const groupRef = useRef<HTMLDivElement>(null);
+  const longPress = useLongPress(() => {
+    const rect = groupRef.current?.getBoundingClientRect();
+    if (rect) openList(rect);
+  });
+
+  return (
+    <div
+      ref={groupRef}
+      className="tool-split"
+      onPointerDown={longPress.onPointerDown}
+      onPointerMove={longPress.onPointerMove}
+      onPointerUp={longPress.onPointerUp}
+      onPointerLeave={longPress.onPointerLeave}
+      onPointerCancel={longPress.onPointerCancel}
+    >
+      <IconButton
+        className="tool-split-main"
+        // The button names the tool it shows, so pressing it is never a surprise.
+        label={label(shown.label)}
+        tooltip={
+          toolShortcutLabel(shown.tool)
+            ? `${label(shown.label)} (${toolShortcutLabel(shown.tool)})`
+            : label(shown.label)
+        }
+        active={Boolean(active)}
+        data-testid={owner}
+        onClick={() => {
+          // A hold opened the list; the tap it ends with must not also start the
+          // tool.
+          if (longPress.consumed()) return;
+          // The button shows the variant in use, so pressing it keeps that
+          // variant: it only starts the base tool while the group is idle.
+          onPick(shown.tool);
+        }}
+      >
+        <SketchEntityIcon type={shown.tool} size={17} />
+      </IconButton>
+      <button
+        type="button"
+        className="tool-split-caret"
+        aria-label={moreLabel}
+        aria-haspopup="menu"
+        data-testid={`sketch-tool-more-${group.base}`}
+        aria-expanded={openOwner === owner}
+        data-menu-trigger={owner}
+        onPointerDown={longPress.onPointerCancel}
+        onClick={(event) => {
+          const rect = event.currentTarget.parentElement!.getBoundingClientRect();
+          openList(rect);
+        }}
+      >
+        <ChevronDown size={9} />
+      </button>
+    </div>
+  );
 }
 
 export function SketchToolRail() {
@@ -157,56 +255,16 @@ export function SketchToolRail() {
             </IconButton>
           );
         })}
-        {SPLIT_TOOLS.map((group) => {
-          const active = group.options.find((option) => option.tool === sketchTool);
-          const shown = active ?? group.options[0]!;
-          const shortcut = toolShortcutLabel(group.base);
-          return (
-            <div key={group.base} className="tool-split">
-              <IconButton
-                className="tool-split-main"
-                label={t(group.options[0]!.label)}
-                tooltip={
-                  shortcut
-                    ? `${t(group.options[0]!.label)} (${shortcut})`
-                    : t(group.options[0]!.label)
-                }
-                active={Boolean(active)}
-                data-testid={`sketch-tool-${group.base}`}
-                onClick={() => setSketchTool(group.base)}
-              >
-                <SketchEntityIcon type={shown.tool} size={17} />
-              </IconButton>
-              <button
-                type="button"
-                className="tool-split-caret"
-                aria-label={t('sketch.toolMore', { tool: t(group.options[0]!.label) })}
-                aria-haspopup="menu"
-                data-testid={`sketch-tool-more-${group.base}`}
-                aria-expanded={openOwner === `sketch-tool-${group.base}`}
-                data-menu-trigger={`sketch-tool-${group.base}`}
-                onClick={(event) => {
-                  const rect = event.currentTarget.parentElement!.getBoundingClientRect();
-                  toggleContextMenu(
-                    `sketch-tool-${group.base}`,
-                    rect.left,
-                    rect.bottom + 6,
-                    group.options.map((option) => ({
-                      id: option.tool,
-                      label: t(option.label),
-                      icon: <SketchEntityIcon type={option.tool} size={14} />,
-                      hint: toolShortcutLabel(option.tool),
-                      checked: sketchTool === option.tool,
-                      onSelect: () => setSketchTool(option.tool),
-                    })),
-                  );
-                }}
-              >
-                <ChevronDown size={9} />
-              </button>
-            </div>
-          );
-        })}
+        {SPLIT_TOOLS.map((group) => (
+          <SplitTool
+            key={group.base}
+            group={group}
+            activeTool={sketchTool}
+            onPick={setSketchTool}
+            label={(key) => t(key)}
+            moreLabel={t('sketch.toolMore', { tool: t(group.options[0]!.label) })}
+          />
+        ))}
         <IconButton
           label={t('sketch.toolBezier')}
           tooltip={`${t('sketch.toolBezier')} (${SKETCH_TOOL_SHORTCUTS.bezier})`}

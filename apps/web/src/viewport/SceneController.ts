@@ -526,7 +526,8 @@ export class SceneController {
     highlight: boolean;
     marker: Point2 | null;
     guides: SketchEntity[];
-  } = { preview: null, draftPoints: [], highlight: false, marker: null, guides: [] };
+    cursor: { point: Point2; snapped: boolean } | null;
+  } = { preview: null, draftPoints: [], highlight: false, marker: null, guides: [], cursor: null };
 
   private animationFrame = 0;
   private needsRender = true;
@@ -3179,8 +3180,9 @@ export class SceneController {
     highlight = false,
     marker: Point2 | null = null,
     guides: SketchEntity[] = [],
+    cursor: { point: Point2; snapped: boolean } | null = null,
   ): void {
-    this.sketchOverlayState = { preview, draftPoints, highlight, marker, guides };
+    this.sketchOverlayState = { preview, draftPoints, highlight, marker, guides, cursor };
     this.rebuildSketchOverlay();
     this.invalidate();
   }
@@ -3813,7 +3815,7 @@ export class SceneController {
     const active = this.sketchEntries.find((entry) => entry.active);
     if (!active) return;
     const group = new THREE.Group();
-    const { preview, draftPoints, highlight, marker, guides } = this.sketchOverlayState;
+    const { preview, draftPoints, highlight, marker, guides, cursor } = this.sketchOverlayState;
     const previewColor = highlight ? this.sketchHighlightColor() : this.sketchColor();
     for (const guide of guides) {
       const line = this.createSketchLine(
@@ -3849,6 +3851,29 @@ export class SceneController {
       );
       draft.renderOrder = RenderOrder.sketchDraft;
       group.add(draft);
+    }
+    if (cursor) {
+      // The point the next click of a creating tool would place. A magnet target
+      // is painted like the geometry it came from, so a snap is visible before
+      // the click, not only after it became a constraint.
+      const geometry = new THREE.BufferGeometry().setFromPoints([
+        this.sketchWorld(active.frame, cursor.point),
+      ]);
+      const dot = new THREE.Points(
+        geometry,
+        new THREE.PointsMaterial({
+          color: cursor.snapped ? this.sketchHighlightColor() : this.sketchPointColor(),
+          map: this.pointTexture,
+          alphaTest: 0.5,
+          transparent: true,
+          size: cursor.snapped ? 12 : 10,
+          sizeAttenuation: false,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      );
+      dot.renderOrder = RenderOrder.sketchPhantom;
+      group.add(dot);
     }
     if (marker) {
       const geometry = new THREE.BufferGeometry().setFromPoints([

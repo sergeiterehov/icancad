@@ -95,22 +95,3 @@ export function ellipticalArcPoint(frame: EllipticalArcFrame, angle: number): Po
   const y = Math.sin(angle) * frame.ry;
   return [frame.cx + x * cos - y * sin, frame.cy + x * sin + y * cos];
 }
-
-/**
- * Where the clicks of an ellipse or an elliptical arc land on the curve. The
- * clicks name the centre, both half-axes and the two ends; only the centre and
- * the first half-axis are on the curve where they were clicked, so the markers
- * would otherwise float off the shape until the entity is built.
- */
-export function ellipseDraftPoints(
-  draft: readonly Point2[],
-  frame: EllipticalArcFrame | null,
-): Point2[] {
-  if (!frame || draft.length < 2) return [...draft];
-  const points: Point2[] = [draft[0]!, ellipticalArcPoint(frame, 0)];
-  // The second half-axis is clicked anywhere on its line; only its distance
-  // matters, so the handle sits at the end of the axis.
-  if (draft.length >= 3) points.push(ellipticalArcPoint(frame, Math.PI / 2));
-  if (draft.length >= 4) points.push(ellipticalArcPoint(frame, frame.startAngle));
-  return points;
-}
