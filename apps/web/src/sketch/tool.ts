@@ -13,9 +13,11 @@ export type SketchTool =
   | 'offset'
   | 'outline'
   | 'fillet'
-  /** Tools that read the pointer alone: a piece cut away, a point added. */
+  /** Tools that read the pointer alone: a piece cut away, a point added, an end
+   * stretched. */
   | 'trim'
-  | 'split';
+  | 'split'
+  | 'extend';
 
 /** Single-key shortcuts of the drawing tools, shown in the tool rail tooltips. */
 export const SKETCH_TOOL_SHORTCUTS: Partial<Record<SketchTool, string>> = {

@@ -168,7 +168,8 @@ test('offers the scissors first in the Tools menu', async ({ page }) => {
   const order = await page.getByRole('menuitem').allInnerTexts();
   expect(order[0]).toBe('Trim');
   expect(order[1]).toBe('Split');
-  expect(order).toHaveLength(5);
+  expect(order[2]).toBe('Extend');
+  expect(order).toHaveLength(6);
 });
 
 test('cuts the piece the pointer stands over and leaves the rest', async ({ page }) => {

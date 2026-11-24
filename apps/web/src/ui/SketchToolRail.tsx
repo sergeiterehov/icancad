@@ -3,6 +3,7 @@ import {
   Check,
   ChevronDown,
   GitCommitHorizontal,
+  LineDotLeftHorizontal,
   LineStyle,
   Magnet,
   MousePointer2,
@@ -18,6 +19,7 @@ import { useRef, type MouseEvent, type ReactElement } from 'react';
 import { useTranslation } from 'react-i18next';
 import { buildConstraintActions } from '../sketch/constraintModel';
 import { constructionSelection, toggleConstruction } from '../sketch/construction';
+import { extendTargets } from '../sketch/sketchExtend';
 import { filletCorners } from '../sketch/sketchFillet';
 import { splitTargets } from '../sketch/sketchSplit';
 import { trimTargets } from '../sketch/sketchTrim';
@@ -219,12 +221,14 @@ export function SketchToolRail() {
   const filletTarget = feature ? filletCorners(feature, selectionIds).length : 0;
   const trimTarget = feature ? trimTargets(feature).length : 0;
   const splitTarget = feature ? splitTargets(feature).length : 0;
+  const extendTarget = feature ? extendTargets(feature).length : 0;
   const toolActive =
     sketchTool === 'offset' ||
     sketchTool === 'outline' ||
     sketchTool === 'fillet' ||
     sketchTool === 'trim' ||
-    sketchTool === 'split';
+    sketchTool === 'split' ||
+    sketchTool === 'extend';
 
   const toggleSelectedConstruction = () => {
     if (!feature) return;
@@ -235,7 +239,7 @@ export function SketchToolRail() {
   const openTools = (event: MouseEvent<HTMLButtonElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const entry = (
-      tool: Extract<SketchTool, 'offset' | 'outline' | 'fillet' | 'trim' | 'split'>,
+      tool: Extract<SketchTool, 'offset' | 'outline' | 'fillet' | 'trim' | 'split' | 'extend'>,
       label: string,
       icon: ReactElement,
       disabled: boolean,
@@ -263,6 +267,13 @@ export function SketchToolRail() {
         <GitCommitHorizontal size={14} />,
         splitTarget === 0,
         t('sketch.splitSelect'),
+      ),
+      entry(
+        'extend',
+        t('sketch.toolExtend'),
+        <LineDotLeftHorizontal size={14} />,
+        extendTarget === 0,
+        t('sketch.extendSelect'),
       ),
       entry(
         'fillet',
@@ -401,6 +412,8 @@ export function SketchToolRail() {
             <Scissors size={17} />
           ) : sketchTool === 'split' ? (
             <GitCommitHorizontal size={17} />
+          ) : sketchTool === 'extend' ? (
+            <LineDotLeftHorizontal size={17} />
           ) : (
             <SplinePointer size={17} />
           )}

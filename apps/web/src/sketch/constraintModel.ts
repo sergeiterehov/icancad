@@ -168,6 +168,28 @@ export function refPoint(
   return entityControlPoints(entity)[ref.pointIndex ?? 0] ?? null;
 }
 
+/**
+ * The relation that holds a point on a curve, or null for a curve that has no
+ * such relation. A tool that puts a new end on another curve asks this to know
+ * what to write.
+ */
+export function pointOnCurveType(
+  entity: SketchEntity,
+): 'point-on-line' | 'point-on-circle' | 'point-on-ellipse' | null {
+  switch (entity.type) {
+    case 'line':
+      return 'point-on-line';
+    case 'circle':
+    case 'arc':
+      return 'point-on-circle';
+    case 'ellipse':
+    case 'elliptical-arc':
+      return 'point-on-ellipse';
+    default:
+      return null;
+  }
+}
+
 function distanceBetween(
   a: SketchConstraintRef,
   b: SketchConstraintRef,

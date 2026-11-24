@@ -15,7 +15,7 @@ import {
   type CurveCrossing,
   type TrimFailure,
 } from '@icancad/sketch';
-import { uniqueConstraints } from './constraintModel';
+import { pointOnCurveType, uniqueConstraints } from './constraintModel';
 import { projectionEntityIds } from './projection';
 
 /**
@@ -327,24 +327,6 @@ export async function commitTrim(
       addedConstraintIds: unique.map((constraint) => constraint.id),
     },
   };
-}
-
-/** The relation that holds a point on a curve, or null for a curve without one. */
-function pointOnCurveType(
-  entity: SketchEntity,
-): 'point-on-line' | 'point-on-circle' | 'point-on-ellipse' | null {
-  switch (entity.type) {
-    case 'line':
-      return 'point-on-line';
-    case 'circle':
-    case 'arc':
-      return 'point-on-circle';
-    case 'ellipse':
-    case 'elliptical-arc':
-      return 'point-on-ellipse';
-    default:
-      return null;
-  }
 }
 
 /** The index of a point among the control points of an entity, or -1. */
