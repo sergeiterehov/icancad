@@ -292,6 +292,23 @@ const SCROLL_PIVOT_IDLE_MS = 220;
 const WHEEL_ZOOM_RATE = 0.0012;
 const SCROLL_ZOOM_RATE = 0.004;
 const PINCH_ZOOM_RATE = 0.01;
+/**
+ * Strip at the bottom of the window that no camera gesture starts on. On an
+ * iPhone a swipe up from that edge is the system gesture that closes an
+ * installed app, and the finger is on the canvas on its way out.
+ */
+const BOTTOM_EDGE_GUARD_PX = 24;
+
+/**
+ * Whether the system asks for less motion. A view the user asked for is still a
+ * view change, so it lands on its pose; only the way there is dropped.
+ */
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+  );
+}
 
 /** Faces selected for an operation, plus the one under the cursor. */
 export interface FaceHighlightState {
@@ -554,6 +571,11 @@ export class SceneController {
   private readonly fingers = new Map<number, { x: number; y: number }>();
   /** Centre and spread of the two-finger gesture, as they were one frame ago. */
   private pinch: { centre: { x: number; y: number }; spread: number } | null = null;
+  /**
+   * Cumulative scale of the pinch Safari reports as gesture events, or null
+   * while no such gesture is running.
+   */
+  private gestureScale: number | null = null;
   /** A second finger joined, so what is left of the gesture only pans and pinches. */
   private multiTouch = false;
   private azimuth = DEFAULT_CAMERA_AZIMUTH;
@@ -3322,6 +3344,18 @@ export class SceneController {
   }
 
   private transitionTo(pose: CameraPose): void {
+    // Less motion means the view arrives at once: the same pose, with nothing
+    // to wait for either in the app or in a test that drives it.
+    if (prefersReducedMotion()) {
+      this.transition = null;
+      this.target.copy(pose.target);
+      this.distance = pose.distance;
+      this.azimuth = pose.azimuth;
+      this.polar = pose.polar;
+      this.roll = pose.roll ?? 0;
+      this.updateCamera();
+      return;
+    }
     const from: CameraPose = {
       target: this.target.clone(),
       distance: this.distance,
@@ -4488,6 +4522,12 @@ export class SceneController {
     this.canvas.addEventListener('pointerleave', this.onPointerLeave);
     this.canvas.addEventListener('wheel', this.onWheel, { passive: false });
     this.canvas.addEventListener('contextmenu', this.onContextMenu);
+    // Safari reports a trackpad pinch as gesture events instead of a wheel with
+    // Ctrl held, so the canvas would never see it. The listeners sit on the
+    // window because a pinch over a sketch annotation targets the annotation.
+    window.addEventListener('gesturestart', this.onGestureStart, { passive: false });
+    window.addEventListener('gesturechange', this.onGestureChange, { passive: false });
+    window.addEventListener('gestureend', this.onGestureEnd, { passive: false });
   }
 
   private unbindEvents(): void {
@@ -4498,11 +4538,17 @@ export class SceneController {
     this.canvas.removeEventListener('pointerleave', this.onPointerLeave);
     this.canvas.removeEventListener('wheel', this.onWheel);
     this.canvas.removeEventListener('contextmenu', this.onContextMenu);
+    window.removeEventListener('gesturestart', this.onGestureStart);
+    window.removeEventListener('gesturechange', this.onGestureChange);
+    window.removeEventListener('gestureend', this.onGestureEnd);
   }
 
   private onPointerDown = (event: PointerEvent): void => {
     this.transition = null;
     this.scrollOrbitPivot = null;
+    // The bottom edge belongs to the platform: a finger that starts there is
+    // leaving the app, not grabbing the model.
+    if (this.inBottomEdge(event)) return;
     // A press is the start of a gesture or of a selection: the tooltip of the
     // geometry under the pointer would be in the way of both.
     this.clearGeometryHover();
@@ -5673,6 +5719,9 @@ export class SceneController {
   private onWheel = (event: WheelEvent): void => {
     event.preventDefault();
     this.transition = null;
+    // Safari can report a pinch as a gesture and as a Ctrl wheel at once; the
+    // gesture already carries the whole movement.
+    if (event.ctrlKey && this.gestureScale !== null) return;
     const scheme = cameraScheme(useUiStore.getState().cameraScheme);
     const kind = this.pointerKind(event);
     // A pinch reaches the page as the wheel with Ctrl held, whatever the device.
@@ -5717,6 +5766,60 @@ export class SceneController {
     noteWheelKind(wheelPointerKind(event));
     return resolvedPointerKind(preference);
   }
+
+  /**
+   * True for a finger that lands on the strip the platform keeps for itself.
+   * A finger joining a gesture already in flight is not the start of one, so
+   * a pinch whose first finger came down elsewhere still works.
+   */
+  private inBottomEdge(event: PointerEvent): boolean {
+    if (!isTouchPointer(event.pointerType) || this.fingers.size > 0) return false;
+    const rect = this.canvas.getBoundingClientRect();
+    return event.clientY >= rect.bottom - BOTTOM_EDGE_GUARD_PX;
+  }
+
+  /** Whether the pinch happened over the viewport rather than over a panel. */
+  private pinchesViewport(event: Event): boolean {
+    const target = event.target;
+    return target instanceof Element && Boolean(target.closest('.viewport-wrap'));
+  }
+
+  /**
+   * Safari sends a trackpad pinch as gesture events rather than a wheel with
+   * Ctrl held, so the zoom has to be read from their cumulative scale: the
+   * step is the ratio to the previous event, and spreading the fingers out
+   * (scale above one) moves the view closer.
+   */
+  private onGestureStart = (event: Event): void => {
+    if (!this.pinchesViewport(event)) return;
+    event.preventDefault();
+    this.transition = null;
+    this.gestureScale = 1;
+  };
+
+  private onGestureChange = (event: Event): void => {
+    if (this.gestureScale === null) return;
+    if (!this.pinchesViewport(event)) {
+      this.gestureScale = null;
+      return;
+    }
+    event.preventDefault();
+    const sample = event as Event & { scale?: number; clientX?: number; clientY?: number };
+    const scale = sample.scale;
+    if (typeof scale !== 'number' || !(scale > 0)) return;
+    const ratio = this.gestureScale / scale;
+    this.gestureScale = scale;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = typeof sample.clientX === 'number' ? sample.clientX : rect.left + rect.width / 2;
+    const y = typeof sample.clientY === 'number' ? sample.clientY : rect.top + rect.height / 2;
+    this.zoomAt(x, y, ratio);
+  };
+
+  private onGestureEnd = (event: Event): void => {
+    if (this.gestureScale === null) return;
+    event.preventDefault();
+    this.gestureScale = null;
+  };
 
   private onContextMenu = (event: MouseEvent): void => {
     event.preventDefault();

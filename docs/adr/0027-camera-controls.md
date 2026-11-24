@@ -53,3 +53,13 @@ to relearn the mouse.
 - A two-finger scroll orbit keeps the pivot it took when the gesture began until the
   scroll goes quiet, so a face that slides over the cursor cannot take the turn over
   mid-gesture.
+- Safari reports a trackpad pinch as `gesturestart`/`gesturechange` rather than a
+  wheel with Ctrl held. The viewport reads the cumulative `scale` of those events
+  and zooms by the ratio between two of them, so a pinch zooms the model at the
+  same pace in Safari as it does in Chrome.
+- A finger that comes down on the bottom 24 px of the window starts no camera
+  gesture. On an iPhone that strip belongs to the system, whose swipe up closes the
+  installed app, and the finger is on the canvas on its way out.
+- A programmed view change honours `prefers-reduced-motion: reduce`: the camera
+  lands on the requested pose at once instead of easing there. The frame the view
+  was asked for is not motion, only the path to it is.
