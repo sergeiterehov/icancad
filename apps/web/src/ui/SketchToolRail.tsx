@@ -7,11 +7,15 @@ import {
   MousePointer2,
   Presentation,
   Ruler,
+  SplinePointer,
+  StrokeLineCapRound,
+  StrokeLineJoinRound,
 } from 'lucide-react';
-import { useRef, type MouseEvent } from 'react';
+import { useRef, type MouseEvent, type ReactElement } from 'react';
 import { useTranslation } from 'react-i18next';
 import { buildConstraintActions } from '../sketch/constraintModel';
 import { constructionSelection, toggleConstruction } from '../sketch/construction';
+import { offsetSelectionEntities } from '../sketch/sketchOffset';
 import {
   SKETCH_CONSTRUCTION_SHORTCUT,
   SKETCH_TOOL_SHORTCUTS,
@@ -202,11 +206,37 @@ export function SketchToolRail() {
   const constructionEntities = feature ? constructionSelection(feature, selectionIds) : [];
   const constructionActive =
     constructionEntities.length > 0 && constructionEntities.every((entity) => entity.construction);
+  // The tools work on a selection of curves: a point or the sketch axes alone
+  // gives them nothing to offset, so the menu says so instead of starting.
+  const offsetTargets = feature ? offsetSelectionEntities(feature, selectionIds) : [];
+  const offsetActive = sketchTool === 'offset' || sketchTool === 'outline';
 
   const toggleSelectedConstruction = () => {
     if (!feature) return;
     const next = toggleConstruction(feature, selectionIds);
     if (next) apply({ type: 'feature/replace', feature: next });
+  };
+
+  const openTools = (event: MouseEvent<HTMLButtonElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const disabled = offsetTargets.length === 0;
+    const entry = (
+      tool: 'offset' | 'outline',
+      label: string,
+      icon: ReactElement,
+    ) => ({
+      id: tool,
+      label,
+      icon,
+      checked: sketchTool === tool,
+      disabled,
+      tooltip: disabled ? t('sketch.offsetSelect') : label,
+      onSelect: () => setSketchTool(tool),
+    });
+    toggleContextMenu('sketch-tools', rect.left, rect.bottom + 6, [
+      entry('offset', t('sketch.toolOffset'), <StrokeLineJoinRound size={14} />),
+      entry('outline', t('sketch.toolOutline'), <StrokeLineCapRound size={14} />),
+    ]);
   };
 
   const openConstraints = (event: MouseEvent<HTMLButtonElement>) => {
@@ -303,6 +333,22 @@ export function SketchToolRail() {
           onClick={openConstraints}
         >
           <Ruler size={17} />
+          <ChevronDown size={9} className="button-caret" />
+        </IconButton>
+        <IconButton
+          label={t('sketch.toolsMenu')}
+          active={offsetActive}
+          aria-expanded={openOwner === 'sketch-tools'}
+          data-menu-trigger="sketch-tools"
+          onClick={openTools}
+        >
+          {sketchTool === 'offset' ? (
+            <StrokeLineJoinRound size={17} />
+          ) : sketchTool === 'outline' ? (
+            <StrokeLineCapRound size={17} />
+          ) : (
+            <SplinePointer size={17} />
+          )}
           <ChevronDown size={9} className="button-caret" />
         </IconButton>
         <div className="tool-separator" />

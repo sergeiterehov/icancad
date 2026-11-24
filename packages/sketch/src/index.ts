@@ -333,6 +333,10 @@ export function moveEntityControlPoint(
 
 export * from './topology';
 
+export * from './intersect';
+
+export * from './offset';
+
 export * from './profile';
 
 export * from './projection';

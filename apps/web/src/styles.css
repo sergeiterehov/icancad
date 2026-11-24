@@ -3277,7 +3277,9 @@ button.selection-item.sketch-entity-row[data-active='true'] {
 
 .sketch-hint {
   position: absolute;
-  bottom: 14px;
+  /* The operations dock owns the bottom edge of the viewport, so the hint sits
+     above it instead of on top of it. */
+  bottom: calc(var(--dock-gap) + 46px + 6px);
   left: 50%;
   padding: 6px 10px;
   border: 1px solid var(--border);

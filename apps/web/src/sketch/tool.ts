@@ -7,7 +7,10 @@ export type SketchTool =
   | 'ellipse'
   | 'elliptical-arc'
   | 'bezier'
-  | 'project';
+  | 'project'
+  /** Tools that work on the selection: a copy of it at a distance, or around it. */
+  | 'offset'
+  | 'outline';
 
 /** Single-key shortcuts of the drawing tools, shown in the tool rail tooltips. */
 export const SKETCH_TOOL_SHORTCUTS: Partial<Record<SketchTool, string>> = {

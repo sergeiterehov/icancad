@@ -71,7 +71,14 @@ scope.onmessage = (event) => {
       const redundant = normalize(gcs.get_gcs_redundant_constraints());
       const dof = gcs.gcs.dof();
       const frozen = request.diagnose
-        ? diagnoseFrozenEntities(gcs, entities, request.constraints, dof, request.derived)
+        ? diagnoseFrozenEntities(
+            gcs,
+            entities,
+            request.constraints,
+            dof,
+            request.derived,
+            conflicting,
+          )
         : [];
       scope.postMessage({
         id: request.id,

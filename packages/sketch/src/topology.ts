@@ -1,5 +1,6 @@
 import type { SketchEntity } from '@icancad/model';
 import { entityControlPoints, entityEndpoints, tessellateEntity, type Point2 } from './index';
+import { exactCurveIntersections, segmentIntersection } from './intersect';
 
 const NODE_TOLERANCE = 1e-3;
 
@@ -108,131 +109,6 @@ function pointInPolygon(point: Point2, polygon: readonly Point2[]): boolean {
 
 function closedLoop(entity: SketchEntity): boolean {
   return entity.type === 'circle' || entity.type === 'ellipse';
-}
-
-// Crossing point of two polyline segments, with the parameters needed to split
-// both entities at the same place.
-function segmentIntersection(
-  a: Point2,
-  b: Point2,
-  c: Point2,
-  d: Point2,
-): { point: Point2; t: number; u: number } | null {
-  const rx = b[0] - a[0];
-  const ry = b[1] - a[1];
-  const sx = d[0] - c[0];
-  const sy = d[1] - c[1];
-  const denominator = rx * sy - ry * sx;
-  if (Math.abs(denominator) < 1e-9) return null;
-  const qx = c[0] - a[0];
-  const qy = c[1] - a[1];
-  const t = (qx * sy - qy * sx) / denominator;
-  const u = (qx * ry - qy * rx) / denominator;
-  const eps = 1e-9;
-  if (t < -eps || t > 1 + eps || u < -eps || u > 1 + eps) return null;
-  const clamped = Math.min(1, Math.max(0, t));
-  return {
-    point: [a[0] + rx * clamped, a[1] + ry * clamped],
-    t: clamped,
-    u: Math.min(1, Math.max(0, u)),
-  };
-}
-
-const TAU = Math.PI * 2;
-
-function normalizeAngle(angle: number): number {
-  let value = angle % TAU;
-  if (value < 0) value += TAU;
-  return value;
-}
-
-interface CircleLike {
-  cx: number;
-  cy: number;
-  r: number;
-  /** Set for arcs: true when the angle lies inside the drawn sweep. */
-  onArc?: (angle: number) => boolean;
-}
-
-function circleOf(entity: SketchEntity): CircleLike | null {
-  if (entity.type === 'circle') return { cx: entity.cx, cy: entity.cy, r: entity.r };
-  if (entity.type !== 'arc') return null;
-  const { cx, cy, r, startAngle, endAngle } = entity;
-  const naturalCcw = endAngle >= startAngle;
-  const from = naturalCcw ? startAngle : endAngle;
-  const sweep = normalizeAngle(naturalCcw ? endAngle - startAngle : startAngle - endAngle);
-  return {
-    cx,
-    cy,
-    r,
-    onArc: (angle) => normalizeAngle(angle - from) <= sweep + 1e-9,
-  };
-}
-
-// Exact crossings for circles, arcs and lines. Splitting at chord intersections
-// would leave the intersection slightly off the real circle and force the
-// profile to stay polygonal; exact points keep partial runs as real arcs.
-function exactIntersections(first: SketchEntity, second: SketchEntity): Point2[] | null {
-  const firstCircle = circleOf(first);
-  const secondCircle = circleOf(second);
-  if (firstCircle && secondCircle) {
-    const dx = secondCircle.cx - firstCircle.cx;
-    const dy = secondCircle.cy - firstCircle.cy;
-    const distance = Math.hypot(dx, dy);
-    if (distance < 1e-9) return [];
-    if (
-      distance > firstCircle.r + secondCircle.r + 1e-9 ||
-      distance < Math.abs(firstCircle.r - secondCircle.r) - 1e-9
-    ) {
-      return [];
-    }
-    const along =
-      (distance * distance + firstCircle.r * firstCircle.r - secondCircle.r * secondCircle.r) /
-      (2 * distance);
-    const height = Math.sqrt(Math.max(0, firstCircle.r * firstCircle.r - along * along));
-    const mx = firstCircle.cx + (along * dx) / distance;
-    const my = firstCircle.cy + (along * dy) / distance;
-    const points: Point2[] =
-      height < 1e-9
-        ? [[mx, my]]
-        : [
-            [mx - (dy / distance) * height, my + (dx / distance) * height],
-            [mx + (dy / distance) * height, my - (dx / distance) * height],
-          ];
-    return points.filter((point) => {
-      const angle = Math.atan2(point[1] - firstCircle.cy, point[0] - firstCircle.cx);
-      const secondAngle = Math.atan2(point[1] - secondCircle.cy, point[0] - secondCircle.cx);
-      return (
-        (!firstCircle.onArc || firstCircle.onArc(angle)) &&
-        (!secondCircle.onArc || secondCircle.onArc(secondAngle))
-      );
-    });
-  }
-  if (firstCircle && second.type === 'line') return lineCircle(firstCircle, second);
-  if (secondCircle && first.type === 'line') return lineCircle(secondCircle, first);
-  return null;
-}
-
-function lineCircle(circle: CircleLike, line: SketchEntity): Point2[] {
-  if (line.type !== 'line') return [];
-  const dx = line.x2 - line.x1;
-  const dy = line.y2 - line.y1;
-  const length2 = dx * dx + dy * dy;
-  if (length2 < 1e-18) return [];
-  const projection = ((circle.cx - line.x1) * dx + (circle.cy - line.y1) * dy) / length2;
-  const footX = line.x1 + projection * dx;
-  const footY = line.y1 + projection * dy;
-  const distance2 = (footX - circle.cx) ** 2 + (footY - circle.cy) ** 2;
-  if (distance2 > circle.r * circle.r + 1e-9) return [];
-  const offset = Math.sqrt(Math.max(0, circle.r * circle.r - distance2) / length2);
-  const parameters = offset < 1e-9 ? [projection] : [projection - offset, projection + offset];
-  return parameters
-    .filter((value) => value >= -1e-9 && value <= 1 + 1e-9)
-    .map((value): Point2 => [line.x1 + dx * value, line.y1 + dy * value])
-    .filter((point) => {
-      if (!circle.onArc) return true;
-      return circle.onArc(Math.atan2(point[1] - circle.cy, point[0] - circle.cx));
-    });
 }
 
 // Sketch geometry as the object it becomes after the sketch is finished: points,
@@ -370,7 +246,7 @@ export function sketchTopology(entities: readonly SketchEntity[]): SketchTopolog
     for (let b = a + 1; b < curves.length; b += 1) {
       const first = curves[a]!;
       const second = curves[b]!;
-      const exact = exactIntersections(first.entity, second.entity);
+      const exact = exactCurveIntersections(first.entity, second.entity);
       if (exact) {
         for (const point of exact) {
           addExactSplit(first, point);

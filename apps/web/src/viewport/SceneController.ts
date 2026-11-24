@@ -521,7 +521,7 @@ export class SceneController {
   private sketchLineMaterials: LineMaterial[] = [];
   private readonly pointTexture = createCircleTexture();
   private sketchOverlayState: {
-    preview: SketchEntity | null;
+    preview: SketchEntity | readonly SketchEntity[] | null;
     draftPoints: Point2[];
     highlight: boolean;
     marker: Point2 | null;
@@ -3175,7 +3175,7 @@ export class SceneController {
   }
 
   setSketchOverlay(
-    preview: SketchEntity | null,
+    preview: SketchEntity | readonly SketchEntity[] | null,
     draftPoints: Point2[],
     highlight = false,
     marker: Point2 | null = null,
@@ -3829,8 +3829,11 @@ export class SceneController {
       if (line) group.add(line);
     }
     if (preview) {
-      const line = this.createSketchLine(preview, active.frame, previewColor, 2, 0.75);
-      if (line) group.add(line);
+      const previews = Array.isArray(preview) ? preview : [preview];
+      for (const entity of previews) {
+        const line = this.createSketchLine(entity, active.frame, previewColor, 2, 0.75);
+        if (line) group.add(line);
+      }
     }
     if (draftPoints.length > 0) {
       const geometry = new THREE.BufferGeometry().setFromPoints(

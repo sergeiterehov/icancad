@@ -178,7 +178,7 @@ export interface ViewportHandle {
   setView: (name: ViewName) => void;
   setSketches: (sketches: SceneSketch[]) => void;
   setSketchOverlay: (
-    preview: SketchEntity | null,
+    preview: SketchEntity | readonly SketchEntity[] | null,
     draftPoints: Point2[],
     highlight?: boolean,
     marker?: Point2 | null,

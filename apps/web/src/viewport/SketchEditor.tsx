@@ -16,6 +16,7 @@ import {
   moveEntityControlPoint,
   sketchEntityIndex,
   withFundamentalEntities,
+  type OffsetJoin,
   type Point2,
 } from '@icancad/sketch';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -70,8 +71,15 @@ import {
   isSelectionConstrained,
   moveDraggedEntities,
 } from '../sketch/dragSelection';
-import { liveMeasures, measureInfo } from '../sketch/measure';
+import { liveMeasures, measureInfo, formatMeasure } from '../sketch/measure';
 import { sketchPickKey } from '../sketch/pickKey';
+import {
+  commitOffsetSolved,
+  offsetPreviewEntities,
+  planOffset,
+  type OffsetPlanError,
+  type OffsetTool,
+} from '../sketch/sketchOffset';
 import {
   isProjectedEntity,
   projectionEntityIds,
@@ -100,6 +108,22 @@ import { getViewport, type ViewportCamera } from './handle';
 
 function distance(a: Point2, b: Point2): number {
   return Math.hypot(b[0] - a[0], b[1] - a[1]);
+}
+
+/** The message a failed offset or contour shows. */
+function offsetErrorKey(error: OffsetPlanError): string {
+  switch (error) {
+    case 'empty':
+      return 'sketch.offsetSelect';
+    case 'branching':
+      return 'sketch.offsetBranching';
+    case 'distance':
+      return 'sketch.offsetFailed';
+    case 'too-close':
+      return 'sketch.offsetDistance';
+    default:
+      return 'sketch.offsetFailed';
+  }
 }
 
 /**
@@ -357,6 +381,11 @@ export function SketchEditor() {
   const polylineTail = useRef<string | null>(null);
   // The tool that produced the current draft. A tool switch must not reuse it.
   const draftToolRef = useRef<SketchTool>(tool);
+  // Round corners are the default of the offset and contour tools; Shift turns
+  // them into sharp ones while the distance is being set.
+  const [offsetJoin, setOffsetJoin] = useState<OffsetJoin>('round');
+  const offsetJoinRef = useRef<OffsetJoin>('round');
+  const offsetTool = tool === 'offset' || tool === 'outline';
 
   const applyAutoHighlight = (ids: string[]) => {
     const key = ids.join('|');
@@ -378,9 +407,29 @@ export function SketchEditor() {
     setHoverPreview(null);
     polylineTail.current = null;
     draftToolRef.current = tool;
+    offsetJoinRef.current = 'round';
+    setOffsetJoin('round');
     applyAutoHighlight([]);
     setSketchHover([]);
   }, [activeSketchId, tool, sketchToolNonce]);
+
+  // Shift switches the corners of the offset and contour tools between round
+  // and sharp while the distance is being set, and the preview follows at once.
+  useEffect(() => {
+    if (!offsetTool) return;
+    const update = (event: KeyboardEvent) => {
+      const join: OffsetJoin = event.shiftKey ? 'miter' : 'round';
+      if (offsetJoinRef.current === join) return;
+      offsetJoinRef.current = join;
+      setOffsetJoin(join);
+    };
+    window.addEventListener('keydown', update);
+    window.addEventListener('keyup', update);
+    return () => {
+      window.removeEventListener('keydown', update);
+      window.removeEventListener('keyup', update);
+    };
+  }, [offsetTool]);
 
   useEffect(() => {
     if (!activeSketchId || !activeSketchReady) return;
@@ -602,6 +651,45 @@ export function SketchEditor() {
     activeModel(useDocumentStore.getState().project).features.find(
       (feature): feature is SketchFeature => feature.id === sketch?.id && feature.type === 'sketch',
     );
+
+  /**
+   * Commits the offset or contour the pointer currently describes. The whole
+   * result — geometry and its driving dimensions — lands as one edit, and the
+   * fresh geometry takes over the selection so the next step starts from it.
+   */
+  const offsetCommitPending = useRef(false);
+  // The preview stands where the committed geometry will be, so it has to go the
+  // moment the click lands: a ghost that outlives the click reads as a tool that
+  // is still working on something.
+  const [offsetCommitting, setOffsetCommitting] = useState(false);
+  const commitOffsetAt = (point: Point2) => {
+    const activeTool = useUiStore.getState().sketchTool;
+    if (activeTool !== 'offset' && activeTool !== 'outline') return;
+    if (offsetCommitPending.current) return;
+    const current = currentSketch();
+    if (!current) return;
+    offsetCommitPending.current = true;
+    setOffsetCommitting(true);
+    void commitOffsetSolved(current, selectionIds, point, {
+      tool: activeTool,
+      join: offsetJoinRef.current,
+    })
+      .then((result) => {
+        if (!result.ok) {
+          useUiStore.getState().showToast(offsetErrorKey(result.error), 'error');
+          return;
+        }
+        apply({ type: 'feature/replace', feature: result.commit.feature });
+        setSketchSelection(result.commit.createdIds);
+        void diagnoseSketch(result.commit.feature);
+        setSketchTool('select');
+      })
+      .catch(() => useUiStore.getState().showToast('sketch.offsetFailed', 'error'))
+      .finally(() => {
+        offsetCommitPending.current = false;
+        setOffsetCommitting(false);
+      });
+  };
 
   const applyAutoConstraintsNow = async (
     entity: SketchEntity,
@@ -1029,6 +1117,9 @@ export function SketchEditor() {
       marquee.current = null;
       pointerDown.current = { x: event.clientX, y: event.clientY };
       const activeTool = useUiStore.getState().sketchTool;
+      // The offset and contour tools read the selection and the pointer distance;
+      // a press starts neither a draft nor a selection box.
+      if (activeTool === 'offset' || activeTool === 'outline') return;
       if (activeTool !== 'select') {
         // A finger that travels stretches the next primitive from where it came
         // down, so the press point has to be kept before the first move.
@@ -1192,6 +1283,14 @@ export function SketchEditor() {
       const activeTool = useUiStore.getState().sketchTool;
       // The projection tool aims at the 3D scene, so the sketch has no hover.
       if (activeTool === 'project') return;
+      if (activeTool === 'offset' || activeTool === 'outline') {
+        // These tools measure the distance from the raw pointer to the chain, so
+        // the magnet must not pull the distance towards the geometry.
+        const point = getViewport()?.sketchPointAt(event.clientX, event.clientY);
+        if (point) setHover(point);
+        setSketchHover([]);
+        return;
+      }
       if (activeTool === 'select') {
         const activeMarquee = marquee.current;
         if (activeMarquee) {
@@ -1450,6 +1549,11 @@ export function SketchEditor() {
       if (down && !isTap(event.clientX - down.x, event.clientY - down.y)) return;
       const activeTool = useUiStore.getState().sketchTool;
       if (activeTool === 'project') return;
+      if (activeTool === 'offset' || activeTool === 'outline') {
+        const point = getViewport()?.sketchPointAt(event.clientX, event.clientY);
+        if (point) commitOffsetAt(point);
+        return;
+      }
       if (activeTool === 'select') {
         const pick = getViewport()?.pickSketch(
           event.clientX,
@@ -1723,6 +1827,17 @@ export function SketchEditor() {
   // resolution actually planned it, never because the pointer is merely near an
   // axis: a magnet target a few degrees off cannot keep both constraints. Such
   // a step keeps its purple target, but its line is not painted as aligned.
+  const offsetPlan = useMemo(() => {
+    if (!offsetTool || !sketch || !hover || offsetCommitting) return null;
+    return planOffset(sketch, selectionIds, hover, {
+      tool: tool as OffsetTool,
+      join: offsetJoin,
+    });
+  }, [offsetTool, tool, sketch, hover, selectionIds, offsetJoin, offsetCommitting]);
+  const offsetPreview = useMemo(
+    () => (offsetPlan ? offsetPreviewEntities(offsetPlan) : []),
+    [offsetPlan],
+  );
   const previewShape = previewEntity();
   const previewAlignment = Boolean(hoverInput?.alignment);
   const previewSnap =
@@ -1757,7 +1872,7 @@ export function SketchEditor() {
       magnetEnabled && hoverSnap?.midpointSnap ? hoverSnap.midpointSnap.point : null;
     const previewGuides = draftGuides(tool, markers.markers, hover, () => createId('guide'));
     getViewport()?.setSketchOverlay(
-      previewEntity(),
+      offsetTool ? offsetPreview : previewEntity(),
       markers.markers,
       previewAuto,
       midpointMarker,
@@ -1775,6 +1890,8 @@ export function SketchEditor() {
     hoverInput,
     markers,
     cursorMarker,
+    offsetTool,
+    offsetPreview,
   ]);
 
   useEffect(() => {
@@ -1848,6 +1965,10 @@ export function SketchEditor() {
       }
       if (event.key === 'Enter' && activeTool === 'bezier') finishBezier();
       if (event.key === 'Enter' && activeTool === 'line') finishLine();
+      // The keyboard can commit the offset the pointer has already described.
+      if (event.key === 'Enter' && hover && (activeTool === 'offset' || activeTool === 'outline')) {
+        commitOffsetAt(hover);
+      }
       const shortcutAction = sketch
         ? resolveConstraintShortcut(buildConstraintActions(sketch, selectionIds), event)
         : null;
@@ -1907,9 +2028,25 @@ export function SketchEditor() {
                   : t('sketch.addBezier')
                 : tool === 'project'
                   ? t('sketch.projectionPickHint')
-                  : '';
+                  : tool === 'offset'
+                    ? t('sketch.offsetHint')
+                    : tool === 'outline'
+                      ? t('sketch.outlineHint')
+                      : '';
 
   const liveMeasure = (() => {
+    if (offsetTool) {
+      if (!hover || !frame || !offsetPlan?.ok) return null;
+      // The pointer sets one distance for every chain of the selection, so the
+      // chip reads it the same way the driving dimension will.
+      const projected = getViewport()?.projectSketchPoint(frame, hover);
+      const value = Math.abs(offsetPlan.loops[0]?.distance ?? 0);
+      return {
+        text: formatMeasure('length', value, locale, 'mm'),
+        x: projected?.x ?? null,
+        y: projected?.y ?? null,
+      };
+    }
     if (!previewShape || !frame) return null;
     const infos = liveMeasures(previewShape)
       .map((measure) => measureInfo(previewShape, measure, locale, 'mm'))

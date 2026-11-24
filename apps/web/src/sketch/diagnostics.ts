@@ -183,7 +183,12 @@ export function diagnoseFrozenEntities(
   constraints: SketchConstraint[],
   globalDof: number,
   derived: readonly string[] = [],
+  conflicting: readonly string[] = [],
 ): string[] {
+  // A set the solver reports conflicts for says nothing about what is free: the
+  // probes below would fail on every entity and paint a sketch that still moves
+  // as fully constrained. Such a sketch is left unjudged.
+  if (conflicting.length > 0) return [];
   if (globalDof === 0) return entities.map((entity) => entity.id);
   return entities
     .filter((entity) => !entityHasMotion(gcs, entities, constraints, entity, derived))
