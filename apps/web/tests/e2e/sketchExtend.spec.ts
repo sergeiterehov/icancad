@@ -1,8 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /**
- * The extend tool, end to end: the press takes hold of a curve, the travel says
- * how far it grows, and it stops at the first curve in its way.
+ * The extend tool, end to end: a click takes hold of a curve, the pointer says
+ * how far it grows, a second click ends it, and it stops at the first curve in
+ * its way.
  */
 
 async function openApp(page: Page) {
@@ -135,16 +136,33 @@ async function screenPoint(page: Page, sketchId: string, point: [number, number]
   );
 }
 
-/** A press on the geometry, a travel outwards, and a release. */
+/** Fit more of the sketch on the screen, so no click lands under a panel. */
+async function zoomOut(page: Page, factor = 2.5) {
+  await page.evaluate(async (scale) => {
+    const url = (name: string) =>
+      performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .find((entry) => entry.includes(name));
+    const handle = await import(url('/src/viewport/handle.ts') ?? '/src/viewport/handle.ts');
+    const viewport = handle.getViewport()!;
+    const pose = viewport.getCameraState();
+    viewport.setCameraState({ ...pose, distance: pose.distance * scale });
+  }, factor);
+  await page.waitForTimeout(300);
+}
+
+/** A click that chooses the curve, a move outwards, and a click that ends it. */
 async function stretch(page: Page, sketchId: string, from: [number, number], to: [number, number]) {
   const start = await screenPoint(page, sketchId, from);
   const end = await screenPoint(page, sketchId, to);
   await page.mouse.move(start.x, start.y);
   await page.waitForTimeout(150);
-  await page.mouse.down();
+  await page.mouse.click(start.x, start.y);
+  await page.waitForTimeout(250);
   await page.mouse.move(end.x, end.y, { steps: 12 });
-  await page.waitForTimeout(200);
-  await page.mouse.up();
+  await page.waitForTimeout(250);
+  await page.mouse.click(end.x, end.y);
   await page.waitForTimeout(400);
 }
 
@@ -158,15 +176,17 @@ const line = (id: string, x1: number, y1: number, x2: number, y2: number) => ({
   y2,
 });
 
-test('stretches the end the press took hold of, and stays on for the next', async ({ page }) => {
+test('stretches the end the click took hold of, and stays on for the next', async ({ page }) => {
   await openApp(page);
   const sketchId = await openSketch(page);
   await replaceEntities(page, sketchId, [line('a', 0, 0, 40, 0)]);
   await page.waitForTimeout(300);
+  await zoomOut(page);
   await startExtend(page);
   await expect(page.locator('.sketch-hint')).toBeVisible();
 
-  // The press lands near the far end, the travel goes further along the line.
+  // The first click lands near the far end; the pointer then goes further along
+  // the line until the second click ends the stretch.
   await stretch(page, sketchId, [38, 0], [55, 0]);
   await expect
     .poll(
@@ -213,13 +233,14 @@ test('stops at the curve in the way and joins it', async ({ page }) => {
   const sketchId = await openSketch(page);
   await replaceEntities(page, sketchId, [
     line('a', 0, 0, 40, 0),
-    line('wall', 60, -20, 60, 20),
+    line('wall', 50, -20, 50, 20),
   ]);
   await page.waitForTimeout(300);
+  await zoomOut(page);
   await startExtend(page);
 
-  // The pointer is let go well past the wall; the curve stops on it.
-  await stretch(page, sketchId, [38, 0], [75, 0]);
+  // The pointer goes past the wall; the curve stops on it all the same.
+  await stretch(page, sketchId, [38, 0], [56, 0]);
   await expect
     .poll(
       async () => {
@@ -232,7 +253,7 @@ test('stops at the curve in the way and joins it', async ({ page }) => {
 
   const { entities, constraints } = await feature(page, sketchId);
   const grown = entities.find((entity) => entity.id === 'a');
-  expect(grown?.x2).toBeCloseTo(60, 0);
+  expect(grown?.x2).toBeCloseTo(50, 0);
   expect(constraints[0]).toMatchObject({
     type: 'point-on-line',
     refs: [
@@ -243,20 +264,36 @@ test('stops at the curve in the way and joins it', async ({ page }) => {
   await expect(page.locator('.toast-error')).toHaveCount(0);
 });
 
-test('a stretch grows a curve, it does not draw a new one', async ({ page }) => {
+test('choosing a curve changes nothing until the stretch is ended', async ({ page }) => {
   await openApp(page);
   const sketchId = await openSketch(page);
   await replaceEntities(page, sketchId, [line('a', 0, 0, 40, 0)]);
   await page.waitForTimeout(300);
+  await zoomOut(page);
   await startExtend(page);
 
-  // A release without travel is not a stretch, and it must leave nothing behind.
-  const point = await screenPoint(page, sketchId, [20, 0]);
+  // The first click only takes hold of the curve, and the hint says so.
+  const point = await screenPoint(page, sketchId, [38, 0]);
   await page.mouse.move(point.x, point.y);
-  await page.mouse.down();
-  await page.mouse.up();
+  await page.waitForTimeout(200);
+  await page.mouse.click(point.x, point.y);
   await page.waitForTimeout(400);
   const after = await feature(page, sketchId);
   expect(after.entities).toHaveLength(1);
   expect(after.entities[0]?.x2).toBeCloseTo(40, 6);
+  await expect(page.locator('.sketch-hint')).toContainText('click to finish');
+
+  // Escape lets the curve go instead of leaving the tool.
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  const tool = await page.evaluate(async () => {
+    const url = (name: string) =>
+      performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .find((entry) => entry.includes(name));
+    const ui = await import(url('/src/stores/uiStore.ts') ?? '/src/stores/uiStore.ts');
+    return ui.useUiStore.getState().sketchTool;
+  });
+  expect(tool).toBe('extend');
 });

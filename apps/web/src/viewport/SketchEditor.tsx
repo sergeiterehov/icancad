@@ -194,6 +194,15 @@ function offsetErrorKey(error: OffsetPlanError): string {
   }
 }
 
+/** A curve the stretch has taken hold of, and the end of it that will grow. */
+interface ExtendGrip {
+  entityId: string;
+  end: 'start' | 'end';
+}
+
+/** Where a pointer or a click stands; both ask the view what is under them. */
+type PointerAt = Pick<PointerEvent, 'clientX' | 'clientY'>;
+
 /**
  * The entity at the pointer's own grid points, with every magnet target
  * ignored. If the snap cannot become a constraint, the geometry must not stay
@@ -436,17 +445,15 @@ export function SketchEditor() {
     point: DraftPoint;
     active: boolean;
   } | null>(null);
-  // The curve a stretch took hold of, and the end of it the press stood nearest.
-  // A stretch begins on the geometry, so the press decides what grows and the
-  // pointer only says how far.
-  const extendPress = useRef<{
-    entityId: string;
-    end: 'start' | 'end';
-    pointerId: number;
-    x: number;
-    y: number;
-    active: boolean;
-  } | null>(null);
+  // The curve a stretch took hold of, and the end of it: the first click picks
+  // the curve, the second ends the stretch. The ref carries the same choice into
+  // the pointer handlers, which are set up outside the render.
+  const [extendGrip, setExtendGrip] = useState<ExtendGrip | null>(null);
+  const extendGripRef = useRef<ExtendGrip | null>(null);
+  const chooseExtendGrip = (grip: ExtendGrip | null) => {
+    extendGripRef.current = grip;
+    setExtendGrip(grip);
+  };
   const skipClick = useRef(false);
   /**
    * The object a finger pressed, kept until it lifts. Its tap is applied on the
@@ -471,7 +478,7 @@ export function SketchEditor() {
   const pointerConstructionRef = useRef(false);
   // The tools that read the selection and take their number from the pointer:
   // the two offsets, the corner radius of a fillet, the piece a trim cuts and
-  // the point a split adds.
+  // the point a split adds — and the stretch, which reads only the pointer.
   const pointerTool =
     tool === 'offset' ||
     tool === 'outline' ||
@@ -501,7 +508,8 @@ export function SketchEditor() {
     setHoverPreview(null);
     polylineTail.current = null;
     // A stretch belongs to the tool that began it.
-    extendPress.current = null;
+    extendGripRef.current = null;
+    setExtendGrip(null);
     draftToolRef.current = tool;
     offsetJoinRef.current = 'round';
     setOffsetJoin('round');
@@ -883,12 +891,13 @@ export function SketchEditor() {
   };
 
   /**
-   * Commits a stretch: the curve the press took hold of, grown to where the
-   * pointer was let go. The tool stays on — a stretch is one gesture, and the
-   * next end is the next press.
+   * Commits a stretch: the curve the first click took hold of, grown to where
+   * the second click stands. `ended` runs when the stretch is over, so the tool
+   * goes back to asking for a curve; a stretch that could not be made keeps the
+   * curve it took, and the next click is another try.
    */
   const extendCommitPending = useRef(false);
-  const commitExtendAt = (point: Point2, grip: { entityId: string; end: 'start' | 'end' }) => {
+  const commitExtendAt = (point: Point2, grip: ExtendGrip, ended: () => void) => {
     const current = currentSketch();
     if (!current || extendCommitPending.current) return;
     extendCommitPending.current = true;
@@ -903,6 +912,7 @@ export function SketchEditor() {
         }
         apply({ type: 'feature/replace', feature: result.commit.feature });
         void diagnoseSketch(result.commit.feature);
+        ended();
       })
       .catch(() => useUiStore.getState().showToast('sketch.extendFailed', 'error'))
       .finally(() => {
@@ -1253,7 +1263,12 @@ export function SketchEditor() {
     // so it restores the cursor from the current hover instead of the tool
     // alone: a late commit must not drop the pointer over geometry.
     const hovering = useUiStore.getState().sketchHoverIds.length > 0;
-    canvas.style.cursor = tool === 'select' ? (hovering ? 'pointer' : 'default') : 'crosshair';
+    canvas.style.cursor =
+      tool === 'select' || tool === 'extend'
+        ? hovering
+          ? 'pointer'
+          : 'default'
+        : 'crosshair';
 
     /**
      * The point a click or a finger gives the current tool: the neighbour the
@@ -1306,19 +1321,19 @@ export function SketchEditor() {
       });
     };
     /**
-     * The curve a stretch takes hold of: the one under the press, with the end
-     * of it the press stood nearest. Nothing under the press means nothing to
-     * stretch, so the gesture does not begin.
+     * The curve the pointer stands on, and the end of it the pointer is
+     * nearest. Hovering says what a click would take hold of; nothing under the
+     * pointer means nothing to stretch.
      */
-    const extendGripAt = (event: PointerEvent) => {
+    const extendGripAt = (event: PointerAt): ExtendGrip | null => {
       if (!sketch) return null;
       const entities = currentSketchEntities(activeSketchId);
       const targets = extendTargets(sketch, { construction: pointerConstructionRef.current });
       if (targets.length === 0) return null;
       const byId = new Map(targets.map((entity) => [entity.id, entity]));
-      // The press takes what it landed on; failing that, the curve it came
+      // The pointer takes what it stands on; failing that, the curve it came
       // close to. The axes and the origin are not curves to stretch, so a line
-      // drawn over one of them is still the line under the press.
+      // drawn over one of them is still the line under the pointer.
       const pick = getViewport()?.pickSketch(event.clientX, event.clientY, entities);
       const snap = getViewport()?.snapSketch(event.clientX, event.clientY, 16, entities);
       const grabbed =
@@ -1334,14 +1349,27 @@ export function SketchEditor() {
         Math.hypot(near[0] - ends[1][0], near[1] - ends[1][1])
           ? ('start' as const)
           : ('end' as const);
-      return {
-        entityId: grabbed.id,
-        end,
-        pointerId: event.pointerId,
-        x: event.clientX,
-        y: event.clientY,
-        active: false,
-      };
+      return { entityId: grabbed.id, end };
+    };
+    /**
+     * Where the new end goes: the pointer, taken to the magnet's target when
+     * there is one. The end of a curve is a point of the sketch like any other,
+     * so it snaps — but not to the curve being stretched, whose own foot would
+     * pull the pointer back onto it.
+     */
+    const extendAimAt = (event: PointerAt, grip: ExtendGrip | null): Point2 | null => {
+      const snap = getViewport()?.snapSketch(
+        event.clientX,
+        event.clientY,
+        magnetEnabled ? 12 : 0,
+        currentSketchEntities(activeSketchId),
+      );
+      if (!snap) return null;
+      const target = [snap.pointSnap, snap.curveSnap, snap.midpointSnap].find(
+        (candidate) => candidate !== null && candidate.entityId !== grip?.entityId,
+      );
+      const aim = target?.point ?? snap.point;
+      return [aim[0], aim[1]];
     };
     const onPointerDown = (event: PointerEvent) => {
       // A second finger takes the gesture for the camera; the box it interrupts
@@ -1374,20 +1402,17 @@ export function SketchEditor() {
       marquee.current = null;
       pointerDown.current = { x: event.clientX, y: event.clientY };
       const activeTool = useUiStore.getState().sketchTool;
-      // A stretch takes hold of the curve under the press; the travel that
-      // follows is what makes it a stretch.
-      if (activeTool === 'extend') {
-        extendPress.current = extendGripAt(event);
-        return;
-      }
       // The offset, contour, fillet and trim tools read the selection and the
       // pointer distance; a press starts neither a draft nor a selection box.
+      // A stretch is chosen and ended by clicks, so it has nothing to start
+      // either.
       if (
         activeTool === 'offset' ||
         activeTool === 'outline' ||
         activeTool === 'fillet' ||
         activeTool === 'trim' ||
-        activeTool === 'split'
+        activeTool === 'split' ||
+        activeTool === 'extend'
       ) {
         return;
       }
@@ -1554,13 +1579,23 @@ export function SketchEditor() {
       const activeTool = useUiStore.getState().sketchTool;
       // The projection tool aims at the 3D scene, so the sketch has no hover.
       if (activeTool === 'project') return;
+      // The stretch is chosen and ended by clicks, so the pointer is free to
+      // say what it would take hold of and where the end would go.
+      if (activeTool === 'extend') {
+        const grip = extendGripRef.current;
+        const candidate = grip ?? extendGripAt(event);
+        setSketchHover(candidate ? [candidate.entityId] : []);
+        canvas.style.cursor = candidate ? 'pointer' : 'default';
+        const aim = extendAimAt(event, grip);
+        if (aim) setHover(aim);
+        return;
+      }
       if (
         activeTool === 'offset' ||
         activeTool === 'outline' ||
         activeTool === 'fillet' ||
         activeTool === 'trim' ||
-        activeTool === 'split' ||
-        activeTool === 'extend'
+        activeTool === 'split'
       ) {
         // These tools measure from the raw pointer — the distance to the chain,
         // the radius around a corner — so the magnet must not pull the number
@@ -1568,16 +1603,6 @@ export function SketchEditor() {
         const point = getViewport()?.sketchPointAt(event.clientX, event.clientY);
         if (point) setHover(point);
         setSketchHover([]);
-        // A stretch begins where the press landed; the travel is what makes it
-        // a stretch rather than a tap.
-        const press = extendPress.current;
-        if (press && press.pointerId === event.pointerId && !press.active) {
-          if (
-            Math.hypot(event.clientX - press.x, event.clientY - press.y) > TAP_SLOP_PX
-          ) {
-            press.active = true;
-          }
-        }
         return;
       }
       if (activeTool === 'select') {
@@ -1746,20 +1771,6 @@ export function SketchEditor() {
       setHover(null);
       setHoverPreview(null);
     };
-    /**
-     * A stretch is committed where the finger lifts: the curve the press took
-     * hold of, grown to the place the pointer left it.
-     */
-    const finishExtend = (event: PointerEvent) => {
-      const press = extendPress.current;
-      extendPress.current = null;
-      if (!press || press.pointerId !== event.pointerId || !press.active) return;
-      // The tap the browser sends after the travel must not be a second act.
-      skipClick.current = true;
-      const point = getViewport()?.sketchPointAt(event.clientX, event.clientY);
-      if (point) commitExtendAt(point, { entityId: press.entityId, end: press.end });
-      setHover(null);
-    };
     const finishDrag = () => {
       const pending = pendingTap.current;
       pendingTap.current = null;
@@ -1852,9 +1863,23 @@ export function SketchEditor() {
       if (down && !isTap(event.clientX - down.x, event.clientY - down.y)) return;
       const activeTool = useUiStore.getState().sketchTool;
       if (activeTool === 'project') return;
-      // A stretch is a gesture, so a tap on its own has nothing to commit; the
-      // press that began it has already decided what to grow.
-      if (activeTool === 'extend') return;
+      // The first click takes hold of a curve, the second one ends the stretch:
+      // the pointer says which curve and how far, and neither needs a press.
+      if (activeTool === 'extend') {
+        const grip = extendGripRef.current;
+        if (!grip) {
+          const candidate = extendGripAt(event);
+          if (candidate) {
+            chooseExtendGrip(candidate);
+            // The curve is chosen; from here the pointer shows how far it grows.
+            setSketchHover([candidate.entityId]);
+          }
+          return;
+        }
+        const aim = extendAimAt(event, grip);
+        if (aim) commitExtendAt(aim, grip, () => chooseExtendGrip(null));
+        return;
+      }
       if (
         activeTool === 'offset' ||
         activeTool === 'outline' ||
@@ -1966,7 +1991,8 @@ export function SketchEditor() {
 
     const onPointerLeave = () => {
       setSketchHover([]);
-      if (useUiStore.getState().sketchTool === 'select') canvas.style.cursor = 'default';
+      const leaving = useUiStore.getState().sketchTool;
+      if (leaving === 'select' || leaving === 'extend') canvas.style.cursor = 'default';
     };
 
     // A gesture the browser takes away, such as a call from outside the page,
@@ -1974,7 +2000,6 @@ export function SketchEditor() {
     // known place.
     const onPointerCancel = () => {
       createPress.current = null;
-      extendPress.current = null;
       marquee.current = null;
       pendingTap.current = null;
       setMarqueeBox(null);
@@ -1997,7 +2022,6 @@ export function SketchEditor() {
     canvas.addEventListener('pointercancel', onPointerCancel);
     window.addEventListener('pointerup', finishDrag);
     window.addEventListener('pointerup', finishCreate);
-    window.addEventListener('pointerup', finishExtend);
     window.addEventListener('pointerup', finishMarquee);
     return () => {
       canvas.style.cursor = '';
@@ -2010,7 +2034,6 @@ export function SketchEditor() {
       canvas.removeEventListener('pointercancel', onPointerCancel);
       window.removeEventListener('pointerup', finishDrag);
       window.removeEventListener('pointerup', finishCreate);
-      window.removeEventListener('pointerup', finishExtend);
       window.removeEventListener('pointerup', finishMarquee);
     };
   }, [
@@ -2180,13 +2203,13 @@ export function SketchEditor() {
       };
     }
     if (tool === 'extend') {
-      // A stretch is a gesture: the press named the curve and its end, and the
-      // pointer only says how far.
-      const press = extendPress.current;
-      if (!press?.active) return none;
+      // Nothing is shown until a curve is chosen: what a stretch would do is
+      // only known once the curve and its end are, and hovering says which
+      // curve that would be by highlighting it.
+      if (!extendGrip) return none;
       const plan = planExtend(sketch, hover, {
         construction: pointerConstruction,
-        grip: { entityId: press.entityId, end: press.end },
+        grip: extendGrip,
       });
       if (!plan.ok) return none;
       // The curve stands aside for its own stretched self, so the ghost is the
@@ -2216,6 +2239,7 @@ export function SketchEditor() {
     offsetJoin,
     offsetCommitting,
     pointerConstruction,
+    extendGrip,
   ]);
   const previewShape = previewEntity();
   const previewAlignment = Boolean(hoverInput?.alignment);
@@ -2296,6 +2320,14 @@ export function SketchEditor() {
           setHoverPreview(null);
           setSketchSelection([]);
           polylineTail.current = null;
+          return;
+        }
+        // A chosen curve is progress too: the first Escape lets it go, the next
+        // one leaves the tool.
+        if (extendGripRef.current) {
+          chooseExtendGrip(null);
+          setHover(null);
+          setSketchHover([]);
           return;
         }
         setSketchSelection([]);
@@ -2423,7 +2455,9 @@ export function SketchEditor() {
                       : tool === 'split'
                         ? t('sketch.splitHint')
                         : tool === 'extend'
-                          ? t('sketch.extendHint')
+                          ? extendGrip
+                            ? t('sketch.extendHintGrow')
+                            : t('sketch.extendHint')
                           : tool === 'offset'
                             ? t('sketch.offsetHint')
                             : tool === 'outline'
