@@ -158,29 +158,31 @@ test('draws a hexagon out of lines held on a construction circle', async ({ page
   await expect(page.locator('.toast-error')).toHaveCount(0);
 });
 
-test('reads the radius and the corner count while it is drawn', async ({ page }) => {
+test('reads one number per step while it is drawn', async ({ page }) => {
   await openApp(page);
   const sketchId = await openSketch(page);
   await startPolygon(page);
 
   await clickAt(page, sketchId, [0, 0]);
-  // The radius step: no figure is decided yet, so it is drawn as five corners
-  // and the chip says what the figure would be.
+  // The radius step reads the radius and nothing else: the count is not being
+  // set yet.
   const radius = await screenPoint(page, sketchId, [12, 0]);
   await page.mouse.move(radius.x, radius.y);
   await page.waitForTimeout(250);
   const chip = page.locator('[data-testid="sketch-live-measure"]');
   await expect(chip).toBeVisible();
   await expect(chip).toContainText('mm');
-  await expect(chip).toContainText('5 corners');
+  await expect(chip).not.toContainText('corners');
 
-  // Once the radius is named the count follows the pointer.
+  // Once the radius is named the chip swaps to the count, which follows the
+  // pointer, and the radius is no longer read.
   await page.mouse.click(radius.x, radius.y);
   await page.waitForTimeout(250);
   const sides = await screenPoint(page, sketchId, [6, 10.3923]);
   await page.mouse.move(sides.x, sides.y, { steps: 10 });
   await page.waitForTimeout(250);
   await expect(chip).toContainText('6 corners');
+  await expect(chip).not.toContainText('mm');
 });
 
 test('Shift makes the radius the distance to the edges', async ({ page }) => {

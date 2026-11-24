@@ -2612,13 +2612,13 @@ export function SketchEditor() {
     if (tool === 'polygon') {
       if (!polygonPreview || !frame || !hover) return null;
       const projected = getViewport()?.projectSketchPoint(frame, hover);
-      // The circle tool reads its radius under the pointer; a polygon has that
-      // and a count as well, and both are what the two remaining clicks set.
+      // A step reads only the number it sets: the radius while the pointer names
+      // it, and how many corners there are once the radius is fixed.
       return {
-        text: [
-          formatMeasure('length', polygonPreview.radius, locale, 'mm'),
-          t('sketch.polygonCorners', { count: polygonPreview.sides }),
-        ].join(' · '),
+        text:
+          draft.length < 2
+            ? formatMeasure('length', polygonPreview.radius, locale, 'mm')
+            : t('sketch.polygonCorners', { count: polygonPreview.sides }),
         x: projected?.x ?? null,
         y: projected?.y ?? null,
       };
