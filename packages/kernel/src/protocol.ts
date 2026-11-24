@@ -177,7 +177,30 @@ export interface ProfileEllipse {
   reversed?: boolean;
 }
 
-export type ProfileCurve = ProfileLine | ProfileArc | ProfileCircle | ProfileEllipse;
+/**
+ * A B-spline on the sketch plane: the poles in sketch coordinates, the degree
+ * and the knots with their multiplicities. A curve the sketch draws as a Bezier
+ * is one span of this, clamped at both ends, so it reaches the kernel exactly
+ * instead of as a polyline of it.
+ */
+export interface ProfileBSpline {
+  type: 'bspline';
+  poles: Array<[number, number]>;
+  /** One weight per pole; absent when the curve is not rational. */
+  weights?: number[];
+  degree: number;
+  knots: number[];
+  /** One multiplicity per knot. */
+  multiplicities: number[];
+  reversed?: boolean;
+}
+
+export type ProfileCurve =
+  | ProfileLine
+  | ProfileArc
+  | ProfileCircle
+  | ProfileEllipse
+  | ProfileBSpline;
 
 export interface ProfileLoop {
   curves: ProfileCurve[];

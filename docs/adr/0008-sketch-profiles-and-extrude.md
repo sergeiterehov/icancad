@@ -11,7 +11,7 @@ Sketch faces (ADR 0006) existed only as an inspector list: nothing turned them i
 | Area | Decision |
 |---|---|
 | Profiles | `sketchProfiles()` turns the faces of `sketchTopology()` into extrusion profiles: ordered contours with exact lines, arcs and circles, plus a `reversed` flag for contours walked against the natural curve direction. Holes are reversed copies of their loops, so the outer contour is always counter-clockwise. Contours that are not closed are dropped. |
-| Approximations | Ellipses and beziers are still sent as polylines (32 segments for ellipses) because the protocol has no exact curve for them yet. This is the only lossy path and is recorded as a follow-up. |
+| Approximations | Ellipses and beziers were sent as polylines (32 segments) when the protocol had no exact curve for them. Both are exact now: ellipses in ADR 0009 and free-form curves in ADR 0051. |
 | Kernel ops | Three new worker requests: `make-prism` (wire → face → prism, transformed onto the sketch plane, supporting blind, symmetric and two-sided extents), `boolean` (fuse, cut, common between two shapes) and `topology` (faces and edges of a shape). OCCT stays behind the worker boundary. |
 | Holes | A region becomes its outer prism minus one prism per hole, using the boolean cut. Adding hole wires to a face depends on OCCT's wire orientation rules and produced broken tessellations; cutting is exact and orientation-free. |
 | Body lifecycle | An extrude with `op: 'new'` creates the body `featureBodyId(featureId)`. Switching the operation to add/cut/intersect removes that body ref, switching back restores it with the same id; metadata (name, colour, visibility) is never touched. Deterministic ids keep the object identity stable across these switches (ADR 0007). |
@@ -25,4 +25,4 @@ Sketch faces (ADR 0006) existed only as an inspector list: nothing turned them i
 - The timeline is now able to produce solids that other operations can consume, which unblocks shell, hole and rib in M3.
 - Rendering a body no longer requires it to come from a primitive: the rebuild pipeline keeps a body-id → shape-id map and tessellates the final shape of each body.
 - Booleans between an extrude and an imported mesh are not possible (a mesh has no B-rep). Meshes are separate mesh objects, so the body picker never offers them and implicit "all bodies" targets skip them; only legacy references report `BODY_NOT_SOLID` until mesh → solid conversion lands in M3.
-- Exact ellipses and beziers in profiles remain a follow-up; until then extruded ellipses have faceted walls.
+- Exact ellipses and beziers in profiles were follow-ups at the time. Both have landed, so extruded ellipses and free-form curves have smooth walls.

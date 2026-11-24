@@ -119,6 +119,11 @@ function loopPoints(loop: ProfileRegion['outer']): [number, number][] {
       }
       continue;
     }
+    if (curve.type === 'bspline') {
+      // Its poles are a rough outline of the curve, which is enough for probes.
+      points.push(...curve.poles);
+      continue;
+    }
     const span = curve.endAngle - curve.startAngle;
     for (let index = 0; index <= 2; index += 1) {
       const angle = curve.startAngle + (span * index) / 2;

@@ -547,6 +547,48 @@ describe('OCCT kernel engine', () => {
     expect(mesh.bbox.max[1]).toBeCloseTo(10, 1);
   });
 
+  it('extrudes a B-spline into one smooth side instead of facets', () => {
+    // A bump over a straight base, as a free-form curve in a sketch. Sent as a
+    // single clamped span of degree 3, the side it sweeps is one face; a
+    // polyline of the same curve would add a face per segment.
+    const result = engine.makePrism({
+      shapeId: 'prism-bspline',
+      origin: [0, 0, 0],
+      xAxis: [1, 0, 0],
+      yAxis: [0, 1, 0],
+      regions: [
+        {
+          outer: {
+            curves: [
+              { type: 'line', x1: 0, y1: 0, x2: 30, y2: 0 },
+              {
+                type: 'bspline',
+                poles: [
+                  [30, 0],
+                  [30, 16],
+                  [0, 16],
+                  [0, 0],
+                ],
+                degree: 3,
+                knots: [0, 1],
+                multiplicities: [4, 4],
+              },
+            ],
+          },
+          holes: [],
+        },
+      ],
+      distances: [5],
+    });
+    // Two caps, the flat base and the curved wall.
+    expect(result.stats.faces).toBe(4);
+    expect(result.stats.solids).toBe(1);
+    const mesh = engine.tessellate('prism-bspline');
+    expect(mesh.bbox.min[0]).toBeCloseTo(0, 5);
+    expect(mesh.bbox.max[0]).toBeCloseTo(30, 5);
+    expect(mesh.bbox.max[2]).toBeCloseTo(5, 5);
+  });
+
   it('extrudes an elliptical arc with its axes turned and its Y axis longer', () => {
     const result = engine.makePrism({
       shapeId: 'prism-ellipse-arc',

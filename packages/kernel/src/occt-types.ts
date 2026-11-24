@@ -1,3 +1,8 @@
+/** A `TCol...Array1` written from index 1, as every OCCT array is. */
+export interface OcctValueArray<T> {
+  SetValue(index: number, value: T): void;
+}
+
 export interface OcctArray<T> {
   Length(): number;
   Value(index: number): T;
@@ -430,6 +435,36 @@ export interface OcctBindings {
   };
   TopLoc_Location_1: new () => OcctLocation;
   gp_Pnt_3: new (x: number, y: number, z: number) => OcctPoint3;
+  /** A `TColgp_Array1OfPnt`: poles written one by one, from index 1. */
+  TColgp_Array1OfPnt_2: new (lower: number, upper: number) => OcctValueArray<OcctPoint3>;
+  /** A `TColStd_Array1OfReal`: knots or weights, written from index 1. */
+  TColStd_Array1OfReal_2: new (lower: number, upper: number) => OcctValueArray<number>;
+  /** A `TColStd_Array1OfInteger`: the multiplicity of every knot. */
+  TColStd_Array1OfInteger_2: new (lower: number, upper: number) => OcctValueArray<number>;
+  /** A `Geom_BSplineCurve` from poles, knots and multiplicities. */
+  Geom_BSplineCurve_1: new (
+    poles: OcctValueArray<OcctPoint3>,
+    knots: OcctValueArray<number>,
+    multiplicities: OcctValueArray<number>,
+    degree: number,
+    periodic: boolean,
+  ) => unknown;
+  /** The same with one weight per pole: a rational B-spline. */
+  Geom_BSplineCurve_2: new (
+    poles: OcctValueArray<OcctPoint3>,
+    weights: OcctValueArray<number>,
+    knots: OcctValueArray<number>,
+    multiplicities: OcctValueArray<number>,
+    degree: number,
+    periodic: boolean,
+  ) => unknown;
+  /** An `Handle_Geom_Curve`, which is what a curve edge is built from. */
+  Handle_Geom_Curve_2: new (curve: unknown) => unknown;
+  /** An edge over an exact curve of any kind. */
+  BRepBuilderAPI_MakeEdge_24: new (curve: unknown) => {
+    IsDone(): boolean;
+    Edge(): OcctShape;
+  };
   gp_Dir_4: new (x: number, y: number, z: number) => unknown;
   gp_Vec_4: new (x: number, y: number, z: number) => unknown;
   gp_Ax2_2: new (origin: OcctPoint3, direction: unknown, xDirection: unknown) => unknown;

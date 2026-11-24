@@ -71,6 +71,69 @@ describe('sketch profiles', () => {
     expect(arc).toMatchObject({ cx: 20, cy: 0, r: 20 });
   });
 
+  it('passes a Bezier as one clamped B-spline span', () => {
+    const entities: SketchEntity[] = [
+      line('l1', 0, 0, 30, 0),
+      {
+        id: 'b1',
+        type: 'bezier',
+        construction: false,
+        points: [
+          [30, 0],
+          [30, 16],
+          [0, 16],
+          [0, 0],
+        ],
+      },
+    ];
+    const [region] = sketchProfiles(entities);
+    expect(region).toBeDefined();
+    expectClosedChain(region!.outer.curves);
+    const spline = region!.outer.curves.find((curve) => curve.type === 'bspline');
+    expect(spline).toBeDefined();
+    expect(spline).toMatchObject({
+      // The four control points are the poles of a degree three span whose ends
+      // are clamped by repeating each knot degree + 1 times.
+      degree: 3,
+      knots: [0, 1],
+      multiplicities: [4, 4],
+    });
+    expect((spline as Extract<ProfileCurve, { type: 'bspline' }>).poles).toHaveLength(4);
+    // One curve, not the 32 segments of its tessellation: the sweep then has a
+    // single smooth wall instead of a fan of facets.
+    expect(region!.outer.curves).toHaveLength(2);
+  });
+
+  it('walks a Bezier backwards by reversing its poles', () => {
+    // The same bump drawn from the other end: the loop has to enter the spline
+    // at its last pole, so the profile reverses the poles rather than flipping
+    // the edge afterwards.
+    const entities: SketchEntity[] = [
+      line('l1', 0, 0, 30, 0),
+      {
+        id: 'b1',
+        type: 'bezier',
+        construction: false,
+        points: [
+          [0, 0],
+          [0, 16],
+          [30, 16],
+          [30, 0],
+        ],
+      },
+    ];
+    const [region] = sketchProfiles(entities);
+    expect(region).toBeDefined();
+    expectClosedChain(region!.outer.curves);
+    const spline = region!.outer.curves.find(
+      (curve): curve is Extract<ProfileCurve, { type: 'bspline' }> => curve.type === 'bspline',
+    );
+    expect(spline).toBeDefined();
+    expect(spline!.reversed).toBeUndefined();
+    expect(spline!.poles[0]).toEqual([30, 0]);
+    expect(spline!.poles[spline!.poles.length - 1]).toEqual([0, 0]);
+  });
+
   it('passes an ellipse as one exact curve instead of a polyline', () => {
     const ellipse: SketchEntity = {
       id: 'e1',
@@ -197,6 +260,11 @@ function ellipsePoint(
 function curveStart(curve: ProfileCurve): [number, number] {
   if (curve.type === 'line') return [curve.x1, curve.y1];
   if (curve.type === 'circle') return [curve.cx + curve.r, curve.cy];
+  if (curve.type === 'bspline') {
+    return curve.reversed
+      ? curve.poles[curve.poles.length - 1]!
+      : curve.poles[0]!;
+  }
   if (curve.type === 'ellipse')
     return ellipsePoint(curve, curve.reversed ? curve.endAngle : curve.startAngle);
   const angle = curve.reversed ? curve.endAngle : curve.startAngle;
@@ -206,6 +274,9 @@ function curveStart(curve: ProfileCurve): [number, number] {
 function curveEnd(curve: ProfileCurve): [number, number] {
   if (curve.type === 'line') return [curve.x2, curve.y2];
   if (curve.type === 'circle') return [curve.cx + curve.r, curve.cy];
+  if (curve.type === 'bspline') {
+    return curve.reversed ? curve.poles[0]! : curve.poles[curve.poles.length - 1]!;
+  }
   if (curve.type === 'ellipse')
     return ellipsePoint(curve, curve.reversed ? curve.startAngle : curve.endAngle);
   const angle = curve.reversed ? curve.startAngle : curve.endAngle;

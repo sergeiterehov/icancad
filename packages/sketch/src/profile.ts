@@ -1,5 +1,5 @@
 import type { SketchEntity } from '@icancad/model';
-import { tessellateEntity, type Point2 } from './index';
+import type { Point2 } from './index';
 import { sketchTopology, type SketchTopologyLoopCurve } from './topology';
 
 export interface ProfileLineCurve {
@@ -46,8 +46,28 @@ export interface ProfileEllipseCurve {
   reversed?: boolean;
 }
 
+/**
+ * A B-spline on the sketch plane: poles, degree and clamped knots. The sketch
+ * draws its free-form curve as a Bezier, which is one span of this — and a span
+ * sent exactly is one smooth face when the profile is swept, where a polyline
+ * of the same curve is a fan of facets.
+ */
+export interface ProfileBSplineCurve {
+  type: 'bspline';
+  poles: Array<[number, number]>;
+  degree: number;
+  knots: number[];
+  /** One multiplicity per knot. */
+  multiplicities: number[];
+  reversed?: boolean;
+}
+
 export type ProfileCurve =
-  ProfileLineCurve | ProfileArcCurve | ProfileCircleCurve | ProfileEllipseCurve;
+  | ProfileLineCurve
+  | ProfileArcCurve
+  | ProfileCircleCurve
+  | ProfileEllipseCurve
+  | ProfileBSplineCurve;
 
 export interface ProfileLoop {
   curves: ProfileCurve[];
@@ -66,9 +86,11 @@ export interface ProfileRegion {
   edges: string[];
 }
 
-// Sketch faces as extrusion profiles: exact lines, arcs, circles and ellipses
-// with the direction the contour walks them, so the kernel rebuilds the same
-// shape the sketch shows. Beziers are still passed as polylines.
+// Sketch faces as extrusion profiles: exact lines, arcs, circles, ellipses and
+// free-form curves with the direction the contour walks them, so the kernel
+// rebuilds the same shape the sketch shows. A run of a Bezier cut short by an
+// intersection is still passed as a polyline: subdividing a Bezier exactly is
+// its own step.
 export function sketchProfiles(entities: readonly SketchEntity[]): ProfileRegion[] {
   const topology = sketchTopology(entities);
   const byId = new Map(entities.map((entity) => [entity.id, entity]));
@@ -292,6 +314,11 @@ function ellipsePoint(curve: ProfileEllipseCurve, angle: number): Point2 {
 
 function curveStart(curve: ProfileCurve): Point2 {
   if (curve.type === 'line') return [curve.x1, curve.y1];
+  if (curve.type === 'bspline') {
+    return curve.reversed
+      ? (curve.poles[curve.poles.length - 1] ?? [0, 0])
+      : (curve.poles[0] ?? [0, 0]);
+  }
   if (curve.type === 'circle') return [curve.cx + curve.r, curve.cy];
   if (curve.type === 'ellipse') {
     // A full ellipse joins itself at its first point, so both ends are angle 0.
@@ -303,6 +330,11 @@ function curveStart(curve: ProfileCurve): Point2 {
 
 function curveEnd(curve: ProfileCurve): Point2 {
   if (curve.type === 'line') return [curve.x2, curve.y2];
+  if (curve.type === 'bspline') {
+    return curve.reversed
+      ? (curve.poles[0] ?? [0, 0])
+      : (curve.poles[curve.poles.length - 1] ?? [0, 0]);
+  }
   if (curve.type === 'circle') return [curve.cx + curve.r, curve.cy];
   if (curve.type === 'ellipse') {
     return ellipsePoint(curve, (curve.reversed ? curve.startAngle : curve.endAngle) ?? 0);
@@ -378,9 +410,23 @@ function entityOrientations(entity: SketchEntity): EntityOrientations {
       };
     }
     case 'bezier': {
-      const points: Point2[] = tessellateEntity(entity);
-      const backwardPoints = [...points].reverse();
-      return { forward: polylineCurves(points), backward: polylineCurves(backwardPoints) };
+      // A Bezier is a single span of a B-spline: its control points are the
+      // poles, and both ends are clamped by repeating the knot as often as the
+      // degree asks. Walking it the other way round is the same curve with the
+      // poles reversed, so no edge has to be flipped.
+      const degree = Math.max(1, entity.points.length - 1);
+      const poles = entity.points.map((point) => [point[0], point[1]] as Point2);
+      const span: ProfileBSplineCurve = {
+        type: 'bspline',
+        poles,
+        degree,
+        knots: [0, 1],
+        multiplicities: [degree + 1, degree + 1],
+      };
+      return {
+        forward: [span],
+        backward: [{ ...span, poles: [...poles].reverse() }],
+      };
     }
     case 'point':
       return { forward: [], backward: [] };

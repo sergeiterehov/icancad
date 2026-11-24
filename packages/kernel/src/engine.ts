@@ -2912,6 +2912,45 @@ export class KernelEngine {
       const to = planePoint(oc, plane, curve.x2, curve.y2);
       return new oc.BRepBuilderAPI_MakeEdge_3(from, to).Edge();
     }
+    if (curve.type === 'bspline') {
+      // The poles are the curve, so they are lifted onto the plane and the
+      // spline is built from them: an exact edge, and one smooth face when the
+      // profile is swept.
+      const poles = new oc.TColgp_Array1OfPnt_2(1, curve.poles.length);
+      curve.poles.forEach((point, index) => {
+        poles.SetValue(index + 1, planePoint(oc, plane, point[0], point[1]));
+      });
+      const knots = new oc.TColStd_Array1OfReal_2(1, curve.knots.length);
+      curve.knots.forEach((knot, index) => knots.SetValue(index + 1, knot));
+      const multiplicities = new oc.TColStd_Array1OfInteger_2(
+        1,
+        curve.multiplicities.length,
+      );
+      curve.multiplicities.forEach((multiplicity, index) =>
+        multiplicities.SetValue(index + 1, multiplicity),
+      );
+      let spline: unknown;
+      if (curve.weights) {
+        const weights = new oc.TColStd_Array1OfReal_2(1, curve.weights.length);
+        curve.weights.forEach((weight, index) => weights.SetValue(index + 1, weight));
+        spline = new oc.Geom_BSplineCurve_2(
+          poles,
+          weights,
+          knots,
+          multiplicities,
+          curve.degree,
+          false,
+        );
+      } else {
+        spline = new oc.Geom_BSplineCurve_1(poles, knots, multiplicities, curve.degree, false);
+      }
+      const maker = new oc.BRepBuilderAPI_MakeEdge_24(new oc.Handle_Geom_Curve_2(spline));
+      if (!maker.IsDone()) {
+        throw new KernelOpError('INVALID_PARAMS', 'Sketch curve cannot be built');
+      }
+      const edge = maker.Edge();
+      return curve.reversed ? oc.TopoDS.Edge_1(edge.Reversed()) : edge;
+    }
     // Orienting the curve with the plane axes keeps sketch angles unchanged.
     const centre = planePoint(oc, plane, curve.cx, curve.cy);
     const direction = (angle: number) =>
@@ -3394,6 +3433,12 @@ function ellipsePoint(curve: ProfileEllipse, angle: number): [number, number] {
 
 function curveStart(curve: ProfileCurve): [number, number] {
   if (curve.type === 'line') return [curve.x1, curve.y1];
+  if (curve.type === 'bspline') {
+    const pole = curve.reversed
+      ? curve.poles[curve.poles.length - 1]
+      : curve.poles[0];
+    return pole ?? [0, 0];
+  }
   if (curve.type === 'circle') return [curve.cx + curve.r, curve.cy];
   if (curve.type === 'ellipse') {
     return ellipsePoint(curve, (curve.reversed ? curve.endAngle : curve.startAngle) ?? 0);
@@ -3404,6 +3449,12 @@ function curveStart(curve: ProfileCurve): [number, number] {
 
 function curveEnd(curve: ProfileCurve): [number, number] {
   if (curve.type === 'line') return [curve.x2, curve.y2];
+  if (curve.type === 'bspline') {
+    const pole = curve.reversed
+      ? curve.poles[0]
+      : curve.poles[curve.poles.length - 1];
+    return pole ?? [0, 0];
+  }
   if (curve.type === 'circle') return [curve.cx + curve.r, curve.cy];
   if (curve.type === 'ellipse') {
     return ellipsePoint(curve, (curve.reversed ? curve.startAngle : curve.endAngle) ?? 0);
