@@ -473,9 +473,12 @@ export function SketchEditor() {
   const [offsetJoin, setOffsetJoin] = useState<OffsetJoin>('round');
   const offsetJoinRef = useRef<OffsetJoin>('round');
   // A polygon takes its radius to the corners; Shift says the same distance is
-  // the one its edges stand at instead.
+  // the one its edges stand at instead. The key is read while the radius is
+  // being set, and the click that sets it keeps the answer: letting go of Shift
+  // afterwards must not turn the figure inside out.
   const [polygonInternal, setPolygonInternal] = useState(false);
   const polygonInternalRef = useRef(false);
+  const polygonGripInternal = useRef(false);
   // The tools that change what is already drawn ignore construction curves
   // unless Shift asks for them: a helper drawn across a part must not be what
   // the scissors or the split take.
@@ -516,6 +519,7 @@ export function SketchEditor() {
     extendGripRef.current = null;
     setExtendGrip(null);
     polygonInternalRef.current = false;
+    polygonGripInternal.current = false;
     setPolygonInternal(false);
     draftToolRef.current = tool;
     offsetJoinRef.current = 'round';
@@ -1224,6 +1228,9 @@ export function SketchEditor() {
     }
     if (activeTool === 'polygon') {
       if (currentDraft.length < 2) {
+        // The click that names the radius settles what the radius means, and the
+        // rest of the figure is drawn to it.
+        if (currentDraft.length === 1) polygonGripInternal.current = polygonInternalRef.current;
         updateDraft([...currentDraft, { point, input }]);
         return;
       }
@@ -1234,7 +1241,7 @@ export function SketchEditor() {
         centre: currentDraft[0]!.point,
         corner: currentDraft[1]!.point,
         cursor: point,
-        internal: polygonInternalRef.current,
+        internal: polygonGripInternal.current,
         inputs: [currentDraft[0]!.input, currentDraft[1]!.input],
       });
       updateDraft([]);
@@ -2243,7 +2250,9 @@ export function SketchEditor() {
       corner: corner ?? hover,
       cursor: hover,
       sides: corner ? undefined : POLYGON_DRAFT_SIDES,
-      internal: polygonInternal,
+      // Once the radius is clicked the mode is the one that click saved, so the
+      // ghost cannot disagree with what the next click will build.
+      internal: corner ? polygonGripInternal.current : polygonInternal,
     });
     if (!geometry) return null;
     // The dotted circle is the radius that was pointed at: the corners lie on it

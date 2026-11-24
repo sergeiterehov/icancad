@@ -191,11 +191,12 @@ test('Shift makes the radius the distance to the edges', async ({ page }) => {
   await startPolygon(page);
 
   await clickAt(page, sketchId, [0, 0]);
-  await clickAt(page, sketchId, [12, 0]);
-  // Held for the click that names the corners, so the figure is built inside out.
+  // Held for the click that names the radius, so the figure is built inside out
+  // — and letting go of it afterwards must not undo that.
   await page.keyboard.down('Shift');
-  await clickAt(page, sketchId, [6, 10.3923]);
+  await clickAt(page, sketchId, [12, 0]);
   await page.keyboard.up('Shift');
+  await clickAt(page, sketchId, [6, 10.3923]);
 
   await expect
     .poll(async () => (await feature(page, sketchId)).entities.length, { timeout: 15_000 })
