@@ -7,6 +7,7 @@ import {
   MousePointer2,
   Presentation,
   Ruler,
+  Scissors,
   SplinePointer,
   SquareRoundCorner,
   StrokeLineCapRound,
@@ -17,6 +18,7 @@ import { useTranslation } from 'react-i18next';
 import { buildConstraintActions } from '../sketch/constraintModel';
 import { constructionSelection, toggleConstruction } from '../sketch/construction';
 import { filletCorners } from '../sketch/sketchFillet';
+import { trimTargets } from '../sketch/sketchTrim';
 import { offsetSelectionEntities } from '../sketch/sketchOffset';
 import {
   SKETCH_CONSTRUCTION_SHORTCUT,
@@ -213,7 +215,12 @@ export function SketchToolRail() {
   const offsetTargets = feature ? offsetSelectionEntities(feature, selectionIds) : [];
   // А corner needs exactly two lines that meet: anything else has nothing to round.
   const filletTarget = feature ? filletCorners(feature, selectionIds).length : 0;
-  const toolActive = sketchTool === 'offset' || sketchTool === 'outline' || sketchTool === 'fillet';
+  const trimTarget = feature ? trimTargets(feature, selectionIds).length : 0;
+  const toolActive =
+    sketchTool === 'offset' ||
+    sketchTool === 'outline' ||
+    sketchTool === 'fillet' ||
+    sketchTool === 'trim';
 
   const toggleSelectedConstruction = () => {
     if (!feature) return;
@@ -224,7 +231,7 @@ export function SketchToolRail() {
   const openTools = (event: MouseEvent<HTMLButtonElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const entry = (
-      tool: Extract<SketchTool, 'offset' | 'outline' | 'fillet'>,
+      tool: Extract<SketchTool, 'offset' | 'outline' | 'fillet' | 'trim'>,
       label: string,
       icon: ReactElement,
       disabled: boolean,
@@ -245,6 +252,13 @@ export function SketchToolRail() {
         <SquareRoundCorner size={14} />,
         filletTarget === 0,
         t('sketch.filletSelect'),
+      ),
+      entry(
+        'trim',
+        t('sketch.toolTrim'),
+        <Scissors size={14} />,
+        trimTarget === 0,
+        t('sketch.trimSelect'),
       ),
       entry(
         'offset',
@@ -372,6 +386,8 @@ export function SketchToolRail() {
             <StrokeLineCapRound size={17} />
           ) : sketchTool === 'fillet' ? (
             <SquareRoundCorner size={17} />
+          ) : sketchTool === 'trim' ? (
+            <Scissors size={17} />
           ) : (
             <SplinePointer size={17} />
           )}

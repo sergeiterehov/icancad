@@ -80,6 +80,12 @@ import {
   type FilletFailure,
 } from '../sketch/sketchFillet';
 import {
+  commitTrim,
+  planTrim,
+  trimPreviewEntities,
+  type TrimFailure,
+} from '../sketch/sketchTrim';
+import {
   commitOffsetSolved,
   offsetPreviewEntities,
   planOffset,
@@ -124,6 +130,17 @@ function filletErrorKey(error: FilletFailure): string {
       return 'sketch.filletSelect';
     default:
       return 'sketch.filletFailed';
+  }
+}
+
+function trimErrorKey(error: TrimFailure): string {
+  switch (error) {
+    case 'selection':
+      return 'sketch.trimSelect';
+    case 'no-crossing':
+      return 'sketch.trimNoCrossing';
+    default:
+      return 'sketch.trimFailed';
   }
 }
 
@@ -402,8 +419,9 @@ export function SketchEditor() {
   const [offsetJoin, setOffsetJoin] = useState<OffsetJoin>('round');
   const offsetJoinRef = useRef<OffsetJoin>('round');
   // The tools that read the selection and take their number from the pointer:
-  // the two offsets, and the corner radius of a fillet.
-  const pointerTool = tool === 'offset' || tool === 'outline' || tool === 'fillet';
+  // the two offsets, the corner radius of a fillet, and the piece a trim cuts.
+  const pointerTool =
+    tool === 'offset' || tool === 'outline' || tool === 'fillet' || tool === 'trim';
   const offsetTool = tool === 'offset' || tool === 'outline';
 
   const applyAutoHighlight = (ids: string[]) => {
@@ -685,7 +703,8 @@ export function SketchEditor() {
   const commitPointerToolAt = (point: Point2) => {
     const activeTool = useUiStore.getState().sketchTool;
     const isFillet = activeTool === 'fillet';
-    if (activeTool !== 'offset' && activeTool !== 'outline' && !isFillet) return;
+    const isTrim = activeTool === 'trim';
+    if (activeTool !== 'offset' && activeTool !== 'outline' && !isFillet && !isTrim) return;
     if (offsetCommitPending.current) return;
     const current = currentSketch();
     if (!current) return;
@@ -701,18 +720,28 @@ export function SketchEditor() {
               }
             : { ok: false as const, message: filletErrorKey(result.error) },
         )
-      : commitOffsetSolved(current, selectionIds, point, {
-          tool: activeTool,
-          join: offsetJoinRef.current,
-        }).then((result) =>
-          result.ok
-            ? {
-                ok: true as const,
-                feature: result.commit.feature,
-                selection: result.commit.createdIds,
-              }
-            : { ok: false as const, message: offsetErrorKey(result.error) },
-        );
+      : isTrim
+        ? commitTrim(current, selectionIds, point).then((result) =>
+            result.ok
+              ? {
+                  ok: true as const,
+                  feature: result.commit.feature,
+                  selection: result.commit.keptIds,
+                }
+              : { ok: false as const, message: trimErrorKey(result.error) },
+          )
+        : commitOffsetSolved(current, selectionIds, point, {
+            tool: activeTool,
+            join: offsetJoinRef.current,
+          }).then((result) =>
+            result.ok
+              ? {
+                  ok: true as const,
+                  feature: result.commit.feature,
+                  selection: result.commit.createdIds,
+                }
+              : { ok: false as const, message: offsetErrorKey(result.error) },
+          );
     void settling
       .then((result) => {
         if (!result.ok) {
@@ -725,7 +754,16 @@ export function SketchEditor() {
         setSketchTool('select');
       })
       .catch(() =>
-        useUiStore.getState().showToast(isFillet ? 'sketch.filletFailed' : 'sketch.offsetFailed', 'error'),
+        useUiStore
+          .getState()
+          .showToast(
+            isFillet
+              ? 'sketch.filletFailed'
+              : isTrim
+                ? 'sketch.trimFailed'
+                : 'sketch.offsetFailed',
+            'error',
+          ),
       )
       .finally(() => {
         offsetCommitPending.current = false;
@@ -1159,9 +1197,16 @@ export function SketchEditor() {
       marquee.current = null;
       pointerDown.current = { x: event.clientX, y: event.clientY };
       const activeTool = useUiStore.getState().sketchTool;
-      // The offset, contour and fillet tools read the selection and the pointer
-      // distance; a press starts neither a draft nor a selection box.
-      if (activeTool === 'offset' || activeTool === 'outline' || activeTool === 'fillet') return;
+      // The offset, contour, fillet and trim tools read the selection and the
+      // pointer distance; a press starts neither a draft nor a selection box.
+      if (
+        activeTool === 'offset' ||
+        activeTool === 'outline' ||
+        activeTool === 'fillet' ||
+        activeTool === 'trim'
+      ) {
+        return;
+      }
       if (activeTool !== 'select') {
         // A finger that travels stretches the next primitive from where it came
         // down, so the press point has to be kept before the first move.
@@ -1328,7 +1373,8 @@ export function SketchEditor() {
       if (
         activeTool === 'offset' ||
         activeTool === 'outline' ||
-        activeTool === 'fillet'
+        activeTool === 'fillet' ||
+        activeTool === 'trim'
       ) {
         // These tools measure from the raw pointer — the distance to the chain,
         // the radius around a corner — so the magnet must not pull the number
@@ -1596,7 +1642,12 @@ export function SketchEditor() {
       if (down && !isTap(event.clientX - down.x, event.clientY - down.y)) return;
       const activeTool = useUiStore.getState().sketchTool;
       if (activeTool === 'project') return;
-      if (activeTool === 'offset' || activeTool === 'outline' || activeTool === 'fillet') {
+      if (
+        activeTool === 'offset' ||
+        activeTool === 'outline' ||
+        activeTool === 'fillet' ||
+        activeTool === 'trim'
+      ) {
         const point = getViewport()?.sketchPointAt(event.clientX, event.clientY);
         if (point) commitPointerToolAt(point);
         return;
@@ -1887,6 +1938,16 @@ export function SketchEditor() {
         replaced: plan.plan.lines.map((line) => line.id),
       };
     }
+    if (tool === 'trim') {
+      const plan = planTrim(sketch, selectionIds, hover);
+      if (!plan.ok) return none;
+      // The cut curve stands aside so the piece that goes is seen as a gap, and
+      // the pieces that stay take its place before the click.
+      return {
+        entities: trimPreviewEntities(plan.plan),
+        replaced: [plan.plan.cut.source.id],
+      };
+    }
     return {
       entities: offsetPreviewEntities(
         planOffset(sketch, selectionIds, hover, {
@@ -2029,7 +2090,10 @@ export function SketchEditor() {
       if (
         event.key === 'Enter' &&
         hover &&
-        (activeTool === 'offset' || activeTool === 'outline' || activeTool === 'fillet')
+        (activeTool === 'offset' ||
+          activeTool === 'outline' ||
+          activeTool === 'fillet' ||
+          activeTool === 'trim')
       ) {
         commitPointerToolAt(hover);
       }
@@ -2094,7 +2158,9 @@ export function SketchEditor() {
                   ? t('sketch.projectionPickHint')
                   : tool === 'fillet'
                     ? t('sketch.filletHint')
-                    : tool === 'offset'
+                    : tool === 'trim'
+                      ? t('sketch.trimHint')
+                      : tool === 'offset'
                       ? t('sketch.offsetHint')
                       : tool === 'outline'
                         ? t('sketch.outlineHint')

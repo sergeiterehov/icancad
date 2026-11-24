@@ -8,10 +8,12 @@ export type SketchTool =
   | 'elliptical-arc'
   | 'bezier'
   | 'project'
-  /** Tools that work on the selection: a copy at a distance, around it, or a corner rounded. */
+  /** Tools that work on the selection: a copy at a distance, around it, a corner
+   * rounded, or a piece cut away. */
   | 'offset'
   | 'outline'
-  | 'fillet';
+  | 'fillet'
+  | 'trim';
 
 /** Single-key shortcuts of the drawing tools, shown in the tool rail tooltips. */
 export const SKETCH_TOOL_SHORTCUTS: Partial<Record<SketchTool, string>> = {

@@ -335,6 +335,7 @@ export * from './topology';
 
 export * from './intersect';
 export * from './fillet';
+export * from './trim';
 
 export * from './offset';
 
