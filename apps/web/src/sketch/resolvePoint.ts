@@ -42,6 +42,9 @@ export function snapModeFor(tool: SketchTool, draftLength: number): SketchSnapMo
   // and the solver would then move the whole arc.
   if (tool === 'arc') return 'free';
   if (tool === 'ellipse') return draftLength <= 1 ? 'free' : 'none';
+  // The centre and the first corner are points of the polygon; the step that
+  // counts its corners names an angle, not a point.
+  if (tool === 'polygon') return draftLength < 2 ? 'free' : 'none';
   // The centre, the major half-axis and both ends are points of the finished
   // arc, so a target they land on becomes a constraint. The minor half-axis only
   // names a length across the major one, so nothing there could be constrained.

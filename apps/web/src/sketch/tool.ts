@@ -7,6 +7,8 @@ export type SketchTool =
   | 'ellipse'
   | 'elliptical-arc'
   | 'bezier'
+  /** A regular polygon: lines and a construction circle, drawn in three clicks. */
+  | 'polygon'
   | 'project'
   /** Tools that work on the selection: a copy at a distance, around it, or a
    * corner rounded. */

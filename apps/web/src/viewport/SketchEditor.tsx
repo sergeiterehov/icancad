@@ -82,6 +82,7 @@ import {
   extendPreviewEntities,
   type ExtendFailure,
 } from '../sketch/sketchExtend';
+import { polygonGeometry } from '../sketch/sketchPolygon';
 import {
   commitFillet,
   filletPreviewEntities,
@@ -471,6 +472,10 @@ export function SketchEditor() {
   // them into sharp ones while the distance is being set.
   const [offsetJoin, setOffsetJoin] = useState<OffsetJoin>('round');
   const offsetJoinRef = useRef<OffsetJoin>('round');
+  // A polygon takes its radius to the corners; Shift says the same distance is
+  // the one its edges stand at instead.
+  const [polygonInternal, setPolygonInternal] = useState(false);
+  const polygonInternalRef = useRef(false);
   // The tools that change what is already drawn ignore construction curves
   // unless Shift asks for them: a helper drawn across a part must not be what
   // the scissors or the split take.
@@ -510,6 +515,8 @@ export function SketchEditor() {
     // A stretch belongs to the tool that began it.
     extendGripRef.current = null;
     setExtendGrip(null);
+    polygonInternalRef.current = false;
+    setPolygonInternal(false);
     draftToolRef.current = tool;
     offsetJoinRef.current = 'round';
     setOffsetJoin('round');
@@ -541,6 +548,23 @@ export function SketchEditor() {
   // a selection left over from before would only be a promise it does not keep.
   useEffect(() => {
     if (tool === 'trim' || tool === 'split' || tool === 'extend') setSketchSelection([]);
+  }, [tool]);
+
+  // Shift says the distance a polygon is drawn to is the one its edges stand at
+  // rather than the one its corners reach, and the preview follows at once.
+  useEffect(() => {
+    if (tool !== 'polygon') return;
+    const update = (event: KeyboardEvent) => {
+      if (polygonInternalRef.current === event.shiftKey) return;
+      polygonInternalRef.current = event.shiftKey;
+      setPolygonInternal(event.shiftKey);
+    };
+    window.addEventListener('keydown', update);
+    window.addEventListener('keyup', update);
+    return () => {
+      window.removeEventListener('keydown', update);
+      window.removeEventListener('keyup', update);
+    };
   }, [tool]);
 
   // Shift switches the corners of the offset and contour tools between round
@@ -1196,6 +1220,34 @@ export function SketchEditor() {
         updateDraft([]);
         setHoverPreview(null);
       }
+      return;
+    }
+    if (activeTool === 'polygon') {
+      if (currentDraft.length < 2) {
+        updateDraft([...currentDraft, { point, input }]);
+        return;
+      }
+      // The figure is a set of lines and a circle, not one entity, and every
+      // one of them is exact: it lands as a single edit rather than through the
+      // one-at-a-time path a drawn segment takes.
+      const geometry = polygonGeometry({
+        centre: currentDraft[0]!.point,
+        corner: currentDraft[1]!.point,
+        cursor: point,
+        internal: polygonInternalRef.current,
+        inputs: [currentDraft[0]!.input, currentDraft[1]!.input],
+      });
+      updateDraft([]);
+      setHoverPreview(null);
+      const latest = currentSketch();
+      if (!geometry || !latest) return;
+      const next: SketchFeature = {
+        ...latest,
+        entities: [...latest.entities, ...geometry.entities],
+        constraints: [...latest.constraints, ...geometry.constraints],
+      };
+      apply({ type: 'feature/replace', feature: next });
+      void diagnoseSketch(next);
       return;
     }
     if (activeTool === 'elliptical-arc') {
@@ -2175,6 +2227,35 @@ export function SketchEditor() {
     return null;
   };
 
+  // The polygon's ghost: the figure the next click will leave behind, drawn
+  // over the circle it is held on. A polygon is not one entity, so the overlay
+  // gets the lines and the circle comes along as a guide.
+  const polygonPreview = useMemo(() => {
+    if (tool !== 'polygon' || !hover) return null;
+    const centre = draft[0]?.point;
+    if (!centre) return null;
+    const corner = draft[1]?.point;
+    if (!corner) {
+      const radius: SketchEntity = {
+        id: 'polygon-radius',
+        type: 'circle',
+        construction: true,
+        cx: centre[0],
+        cy: centre[1],
+        r: distance(centre, hover),
+      };
+      return { entities: [] as SketchEntity[], guides: [radius] };
+    }
+    const geometry = polygonGeometry({
+      centre,
+      corner,
+      cursor: hover,
+      internal: polygonInternal,
+    });
+    if (!geometry) return null;
+    return { entities: geometry.lines, guides: [geometry.circle] };
+  }, [tool, draft, hover, polygonInternal]);
+
   // Purple means "a constraint will be created". Alignment counts only when the
   // resolution actually planned it, never because the pointer is merely near an
   // axis: a magnet target a few degrees off cannot keep both constraints. Such
@@ -2295,11 +2376,11 @@ export function SketchEditor() {
       magnetEnabled && hoverSnap?.midpointSnap ? hoverSnap.midpointSnap.point : null;
     const previewGuides = draftGuides(tool, markers.markers, hover, () => createId('guide'));
     getViewport()?.setSketchOverlay(
-      pointerTool ? pointerPreview.entities : previewEntity(),
+      pointerTool ? pointerPreview.entities : (polygonPreview?.entities ?? previewEntity()),
       pointerTool ? [...markers.markers, ...pointerPreview.points] : markers.markers,
       previewAuto,
       midpointMarker,
-      previewGuides,
+      [...previewGuides, ...(polygonPreview?.guides ?? [])],
       cursorMarker,
       pointerTool ? pointerPreview.replaced : [],
     );
@@ -2316,6 +2397,7 @@ export function SketchEditor() {
     cursorMarker,
     pointerTool,
     pointerPreview,
+    polygonPreview,
   ]);
 
   useEffect(() => {
@@ -2468,6 +2550,12 @@ export function SketchEditor() {
                 ? draft.length > 0
                   ? t('sketch.finishBezier')
                   : t('sketch.addBezier')
+                : tool === 'polygon'
+                  ? draft.length === 0
+                    ? t('sketch.polygonCenter')
+                    : draft.length === 1
+                      ? t('sketch.polygonRadius')
+                      : t('sketch.polygonSides')
                 : tool === 'project'
                   ? t('sketch.projectionPickHint')
                   : tool === 'fillet'

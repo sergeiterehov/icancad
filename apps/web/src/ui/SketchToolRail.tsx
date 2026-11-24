@@ -7,6 +7,7 @@ import {
   LineStyle,
   Magnet,
   MousePointer2,
+  Pentagon,
   Presentation,
   Ruler,
   Scissors,
@@ -362,6 +363,13 @@ export function SketchToolRail() {
           onClick={() => setSketchTool('bezier')}
         >
           <SketchEntityIcon type="bezier" size={17} />
+        </IconButton>
+        <IconButton
+          label={t('sketch.toolPolygon')}
+          active={sketchTool === 'polygon'}
+          onClick={() => setSketchTool('polygon')}
+        >
+          <Pentagon size={17} />
         </IconButton>
         <IconButton
           label={t('sketch.toolProject')}

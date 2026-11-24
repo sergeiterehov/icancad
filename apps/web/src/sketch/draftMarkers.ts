@@ -51,6 +51,15 @@ export function draftMarkers(
   const centre = points[0];
   if (!centre) return NONE;
 
+  if (tool === 'polygon') {
+    // The centre and the first corner are points of the figure; the pointer
+    // only stands for one until the centre is named.
+    const corner = points[1];
+    return corner
+      ? { markers: [centre, corner], cursorAtPointer: false }
+      : { markers: [centre], cursorAtPointer: true };
+  }
+
   if (tool === 'arc') {
     const start = points[1];
     // The radius step lands under the pointer: the circle of the guide is drawn

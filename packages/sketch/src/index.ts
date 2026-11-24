@@ -337,6 +337,7 @@ export * from './intersect';
 export * from './fillet';
 export * from './trim';
 export * from './extend';
+export * from './polygon';
 
 export * from './offset';
 

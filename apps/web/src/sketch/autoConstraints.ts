@@ -26,7 +26,12 @@ const CURVE_POINT_CONSTRAINTS: Partial<Record<SketchEntity['type'], SketchConstr
   'elliptical-arc': 'point-on-ellipse',
 };
 
-function snapConstraint(
+/**
+ * The relation that ties one point of geometry a tool is about to place to what
+ * its click snapped to, or null when the click snapped to nothing a relation
+ * can hold.
+ */
+export function snapConstraint(
   entity: SketchEntity,
   pointIndex: number,
   input: SketchSnapInput,
