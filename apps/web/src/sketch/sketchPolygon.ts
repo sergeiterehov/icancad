@@ -1,5 +1,6 @@
 import { createId, type SketchConstraint, type SketchEntity } from '@icancad/model';
 import {
+  clampPolygonSides,
   polygonRadiusFromApothem,
   polygonSidesBetween,
   polygonVertices,
@@ -31,7 +32,18 @@ export interface PolygonInput {
   internal?: boolean;
   /** What the two clicks snapped to, so the figure can be tied to them. */
   inputs?: readonly SketchSnapInput[];
+  /**
+   * The number of corners, when it is known without a pointer: the figure is
+   * drawn as a guess while the radius itself is still being set.
+   */
+  sides?: number;
 }
+
+/**
+ * The figure a polygon is drawn as before its own count is named — the way an
+ * ellipse is drawn half as tall as it is long until its second axis is picked.
+ */
+export const POLYGON_DRAFT_SIDES = 5;
 
 export interface PolygonGeometry {
   entities: SketchEntity[];
@@ -42,9 +54,13 @@ export interface PolygonGeometry {
   sides: number;
 }
 
-/** How many corners the pointer asks for; the radius step is already over. */
-export function polygonSides(input: Pick<PolygonInput, 'centre' | 'corner' | 'cursor'>): number {
-  return polygonSidesBetween(input.centre, input.corner, input.cursor);
+/** How many corners the figure has: the one given, or the one the pointer asks for. */
+export function polygonSides(
+  input: Pick<PolygonInput, 'centre' | 'corner' | 'cursor' | 'sides'>,
+): number {
+  return input.sides === undefined
+    ? polygonSidesBetween(input.centre, input.corner, input.cursor)
+    : clampPolygonSides(input.sides);
 }
 
 /** The figure the three clicks describe, or null when the radius is nothing. */

@@ -82,7 +82,7 @@ import {
   extendPreviewEntities,
   type ExtendFailure,
 } from '../sketch/sketchExtend';
-import { polygonGeometry } from '../sketch/sketchPolygon';
+import { POLYGON_DRAFT_SIDES, polygonGeometry } from '../sketch/sketchPolygon';
 import {
   commitFillet,
   filletPreviewEntities,
@@ -2228,32 +2228,37 @@ export function SketchEditor() {
   };
 
   // The polygon's ghost: the figure the next click will leave behind, drawn
-  // over the circle it is held on. A polygon is not one entity, so the overlay
-  // gets the lines and the circle comes along as a guide.
+  // over the circle of the radius it is being drawn to. A polygon is not one
+  // entity, so the overlay gets the lines and the circle comes along as a guide.
   const polygonPreview = useMemo(() => {
     if (tool !== 'polygon' || !hover) return null;
     const centre = draft[0]?.point;
     if (!centre) return null;
     const corner = draft[1]?.point;
-    if (!corner) {
-      const radius: SketchEntity = {
-        id: 'polygon-radius',
-        type: 'circle',
-        construction: true,
-        cx: centre[0],
-        cy: centre[1],
-        r: distance(centre, hover),
-      };
-      return { entities: [] as SketchEntity[], guides: [radius] };
-    }
+    // Before the radius is named the figure is a guess — five corners, the way
+    // an ellipse is drawn half as tall as it is long until its own second axis
+    // is picked — and the pointer is the corner it is being drawn through.
     const geometry = polygonGeometry({
       centre,
-      corner,
+      corner: corner ?? hover,
       cursor: hover,
+      sides: corner ? undefined : POLYGON_DRAFT_SIDES,
       internal: polygonInternal,
     });
     if (!geometry) return null;
-    return { entities: geometry.lines, guides: [geometry.circle] };
+    // The dotted circle is the radius that was pointed at: the corners lie on it
+    // when the figure stands inside it, and it sits inside the figure when Shift
+    // made that distance the one the edges stand at.
+    const radius = distance(centre, corner ?? hover);
+    const guide: SketchEntity = {
+      id: 'polygon-radius',
+      type: 'circle',
+      construction: true,
+      cx: centre[0],
+      cy: centre[1],
+      r: radius,
+    };
+    return { entities: geometry.lines, guides: [guide], radius, sides: geometry.sides };
   }, [tool, draft, hover, polygonInternal]);
 
   // Purple means "a constraint will be created". Alignment counts only when the
@@ -2600,6 +2605,20 @@ export function SketchEditor() {
       const value = Math.abs(plan.loops[0]?.distance ?? 0);
       return {
         text: formatMeasure('length', value, locale, 'mm'),
+        x: projected?.x ?? null,
+        y: projected?.y ?? null,
+      };
+    }
+    if (tool === 'polygon') {
+      if (!polygonPreview || !frame || !hover) return null;
+      const projected = getViewport()?.projectSketchPoint(frame, hover);
+      // The circle tool reads its radius under the pointer; a polygon has that
+      // and a count as well, and both are what the two remaining clicks set.
+      return {
+        text: [
+          formatMeasure('length', polygonPreview.radius, locale, 'mm'),
+          t('sketch.polygonCorners', { count: polygonPreview.sides }),
+        ].join(' · '),
         x: projected?.x ?? null,
         y: projected?.y ?? null,
       };

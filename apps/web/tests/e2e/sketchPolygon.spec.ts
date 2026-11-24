@@ -158,6 +158,31 @@ test('draws a hexagon out of lines held on a construction circle', async ({ page
   await expect(page.locator('.toast-error')).toHaveCount(0);
 });
 
+test('reads the radius and the corner count while it is drawn', async ({ page }) => {
+  await openApp(page);
+  const sketchId = await openSketch(page);
+  await startPolygon(page);
+
+  await clickAt(page, sketchId, [0, 0]);
+  // The radius step: no figure is decided yet, so it is drawn as five corners
+  // and the chip says what the figure would be.
+  const radius = await screenPoint(page, sketchId, [12, 0]);
+  await page.mouse.move(radius.x, radius.y);
+  await page.waitForTimeout(250);
+  const chip = page.locator('[data-testid="sketch-live-measure"]');
+  await expect(chip).toBeVisible();
+  await expect(chip).toContainText('mm');
+  await expect(chip).toContainText('5 corners');
+
+  // Once the radius is named the count follows the pointer.
+  await page.mouse.click(radius.x, radius.y);
+  await page.waitForTimeout(250);
+  const sides = await screenPoint(page, sketchId, [6, 10.3923]);
+  await page.mouse.move(sides.x, sides.y, { steps: 10 });
+  await page.waitForTimeout(250);
+  await expect(chip).toContainText('6 corners');
+});
+
 test('Shift makes the radius the distance to the edges', async ({ page }) => {
   await openApp(page);
   const sketchId = await openSketch(page);
