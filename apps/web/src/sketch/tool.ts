@@ -29,6 +29,9 @@ export const SKETCH_TOOL_SHORTCUTS: Partial<Record<SketchTool, string>> = {
   arc: 'A',
   ellipse: 'E',
   bezier: 'B',
+  // N for a polygon: Shift+N stays the perpendicular constraint, because a bare
+  // letter is a tool and a Shift letter is a relation.
+  polygon: 'N',
   project: 'P',
 };
 

@@ -334,6 +334,25 @@ test.describe('on a touch screen', () => {
   });
 });
 
+test('opens on N', async ({ page }) => {
+  await openApp(page);
+  await openSketch(page);
+  await page.keyboard.press('n');
+  await expect
+    .poll(async () =>
+      page.evaluate(async () => {
+        const url = (name: string) =>
+          performance
+            .getEntriesByType('resource')
+            .map((entry) => entry.name)
+            .find((entry) => entry.includes(name));
+        const ui = await import(url('/src/stores/uiStore.ts') ?? '/src/stores/uiStore.ts');
+        return ui.useUiStore.getState().sketchTool;
+      }),
+    )
+    .toBe('polygon');
+});
+
 test('takes a pen like a finger, and reads its hints the same way', async ({ page }) => {
   await openApp(page);
   const sketchId = await openSketch(page);

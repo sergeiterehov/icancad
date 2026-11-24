@@ -205,6 +205,9 @@ describe('sketch constraint shortcuts', () => {
     expect(sketchToolFromShortcut(key('a'))).toBe('arc');
     expect(sketchToolFromShortcut(key('e'))).toBe('ellipse');
     expect(sketchToolFromShortcut(key('b'))).toBe('bezier');
+    expect(sketchToolFromShortcut(key('n'))).toBe('polygon');
+    // Shift is the relation's key, so Shift+N is perpendicular, not a tool.
+    expect(sketchToolFromShortcut(key('n', { shiftKey: true }))).toBeNull();
     expect(sketchToolFromShortcut(key('p', { shiftKey: true }))).toBeNull();
     expect(sketchToolFromShortcut(key('p', { metaKey: true }))).toBeNull();
   });

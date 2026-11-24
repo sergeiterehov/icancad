@@ -366,6 +366,7 @@ export function SketchToolRail() {
         </IconButton>
         <IconButton
           label={t('sketch.toolPolygon')}
+          tooltip={`${t('sketch.toolPolygon')} (${SKETCH_TOOL_SHORTCUTS.polygon})`}
           active={sketchTool === 'polygon'}
           onClick={() => setSketchTool('polygon')}
         >
