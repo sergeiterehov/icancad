@@ -74,6 +74,12 @@ import {
 import { liveMeasures, measureInfo, formatMeasure } from '../sketch/measure';
 import { sketchPickKey } from '../sketch/pickKey';
 import {
+  commitFillet,
+  filletPreviewEntities,
+  planFillet,
+  type FilletFailure,
+} from '../sketch/sketchFillet';
+import {
   commitOffsetSolved,
   offsetPreviewEntities,
   planOffset,
@@ -111,6 +117,16 @@ function distance(a: Point2, b: Point2): number {
 }
 
 /** The message a failed offset or contour shows. */
+function filletErrorKey(error: FilletFailure): string {
+  switch (error) {
+    case 'selection':
+    case 'not-connected':
+      return 'sketch.filletSelect';
+    default:
+      return 'sketch.filletFailed';
+  }
+}
+
 function offsetErrorKey(error: OffsetPlanError): string {
   switch (error) {
     case 'empty':
@@ -385,6 +401,9 @@ export function SketchEditor() {
   // them into sharp ones while the distance is being set.
   const [offsetJoin, setOffsetJoin] = useState<OffsetJoin>('round');
   const offsetJoinRef = useRef<OffsetJoin>('round');
+  // The tools that read the selection and take their number from the pointer:
+  // the two offsets, and the corner radius of a fillet.
+  const pointerTool = tool === 'offset' || tool === 'outline' || tool === 'fillet';
   const offsetTool = tool === 'offset' || tool === 'outline';
 
   const applyAutoHighlight = (ids: string[]) => {
@@ -653,38 +672,61 @@ export function SketchEditor() {
     );
 
   /**
-   * Commits the offset or contour the pointer currently describes. The whole
-   * result — geometry and its driving dimensions — lands as one edit, and the
-   * fresh geometry takes over the selection so the next step starts from it.
+   * Commits what the pointer currently describes — an offset, a contour or a
+   * rounded corner. The whole result, geometry and its dimensions, lands as one
+   * edit, and the fresh geometry takes over the selection so the next step
+   * starts from it.
    */
   const offsetCommitPending = useRef(false);
   // The preview stands where the committed geometry will be, so it has to go the
   // moment the click lands: a ghost that outlives the click reads as a tool that
   // is still working on something.
   const [offsetCommitting, setOffsetCommitting] = useState(false);
-  const commitOffsetAt = (point: Point2) => {
+  const commitPointerToolAt = (point: Point2) => {
     const activeTool = useUiStore.getState().sketchTool;
-    if (activeTool !== 'offset' && activeTool !== 'outline') return;
+    const isFillet = activeTool === 'fillet';
+    if (activeTool !== 'offset' && activeTool !== 'outline' && !isFillet) return;
     if (offsetCommitPending.current) return;
     const current = currentSketch();
     if (!current) return;
     offsetCommitPending.current = true;
     setOffsetCommitting(true);
-    void commitOffsetSolved(current, selectionIds, point, {
-      tool: activeTool,
-      join: offsetJoinRef.current,
-    })
+    const settling = isFillet
+      ? commitFillet(current, selectionIds, point).then((result) =>
+          result.ok
+            ? {
+                ok: true as const,
+                feature: result.commit.feature,
+                selection: result.commit.arcIds,
+              }
+            : { ok: false as const, message: filletErrorKey(result.error) },
+        )
+      : commitOffsetSolved(current, selectionIds, point, {
+          tool: activeTool,
+          join: offsetJoinRef.current,
+        }).then((result) =>
+          result.ok
+            ? {
+                ok: true as const,
+                feature: result.commit.feature,
+                selection: result.commit.createdIds,
+              }
+            : { ok: false as const, message: offsetErrorKey(result.error) },
+        );
+    void settling
       .then((result) => {
         if (!result.ok) {
-          useUiStore.getState().showToast(offsetErrorKey(result.error), 'error');
+          useUiStore.getState().showToast(result.message, 'error');
           return;
         }
-        apply({ type: 'feature/replace', feature: result.commit.feature });
-        setSketchSelection(result.commit.createdIds);
-        void diagnoseSketch(result.commit.feature);
+        apply({ type: 'feature/replace', feature: result.feature });
+        setSketchSelection(result.selection);
+        void diagnoseSketch(result.feature);
         setSketchTool('select');
       })
-      .catch(() => useUiStore.getState().showToast('sketch.offsetFailed', 'error'))
+      .catch(() =>
+        useUiStore.getState().showToast(isFillet ? 'sketch.filletFailed' : 'sketch.offsetFailed', 'error'),
+      )
       .finally(() => {
         offsetCommitPending.current = false;
         setOffsetCommitting(false);
@@ -1117,9 +1159,9 @@ export function SketchEditor() {
       marquee.current = null;
       pointerDown.current = { x: event.clientX, y: event.clientY };
       const activeTool = useUiStore.getState().sketchTool;
-      // The offset and contour tools read the selection and the pointer distance;
-      // a press starts neither a draft nor a selection box.
-      if (activeTool === 'offset' || activeTool === 'outline') return;
+      // The offset, contour and fillet tools read the selection and the pointer
+      // distance; a press starts neither a draft nor a selection box.
+      if (activeTool === 'offset' || activeTool === 'outline' || activeTool === 'fillet') return;
       if (activeTool !== 'select') {
         // A finger that travels stretches the next primitive from where it came
         // down, so the press point has to be kept before the first move.
@@ -1283,9 +1325,14 @@ export function SketchEditor() {
       const activeTool = useUiStore.getState().sketchTool;
       // The projection tool aims at the 3D scene, so the sketch has no hover.
       if (activeTool === 'project') return;
-      if (activeTool === 'offset' || activeTool === 'outline') {
-        // These tools measure the distance from the raw pointer to the chain, so
-        // the magnet must not pull the distance towards the geometry.
+      if (
+        activeTool === 'offset' ||
+        activeTool === 'outline' ||
+        activeTool === 'fillet'
+      ) {
+        // These tools measure from the raw pointer — the distance to the chain,
+        // the radius around a corner — so the magnet must not pull the number
+        // towards the geometry.
         const point = getViewport()?.sketchPointAt(event.clientX, event.clientY);
         if (point) setHover(point);
         setSketchHover([]);
@@ -1549,9 +1596,9 @@ export function SketchEditor() {
       if (down && !isTap(event.clientX - down.x, event.clientY - down.y)) return;
       const activeTool = useUiStore.getState().sketchTool;
       if (activeTool === 'project') return;
-      if (activeTool === 'offset' || activeTool === 'outline') {
+      if (activeTool === 'offset' || activeTool === 'outline' || activeTool === 'fillet') {
         const point = getViewport()?.sketchPointAt(event.clientX, event.clientY);
-        if (point) commitOffsetAt(point);
+        if (point) commitPointerToolAt(point);
         return;
       }
       if (activeTool === 'select') {
@@ -1827,17 +1874,29 @@ export function SketchEditor() {
   // resolution actually planned it, never because the pointer is merely near an
   // axis: a magnet target a few degrees off cannot keep both constraints. Such
   // a step keeps its purple target, but its line is not painted as aligned.
-  const offsetPlan = useMemo(() => {
-    if (!offsetTool || !sketch || !hover || offsetCommitting) return null;
-    return planOffset(sketch, selectionIds, hover, {
-      tool: tool as OffsetTool,
-      join: offsetJoin,
-    });
-  }, [offsetTool, tool, sketch, hover, selectionIds, offsetJoin, offsetCommitting]);
-  const offsetPreview = useMemo(
-    () => (offsetPlan ? offsetPreviewEntities(offsetPlan) : []),
-    [offsetPlan],
-  );
+  const pointerPreview = useMemo(() => {
+    const none: { entities: SketchEntity[]; replaced: string[] } = { entities: [], replaced: [] };
+    if (!pointerTool || !sketch || !hover || offsetCommitting) return none;
+    if (tool === 'fillet') {
+      const plan = planFillet(sketch, selectionIds, hover);
+      if (!plan.ok) return none;
+      // The corner stands where the trimmed lines meet, so the ghost shows the
+      // result only if the source lines stand aside while it is up.
+      return {
+        entities: filletPreviewEntities(plan.plan),
+        replaced: plan.plan.lines.map((line) => line.id),
+      };
+    }
+    return {
+      entities: offsetPreviewEntities(
+        planOffset(sketch, selectionIds, hover, {
+          tool: tool as OffsetTool,
+          join: offsetJoin,
+        }),
+      ),
+      replaced: [],
+    };
+  }, [pointerTool, tool, sketch, hover, selectionIds, offsetJoin, offsetCommitting]);
   const previewShape = previewEntity();
   const previewAlignment = Boolean(hoverInput?.alignment);
   const previewSnap =
@@ -1872,12 +1931,13 @@ export function SketchEditor() {
       magnetEnabled && hoverSnap?.midpointSnap ? hoverSnap.midpointSnap.point : null;
     const previewGuides = draftGuides(tool, markers.markers, hover, () => createId('guide'));
     getViewport()?.setSketchOverlay(
-      offsetTool ? offsetPreview : previewEntity(),
+      pointerTool ? pointerPreview.entities : previewEntity(),
       markers.markers,
       previewAuto,
       midpointMarker,
       previewGuides,
       cursorMarker,
+      pointerTool ? pointerPreview.replaced : [],
     );
   }, [
     activeSketchId,
@@ -1890,8 +1950,8 @@ export function SketchEditor() {
     hoverInput,
     markers,
     cursorMarker,
-    offsetTool,
-    offsetPreview,
+    pointerTool,
+    pointerPreview,
   ]);
 
   useEffect(() => {
@@ -1966,8 +2026,12 @@ export function SketchEditor() {
       if (event.key === 'Enter' && activeTool === 'bezier') finishBezier();
       if (event.key === 'Enter' && activeTool === 'line') finishLine();
       // The keyboard can commit the offset the pointer has already described.
-      if (event.key === 'Enter' && hover && (activeTool === 'offset' || activeTool === 'outline')) {
-        commitOffsetAt(hover);
+      if (
+        event.key === 'Enter' &&
+        hover &&
+        (activeTool === 'offset' || activeTool === 'outline' || activeTool === 'fillet')
+      ) {
+        commitPointerToolAt(hover);
       }
       const shortcutAction = sketch
         ? resolveConstraintShortcut(buildConstraintActions(sketch, selectionIds), event)
@@ -2028,19 +2092,38 @@ export function SketchEditor() {
                   : t('sketch.addBezier')
                 : tool === 'project'
                   ? t('sketch.projectionPickHint')
-                  : tool === 'offset'
-                    ? t('sketch.offsetHint')
-                    : tool === 'outline'
-                      ? t('sketch.outlineHint')
-                      : '';
+                  : tool === 'fillet'
+                    ? t('sketch.filletHint')
+                    : tool === 'offset'
+                      ? t('sketch.offsetHint')
+                      : tool === 'outline'
+                        ? t('sketch.outlineHint')
+                        : '';
 
   const liveMeasure = (() => {
+    if (tool === 'fillet') {
+      if (!hover || !frame || !sketch) return null;
+      const plan = planFillet(sketch, selectionIds, hover);
+      if (!plan.ok) return null;
+      // The pointer rides the arc, so the chip shows the radius it describes.
+      const projected = getViewport()?.projectSketchPoint(frame, hover);
+      return {
+        text: formatMeasure('length', plan.plan.radius, locale, 'mm'),
+        x: projected?.x ?? null,
+        y: projected?.y ?? null,
+      };
+    }
     if (offsetTool) {
-      if (!hover || !frame || !offsetPlan?.ok) return null;
+      if (!hover || !frame || !sketch) return null;
+      const plan = planOffset(sketch, selectionIds, hover, {
+        tool: tool as OffsetTool,
+        join: offsetJoin,
+      });
+      if (!plan.ok) return null;
       // The pointer sets one distance for every chain of the selection, so the
       // chip reads it the same way the driving dimension will.
       const projected = getViewport()?.projectSketchPoint(frame, hover);
-      const value = Math.abs(offsetPlan.loops[0]?.distance ?? 0);
+      const value = Math.abs(plan.loops[0]?.distance ?? 0);
       return {
         text: formatMeasure('length', value, locale, 'mm'),
         x: projected?.x ?? null,

@@ -8,6 +8,7 @@ import {
   Presentation,
   Ruler,
   SplinePointer,
+  SquareRoundCorner,
   StrokeLineCapRound,
   StrokeLineJoinRound,
 } from 'lucide-react';
@@ -15,6 +16,7 @@ import { useRef, type MouseEvent, type ReactElement } from 'react';
 import { useTranslation } from 'react-i18next';
 import { buildConstraintActions } from '../sketch/constraintModel';
 import { constructionSelection, toggleConstruction } from '../sketch/construction';
+import { filletCorners } from '../sketch/sketchFillet';
 import { offsetSelectionEntities } from '../sketch/sketchOffset';
 import {
   SKETCH_CONSTRUCTION_SHORTCUT,
@@ -209,7 +211,9 @@ export function SketchToolRail() {
   // The tools work on a selection of curves: a point or the sketch axes alone
   // gives them nothing to offset, so the menu says so instead of starting.
   const offsetTargets = feature ? offsetSelectionEntities(feature, selectionIds) : [];
-  const offsetActive = sketchTool === 'offset' || sketchTool === 'outline';
+  // А corner needs exactly two lines that meet: anything else has nothing to round.
+  const filletTarget = feature ? filletCorners(feature, selectionIds).length : 0;
+  const toolActive = sketchTool === 'offset' || sketchTool === 'outline' || sketchTool === 'fillet';
 
   const toggleSelectedConstruction = () => {
     if (!feature) return;
@@ -219,23 +223,43 @@ export function SketchToolRail() {
 
   const openTools = (event: MouseEvent<HTMLButtonElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
-    const disabled = offsetTargets.length === 0;
     const entry = (
-      tool: 'offset' | 'outline',
+      tool: Extract<SketchTool, 'offset' | 'outline' | 'fillet'>,
       label: string,
       icon: ReactElement,
+      disabled: boolean,
+      why: string,
     ) => ({
       id: tool,
       label,
       icon,
       checked: sketchTool === tool,
       disabled,
-      tooltip: disabled ? t('sketch.offsetSelect') : label,
+      tooltip: disabled ? why : label,
       onSelect: () => setSketchTool(tool),
     });
     toggleContextMenu('sketch-tools', rect.left, rect.bottom + 6, [
-      entry('offset', t('sketch.toolOffset'), <StrokeLineJoinRound size={14} />),
-      entry('outline', t('sketch.toolOutline'), <StrokeLineCapRound size={14} />),
+      entry(
+        'fillet',
+        t('sketch.toolFillet'),
+        <SquareRoundCorner size={14} />,
+        filletTarget === 0,
+        t('sketch.filletSelect'),
+      ),
+      entry(
+        'offset',
+        t('sketch.toolOffset'),
+        <StrokeLineJoinRound size={14} />,
+        offsetTargets.length === 0,
+        t('sketch.offsetSelect'),
+      ),
+      entry(
+        'outline',
+        t('sketch.toolOutline'),
+        <StrokeLineCapRound size={14} />,
+        offsetTargets.length === 0,
+        t('sketch.offsetSelect'),
+      ),
     ]);
   };
 
@@ -337,7 +361,7 @@ export function SketchToolRail() {
         </IconButton>
         <IconButton
           label={t('sketch.toolsMenu')}
-          active={offsetActive}
+          active={toolActive}
           aria-expanded={openOwner === 'sketch-tools'}
           data-menu-trigger="sketch-tools"
           onClick={openTools}
@@ -346,6 +370,8 @@ export function SketchToolRail() {
             <StrokeLineJoinRound size={17} />
           ) : sketchTool === 'outline' ? (
             <StrokeLineCapRound size={17} />
+          ) : sketchTool === 'fillet' ? (
+            <SquareRoundCorner size={17} />
           ) : (
             <SplinePointer size={17} />
           )}

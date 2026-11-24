@@ -186,6 +186,9 @@ export interface ViewportHandle {
     guides?: SketchEntity[],
     /** Where the next point of a creation tool would land, and whether it snaps. */
     cursor?: { point: Point2; snapped: boolean } | null,
+    /** Entities of the edited sketch the preview takes over; they are hidden
+     * while it is up, so their old shape cannot be read over the ghost. */
+    replaced?: readonly string[],
   ) => void;
   alignSketch: (
     frame: SketchFrame,

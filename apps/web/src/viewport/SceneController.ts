@@ -527,7 +527,12 @@ export class SceneController {
     marker: Point2 | null;
     guides: SketchEntity[];
     cursor: { point: Point2; snapped: boolean } | null;
-  } = { preview: null, draftPoints: [], highlight: false, marker: null, guides: [], cursor: null };
+    /** Entities of the edited sketch the preview takes over, hidden while it is up. */
+    replaced: readonly string[];
+  } = { preview: null, draftPoints: [], highlight: false, marker: null, guides: [], cursor: null, replaced: [] };
+
+  /** The entities the preview is hiding right now, so they can come back. */
+  private hiddenSketchEntityIds: readonly string[] = [];
 
   private animationFrame = 0;
   private needsRender = true;
@@ -3174,6 +3179,23 @@ export class SceneController {
     }
   }
 
+  /**
+   * Hides the named entities of the edited sketch, and brings back whatever the
+   * last call hid: nothing else in the scene turns visibility off, so the two
+   * lists are all that has to be undone.
+   */
+  private hideSketchEntities(entry: { group: THREE.Group }, ids: readonly string[]): void {
+    const next = new Set(ids);
+    const touched = new Set([...next, ...this.hiddenSketchEntityIds]);
+    this.hiddenSketchEntityIds = [...next];
+    if (touched.size === 0) return;
+    for (const object of entry.group.children) {
+      const id = object.userData.entityId;
+      if (typeof id !== 'string' || !touched.has(id)) continue;
+      object.visible = !next.has(id);
+    }
+  }
+
   setSketchOverlay(
     preview: SketchEntity | readonly SketchEntity[] | null,
     draftPoints: Point2[],
@@ -3181,8 +3203,9 @@ export class SceneController {
     marker: Point2 | null = null,
     guides: SketchEntity[] = [],
     cursor: { point: Point2; snapped: boolean } | null = null,
+    replaced: readonly string[] = [],
   ): void {
-    this.sketchOverlayState = { preview, draftPoints, highlight, marker, guides, cursor };
+    this.sketchOverlayState = { preview, draftPoints, highlight, marker, guides, cursor, replaced };
     this.rebuildSketchOverlay();
     this.invalidate();
   }
@@ -3813,7 +3836,14 @@ export class SceneController {
       this.sketchOverlay = null;
     }
     const active = this.sketchEntries.find((entry) => entry.active);
-    if (!active) return;
+    if (!active) {
+      this.hiddenSketchEntityIds = [];
+      return;
+    }
+    // A pointer tool draws the shape the click will leave behind, so the curves
+    // it is about to replace step out of the way: a sharp corner left drawn
+    // under a rounded ghost reads as a tool that has already done its work.
+    this.hideSketchEntities(active, this.sketchOverlayState.replaced ?? []);
     const group = new THREE.Group();
     const { preview, draftPoints, highlight, marker, guides, cursor } = this.sketchOverlayState;
     const previewColor = highlight ? this.sketchHighlightColor() : this.sketchColor();

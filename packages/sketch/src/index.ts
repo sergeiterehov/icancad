@@ -334,6 +334,7 @@ export function moveEntityControlPoint(
 export * from './topology';
 
 export * from './intersect';
+export * from './fillet';
 
 export * from './offset';
 
