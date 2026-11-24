@@ -248,40 +248,60 @@ function segmentCrossings(
   return points;
 }
 
+/** A crossing of one curve with another, and the curve it came from. */
+export interface CurveCrossing {
+  /** Where it stands along the crossed curve, 0 at its start and 1 at its end. */
+  parameter: number;
+  /** The curve that runs through it. */
+  otherId: string;
+}
+
 /**
- * The crossings of one curve with others, as parameters along it, sorted and
- * deduplicated. A pair with an exact solution is answered exactly; the rest is
- * walked as short segments, so an ellipse or a Bezier cuts a line as reliably as
- * a circle does.
+ * The crossings of one curve with others, with the curve each one came from. A
+ * pair with an exact solution is answered exactly; the rest is walked as short
+ * segments, so an ellipse or a Bezier cuts a line as reliably as a circle does —
+ * and the crossing still knows which curve it belongs to, which is what a joint
+ * at that point needs.
  */
-export function curveCrossings(
+export function curveCrossingSources(
   entity: SketchEntity,
   others: readonly SketchEntity[],
-): number[] {
-  const parameters: number[] = [];
-  const add = (point: Point2) => {
+): CurveCrossing[] {
+  const crossings: CurveCrossing[] = [];
+  const add = (point: Point2, otherId: string) => {
     const parameter = curveParameterAt(entity, point);
     if (parameter === null || !Number.isFinite(parameter)) return;
     if (parameter < -PARAMETER_EPSILON || parameter > 1 + PARAMETER_EPSILON) return;
-    parameters.push(Math.min(1, Math.max(0, parameter)));
+    crossings.push({ parameter: Math.min(1, Math.max(0, parameter)), otherId });
   };
   for (const other of others) {
     if (other.id === entity.id) continue;
     const exact = exactCurveIntersections(entity, other);
     if (exact) {
-      for (const point of exact) add(point);
+      for (const point of exact) add(point, other.id);
       continue;
     }
     const samples = tessellateEntity(other, 96);
     for (let index = 0; index < samples.length - 1; index += 1) {
       for (const point of segmentCrossings(entity, samples[index]!, samples[index + 1]!)) {
-        add(point);
+        add(point, other.id);
       }
     }
   }
-  parameters.sort((a, b) => a - b);
+  crossings.sort((a, b) => a.parameter - b.parameter);
+  return crossings;
+}
+
+/**
+ * The crossings of one curve with others, as parameters along it, sorted and
+ * deduplicated: two curves through the same point are one cut.
+ */
+export function curveCrossings(
+  entity: SketchEntity,
+  others: readonly SketchEntity[],
+): number[] {
   const unique: number[] = [];
-  for (const parameter of parameters) {
+  for (const { parameter } of curveCrossingSources(entity, others)) {
     const previous = unique[unique.length - 1];
     if (previous !== undefined && parameter - previous <= PARAMETER_EPSILON) continue;
     unique.push(parameter);

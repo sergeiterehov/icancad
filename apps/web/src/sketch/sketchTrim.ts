@@ -1,6 +1,6 @@
 import { createId, type SketchConstraint, type SketchFeature, type SketchEntity } from '@icancad/model';
 import {
-  curveCrossings,
+  curveCrossingSources,
   curveIntervals,
   curveParameterAt,
   curvePointAt,
@@ -11,6 +11,7 @@ import {
   isWholeCurve,
   sketchEntityIndex,
   trimPiece,
+  type CurveCrossing,
   type TrimFailure,
 } from '@icancad/sketch';
 import { uniqueConstraints } from './constraintModel';
@@ -46,6 +47,8 @@ export interface TrimCut {
 
 export interface TrimPlan {
   cut: TrimCut;
+  /** Where the cut curve is crossed, and by what. */
+  crossings: Array<{ parameter: number; otherIds: string[] }>;
 }
 
 export type TrimPlanResult = { ok: true; plan: TrimPlan } | { ok: false; error: TrimFailure };
@@ -107,7 +110,11 @@ export function planTrim(
     (entity) =>
       entity.id !== source.id && (options.construction || !entity.construction),
   );
-  const intervals = curveIntervals(source, curveCrossings(source, others));
+  const crossings = groupCrossings(curveCrossingSources(source, others));
+  const intervals = curveIntervals(
+    source,
+    crossings.map((crossing) => crossing.parameter),
+  );
   if ('error' in intervals) return { ok: false, error: intervals.error };
 
   let piece: [number, number] | null = null;
@@ -139,7 +146,23 @@ export function planTrim(
     }
     if (!assigned && kept.length > 0) kept[0] = { ...kept[0]!, keepsId: true };
   }
-  return { ok: true, plan: { cut: { source, removed, kept, whole } } };
+  return { ok: true, plan: { cut: { source, removed, kept, whole }, crossings } };
+}
+
+/** One entry per crossing point, listing every curve that runs through it. */
+function groupCrossings(
+  crossings: readonly CurveCrossing[],
+): Array<{ parameter: number; otherIds: string[] }> {
+  const grouped: Array<{ parameter: number; otherIds: string[] }> = [];
+  for (const crossing of crossings) {
+    const last = grouped[grouped.length - 1];
+    if (last && crossing.parameter - last.parameter <= 1e-6) {
+      if (!last.otherIds.includes(crossing.otherId)) last.otherIds.push(crossing.otherId);
+      continue;
+    }
+    grouped.push({ parameter: crossing.parameter, otherIds: [crossing.otherId] });
+  }
+  return grouped;
 }
 
 /** How far the nearest point of a curve stands from the pointer, coarsely. */
@@ -187,6 +210,7 @@ export async function commitTrim(
   const planned = planTrim(feature, pointer, options);
   if (!planned.ok) return planned;
   const { cut } = planned.plan;
+  const crossings = planned.plan.crossings;
 
   const assigned = cut.kept.map((piece) => ({
     entity: piece.keepsId ? piece.entity : { ...piece.entity, id: createId('entity') },
@@ -259,11 +283,20 @@ export async function commitTrim(
         continue;
       }
       // Nothing of the sketch has a point there, so the cut end is held on the
-      // curves that run through it: the point the cut made is their crossing.
-      for (const { other } of near) {
+      // curves that run through it: the point the cut made is their crossing,
+      // and the plan knows which curves those are — an ellipse or a Bezier
+      // included, which a distance test would miss.
+      const parameter = curveParameterAt(cut.source, [point[0], point[1]]);
+      const through =
+        parameter === null
+          ? []
+          : (crossings.find((crossing) => Math.abs(crossing.parameter - parameter) <= 1e-6)
+              ?.otherIds ?? []);
+      for (const id of through) {
+        const other = entities.find((entity) => entity.id === id);
+        if (!other) continue;
         const type = pointOnCurveType(other);
         if (!type) continue;
-        if (!pointLiesOn(other, point)) continue;
         added.push({
           id: createId('con'),
           type,
@@ -307,14 +340,6 @@ function pointOnCurveType(
     default:
       return null;
   }
-}
-
-/** True when a point sits on a curve, inside its own sweep. */
-function pointLiesOn(entity: SketchEntity, point: readonly [number, number]): boolean {
-  const parameter = curveParameterAt(entity, [point[0], point[1]]);
-  if (parameter === null || parameter < -1e-9 || parameter > 1 + 1e-9) return false;
-  const at = curvePointAt(entity, Math.min(1, Math.max(0, parameter)));
-  return Boolean(at) && Math.hypot(at![0] - point[0], at![1] - point[1]) <= 1e-6;
 }
 
 /** The index of a point among the control points of an entity, or -1. */

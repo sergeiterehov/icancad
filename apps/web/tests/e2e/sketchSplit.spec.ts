@@ -306,6 +306,17 @@ test('splits an arc into two arcs that stay one arc', async ({ page }) => {
     .sort();
   expect(indices).toEqual([1, 2]);
 
+  // The pieces are held on one circle: the same centre and the same radius.
+  const types = constraints.map((constraint) => constraint.type);
+  expect(types.filter((type) => type === 'equal')).toHaveLength(1);
+  const centres = constraints.filter(
+    (constraint) =>
+      constraint.type === 'coincident' &&
+      constraint.refs.length === 2 &&
+      constraint.refs.every((ref) => ref.pointIndex === 0),
+  );
+  expect(centres).toHaveLength(1);
+
   // Dragging the far end of the tail moves the arc, and the two pieces stay one
   // arc instead of collapsing.
   await startTool(page, 'split');
@@ -331,8 +342,11 @@ test('splits an arc into two arcs that stay one arc', async ({ page }) => {
   const arcs = (await feature(page, sketchId)).entities.filter((entity) => entity.type === 'arc');
   expect(arcs).toHaveLength(2);
   for (const arc of arcs) expect(arc.r!).toBeGreaterThan(2);
+  // One circle, not two that happen to meet: the same centre and radius.
   const [a, b] = arcs;
-  expect(Math.abs((a?.r ?? 0) - (b?.r ?? 0)) / (a?.r ?? 1)).toBeLessThan(0.2);
+  expect(Math.abs((a?.r ?? 0) - (b?.r ?? 0))).toBeLessThan(1e-6);
+  expect(Math.abs((a?.cx ?? 0) - (b?.cx ?? 0))).toBeLessThan(1e-6);
+  expect(Math.abs((a?.cy ?? 0) - (b?.cy ?? 0))).toBeLessThan(1e-6);
 });
 
 test('splits a construction curve only while Shift is held', async ({ page }) => {

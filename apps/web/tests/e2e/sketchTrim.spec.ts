@@ -384,6 +384,40 @@ test('moves the relations of the cut curve onto the pieces that carry them', asy
   await expect(page.locator('.toast-error')).toHaveCount(0);
 });
 
+test('holds the new points on an ellipse that crosses the cut', async ({ page }) => {
+  await openApp(page);
+  const sketchId = await openSketch(page);
+  await replaceEntities(page, sketchId, [
+    line('h', 0, 0, 40, 0),
+    { id: 'e', type: 'ellipse', construction: false, cx: 20, cy: 0, rx: 10, ry: 4, rotation: 0 },
+  ]);
+  await page.waitForTimeout(300);
+  await startTool(page, 'trim');
+
+  // The pointer stands on the line, inside the ellipse's span.
+  const target = await screenPoint(page, sketchId, [20, 1]);
+  await page.mouse.move(target.x, target.y);
+  await page.waitForTimeout(250);
+  await page.mouse.click(target.x, target.y);
+  await expect
+    .poll(async () => (await feature(page, sketchId)).entities.length, { timeout: 15_000 })
+    .toBe(3);
+
+  const { constraints } = await feature(page, sketchId);
+  // Every new end is a joint on the ellipse: a point-on-ellipse, or the
+  // ellipse's own point where the cut happened to land on one.
+  expect(constraints).toHaveLength(2);
+  expect(
+    constraints.every((constraint) =>
+      ['point-on-ellipse', 'coincident'].includes(constraint.type),
+    ),
+  ).toBe(true);
+  expect(
+    constraints.every((constraint) => constraint.refs.some((ref) => ref.entityId === 'e')),
+  ).toBe(true);
+  await expect(page.locator('.toast-error')).toHaveCount(0);
+});
+
 test('turns a cut circle into the arcs that are left', async ({ page }) => {
   await openApp(page);
   const sketchId = await openSketch(page);

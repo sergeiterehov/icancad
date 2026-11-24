@@ -38,6 +38,8 @@ export interface SplitPlan {
   second: SplitPiecePlan;
   /** The joint between the pieces; a closed curve has two, one at its seam. */
   joints: Array<{ firstIndex: number; secondIndex: number }>;
+  /** What keeps the pieces on the curve they came from, e.g. their centres. */
+  ties: SketchConstraint[];
 }
 
 export type SplitPlanResult = { ok: true; plan: SplitPlan } | { ok: false; error: SplitFailure };
@@ -146,16 +148,58 @@ export function planSplit(
   }
   if (joints.length === 0) return { ok: false, error: 'piece' };
 
+  // Both pieces come from one curve and so carry its id; the second one gets a
+  // marker of its own, so a relation written in the plan can say which piece it
+  // means. The commit gives it a real id.
+  const marked: SketchEntity = { ...second, id: `${nearest.source.id}#second` };
   return {
     ok: true,
     plan: {
       source: nearest.source,
       at: { parameter, point: nearest.point },
       first: { entity: first, keepsId: true },
-      second: { entity: second, keepsId: false },
+      second: { entity: marked, keepsId: false },
       joints,
+      ties: curveTies(first, marked),
     },
   };
+}
+
+/**
+ * What makes the pieces one curve rather than two that touch: a line needs
+ * nothing, an arc needs the same centre and the same radius, an ellipse the same
+ * centre and the same two axes, and a circle — which becomes two arcs — the same
+ * again, with its seam joined by the joints.
+ */
+function curveTies(first: SketchEntity, second: SketchEntity): SketchConstraint[] {
+  const ties: SketchConstraint[] = [];
+  const coincident = (a: number, b: number) =>
+    ties.push({
+      id: createId('con'),
+      type: 'coincident',
+      auto: true,
+      refs: [
+        { entityId: first.id, pointIndex: a },
+        { entityId: second.id, pointIndex: b },
+      ],
+    } as SketchConstraint);
+  const pair = first.type === 'arc' || first.type === 'elliptical-arc';
+  if (!pair || first.type !== second.type) return ties;
+  // Both pieces have a centre, and an ellipse's axes are points of its own, so
+  // the same centre and the same axes is the same ellipse.
+  coincident(0, 0);
+  if (first.type === 'arc') {
+    ties.push({
+      id: createId('con'),
+      type: 'equal',
+      auto: true,
+      refs: [{ entityId: first.id }, { entityId: second.id }],
+    } as SketchConstraint);
+  } else {
+    coincident(1, 1);
+    coincident(2, 2);
+  }
+  return ties;
 }
 
 function pointIndexAt(entity: SketchEntity, point: Point2): number {
@@ -240,6 +284,15 @@ export async function commitSplit(
         ],
       }) as SketchConstraint,
   );
+  // The ties name the pieces, and the second one only gets its id now.
+  for (const tie of plan.ties) {
+    added.push({
+      ...tie,
+      refs: tie.refs.map((ref) =>
+        ref.entityId === plan.second.entity.id ? { ...ref, entityId: pieces[1]!.id } : ref,
+      ),
+    } as SketchConstraint);
+  }
   const unique = uniqueConstraints(added, constraints, sketchEntityIndex(entities));
 
   const next: SketchFeature = { ...feature, entities, constraints: [...constraints, ...unique] };

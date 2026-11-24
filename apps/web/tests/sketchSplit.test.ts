@@ -101,6 +101,67 @@ describe('split tool', () => {
     expect(result.plan.joints).toEqual([{ firstIndex: 2, secondIndex: 1 }]);
   });
 
+  it('keeps an arc one arc: the same centre and the same radius', async () => {
+    const arc: SketchEntity = {
+      id: 'a',
+      type: 'arc',
+      construction: false,
+      cx: 0,
+      cy: 0,
+      r: 10,
+      startAngle: 0,
+      endAngle: Math.PI / 2,
+    };
+    const cut = await commitSplit(feature([arc]), [7.0710678, 7.0710678]);
+    if (!cut.ok) throw new Error(cut.error);
+    const types = cut.commit.feature.constraints.map((constraint) => constraint.type);
+    // The joint at the new point, the same centre, and the same radius.
+    expect(types).toEqual(['coincident', 'coincident', 'equal']);
+    const centre = cut.commit.feature.constraints[1]!;
+    expect(centre.refs.map((ref) => ref.pointIndex)).toEqual([0, 0]);
+    const radii = cut.commit.feature.constraints[2]!;
+    expect(radii.refs).toHaveLength(2);
+    expect(radii.refs[0]?.entityId).not.toBe(radii.refs[1]?.entityId);
+  });
+
+  it('keeps an elliptical arc one arc: the same centre and the same axes', async () => {
+    const ellipse: SketchEntity = {
+      id: 'e',
+      type: 'elliptical-arc',
+      construction: false,
+      cx: 0,
+      cy: 0,
+      rx: 10,
+      ry: 5,
+      rotation: 0,
+      startAngle: 0,
+      endAngle: Math.PI / 2,
+    };
+    const at = [10 * Math.cos(Math.PI / 4), 5 * Math.sin(Math.PI / 4)] as [number, number];
+    const cut = await commitSplit(feature([ellipse]), at);
+    if (!cut.ok) throw new Error(cut.error);
+    const constraints = cut.commit.feature.constraints;
+    // There is no "equal radii" for an ellipse in the solver, so the two axes
+    // are points of the arc and are made coincident: the same ellipse.
+    expect(constraints.every((constraint) => constraint.type === 'coincident')).toBe(true);
+    expect(constraints).toHaveLength(4);
+    const indices = constraints.map((constraint) =>
+      constraint.refs.map((ref) => ref.pointIndex).sort((a, b) => (a ?? -1) - (b ?? -1)),
+    );
+    expect(indices).toContainEqual([0, 0]);
+    expect(indices).toContainEqual([1, 1]);
+    expect(indices).toContainEqual([2, 2]);
+    expect(indices).toContainEqual([3, 4]);
+  });
+
+  it('keeps a split line as one line: the pieces only meet', async () => {
+    const cut = await commitSplit(feature([line('a', 0, 0, 40, 0)]), [15, 0]);
+    if (!cut.ok) throw new Error(cut.error);
+    expect(cut.commit.feature.constraints.map((constraint) => constraint.type)).toEqual([
+      'coincident',
+    ]);
+  });
+
   it('turns a circle into two arcs that meet at the new point and at its seam', () => {
     const circle: SketchEntity = { id: 'c', type: 'circle', construction: false, cx: 0, cy: 0, r: 5 };
     const result = planSplit(feature([circle]), [0, 5]);
@@ -115,6 +176,9 @@ describe('split tool', () => {
       expect(joint.firstIndex).toBeGreaterThanOrEqual(1);
       expect(joint.secondIndex).toBeGreaterThanOrEqual(1);
     }
+    // A circle becomes arcs, so it is held together like an arc: same centre,
+    // same radius — plus the two joints.
+    expect(result.plan.ties.map((tie) => tie.type)).toEqual(['coincident', 'equal']);
   });
 
   it('previews the two pieces the curve will be', () => {

@@ -227,6 +227,57 @@ describe('trim tool', () => {
     expect(solved.redundant).toEqual([]);
   });
 
+  it('holds cut ends on an ellipse or an elliptical arc that runs through them', async () => {
+    // No exact pair exists for a line against an ellipse, so the crossing is
+    // found by walking the ellipse — and the joint must still be made.
+    const entities: SketchEntity[] = [
+      line('h', 0, 0, 40, 0),
+      { id: 'e', type: 'ellipse', construction: false, cx: 20, cy: 0, rx: 10, ry: 4, rotation: 0 },
+    ];
+    const cut = await commitTrim(feature(entities), [20, 1]);
+    if (!cut.ok) throw new Error(cut.error);
+    const constraints = cut.commit.feature.constraints;
+    // Both new ends are held on the ellipse; the one that landed on an axis
+    // point of the ellipse is tied to that point instead.
+    expect(constraints).toHaveLength(2);
+    expect(constraints.every((constraint) => constraint.refs[1]?.entityId === 'e')).toBe(true);
+    expect(constraints.some((constraint) => constraint.type === 'point-on-ellipse')).toBe(true);
+    expect(
+      constraints.every((constraint) =>
+        ['point-on-ellipse', 'coincident'].includes(constraint.type),
+      ),
+    ).toBe(true);
+    expect(cut.commit.feature.entities.filter((entity) => entity.id === 'h')).toHaveLength(1);
+
+    const elliptical: SketchEntity[] = [
+      line('h2', 0, 0, 40, 0),
+      {
+        id: 'ea',
+        type: 'elliptical-arc',
+        construction: false,
+        cx: 20,
+        cy: 0,
+        rx: 12,
+        ry: 6,
+        rotation: 0,
+        startAngle: 0,
+        endAngle: Math.PI,
+      },
+    ];
+    const other = await commitTrim(feature(elliptical), [20, 1]);
+    if (!other.ok) throw new Error(other.error);
+    const joints = other.commit.feature.constraints;
+    // The ends of the arc are where the line crosses it, so both points are
+    // already points of the arc and the joint names them.
+    expect(joints).toHaveLength(2);
+    expect(joints.every((constraint) => constraint.refs[1]?.entityId === 'ea')).toBe(true);
+    expect(
+      joints.every((constraint) =>
+        ['point-on-ellipse', 'coincident'].includes(constraint.type),
+      ),
+    ).toBe(true);
+  });
+
   it('joins a piece to the point the cut left it standing on', async () => {
     // The vertical line ends on the horizontal one, so cutting the horizontal
     // leaves a piece whose end is the very point the vertical ends at.
