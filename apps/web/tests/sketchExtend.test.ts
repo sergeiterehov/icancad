@@ -52,15 +52,32 @@ describe('extend tool', () => {
     expect(result.commit.pointId).toBeNull();
   });
 
-  it('stops at the first curve it meets and lands on it', async () => {
-    // The pointer asks for thirty, the wall stands at twenty.
+  it('crosses what it passes instead of stopping at it', async () => {
+    // The pointer asks for thirty, and the wall at twenty is only on the way.
     const wall = line('wall', 20, -5, 20, 5);
-    const result = await commitExtend(feature([line('a', 0, 0, 10, 0), wall]), [30, 0]);
+    const result = await commitExtend(feature([line('a', 0, 0, 10, 0), wall]), [30, 0], {
+      grip: { entityId: 'a', end: 'end' },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const grown = lineOf(result.commit.feature.entities.find((entity) => entity.id === 'a'));
+    expect(grown.x2).toBeCloseTo(30, 9);
+    // Nothing holds the end: it did not stop on the wall, it went through it.
+    expect(result.commit.feature.constraints).toEqual([]);
+  });
+
+  it('lands exactly on the curve the pointer is on', async () => {
+    // The magnet names the wall, so the end meets it rather than nearly
+    // meeting it.
+    const wall = line('wall', 20, -5, 20, 5);
+    const result = await commitExtend(feature([line('a', 0, 0, 10, 0), wall]), [20.4, 3], {
+      grip: { entityId: 'a', end: 'end' },
+      snapTo: 'wall',
+    });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const grown = lineOf(result.commit.feature.entities.find((entity) => entity.id === 'a'));
     expect(grown.x2).toBeCloseTo(20, 9);
-    // The end is exactly on the wall, and the wall is what holds it there.
     expect(result.commit.feature.constraints).toEqual([
       expect.objectContaining({
         type: 'point-on-line',
@@ -74,7 +91,7 @@ describe('extend tool', () => {
 
   it('joins the end to a point that already stands there', async () => {
     const up = line('up', 20, 0, 20, 5);
-    const result = await commitExtend(feature([line('a', 0, 0, 10, 0), up]), [30, 0]);
+    const result = await commitExtend(feature([line('a', 0, 0, 10, 0), up]), [20, 0]);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.commit.feature.constraints).toEqual([

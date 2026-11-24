@@ -69,6 +69,11 @@ export interface ExtendOptions {
    * far.
    */
   grip?: { entityId: string; end: 'start' | 'end' };
+  /**
+   * The curve the pointer is on — the magnet's target. The stretch lands on it
+   * rather than wherever the pointer stands, so the end meets it exactly.
+   */
+  snapTo?: string;
 }
 
 const CURVE_TYPES = new Set(['line', 'arc', 'elliptical-arc']);
@@ -115,7 +120,13 @@ export function planExtend(
       if (result.error === 'inside') inside = true;
       continue;
     }
-    const shape = stopAtBoundary(source, result.shape, feature, options);
+    // The pointer only says how far: what the stretch passes on the way is
+    // crossed, not stopped at. A curve the pointer itself is on is the one it
+    // lands on, and there the end meets it exactly.
+    const shape =
+      options.snapTo && options.snapTo !== source.id
+        ? landOnCurve(source, result.shape, feature, options.snapTo)
+        : result.shape;
     if (!best || nearer(at, shape, best.shape)) best = { source, shape };
   }
   if (!best) return { ok: false, error: inside ? 'inside' : 'unsupported' };
@@ -154,41 +165,38 @@ function nearer(pointer: Point2, a: ExtendShape, b: ExtendShape): boolean {
 }
 
 /**
- * The end does not run past what stands in its way: the first curve it meets
- * stops the stretch, so the curve lands on that curve instead of through it.
+ * The end lands on the curve the pointer is on: the crossing of the stretch with
+ * that curve becomes the new end, so the two meet exactly rather than nearly.
+ * The pointer runs the stretch, so a curve it is not on is crossed and not
+ * stopped at.
  */
-function stopAtBoundary(
+function landOnCurve(
   source: SketchEntity,
   shape: ExtendShape,
   feature: SketchFeature,
-  options: ExtendOptions,
+  curveId: string,
 ): ExtendShape {
-  const others = feature.entities.filter(
-    (entity) =>
-      entity.id !== source.id && (options.construction || !entity.construction),
-  );
-  if (others.length === 0) return shape;
+  const target = feature.entities.find((entity) => entity.id === curveId);
+  if (!target) return shape;
   // Where the old end stands on the stretched curve: everything past it is what
-  // the tool added, and only what the tool added can stop it.
+  // the tool added, and only what the tool added can be landed on.
   const old = curveParameterAt(shape.entity, shape.from);
   if (old === null) return shape;
-
-  let stop: Point2 | null = null;
-  let closest = Infinity;
-  for (const crossing of curveCrossingSources(shape.entity, others)) {
+  let landing: { point: Point2; distance: number } | null = null;
+  for (const crossing of curveCrossingSources(shape.entity, [target])) {
     const gap =
       shape.end === 'end' ? crossing.parameter - old : old - crossing.parameter;
-    if (gap <= 1e-6 || gap >= closest) continue;
+    if (gap <= 1e-6) continue;
     const point = curvePointAt(shape.entity, crossing.parameter);
     if (!point) continue;
-    closest = gap;
-    stop = point;
+    const distance = Math.hypot(point[0] - shape.to[0], point[1] - shape.to[1]);
+    if (!landing || distance < landing.distance) landing = { point, distance };
   }
-  if (!stop) return shape;
+  if (!landing) return shape;
   // The crossing lies on the curve's own course, so stretching to it lands the
   // end exactly on it.
-  const stopped = extendCurve(source, stop, shape.end);
-  return stopped.ok ? stopped.shape : shape;
+  const landed = extendCurve(source, landing.point, shape.end);
+  return landed.ok ? landed.shape : shape;
 }
 
 /** The relations the new end will be held by, if the sketch has any there. */

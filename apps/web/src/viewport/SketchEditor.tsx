@@ -897,13 +897,18 @@ export function SketchEditor() {
    * curve it took, and the next click is another try.
    */
   const extendCommitPending = useRef(false);
-  const commitExtendAt = (point: Point2, grip: ExtendGrip, ended: () => void) => {
+  const commitExtendAt = (
+    aim: { point: Point2; snapTo: string | null },
+    grip: ExtendGrip,
+    ended: () => void,
+  ) => {
     const current = currentSketch();
     if (!current || extendCommitPending.current) return;
     extendCommitPending.current = true;
-    void commitExtend(current, point, {
+    void commitExtend(current, aim.point, {
       construction: pointerConstructionRef.current,
       grip,
+      snapTo: aim.snapTo ?? undefined,
     })
       .then((result) => {
         if (!result.ok) {
@@ -1355,9 +1360,13 @@ export function SketchEditor() {
      * Where the new end goes: the pointer, taken to the magnet's target when
      * there is one. The end of a curve is a point of the sketch like any other,
      * so it snaps — but not to the curve being stretched, whose own foot would
-     * pull the pointer back onto it.
+     * pull the pointer back onto it. The curve the magnet names is handed on, so
+     * the end can meet it exactly instead of nearly.
      */
-    const extendAimAt = (event: PointerAt, grip: ExtendGrip | null): Point2 | null => {
+    const extendAimAt = (
+      event: PointerAt,
+      grip: ExtendGrip | null,
+    ): { point: Point2; snapTo: string | null } | null => {
       const snap = getViewport()?.snapSketch(
         event.clientX,
         event.clientY,
@@ -1365,11 +1374,17 @@ export function SketchEditor() {
         currentSketchEntities(activeSketchId),
       );
       if (!snap) return null;
-      const target = [snap.pointSnap, snap.curveSnap, snap.midpointSnap].find(
-        (candidate) => candidate !== null && candidate.entityId !== grip?.entityId,
-      );
+      const away = <T extends { entityId: string }>(candidate: T | null) =>
+        candidate && candidate.entityId !== grip?.entityId ? candidate : null;
+      const pointSnap = away(snap.pointSnap);
+      const curveSnap = away(snap.curveSnap);
+      const midpointSnap = away(snap.midpointSnap);
+      const target = pointSnap ?? curveSnap ?? midpointSnap;
       const aim = target?.point ?? snap.point;
-      return [aim[0], aim[1]];
+      return {
+        point: [aim[0], aim[1]],
+        snapTo: curveSnap && target === curveSnap ? curveSnap.entityId : null,
+      };
     };
     const onPointerDown = (event: PointerEvent) => {
       // A second finger takes the gesture for the camera; the box it interrupts
@@ -1580,14 +1595,17 @@ export function SketchEditor() {
       // The projection tool aims at the 3D scene, so the sketch has no hover.
       if (activeTool === 'project') return;
       // The stretch is chosen and ended by clicks, so the pointer is free to
-      // say what it would take hold of and where the end would go.
+      // say what it would take hold of and where the end would go. The geometry
+      // it would take is painted the accent the editor already uses for "this
+      // is what the tool means", and no point is drawn under the pointer until
+      // a curve is chosen: nothing is being placed yet.
       if (activeTool === 'extend') {
         const grip = extendGripRef.current;
         const candidate = grip ?? extendGripAt(event);
-        setSketchHover(candidate ? [candidate.entityId] : []);
+        applyAutoHighlight(candidate ? [candidate.entityId] : []);
         canvas.style.cursor = candidate ? 'pointer' : 'default';
         const aim = extendAimAt(event, grip);
-        if (aim) setHover(aim);
+        if (aim) setHover(aim.point);
         return;
       }
       if (
@@ -1869,11 +1887,7 @@ export function SketchEditor() {
         const grip = extendGripRef.current;
         if (!grip) {
           const candidate = extendGripAt(event);
-          if (candidate) {
-            chooseExtendGrip(candidate);
-            // The curve is chosen; from here the pointer shows how far it grows.
-            setSketchHover([candidate.entityId]);
-          }
+          if (candidate) chooseExtendGrip(candidate);
           return;
         }
         const aim = extendAimAt(event, grip);
@@ -2265,7 +2279,13 @@ export function SketchEditor() {
     [tool, draft, hover],
   );
   const cursorMarker =
-    hover && markers.cursorAtPointer && tool !== 'select' && tool !== 'project'
+    hover &&
+    markers.cursorAtPointer &&
+    tool !== 'select' &&
+    tool !== 'project' &&
+    // A stretch places nothing until a curve is chosen; before that the pointer
+    // only says what it would take, and a point under it would say otherwise.
+    (tool !== 'extend' || extendGrip !== null)
       ? { point: hover, snapped: magnetEnabled && hasMagnetTarget(hoverInput ?? undefined) }
       : null;
 
@@ -2299,6 +2319,8 @@ export function SketchEditor() {
   ]);
 
   useEffect(() => {
+    // The stretch paints its own highlight: the curve it would take hold of.
+    if (tool === 'extend') return;
     if (!magnetEnabled || tool === 'select') {
       applyAutoHighlight([]);
       return;

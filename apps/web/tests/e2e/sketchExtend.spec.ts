@@ -228,19 +228,20 @@ test('stretches the end the click took hold of, and stays on for the next', asyn
   await expect(page.locator('.toast-error')).toHaveCount(0);
 });
 
-test('stops at the curve in the way and joins it', async ({ page }) => {
+test('lands exactly on the curve the pointer is on', async ({ page }) => {
   await openApp(page);
   const sketchId = await openSketch(page);
   await replaceEntities(page, sketchId, [
-    line('a', 0, 0, 40, 0),
-    line('wall', 50, -20, 50, 20),
+    line('a', 0, 15, 40, 15),
+    line('wall', 50, 0, 50, 30),
   ]);
   await page.waitForTimeout(300);
   await zoomOut(page);
   await startExtend(page);
 
-  // The pointer goes past the wall; the curve stops on it all the same.
-  await stretch(page, sketchId, [38, 0], [56, 0]);
+  // The pointer comes to the wall and the magnet takes it: the end meets the
+  // wall rather than stopping a hair short of it.
+  await stretch(page, sketchId, [38, 15], [52, 15]);
   await expect
     .poll(
       async () => {
@@ -261,6 +262,35 @@ test('stops at the curve in the way and joins it', async ({ page }) => {
       { entityId: 'wall' },
     ],
   });
+  await expect(page.locator('.toast-error')).toHaveCount(0);
+});
+
+test('crosses what it passes instead of stopping at it', async ({ page }) => {
+  await openApp(page);
+  const sketchId = await openSketch(page);
+  await replaceEntities(page, sketchId, [
+    line('a', 0, 15, 40, 15),
+    line('wall', 50, 0, 50, 30),
+  ]);
+  await page.waitForTimeout(300);
+  await zoomOut(page);
+  await startExtend(page);
+
+  // The pointer is well past the wall: the curve goes through it.
+  await stretch(page, sketchId, [38, 15], [60, 15]);
+  await expect
+    .poll(
+      async () => {
+        const { entities } = await feature(page, sketchId);
+        return entities.find((entity) => entity.id === 'a')?.x2 ?? 0;
+      },
+      { timeout: 15_000 },
+    )
+    .toBeGreaterThan(55);
+
+  const { constraints } = await feature(page, sketchId);
+  // Nothing holds the end: it did not stop on the wall, it went through it.
+  expect(constraints).toHaveLength(0);
   await expect(page.locator('.toast-error')).toHaveCount(0);
 });
 
