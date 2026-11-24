@@ -636,6 +636,10 @@ test.describe('ICANCad foundation', () => {
     await page.getByRole('menuitem', { name: 'Русский' }).click();
     await expect(inspectorTitle(page)).toHaveText(/модель/i);
 
+    // A language item keeps the menu open, rebuilt in the new language, so the
+    // next press on the trigger would close it instead of opening it again.
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu')).toHaveCount(0);
     await page.getByRole('button', { name: 'Меню проекта' }).click();
     await expect(page.getByRole('menuitem', { name: 'Отменить' })).toBeVisible();
     await page.keyboard.press('Escape');
@@ -645,10 +649,13 @@ test.describe('ICANCad foundation', () => {
     await page.getByRole('menuitem', { name: 'Светлая' }).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 
-    await page.getByRole('button', { name: 'Меню проекта' }).click();
+    // A checked theme keeps the menu open and rebuilds it in place, so the same
+    // menu switches the theme back; pressing the trigger would close it.
     await page.getByRole('menuitem', { name: 'Цветовая тема' }).hover();
     await page.getByRole('menuitem', { name: 'Тёмная' }).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu')).toHaveCount(0);
 
     await page.locator('.tool-dock').getByRole('button', { name: 'Примитивы' }).hover();
     await expect(page.getByRole('tooltip')).toHaveText('Примитивы');
@@ -919,10 +926,12 @@ test.describe('ICANCad foundation', () => {
 
     const tools = page.locator('.tool-dock');
     await tools.getByRole('button', { name: 'Select', exact: true }).click();
-    const deleteButton = tools.getByRole('button', { name: 'Delete', exact: true });
-    await expect(deleteButton).toBeDisabled();
-    await page.locator('.sketch-entity-row').click();
-    await expect(deleteButton).toBeEnabled();
+    // The tool bar has no Delete button: removing geometry is done from the
+    // geometry's own menu, so a row click only has to select it.
+    const entityRow = page.locator('.sketch-entity-row').first();
+    await expect(entityRow).not.toHaveAttribute('data-active', 'true');
+    await entityRow.click();
+    await expect(entityRow).toHaveAttribute('data-active', 'true');
     await expect(page.getByText('Geometry')).toBeVisible();
     await expect(page.getByText('Constraints').first()).toBeVisible();
 
@@ -1556,7 +1565,7 @@ test.describe('ICANCad foundation', () => {
     await tools.getByRole('button', { name: 'Sketch', exact: true }).click();
     await page.getByRole('menuitem', { name: 'XY plane' }).click();
     await expect(tools.getByRole('button', { name: 'Line', exact: true })).toBeVisible();
-    await expect(tools.getByRole('button', { name: 'Delete', exact: true })).toBeVisible();
+    await expect(tools.getByRole('button', { name: 'Projection', exact: true })).toBeVisible();
     await expect(tools.getByRole('button', { name: 'Finish sketch', exact: true })).toBeVisible();
     await expect(tools.getByRole('button', { name: 'Section', exact: true })).toBeVisible();
     await expect(page.locator('.sketch-toolbar')).toHaveCount(0);
@@ -1707,8 +1716,8 @@ test.describe('ICANCad foundation', () => {
 
     const tools = page.locator('.tool-dock');
     await tools.getByRole('button', { name: 'Select', exact: true }).click();
-    await page.locator('.sketch-entity-row').first().click();
-    await tools.getByRole('button', { name: 'Delete', exact: true }).click();
+    await page.locator('.sketch-entity-row').first().click({ button: 'right' });
+    await page.getByRole('menuitem', { name: /^Delete\b/ }).click();
 
     await expect(page.locator('.sketch-entity-row')).toHaveCount(1);
     await expect(constraints).not.toContainText('Coincident');
@@ -2255,7 +2264,9 @@ test.describe('ICANCad foundation', () => {
     await tools.getByRole('button', { name: 'Constraints', exact: true }).click();
     await page.getByRole('menuitem', { name: /^Distance\b/ }).click();
 
-    await page.locator('.constraint-row').click();
+    // The distance that was just applied is already the active row, so the
+    // unrelated horizontal the line got on its own is the one to switch to.
+    await page.locator('.constraint-row:not([data-active="true"])').click();
     await expect(page.locator('.constraint-row[data-active="true"]')).toHaveCount(1);
     await expect(page.locator('.sketch-entity-row[data-dimmed="true"]')).toHaveCount(1);
 
