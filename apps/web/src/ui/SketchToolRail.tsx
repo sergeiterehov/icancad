@@ -357,20 +357,20 @@ export function SketchToolRail() {
           />
         ))}
         <IconButton
-          label={t('sketch.toolBezier')}
-          tooltip={`${t('sketch.toolBezier')} (${SKETCH_TOOL_SHORTCUTS.bezier})`}
-          active={sketchTool === 'bezier'}
-          onClick={() => setSketchTool('bezier')}
-        >
-          <SketchEntityIcon type="bezier" size={17} />
-        </IconButton>
-        <IconButton
           label={t('sketch.toolPolygon')}
           tooltip={`${t('sketch.toolPolygon')} (${SKETCH_TOOL_SHORTCUTS.polygon})`}
           active={sketchTool === 'polygon'}
           onClick={() => setSketchTool('polygon')}
         >
           <Pentagon size={17} />
+        </IconButton>
+        <IconButton
+          label={t('sketch.toolBezier')}
+          tooltip={`${t('sketch.toolBezier')} (${SKETCH_TOOL_SHORTCUTS.bezier})`}
+          active={sketchTool === 'bezier'}
+          onClick={() => setSketchTool('bezier')}
+        >
+          <SketchEntityIcon type="bezier" size={17} />
         </IconButton>
         <IconButton
           label={t('sketch.toolProject')}

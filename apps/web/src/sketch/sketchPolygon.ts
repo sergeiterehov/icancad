@@ -10,8 +10,8 @@ import { snapConstraint } from './autoConstraints';
 import type { SketchSnapInput } from './snap';
 
 /**
- * Правильный многоугольник: a shape the sketch draws out of plain segments and
- * one construction circle.
+ * Многоугольник: a shape the sketch draws out of plain segments and one
+ * construction circle — always a regular one.
  *
  * The circle is what makes the figure hold together: its corners lie on it, its
  * edges are all equal, and its corners meet. Together that is a regular polygon,
