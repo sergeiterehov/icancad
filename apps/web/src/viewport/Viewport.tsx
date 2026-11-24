@@ -1018,7 +1018,9 @@ export function Viewport() {
           }
           const resolution = resolveSelectionHit(hit, store.selection, { additive });
           if (!resolution) {
-            if (emptyTapClearsSelection(store.selection, pointerType)) store.select(null);
+            if (emptyTapClearsSelection(store.selection, pointerType, additive)) {
+              store.select(null);
+            }
             return;
           }
           store.select(resolution.item, { additive: resolution.additive });

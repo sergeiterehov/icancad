@@ -80,3 +80,6 @@ finger does not have to be taught.
   curves and points, body edges and vertices, and quick-operation handles. The
   dock tongue is widened on a coarse pointer for the same reason; the invisible
   strip it draws around itself grows with it.
+- An empty click with Shift or Cmd/Ctrl held leaves the selection alone, in the 3D
+  view and on the sketch canvas: the modifier adds to a set, and empty space has
+  nothing to add. A finger has no key to hold and keeps its empty-tap rule.

@@ -125,4 +125,11 @@ describe('selection helpers', () => {
     expect(emptyTapClearsSelectionCount(2, 'touch')).toBe(false);
     expect(emptyTapClearsSelectionCount(2, 'mouse')).toBe(true);
   });
+
+  it('leaves the selection alone when an empty click is additive', () => {
+    const one = [{ kind: 'feature' as const, id: 'feat-1' }];
+    expect(emptyTapClearsSelection(one, 'mouse', true)).toBe(false);
+    // A finger is additive as well, but it has no key: it keeps its own rule.
+    expect(emptyTapClearsSelection(one, 'touch', true)).toBe(true);
+  });
 });

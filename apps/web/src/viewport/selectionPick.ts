@@ -6,11 +6,16 @@ import { isKeylessPointer } from './inputProfile';
  * Whether an empty tap should drop the selection. A finger that has picked one
  * object clears it at once, but a set the user built tap by tap is easy to lose
  * by accident, so a set of two or more asks for a second tap in the same place.
+ * A click with the multi-select key held adds nothing and takes nothing away,
+ * so empty space under it leaves the selection alone. A finger is additive too,
+ * but it owns the tap rules below: it has no key to hold.
  */
 export function emptyTapClearsSelection(
   selection: readonly SelectionItem[],
   pointerType: string,
+  additive = false,
 ): boolean {
+  if (additive && !isKeylessPointer(pointerType)) return false;
   return emptyTapClearsSelectionCount(selection.length, pointerType);
 }
 

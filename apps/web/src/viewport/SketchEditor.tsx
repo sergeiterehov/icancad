@@ -1971,6 +1971,10 @@ export function SketchEditor() {
           currentSketchEntities(activeSketchId),
         );
         if (!pick?.entityId) {
+          // With the multi-select key held an empty click adds nothing and
+          // takes nothing away: it must not drop the set being built. A finger
+          // has no key to hold and keeps its own empty-tap rule below.
+          if (event.shiftKey || event.metaKey || event.ctrlKey) return;
           const tap: TapMark = {
             time: performance.now(),
             x: event.clientX,
@@ -1999,8 +2003,9 @@ export function SketchEditor() {
         const additive = isAdditiveClick(event);
         if (!key) {
           // A pick that names nothing, such as a construction marker, is no more
-          // a row to toggle than empty space is.
-          setSketchSelection([]);
+          // a row to toggle than empty space is: a multi-select click leaves the
+          // set alone there too.
+          if (!(event.shiftKey || event.metaKey || event.ctrlKey)) setSketchSelection([]);
         } else if (!additive) {
           // A click on one object of a set leaves the set alone, so the next
           // drag still moves all of it. A click on another object takes over.
