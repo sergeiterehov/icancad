@@ -133,13 +133,16 @@ export function planSplit(
   const secondEnds = entityEndpoints(second) ?? [];
   const same = (a: Point2, b: Point2) => Math.hypot(a[0] - b[0], a[1] - b[1]) <= 1e-6;
   // Every place the two pieces meet is a joint: the point that was added, and —
-  // on a closed curve — the seam the curve already had.
+  // on a closed curve — the seam the curve already had. The indices are the ones
+  // a constraint names, which are not the ends' own order: an arc's points are
+  // its centre, then its start and its end.
   for (const end of firstEnds) {
     const other = secondEnds.findIndex((candidate) => same(candidate, end));
     if (other < 0) continue;
     const index = pointIndexAt(first, end);
-    if (index < 0) continue;
-    joints.push({ firstIndex: index, secondIndex: other });
+    const secondIndex = pointIndexAt(second, secondEnds[other]!);
+    if (index < 0 || secondIndex < 0) continue;
+    joints.push({ firstIndex: index, secondIndex });
   }
   if (joints.length === 0) return { ok: false, error: 'piece' };
 

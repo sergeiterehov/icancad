@@ -79,6 +79,28 @@ describe('split tool', () => {
     expect(planSplit(feature([]), [0, 0])).toEqual({ ok: false, error: 'selection' });
   });
 
+  it('names the joint points an arc really has', () => {
+    // An arc's points are its centre, its start and its end — not its ends' own
+    // order. A joint written against index 0 would tie a piece's end to the
+    // other piece's centre, and the solver answers that by collapsing both arcs.
+    const arc: SketchEntity = {
+      id: 'a',
+      type: 'arc',
+      construction: false,
+      cx: 0,
+      cy: 0,
+      r: 10,
+      startAngle: 0,
+      endAngle: Math.PI / 2,
+    };
+    const result = planSplit(feature([arc]), [7.0710678, 7.0710678]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The first piece runs from the arc's start to the new point: the new end is
+    // its index 2; the second piece starts at the new point, its index 1.
+    expect(result.plan.joints).toEqual([{ firstIndex: 2, secondIndex: 1 }]);
+  });
+
   it('turns a circle into two arcs that meet at the new point and at its seam', () => {
     const circle: SketchEntity = { id: 'c', type: 'circle', construction: false, cx: 0, cy: 0, r: 5 };
     const result = planSplit(feature([circle]), [0, 5]);
@@ -86,8 +108,13 @@ describe('split tool', () => {
     if (!result.ok) return;
     expect(result.plan.first.entity.type).toBe('arc');
     expect(result.plan.second.entity.type).toBe('arc');
-    // Both halves are arcs of the same circle, and they meet twice.
+    // Both halves are arcs of the same circle, and they meet twice: at the new
+    // point and at the seam the circle already had.
     expect(result.plan.joints).toHaveLength(2);
+    for (const joint of result.plan.joints) {
+      expect(joint.firstIndex).toBeGreaterThanOrEqual(1);
+      expect(joint.secondIndex).toBeGreaterThanOrEqual(1);
+    }
   });
 
   it('previews the two pieces the curve will be', () => {
