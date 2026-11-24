@@ -24,7 +24,7 @@ import {
   SquaresSubtract,
   SquaresUnite,
   Trash2,
-  Waypoints,
+  GraphPath,
 } from 'lucide-react';
 import { ChamferIcon, FilletIcon } from './edgeIcons';
 
@@ -82,7 +82,7 @@ export function SketchEntityIcon({
     case 'point':
       return <PointIcon size={size} />;
     case 'line':
-      return <Waypoints size={size} />;
+      return <GraphPath size={size} />;
     case 'circle':
       return <CircleDot size={size} />;
     case 'arc':

@@ -29,7 +29,7 @@ lucide's `Icon` wrapper. Both packages are dependencies of the web app.
 | Extrude operation, inspector and history   | Intersect                                 | `SquaresIntersect`                                                                                                 |
 | Sketch tools                               | Select                                    | `MousePointer2`                                                                                                    |
 | Sketch tools                               | Point                                     | `CrosshairPlusDot` (Lucide Lab)                                                                                    |
-| Sketch tools                               | Line                                      | `Waypoints`                                                                                                        |
+| Sketch tools                               | Line                                      | `GraphPath`                                                                                                        |
 | Sketch tools                               | Circle                                    | `CircleDot`                                                                                                        |
 | Sketch tools                               | Arc                                       | `LoaderCircle`                                                                                                     |
 | Sketch tools                               | Ellipse                                   | `Ellipse`                                                                                                          |
