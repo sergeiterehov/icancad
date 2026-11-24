@@ -167,7 +167,8 @@ test('offers the scissors first in the Tools menu', async ({ page }) => {
   await page.locator('.tool-rail-sketch').getByRole('button', { name: 'Tools' }).click();
   const order = await page.getByRole('menuitem').allInnerTexts();
   expect(order[0]).toBe('Trim');
-  expect(order).toHaveLength(4);
+  expect(order[1]).toBe('Split');
+  expect(order).toHaveLength(5);
 });
 
 test('cuts the piece the pointer stands over and leaves the rest', async ({ page }) => {

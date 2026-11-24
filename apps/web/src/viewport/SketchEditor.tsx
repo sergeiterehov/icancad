@@ -80,6 +80,12 @@ import {
   type FilletFailure,
 } from '../sketch/sketchFillet';
 import {
+  commitSplit,
+  planSplit,
+  splitPreviewEntities,
+  type SplitFailure,
+} from '../sketch/sketchSplit';
+import {
   commitTrim,
   planTrim,
   trimPreviewEntities,
@@ -130,6 +136,17 @@ function filletErrorKey(error: FilletFailure): string {
       return 'sketch.filletSelect';
     default:
       return 'sketch.filletFailed';
+  }
+}
+
+function splitErrorKey(error: SplitFailure): string {
+  switch (error) {
+    case 'selection':
+      return 'sketch.splitSelect';
+    case 'end':
+      return 'sketch.splitAtEnd';
+    default:
+      return 'sketch.splitFailed';
   }
 }
 
@@ -416,14 +433,20 @@ export function SketchEditor() {
   // them into sharp ones while the distance is being set.
   const [offsetJoin, setOffsetJoin] = useState<OffsetJoin>('round');
   const offsetJoinRef = useRef<OffsetJoin>('round');
-  // A cut ignores construction curves unless Shift asks for them: a helper drawn
-  // across a part must not be what the scissors take.
-  const [trimConstruction, setTrimConstruction] = useState(false);
-  const trimConstructionRef = useRef(false);
+  // The tools that change what is already drawn ignore construction curves
+  // unless Shift asks for them: a helper drawn across a part must not be what
+  // the scissors or the split take.
+  const [pointerConstruction, setPointerConstruction] = useState(false);
+  const pointerConstructionRef = useRef(false);
   // The tools that read the selection and take their number from the pointer:
-  // the two offsets, the corner radius of a fillet, and the piece a trim cuts.
+  // the two offsets, the corner radius of a fillet, the piece a trim cuts and
+  // the point a split adds.
   const pointerTool =
-    tool === 'offset' || tool === 'outline' || tool === 'fillet' || tool === 'trim';
+    tool === 'offset' ||
+    tool === 'outline' ||
+    tool === 'fillet' ||
+    tool === 'trim' ||
+    tool === 'split';
   const offsetTool = tool === 'offset' || tool === 'outline';
 
   const applyAutoHighlight = (ids: string[]) => {
@@ -448,20 +471,21 @@ export function SketchEditor() {
     draftToolRef.current = tool;
     offsetJoinRef.current = 'round';
     setOffsetJoin('round');
-    trimConstructionRef.current = false;
-    setTrimConstruction(false);
+    pointerConstructionRef.current = false;
+    setPointerConstruction(false);
     applyAutoHighlight([]);
     setSketchHover([]);
   }, [activeSketchId, tool, sketchToolNonce]);
 
-  // The scissors work on the geometry the part is made of. Shift says the
-  // construction curves are part of it too, and the preview answers at once.
+  // The scissors and the split work on the geometry the part is made of. Shift
+  // says the construction curves are part of it too, and the preview answers at
+  // once.
   useEffect(() => {
-    if (tool !== 'trim') return;
+    if (tool !== 'trim' && tool !== 'split') return;
     const update = (event: KeyboardEvent) => {
-      if (trimConstructionRef.current === event.shiftKey) return;
-      trimConstructionRef.current = event.shiftKey;
-      setTrimConstruction(event.shiftKey);
+      if (pointerConstructionRef.current === event.shiftKey) return;
+      pointerConstructionRef.current = event.shiftKey;
+      setPointerConstruction(event.shiftKey);
     };
     window.addEventListener('keydown', update);
     window.addEventListener('keyup', update);
@@ -471,10 +495,10 @@ export function SketchEditor() {
     };
   }, [tool]);
 
-  // A cut is a direct act on the piece under the pointer, so a selection left
-  // over from before would only be a promise the tool does not keep.
+  // A cut or a split is a direct act on what is under the pointer, so a
+  // selection left over from before would only be a promise it does not keep.
   useEffect(() => {
-    if (tool === 'trim') setSketchSelection([]);
+    if (tool === 'trim' || tool === 'split') setSketchSelection([]);
   }, [tool]);
 
   // Shift switches the corners of the offset and contour tools between round
@@ -731,7 +755,19 @@ export function SketchEditor() {
     const activeTool = useUiStore.getState().sketchTool;
     const isFillet = activeTool === 'fillet';
     const isTrim = activeTool === 'trim';
-    if (activeTool !== 'offset' && activeTool !== 'outline' && !isFillet && !isTrim) return;
+    const isSplit = activeTool === 'split';
+    // A cut or a split leaves the tool where it is: the next piece is one click
+    // away.
+    const staysOn = isTrim || isSplit;
+    if (
+      activeTool !== 'offset' &&
+      activeTool !== 'outline' &&
+      !isFillet &&
+      !isTrim &&
+      !isSplit
+    ) {
+      return;
+    }
     if (offsetCommitPending.current) return;
     const current = currentSketch();
     if (!current) return;
@@ -748,18 +784,27 @@ export function SketchEditor() {
             : { ok: false as const, message: filletErrorKey(result.error) },
         )
       : isTrim
-        ? commitTrim(current, point, { construction: trimConstructionRef.current }).then(
+        ? commitTrim(current, point, { construction: pointerConstructionRef.current }).then(
             (result) =>
               result.ok
                 ? {
                     ok: true as const,
                     feature: result.commit.feature,
-                    // A cut leaves nothing to hand on: the tool stays where it
-                    // is and the next piece is one click away.
                     selection: null,
                   }
                 : { ok: false as const, message: trimErrorKey(result.error) },
           )
+        : isSplit
+          ? commitSplit(current, point, { construction: pointerConstructionRef.current }).then(
+              (result) =>
+                result.ok
+                  ? {
+                      ok: true as const,
+                      feature: result.commit.feature,
+                      selection: null,
+                    }
+                  : { ok: false as const, message: splitErrorKey(result.error) },
+            )
         : commitOffsetSolved(current, selectionIds, point, {
             tool: activeTool,
             join: offsetJoinRef.current,
@@ -781,7 +826,7 @@ export function SketchEditor() {
         apply({ type: 'feature/replace', feature: result.feature });
         if (result.selection) setSketchSelection(result.selection);
         void diagnoseSketch(result.feature);
-        if (!isTrim) setSketchTool('select');
+        if (!staysOn) setSketchTool('select');
       })
       .catch(() =>
         useUiStore
@@ -791,7 +836,9 @@ export function SketchEditor() {
               ? 'sketch.filletFailed'
               : isTrim
                 ? 'sketch.trimFailed'
-                : 'sketch.offsetFailed',
+                : isSplit
+                  ? 'sketch.splitFailed'
+                  : 'sketch.offsetFailed',
             'error',
           ),
       )
@@ -1233,7 +1280,8 @@ export function SketchEditor() {
         activeTool === 'offset' ||
         activeTool === 'outline' ||
         activeTool === 'fillet' ||
-        activeTool === 'trim'
+        activeTool === 'trim' ||
+        activeTool === 'split'
       ) {
         return;
       }
@@ -1404,7 +1452,8 @@ export function SketchEditor() {
         activeTool === 'offset' ||
         activeTool === 'outline' ||
         activeTool === 'fillet' ||
-        activeTool === 'trim'
+        activeTool === 'trim' ||
+        activeTool === 'split'
       ) {
         // These tools measure from the raw pointer — the distance to the chain,
         // the radius around a corner — so the magnet must not pull the number
@@ -1676,7 +1725,8 @@ export function SketchEditor() {
         activeTool === 'offset' ||
         activeTool === 'outline' ||
         activeTool === 'fillet' ||
-        activeTool === 'trim'
+        activeTool === 'trim' ||
+        activeTool === 'split'
       ) {
         const point = getViewport()?.sketchPointAt(event.clientX, event.clientY);
         if (point) commitPointerToolAt(point);
@@ -1956,7 +2006,8 @@ export function SketchEditor() {
   // axis: a magnet target a few degrees off cannot keep both constraints. Such
   // a step keeps its purple target, but its line is not painted as aligned.
   const pointerPreview = useMemo(() => {
-    const none: { entities: SketchEntity[]; replaced: string[] } = { entities: [], replaced: [] };
+    type Preview = { entities: SketchEntity[]; replaced: string[]; points: Point2[] };
+    const none: Preview = { entities: [], replaced: [], points: [] };
     if (!pointerTool || !sketch || !hover || offsetCommitting) return none;
     if (tool === 'fillet') {
       const plan = planFillet(sketch, selectionIds, hover);
@@ -1966,16 +2017,29 @@ export function SketchEditor() {
       return {
         entities: filletPreviewEntities(plan.plan),
         replaced: plan.plan.lines.map((line) => line.id),
+        points: [],
       };
     }
     if (tool === 'trim') {
-      const plan = planTrim(sketch, hover, { construction: trimConstruction });
+      const plan = planTrim(sketch, hover, { construction: pointerConstruction });
       if (!plan.ok) return none;
       // The cut curve stands aside so the piece that goes is seen as a gap, and
       // the pieces that stay take its place before the click.
       return {
         entities: trimPreviewEntities(plan.plan),
         replaced: [plan.plan.cut.source.id],
+        points: [],
+      };
+    }
+    if (tool === 'split') {
+      const plan = planSplit(sketch, hover, { construction: pointerConstruction });
+      if (!plan.ok) return none;
+      // The curve stands aside for its own two pieces, and the point it gains
+      // is drawn where the click will put it.
+      return {
+        entities: splitPreviewEntities(plan.plan),
+        replaced: [plan.plan.source.id],
+        points: [plan.plan.at.point],
       };
     }
     return {
@@ -1986,6 +2050,7 @@ export function SketchEditor() {
         }),
       ),
       replaced: [],
+      points: [],
     };
   }, [
     pointerTool,
@@ -1995,7 +2060,7 @@ export function SketchEditor() {
     selectionIds,
     offsetJoin,
     offsetCommitting,
-    trimConstruction,
+    pointerConstruction,
   ]);
   const previewShape = previewEntity();
   const previewAlignment = Boolean(hoverInput?.alignment);
@@ -2032,7 +2097,7 @@ export function SketchEditor() {
     const previewGuides = draftGuides(tool, markers.markers, hover, () => createId('guide'));
     getViewport()?.setSketchOverlay(
       pointerTool ? pointerPreview.entities : previewEntity(),
-      markers.markers,
+      pointerTool ? [...markers.markers, ...pointerPreview.points] : markers.markers,
       previewAuto,
       midpointMarker,
       previewGuides,
@@ -2132,7 +2197,8 @@ export function SketchEditor() {
         (activeTool === 'offset' ||
           activeTool === 'outline' ||
           activeTool === 'fillet' ||
-          activeTool === 'trim')
+          activeTool === 'trim' ||
+          activeTool === 'split')
       ) {
         commitPointerToolAt(hover);
       }
@@ -2199,6 +2265,8 @@ export function SketchEditor() {
                     ? t('sketch.filletHint')
                     : tool === 'trim'
                       ? t('sketch.trimHint')
+                      : tool === 'split'
+                        ? t('sketch.splitHint')
                       : tool === 'offset'
                       ? t('sketch.offsetHint')
                       : tool === 'outline'

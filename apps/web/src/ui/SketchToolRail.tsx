@@ -2,6 +2,7 @@ import type { SketchFeature } from '@icancad/model';
 import {
   Check,
   ChevronDown,
+  GitCommitHorizontal,
   LineStyle,
   Magnet,
   MousePointer2,
@@ -18,6 +19,7 @@ import { useTranslation } from 'react-i18next';
 import { buildConstraintActions } from '../sketch/constraintModel';
 import { constructionSelection, toggleConstruction } from '../sketch/construction';
 import { filletCorners } from '../sketch/sketchFillet';
+import { splitTargets } from '../sketch/sketchSplit';
 import { trimTargets } from '../sketch/sketchTrim';
 import { offsetSelectionEntities } from '../sketch/sketchOffset';
 import {
@@ -216,11 +218,13 @@ export function SketchToolRail() {
   // А corner needs exactly two lines that meet: anything else has nothing to round.
   const filletTarget = feature ? filletCorners(feature, selectionIds).length : 0;
   const trimTarget = feature ? trimTargets(feature).length : 0;
+  const splitTarget = feature ? splitTargets(feature).length : 0;
   const toolActive =
     sketchTool === 'offset' ||
     sketchTool === 'outline' ||
     sketchTool === 'fillet' ||
-    sketchTool === 'trim';
+    sketchTool === 'trim' ||
+    sketchTool === 'split';
 
   const toggleSelectedConstruction = () => {
     if (!feature) return;
@@ -231,7 +235,7 @@ export function SketchToolRail() {
   const openTools = (event: MouseEvent<HTMLButtonElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const entry = (
-      tool: Extract<SketchTool, 'offset' | 'outline' | 'fillet' | 'trim'>,
+      tool: Extract<SketchTool, 'offset' | 'outline' | 'fillet' | 'trim' | 'split'>,
       label: string,
       icon: ReactElement,
       disabled: boolean,
@@ -252,6 +256,13 @@ export function SketchToolRail() {
         <Scissors size={14} />,
         trimTarget === 0,
         t('sketch.trimSelect'),
+      ),
+      entry(
+        'split',
+        t('sketch.toolSplit'),
+        <GitCommitHorizontal size={14} />,
+        splitTarget === 0,
+        t('sketch.splitSelect'),
       ),
       entry(
         'fillet',
@@ -388,6 +399,8 @@ export function SketchToolRail() {
             <SquareRoundCorner size={17} />
           ) : sketchTool === 'trim' ? (
             <Scissors size={17} />
+          ) : sketchTool === 'split' ? (
+            <GitCommitHorizontal size={17} />
           ) : (
             <SplinePointer size={17} />
           )}
