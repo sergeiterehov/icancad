@@ -161,6 +161,15 @@ const spans = (entities: TrimEntity[]) =>
     .map((entity) => [entity.x1, entity.x2])
     .sort((a, b) => (a[0] ?? 0) - (b[0] ?? 0) || (a[1] ?? 0) - (b[1] ?? 0));
 
+test('offers the scissors first in the Tools menu', async ({ page }) => {
+  await openApp(page);
+  await openSketch(page);
+  await page.locator('.tool-rail-sketch').getByRole('button', { name: 'Tools' }).click();
+  const order = await page.getByRole('menuitem').allInnerTexts();
+  expect(order[0]).toBe('Trim');
+  expect(order).toHaveLength(4);
+});
+
 test('cuts the piece the pointer stands over and leaves the rest', async ({ page }) => {
   await openApp(page);
   const sketchId = await openSketch(page);
