@@ -522,6 +522,8 @@
     "polygonCenter": "Pick the centre of the polygon",
     "polygonRadius": "Pick the radius; Shift makes it the one the edges stand at",
     "polygonSides": "Move the pointer to set how many sides, and click",
+    "polygonRadiusTouch": "Drag out from the centre to set the radius",
+    "polygonSidesTouch": "Move to set how many sides, and lift your finger",
     "polygonCorners": "{{count}} corners",
     "polygonCorners_few": "{{count}} corners",
     "polygonCorners_many": "{{count}} corners",

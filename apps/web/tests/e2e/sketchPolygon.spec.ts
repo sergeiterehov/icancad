@@ -74,6 +74,57 @@ async function screenPoint(page: Page, sketchId: string, point: [number, number]
   );
 }
 
+/** A finger that comes down, travels and lifts, through the browser's own touch
+ * input, so the page sees the pointer events a tablet would send. */
+async function touchDrag(
+  page: Page,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+) {
+  const client = await page.context().newCDPSession(page);
+  const point = (x: number, y: number) => [{ x, y, radiusX: 4, radiusY: 4, force: 1 }];
+  await client.send('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: point(from.x, from.y),
+  });
+  for (let step = 1; step <= 8; step += 1) {
+    const x = from.x + ((to.x - from.x) * step) / 8;
+    const y = from.y + ((to.y - from.y) * step) / 8;
+    await client.send('Input.dispatchTouchEvent', {
+      type: 'touchMove',
+      touchPoints: point(x, y),
+    });
+    await page.waitForTimeout(20);
+  }
+  await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await client.detach();
+}
+
+/** A pen tap: the browser reports `pointerType: 'pen'` for it, not a mouse. */
+async function penTap(page: Page, at: { x: number; y: number }) {
+  const client = await page.context().newCDPSession(page);
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: at.x,
+    y: at.y,
+    button: 'left',
+    buttons: 1,
+    clickCount: 1,
+    pointerType: 'pen',
+  });
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: at.x,
+    y: at.y,
+    button: 'left',
+    buttons: 0,
+    clickCount: 1,
+    pointerType: 'pen',
+  });
+  await client.detach();
+  await page.waitForTimeout(350);
+}
+
 async function clickAt(page: Page, sketchId: string, point: [number, number]) {
   const screen = await screenPoint(page, sketchId, point);
   await page.mouse.move(screen.x, screen.y);
@@ -214,6 +265,91 @@ test('Shift makes the radius the distance to the edges', async ({ page }) => {
   expect(corners[0]).toBeGreaterThan(13);
   expect(apothem).toBeCloseTo(12, 0);
   await expect(page.locator('.toast-error')).toHaveCount(0);
+});
+
+test.describe('on a touch screen', () => {
+  // A finger has neither a hover nor a key: the same three steps are taps, and
+  // the hints say so.
+  test.use({ hasTouch: true });
+
+  test('draws a polygon with taps and asks for no key', async ({ page }) => {
+    await openApp(page);
+    const sketchId = await openSketch(page);
+    await startPolygon(page);
+
+    const tap = async (point: [number, number]) => {
+      const at = await screenPoint(page, sketchId, point);
+      await page.touchscreen.tap(at.x, at.y);
+      await page.waitForTimeout(350);
+    };
+
+    await tap([0, 0]);
+    const hint = page.locator('.sketch-hint');
+    // The radius step teaches the gesture a finger has instead of Shift.
+    await expect(hint).toContainText('Drag out from the centre');
+    await expect(hint).not.toContainText('Shift');
+
+    await tap([12, 0]);
+    await expect(hint).toContainText('lift your finger');
+    await expect(hint).not.toContainText('click');
+
+    await tap([6, 10.3923]);
+    await expect
+      .poll(async () => (await feature(page, sketchId)).entities.length, { timeout: 15_000 })
+      .toBe(7);
+    const { entities, constraints } = await feature(page, sketchId);
+    expect(entities.filter((entity) => entity.type === 'line')).toHaveLength(6);
+    expect(entities.filter((entity) => entity.type === 'circle')).toHaveLength(1);
+    // The figure is tied the same way a mouse would tie it.
+    const types = constraints.map((constraint) => constraint.type);
+    expect(types.filter((type) => type === 'equal')).toHaveLength(5);
+    expect(types.filter((type) => type === 'point-on-circle')).toHaveLength(6);
+    await expect(page.locator('.toast-error')).toHaveCount(0);
+  });
+
+  test('takes the centre and the radius from one drag of a finger', async ({ page }) => {
+    await openApp(page);
+    const sketchId = await openSketch(page);
+    await startPolygon(page);
+
+    // A finger that travels from the centre names the centre and the radius in
+    // one gesture, so the next tap only has to count the corners.
+    const centre = await screenPoint(page, sketchId, [0, 0]);
+    const radius = await screenPoint(page, sketchId, [12, 0]);
+    await touchDrag(page, centre, radius);
+    await page.waitForTimeout(400);
+    expect((await feature(page, sketchId)).entities).toHaveLength(0);
+
+    const sides = await screenPoint(page, sketchId, [6, 10.3923]);
+    await page.touchscreen.tap(sides.x, sides.y);
+    await expect
+      .poll(async () => (await feature(page, sketchId)).entities.length, { timeout: 15_000 })
+      .toBe(7);
+    const { entities } = await feature(page, sketchId);
+    const lines = entities.filter((entity) => entity.type === 'line');
+    expect(lines).toHaveLength(6);
+    // The radius is the drag's own length, and the corners stand on it.
+    const circle = entities.find((entity) => entity.type === 'circle');
+    expect(circle?.r).toBeCloseTo(12, 0);
+  });
+});
+
+test('takes a pen like a finger, and reads its hints the same way', async ({ page }) => {
+  await openApp(page);
+  const sketchId = await openSketch(page);
+  await startPolygon(page);
+
+  const hint = page.locator('.sketch-hint');
+  await penTap(page, await screenPoint(page, sketchId, [0, 0]));
+  // A pen has no keyboard either: the step asks for a gesture, not for a key.
+  await expect(hint).toContainText('Drag out from the centre');
+  await expect(hint).not.toContainText('Shift');
+
+  await penTap(page, await screenPoint(page, sketchId, [12, 0]));
+  await penTap(page, await screenPoint(page, sketchId, [6, 10.3923]));
+  await expect
+    .poll(async () => (await feature(page, sketchId)).entities.length, { timeout: 15_000 })
+    .toBe(7);
 });
 
 test('stays on, so the next polygon starts with a click', async ({ page }) => {

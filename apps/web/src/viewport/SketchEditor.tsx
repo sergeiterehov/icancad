@@ -82,7 +82,7 @@ import {
   extendPreviewEntities,
   type ExtendFailure,
 } from '../sketch/sketchExtend';
-import { POLYGON_DRAFT_SIDES, polygonGeometry } from '../sketch/sketchPolygon';
+import { POLYGON_DRAFT_SIDES, polygonGeometry, polygonHint } from '../sketch/sketchPolygon';
 import {
   commitFillet,
   filletPreviewEntities,
@@ -129,7 +129,7 @@ import {
 import { useKernelStore } from '../stores/kernelStore';
 import { useUiStore } from '../stores/uiStore';
 import { useContextMenuStore } from '../ui/ContextMenu';
-import { isKeylessPointer, lastPointerType } from './inputProfile';
+import { isKeylessPointer, lastPointerType, primaryInputProfile } from './inputProfile';
 import { emptyTapClearsSelectionCount } from './selectionPick';
 import { isDoubleTap, type TapMark } from './doubleTap';
 import { getViewport, type ViewportCamera } from './handle';
@@ -2529,6 +2529,11 @@ export function SketchEditor() {
 
   if (!sketch || !activeSketchId || !activeSketchReady) return null;
 
+  // A finger and a pen have no key to hold: a hint must not ask for one, and a
+  // step they take is a drag or a tap rather than a click.
+  const keylessInput =
+    isKeylessPointer(lastPointerType()) || primaryInputProfile() === 'touch';
+
   const hint =
     tool === 'line'
       ? draft.length === 0
@@ -2565,11 +2570,7 @@ export function SketchEditor() {
                   ? t('sketch.finishBezier')
                   : t('sketch.addBezier')
                 : tool === 'polygon'
-                  ? draft.length === 0
-                    ? t('sketch.polygonCenter')
-                    : draft.length === 1
-                      ? t('sketch.polygonRadius')
-                      : t('sketch.polygonSides')
+                  ? t(polygonHint(draft.length, keylessInput))
                 : tool === 'project'
                   ? t('sketch.projectionPickHint')
                   : tool === 'fillet'

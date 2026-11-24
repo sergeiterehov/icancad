@@ -5,6 +5,8 @@ import {
   detectInputProfile,
   inputProfile,
   isInputPreference,
+  isKeylessPointer,
+  isTouchPointer,
   likelyPointerKind,
   noteWheelKind,
   resolvedPointerKind,
@@ -39,6 +41,18 @@ describe('wheel signature', () => {
 
   it('says nothing when the event is not clear', () => {
     expect(wheelPointerKind(wheel(20))).toBeNull();
+  });
+});
+
+describe('pointer kinds', () => {
+  it('knows which pointers have no key to hold', () => {
+    // A mouse hovers and has buttons; a pen hovers too but has no keyboard, and
+    // a finger is the one that cannot hover at all.
+    expect(isKeylessPointer('mouse')).toBe(false);
+    expect(isKeylessPointer('touch')).toBe(true);
+    expect(isKeylessPointer('pen')).toBe(true);
+    expect(isTouchPointer('pen')).toBe(false);
+    expect(isTouchPointer('touch')).toBe(true);
   });
 });
 

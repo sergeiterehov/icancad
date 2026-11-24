@@ -2,7 +2,7 @@ import type { SketchConstraint, SketchFeature } from '@icancad/model';
 import { polygonApothem } from '@icancad/sketch';
 import { describe, expect, it, vi } from 'vitest';
 import { solveSketch } from '../src/sketch/client';
-import { polygonGeometry, polygonSides } from '../src/sketch/sketchPolygon';
+import { polygonGeometry, polygonHint, polygonSides } from '../src/sketch/sketchPolygon';
 
 vi.mock('../src/sketch/client', () => import('./planegcsSolve'));
 
@@ -125,6 +125,17 @@ describe('polygon tool', () => {
         { entityId: 'other', pointIndex: 1 },
       ],
     ]);
+  });
+
+  it('asks a keyboard owner for a key, and a finger for a gesture', () => {
+    // A mouse reads the same three steps whatever it does; a finger and a pen
+    // have no key to hold, so their hints never mention one.
+    expect(polygonHint(0, false)).toBe('sketch.polygonCenter');
+    expect(polygonHint(0, true)).toBe('sketch.polygonCenter');
+    expect(polygonHint(1, false)).toBe('sketch.polygonRadius');
+    expect(polygonHint(1, true)).toBe('sketch.polygonRadiusTouch');
+    expect(polygonHint(2, false)).toBe('sketch.polygonSides');
+    expect(polygonHint(2, true)).toBe('sketch.polygonSidesTouch');
   });
 
   it('refuses a radius of nothing', () => {

@@ -54,6 +54,25 @@ export interface PolygonGeometry {
   sides: number;
 }
 
+/** The hint a draft shows, one per step and one per kind of pointer. */
+export type PolygonHintKey =
+  | 'sketch.polygonCenter'
+  | 'sketch.polygonRadius'
+  | 'sketch.polygonRadiusTouch'
+  | 'sketch.polygonSides'
+  | 'sketch.polygonSidesTouch';
+
+/**
+ * What the next click of a polygon draft is for. A pointer with no keyboard —
+ * a finger or a pen — is told to drag and to lift, never to hold Shift, because
+ * there is no key to hold.
+ */
+export function polygonHint(points: number, keyless: boolean): PolygonHintKey {
+  if (points === 0) return 'sketch.polygonCenter';
+  if (points === 1) return keyless ? 'sketch.polygonRadiusTouch' : 'sketch.polygonRadius';
+  return keyless ? 'sketch.polygonSidesTouch' : 'sketch.polygonSides';
+}
+
 /** How many corners the figure has: the one given, or the one the pointer asks for. */
 export function polygonSides(
   input: Pick<PolygonInput, 'centre' | 'corner' | 'cursor' | 'sides'>,
