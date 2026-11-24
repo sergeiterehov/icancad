@@ -2,7 +2,8 @@ import { createId, type SketchConstraint, type SketchFeature, type SketchEntity 
 import {
   curvePointAt,
   entityControlPoints,
-  entityEndpoints,
+  curveEndIndices,
+  isClosedCurve,
   isFundamentalEntityId,
   sketchEntityIndex,
   trimPiece,
@@ -130,23 +131,21 @@ export function planSplit(
   const second = trimPiece(nearest.source, parameter, 1);
   if (!first || !second) return { ok: false, error: 'piece' };
 
-  const joints: SplitPlan['joints'] = [];
-  const firstEnds = entityEndpoints(first) ?? [];
-  const secondEnds = entityEndpoints(second) ?? [];
-  const same = (a: Point2, b: Point2) => Math.hypot(a[0] - b[0], a[1] - b[1]) <= 1e-6;
-  // Every place the two pieces meet is a joint: the point that was added, and —
-  // on a closed curve — the seam the curve already had. The indices are the ones
-  // a constraint names, which are not the ends' own order: an arc's points are
-  // its centre, then its start and its end.
-  for (const end of firstEnds) {
-    const other = secondEnds.findIndex((candidate) => same(candidate, end));
-    if (other < 0) continue;
-    const index = pointIndexAt(first, end);
-    const secondIndex = pointIndexAt(second, secondEnds[other]!);
-    if (index < 0 || secondIndex < 0) continue;
-    joints.push({ firstIndex: index, secondIndex });
+  // The pieces meet twice: where the point was added, and — on a closed curve —
+  // at the seam the curve already had. Both are known from the pieces
+  // themselves: the first piece ends where the second begins, and, for a closed
+  // curve, the first begins where the second ends. Naming the ends by their
+  // control-point indices and not by position matters: an ellipse's axis handles
+  // stand exactly where its ends are.
+  const firstEnds = curveEndIndices(first);
+  const secondEnds = curveEndIndices(second);
+  if (!firstEnds || !secondEnds) return { ok: false, error: 'piece' };
+  const joints: SplitPlan['joints'] = [
+    { firstIndex: firstEnds.end, secondIndex: secondEnds.start },
+  ];
+  if (isClosedCurve(nearest.source)) {
+    joints.push({ firstIndex: firstEnds.start, secondIndex: secondEnds.end });
   }
-  if (joints.length === 0) return { ok: false, error: 'piece' };
 
   // Both pieces come from one curve and so carry its id; the second one gets a
   // marker of its own, so a relation written in the plan can say which piece it
@@ -160,7 +159,7 @@ export function planSplit(
       first: { entity: first, keepsId: true },
       second: { entity: marked, keepsId: false },
       joints,
-      ties: curveTies(first, marked),
+      ties: curveTies(first, marked, isClosedCurve(nearest.source)),
     },
   };
 }
@@ -171,7 +170,11 @@ export function planSplit(
  * centre and the same two axes, and a circle — which becomes two arcs — the same
  * again, with its seam joined by the joints.
  */
-function curveTies(first: SketchEntity, second: SketchEntity): SketchConstraint[] {
+function curveTies(
+  first: SketchEntity,
+  second: SketchEntity,
+  closed: boolean,
+): SketchConstraint[] {
   const ties: SketchConstraint[] = [];
   const coincident = (a: number, b: number) =>
     ties.push({
@@ -196,7 +199,11 @@ function curveTies(first: SketchEntity, second: SketchEntity): SketchConstraint[
       refs: [{ entityId: first.id }, { entityId: second.id }],
     } as SketchConstraint);
   } else {
-    coincident(1, 1);
+    // A closed curve is cut from its own angle zero, so the first piece starts
+    // on the X axis where the second one ends: the seam joint already ties those
+    // handles, and saying it again is a relation the solver reports as
+    // redundant.
+    if (!closed) coincident(1, 1);
     coincident(2, 2);
   }
   return ties;

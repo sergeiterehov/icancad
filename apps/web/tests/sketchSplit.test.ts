@@ -154,6 +154,78 @@ describe('split tool', () => {
     expect(indices).toContainEqual([3, 4]);
   });
 
+  it('joins both places an ellipse meets itself again', async () => {
+    // An ellipse is closed: cut once it becomes two elliptical arcs that meet at
+    // the new point *and* at the seam. The seam sits exactly on the ellipse's
+    // own axis handle, so naming points by position ties a handle instead — the
+    // reported bug was one joint in the right place and none at the seam.
+    const ellipse: SketchEntity = {
+      id: 'e',
+      type: 'ellipse',
+      construction: false,
+      cx: 0,
+      cy: 0,
+      rx: 20,
+      ry: 10,
+      rotation: 0,
+    };
+    // The top of the ellipse: parameter π/2.
+    const top: [number, number] = [0, 10];
+    const result = planSplit(feature([ellipse]), top);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // An elliptical arc's points are its centre, its two axis handles, its
+    // start and its end: 3 and 4 are the ends, 1 and 2 are the handles.
+    const named = result.plan.joints.flatMap((joint) => [joint.firstIndex, joint.secondIndex]);
+    expect(named.every((index) => index === 3 || index === 4)).toBe(true);
+    expect(result.plan.joints).toEqual([
+      { firstIndex: 4, secondIndex: 3 },
+      { firstIndex: 3, secondIndex: 4 },
+    ]);
+
+    const cut = await commitSplit(feature([ellipse]), top);
+    if (!cut.ok) throw new Error(cut.error);
+    const coincidences = cut.commit.feature.constraints.filter(
+      (constraint) => constraint.type === 'coincident',
+    );
+    // Two joints at the ends, the same centre and the same Y axis. The X axis is
+    // not tied again: a closed ellipse is cut from its own angle zero, so the
+    // seam joint already ties the handles that stand there.
+    expect(coincidences).toHaveLength(4);
+    const atEnds = coincidences.filter((constraint) =>
+      constraint.refs.every((ref) => ref.pointIndex === 3 || ref.pointIndex === 4),
+    );
+    expect(atEnds).toHaveLength(2);
+    const handles = coincidences.flatMap((constraint) =>
+      constraint.refs.map((ref) => ref.pointIndex),
+    );
+    expect(handles).not.toContain(1);
+  });
+
+  it('ties both axes of an open elliptical arc', async () => {
+    // An open arc has no seam, so nothing else ties its X axis.
+    const open: SketchEntity = {
+      id: 'ea',
+      type: 'elliptical-arc',
+      construction: false,
+      cx: 0,
+      cy: 0,
+      rx: 10,
+      ry: 5,
+      rotation: 0,
+      startAngle: Math.PI / 4,
+      endAngle: (3 * Math.PI) / 2,
+    };
+    const at = [10 * Math.cos(Math.PI / 2), 5 * Math.sin(Math.PI / 2)] as [number, number];
+    const result = planSplit(feature([open]), at);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const indices = result.plan.ties.flatMap((tie) => tie.refs.map((ref) => ref.pointIndex));
+    expect(indices).toContain(0);
+    expect(indices).toContain(1);
+    expect(indices).toContain(2);
+  });
+
   it('keeps a split line as one line: the pieces only meet', async () => {
     const cut = await commitSplit(feature([line('a', 0, 0, 40, 0)]), [15, 0]);
     if (!cut.ok) throw new Error(cut.error);

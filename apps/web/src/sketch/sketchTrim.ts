@@ -1,6 +1,7 @@
 import { createId, type SketchConstraint, type SketchFeature, type SketchEntity } from '@icancad/model';
 import {
   curveCrossingSources,
+  curveEndIndices,
   curveIntervals,
   curveParameterAt,
   curvePointAt,
@@ -263,11 +264,15 @@ export async function commitTrim(
   const same = (a: readonly [number, number], b: readonly [number, number]) =>
     Math.hypot(a[0] - b[0], a[1] - b[1]) <= 1e-6;
   for (const piece of assigned) {
-    for (const point of entityEndpoints(piece.entity) ?? []) {
+    const pieceEnds = entityEndpoints(piece.entity) ?? [];
+    const indices = curveEndIndices(piece.entity);
+    if (!indices) continue;
+    for (const [position, point] of pieceEnds.entries()) {
       // An end the cut created, not an end the curve already had.
       if (sourceEnds.some((end) => same(end, point))) continue;
-      const index = pointIndexOf(piece.entity, point);
-      if (index < 0) continue;
+      // The end is named by what it is, not by where it lies: an ellipse's axis
+      // handles stand exactly where its ends are.
+      const index = position === 0 ? indices.start : indices.end;
       const pieceRef = { entityId: piece.entity.id, pointIndex: index };
       const near = others
         .filter((other) => other.id !== piece.entity.id)

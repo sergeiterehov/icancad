@@ -206,6 +206,30 @@ export function trimPiece(
   }
 }
 
+/**
+ * The control-point indices of a curve's two ends.
+ *
+ * Position is not enough to name an end: an ellipse's own axis handles stand
+ * exactly where its start and its end are, so a search by coordinates finds a
+ * handle first. A joint that names a handle is not a joint between the pieces.
+ */
+export function curveEndIndices(entity: SketchEntity): { start: number; end: number } | null {
+  switch (entity.type) {
+    case 'line':
+      return { start: 0, end: 1 };
+    case 'arc':
+      return { start: 1, end: 2 };
+    case 'elliptical-arc':
+      return { start: 3, end: 4 };
+    case 'bezier':
+      return entity.points.length >= 2
+        ? { start: 0, end: entity.points.length - 1 }
+        : null;
+    default:
+      return null;
+  }
+}
+
 /** True when the curve has no ends: its pieces wrap round its own start. */
 export function isClosedCurve(entity: SketchEntity): boolean {
   return entity.type === 'circle' || entity.type === 'ellipse';
