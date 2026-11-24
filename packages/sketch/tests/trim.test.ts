@@ -5,6 +5,7 @@ import {
   curveIntervals,
   curveParameterAt,
   curvePointAt,
+  isWholeCurve,
   trimPiece,
 } from '../src/index';
 
@@ -132,9 +133,14 @@ describe('trim crossings', () => {
     expect(intervals.intervals).toHaveLength(3);
     expect(intervals.intervals[1]).toEqual([0.3, 0.7]);
 
-    // A crossing at an end is the joint the curve already has, not a cut.
-    const atEnds = curveIntervals(segment, [0, 1]);
-    expect(atEnds).toEqual({ error: 'no-crossing' });
+    // A crossing at an end is the joint the curve already has, not a cut: with
+    // no cut left the curve is one whole piece.
+    expect(curveIntervals(segment, [0, 1])).toEqual({
+      from: 0,
+      to: 1,
+      intervals: [[0, 1]],
+      closed: false,
+    });
 
     // A circle has no ends: its pieces run from crossing to crossing, all the
     // way round.
@@ -145,8 +151,15 @@ describe('trim crossings', () => {
     expect(loop.intervals[1]).toEqual([0.6, 1.1]);
   });
 
-  it('refuses a curve nothing crosses', () => {
-    expect(curveIntervals(line('a', 0, 0, 10, 0), [])).toEqual({ error: 'no-crossing' });
-    expect(curveIntervals(circle('b', 0, 0, 5), [0.2])).toEqual({ error: 'no-crossing' });
+  it('hands a curve nothing crosses back as one whole piece', () => {
+    // A lone curve is its own piece: the scissors take it whole rather than
+    // refusing to act, and a loop one curve crosses is in the same place.
+    const alone = curveIntervals(line('a', 0, 0, 10, 0), []);
+    expect(alone).toEqual({ from: 0, to: 1, intervals: [[0, 1]], closed: false });
+    const touched = curveIntervals(circle('b', 0, 0, 5), [0.2]);
+    expect(touched).toEqual({ from: 0, to: 1, intervals: [[0, 1]], closed: true });
+    const whole: [number, number] = [0, 1];
+    expect(isWholeCurve(whole)).toBe(true);
+    expect(isWholeCurve([0.3, 0.7])).toBe(false);
   });
 });

@@ -13,7 +13,7 @@ import { exactCurveIntersections, segmentIntersection } from './intersect';
  * that has no parameter of its own is refused rather than approximated.
  */
 
-export type TrimFailure = 'selection' | 'unsupported' | 'no-crossing' | 'piece';
+export type TrimFailure = 'selection' | 'unsupported' | 'piece';
 
 /** Two crossings closer than this along a curve are one crossing. */
 const PARAMETER_EPSILON = 1e-6;
@@ -307,7 +307,9 @@ export function curveIntervals(
         (parameter) => parameter > PARAMETER_EPSILON && parameter < 1 - PARAMETER_EPSILON,
       );
   if (closed) {
-    if (breaks.length < 2) return { error: 'no-crossing' };
+    // A loop that nothing crosses — or that only one curve crosses, which leaves
+    // it one piece — is the piece: cutting it removes it whole.
+    if (breaks.length < 2) return { from: 0, to: 1, intervals: [[0, 1]], closed };
     const intervals: Array<[number, number]> = [];
     for (const [index, from] of breaks.entries()) {
       const to = breaks[(index + 1) % breaks.length]!;
@@ -315,7 +317,9 @@ export function curveIntervals(
     }
     return { from: breaks[0]!, to: breaks[0]! + 1, intervals, closed };
   }
-  if (breaks.length === 0) return { error: 'no-crossing' };
+  // A curve nothing crosses is one piece: itself. The tool turns that into a
+  // whole removal rather than refusing to act at all.
+  if (breaks.length === 0) return { from: 0, to: 1, intervals: [[0, 1]], closed };
   const edges = [0, ...breaks, 1];
   const intervals: Array<[number, number]> = [];
   for (let index = 0; index < edges.length - 1; index += 1) {
@@ -325,6 +329,11 @@ export function curveIntervals(
     intervals.push([from, to]);
   }
   return { from: 0, to: 1, intervals, closed };
+}
+
+/** True when an interval is the curve itself rather than a piece of it. */
+export function isWholeCurve(interval: [number, number]): boolean {
+  return interval[1] - interval[0] >= 1 - PARAMETER_EPSILON;
 }
 
 /** The nearest point of an interval to a pointer, and how far it stands. */

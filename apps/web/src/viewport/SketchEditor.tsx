@@ -137,8 +137,6 @@ function trimErrorKey(error: TrimFailure): string {
   switch (error) {
     case 'selection':
       return 'sketch.trimSelect';
-    case 'no-crossing':
-      return 'sketch.trimNoCrossing';
     default:
       return 'sketch.trimFailed';
   }
@@ -418,6 +416,10 @@ export function SketchEditor() {
   // them into sharp ones while the distance is being set.
   const [offsetJoin, setOffsetJoin] = useState<OffsetJoin>('round');
   const offsetJoinRef = useRef<OffsetJoin>('round');
+  // A cut ignores construction curves unless Shift asks for them: a helper drawn
+  // across a part must not be what the scissors take.
+  const [trimConstruction, setTrimConstruction] = useState(false);
+  const trimConstructionRef = useRef(false);
   // The tools that read the selection and take their number from the pointer:
   // the two offsets, the corner radius of a fillet, and the piece a trim cuts.
   const pointerTool =
@@ -446,9 +448,34 @@ export function SketchEditor() {
     draftToolRef.current = tool;
     offsetJoinRef.current = 'round';
     setOffsetJoin('round');
+    trimConstructionRef.current = false;
+    setTrimConstruction(false);
     applyAutoHighlight([]);
     setSketchHover([]);
   }, [activeSketchId, tool, sketchToolNonce]);
+
+  // The scissors work on the geometry the part is made of. Shift says the
+  // construction curves are part of it too, and the preview answers at once.
+  useEffect(() => {
+    if (tool !== 'trim') return;
+    const update = (event: KeyboardEvent) => {
+      if (trimConstructionRef.current === event.shiftKey) return;
+      trimConstructionRef.current = event.shiftKey;
+      setTrimConstruction(event.shiftKey);
+    };
+    window.addEventListener('keydown', update);
+    window.addEventListener('keyup', update);
+    return () => {
+      window.removeEventListener('keydown', update);
+      window.removeEventListener('keyup', update);
+    };
+  }, [tool]);
+
+  // A cut is a direct act on the piece under the pointer, so a selection left
+  // over from before would only be a promise the tool does not keep.
+  useEffect(() => {
+    if (tool === 'trim') setSketchSelection([]);
+  }, [tool]);
 
   // Shift switches the corners of the offset and contour tools between round
   // and sharp while the distance is being set, and the preview follows at once.
@@ -721,14 +748,17 @@ export function SketchEditor() {
             : { ok: false as const, message: filletErrorKey(result.error) },
         )
       : isTrim
-        ? commitTrim(current, selectionIds, point).then((result) =>
-            result.ok
-              ? {
-                  ok: true as const,
-                  feature: result.commit.feature,
-                  selection: result.commit.keptIds,
-                }
-              : { ok: false as const, message: trimErrorKey(result.error) },
+        ? commitTrim(current, point, { construction: trimConstructionRef.current }).then(
+            (result) =>
+              result.ok
+                ? {
+                    ok: true as const,
+                    feature: result.commit.feature,
+                    // A cut leaves nothing to hand on: the tool stays where it
+                    // is and the next piece is one click away.
+                    selection: null,
+                  }
+                : { ok: false as const, message: trimErrorKey(result.error) },
           )
         : commitOffsetSolved(current, selectionIds, point, {
             tool: activeTool,
@@ -749,9 +779,9 @@ export function SketchEditor() {
           return;
         }
         apply({ type: 'feature/replace', feature: result.feature });
-        setSketchSelection(result.selection);
+        if (result.selection) setSketchSelection(result.selection);
         void diagnoseSketch(result.feature);
-        setSketchTool('select');
+        if (!isTrim) setSketchTool('select');
       })
       .catch(() =>
         useUiStore
@@ -1939,7 +1969,7 @@ export function SketchEditor() {
       };
     }
     if (tool === 'trim') {
-      const plan = planTrim(sketch, selectionIds, hover);
+      const plan = planTrim(sketch, hover, { construction: trimConstruction });
       if (!plan.ok) return none;
       // The cut curve stands aside so the piece that goes is seen as a gap, and
       // the pieces that stay take its place before the click.
@@ -1957,7 +1987,16 @@ export function SketchEditor() {
       ),
       replaced: [],
     };
-  }, [pointerTool, tool, sketch, hover, selectionIds, offsetJoin, offsetCommitting]);
+  }, [
+    pointerTool,
+    tool,
+    sketch,
+    hover,
+    selectionIds,
+    offsetJoin,
+    offsetCommitting,
+    trimConstruction,
+  ]);
   const previewShape = previewEntity();
   const previewAlignment = Boolean(hoverInput?.alignment);
   const previewSnap =

@@ -191,10 +191,10 @@ test('cuts the piece the pointer stands over and leaves the rest', async ({ page
   await expect(page.locator('.toast-error')).toHaveCount(0);
 });
 
-test('refuses a curve nothing crosses', async ({ page }) => {
+test('removes a curve nothing crosses whole', async ({ page }) => {
   await openApp(page);
   const sketchId = await openSketch(page);
-  await replaceEntities(page, sketchId, [line('a', 0, 0, 30, 0)]);
+  await replaceEntities(page, sketchId, [line('a', 0, 0, 30, 0), line('b', 0, 20, 30, 20)]);
   await page.waitForTimeout(300);
   await startTool(page, 'trim');
 
@@ -202,11 +202,126 @@ test('refuses a curve nothing crosses', async ({ page }) => {
   await page.mouse.move(middle.x, middle.y);
   await page.waitForTimeout(250);
   await page.mouse.click(middle.x, middle.y);
-  await expect(page.locator('.toast-error').first()).toBeVisible({ timeout: 15_000 });
+  await expect
+    .poll(async () => (await feature(page, sketchId)).entities.length, { timeout: 15_000 })
+    .toBe(1);
 
   const { entities } = await feature(page, sketchId);
-  expect(entities).toHaveLength(1);
-  expect(entities[0]?.x2).toBe(30);
+  expect(entities.map((entity) => entity.id)).toEqual(['b']);
+  await expect(page.locator('.toast-error')).toHaveCount(0);
+});
+
+test('stays on after a cut and forgets the selection it started with', async ({ page }) => {
+  await openApp(page);
+  const sketchId = await openSketch(page);
+  await replaceEntities(page, sketchId, crossed());
+  await page.waitForTimeout(300);
+
+  // A selection left over from before the tool must not be a promise the cut
+  // does not keep.
+  await page.evaluate(async () => {
+    const url = (name: string) =>
+      performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .find((entry) => entry.includes(name));
+    const ui = await import(url('/src/stores/uiStore.ts') ?? '/src/stores/uiStore.ts');
+    ui.useUiStore.getState().setSketchSelection(['v1']);
+  });
+  await page.waitForTimeout(200);
+  await startTool(page, 'trim');
+  await page.waitForTimeout(300);
+  const cleared = await page.evaluate(async () => {
+    const url = (name: string) =>
+      performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .find((entry) => entry.includes(name));
+    const ui = await import(url('/src/stores/uiStore.ts') ?? '/src/stores/uiStore.ts');
+    return ui.useUiStore.getState().sketchSelectionIds;
+  });
+  expect(cleared).toEqual([]);
+
+  // Two cuts in a row, without the tool letting go in between.
+  const first = await screenPoint(page, sketchId, [5, 0]);
+  await page.mouse.move(first.x, first.y);
+  await page.waitForTimeout(250);
+  await page.mouse.click(first.x, first.y);
+  await expect
+    .poll(async () => (await feature(page, sketchId)).entities.length, { timeout: 15_000 })
+    .toBe(5);
+  const tool = await page.evaluate(async () => {
+    const url = (name: string) =>
+      performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .find((entry) => entry.includes(name));
+    const ui = await import(url('/src/stores/uiStore.ts') ?? '/src/stores/uiStore.ts');
+    return ui.useUiStore.getState().sketchTool;
+  });
+  expect(tool).toBe('trim');
+
+  // The second cut works on what the first one left: the pointer stands on the
+  // piece between the two crossings, and that piece goes whole because nothing
+  // crosses it in its middle any more.
+  const target = await screenPoint(page, sketchId, [20, 0]);
+  await page.mouse.move(target.x, target.y);
+  await page.waitForTimeout(250);
+  await page.mouse.click(target.x, target.y);
+  await expect
+    .poll(async () => (await feature(page, sketchId)).entities.length, { timeout: 15_000 })
+    .toBe(4);
+  const stillTrimming = await page.evaluate(async () => {
+    const url = (name: string) =>
+      performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .find((entry) => entry.includes(name));
+    const ui = await import(url('/src/stores/uiStore.ts') ?? '/src/stores/uiStore.ts');
+    return ui.useUiStore.getState().sketchTool;
+  });
+  expect(stillTrimming).toBe('trim');
+});
+
+test('cuts construction curves only while Shift is held', async ({ page }) => {
+  await openApp(page);
+  const sketchId = await openSketch(page);
+  await replaceEntities(page, sketchId, [
+    line('h', 0, 0, 40, 0),
+    { ...line('helper', 20, -10, 20, 10), construction: true },
+  ]);
+  await page.waitForTimeout(300);
+  await startTool(page, 'trim');
+
+  // Without Shift the helper does not cut the line: the line is one piece and
+  // the pointer removes it whole.
+  const middle = await screenPoint(page, sketchId, [5, 0]);
+  await page.mouse.move(middle.x, middle.y);
+  await page.waitForTimeout(250);
+  await page.mouse.click(middle.x, middle.y);
+  await expect
+    .poll(async () => (await feature(page, sketchId)).entities.length, { timeout: 15_000 })
+    .toBe(1);
+  expect((await feature(page, sketchId)).entities[0]?.id).toBe('helper');
+
+  // With Shift the helper is part of the geometry, and it splits the line.
+  await replaceEntities(page, sketchId, [
+    line('h', 0, 0, 40, 0),
+    { ...line('helper', 20, -10, 20, 10), construction: true },
+  ]);
+  await page.waitForTimeout(300);
+  await startTool(page, 'trim');
+  await page.keyboard.down('Shift');
+  const left = await screenPoint(page, sketchId, [5, 0]);
+  await page.mouse.move(left.x, left.y);
+  await page.waitForTimeout(250);
+  await page.mouse.click(left.x, left.y);
+  await page.keyboard.up('Shift');
+  await expect
+    .poll(async () => (await feature(page, sketchId)).entities.length, { timeout: 15_000 })
+    .toBe(2);
+  const kept = (await feature(page, sketchId)).entities.filter((entity) => entity.id === 'h')[0]!;
+  expect(kept.x1).toBeCloseTo(20, 6);
 });
 
 test('moves the relations of the cut curve onto the pieces that carry them', async ({ page }) => {
@@ -248,9 +363,12 @@ test('moves the relations of the cut curve onto the pieces that carry them', asy
     .toBe(5);
 
   const { entities, constraints } = await feature(page, sketchId);
-  expect(constraints.map((constraint) => constraint.id)).toEqual(['end']);
+  // The joint of the far end survives; the pieces that share the crossing are
+  // joined there as well.
+  const joint = constraints.find((constraint) => constraint.id === 'end')!;
+  expect(joint).toBeTruthy();
+  expect(constraints.length).toBeGreaterThanOrEqual(1);
   // The joint that named the far end now names a piece that really ends there.
-  const joint = constraints[0]!;
   const piece = entities.find((entity) => entity.id === joint.refs[0]?.entityId)!;
   expect(piece.x2).toBeCloseTo(40, 6);
   await expect(page.locator('.toast-error')).toHaveCount(0);

@@ -215,7 +215,7 @@ export function SketchToolRail() {
   const offsetTargets = feature ? offsetSelectionEntities(feature, selectionIds) : [];
   // А corner needs exactly two lines that meet: anything else has nothing to round.
   const filletTarget = feature ? filletCorners(feature, selectionIds).length : 0;
-  const trimTarget = feature ? trimTargets(feature, selectionIds).length : 0;
+  const trimTarget = feature ? trimTargets(feature).length : 0;
   const toolActive =
     sketchTool === 'offset' ||
     sketchTool === 'outline' ||
@@ -247,18 +247,18 @@ export function SketchToolRail() {
     });
     toggleContextMenu('sketch-tools', rect.left, rect.bottom + 6, [
       entry(
-        'fillet',
-        t('sketch.toolFillet'),
-        <SquareRoundCorner size={14} />,
-        filletTarget === 0,
-        t('sketch.filletSelect'),
-      ),
-      entry(
         'trim',
         t('sketch.toolTrim'),
         <Scissors size={14} />,
         trimTarget === 0,
         t('sketch.trimSelect'),
+      ),
+      entry(
+        'fillet',
+        t('sketch.toolFillet'),
+        <SquareRoundCorner size={14} />,
+        filletTarget === 0,
+        t('sketch.filletSelect'),
       ),
       entry(
         'offset',
