@@ -2,7 +2,11 @@ import clsx from 'clsx';
 import { isFormula, type ParamValue } from '@icancad/model';
 import { TriangleAlert, X } from 'lucide-react';
 import {
+  createContext,
+  useCallback,
+  useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ButtonHTMLAttributes,
@@ -46,6 +50,70 @@ export function IconButton({
   );
 }
 
+/** Whether the row the tab sits in has folded its inactive labels to icons. */
+const SegmentedCollapsed = createContext(false);
+
+/** Where the slots of a row sit, and how much of a label each one shows. */
+interface RowLayout {
+  width: number;
+  items: { width: number; label: number }[];
+}
+
+const MORPH_MS = 170;
+const MORPH_EASING = 'cubic-bezier(0.2, 0, 0, 1)';
+
+/** The system's "less motion" answer: the row still re-folds, it just lands. */
+function reducedMotion(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+  );
+}
+
+/** A slot is the anchor when the tab has a bubble; the tab itself otherwise. */
+function slotOf(child: Element): HTMLElement[] {
+  const item = child as HTMLElement;
+  const tab = item.firstElementChild;
+  return item.classList.contains('segmented-anchor') && tab instanceof HTMLElement
+    ? [item, tab]
+    : [item];
+}
+
+function rowLayout(element: HTMLElement): RowLayout {
+  const rect = element.getBoundingClientRect();
+  return {
+    width: rect.width,
+    items: Array.from(element.children, (child) => {
+      const item = child as HTMLElement;
+      const label = item.querySelector<HTMLElement>('.segmented-tab-label');
+      // A folded label keeps its box in the flow at zero width, so its text is
+      // still measurable; a visible one is clipped by the slot, never by its
+      // own max-width, which is what the morph would animate.
+      const hidden = label?.parentElement?.dataset.labelHidden === 'true';
+      return {
+        width: item.getBoundingClientRect().width,
+        label: label && !hidden ? label.scrollWidth : 0,
+      };
+    }),
+  };
+}
+
+/** What the row is showing, and how wide the panel lets it be. */
+function rowKey(element: HTMLElement): string {
+  const width = Math.round(element.getBoundingClientRect().width * 10);
+  const slots = Array.from(element.children, (child) => {
+    const item = child as HTMLElement;
+    const tab = item.matches('.segmented-tab') ? item : item.querySelector('.segmented-tab');
+    return [
+      item.className,
+      tab?.getAttribute('data-active') ?? '',
+      tab?.getAttribute('data-label-hidden') ?? '',
+      tab?.textContent ?? '',
+    ].join('|');
+  });
+  return `${width}#${slots.join('~')}`;
+}
+
 export function Segmented({
   ariaLabel,
   compact,
@@ -56,9 +124,135 @@ export function Segmented({
   compact?: boolean;
   children: ReactNode;
 }) {
+  const row = useRef<HTMLDivElement>(null);
+  const [collapsed, setCollapsed] = useState(false);
+  const folded = useRef(false);
+  const layout = useRef<RowLayout | null>(null);
+  const shown = useRef<string | null>(null);
+  const running = useRef<Animation[]>([]);
+
+  const stop = useCallback(() => {
+    running.current.forEach((animation) => animation.cancel());
+    running.current = [];
+  }, []);
+
+  const moving = useCallback(
+    () => running.current.some((animation) => animation.playState === 'running'),
+    [],
+  );
+
+  // A row that cannot hold every label keeps the whole word only on the active
+  // tab and folds the rest into their icons. Whether they fit is read in a
+  // measuring pass: the row lays its tabs out with their full labels for one
+  // synchronous read and drops the attribute again before the browser paints.
+  const measure = useCallback(
+    (fromResize = false) => {
+      const element = row.current;
+      if (!element) return;
+      element.dataset.measure = 'true';
+      const fits = element.scrollWidth <= element.clientWidth + 1;
+      delete element.dataset.measure;
+      if (folded.current === !fits) {
+        // A resize moves the tabs without a render, so the snapshot the next
+        // morph starts from would go stale. Refresh it unless a morph of its
+        // own is still in flight.
+        if (fromResize && !moving()) layout.current = rowLayout(element);
+        return;
+      }
+      // Folding changes the layout in this very pass: remember where the slots
+      // sit at this width, so the morph starts from the squeezed row instead of
+      // from the layout of the previous render.
+      stop();
+      layout.current = rowLayout(element);
+      folded.current = !fits;
+      setCollapsed(!fits);
+    },
+    [moving, stop],
+  );
+
+  useLayoutEffect(() => {
+    measure();
+  });
+
+  useEffect(() => {
+    const element = row.current;
+    if (!element) return;
+    // A panel that is resized (a pinned inspector, a narrower window) re-decides
+    // whether the labels still fit.
+    const observer = new ResizeObserver(() => measure(true));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [measure]);
+
+  // Morph the row from where its slots were to where they are. The widths add
+  // up to the container, so freezing the flex sharing while they animate cannot
+  // leave a gap; the labels are clipped by their own max-width at the same
+  // time, so a word grows out of the icon instead of popping in.
+  //
+  // A click on a tab re-renders the whole panel, and every one of those renders
+  // passes through here. Only a row that actually shows something different is
+  // a morph: measuring on the others would read the widths mid-flight and
+  // restart the animation from its own end.
+  useLayoutEffect(() => {
+    const element = row.current;
+    if (!element) return;
+    const key = rowKey(element);
+    if (key === shown.current) return;
+    shown.current = key;
+    stop();
+    const next = rowLayout(element);
+    const previous = layout.current;
+    layout.current = next;
+    // A resize is already a continuous movement, and two different sets of tabs
+    // have nothing to move between.
+    if (!previous || reducedMotion()) return;
+    if (previous.items.length !== next.items.length) return;
+    if (Math.abs(previous.width - next.width) > 0.5) return;
+
+    Array.from(element.children).forEach((child, index) => {
+      const from = previous.items[index];
+      const to = next.items[index];
+      if (!from || !to) return;
+      const options: KeyframeAnimationOptions = { duration: MORPH_MS, easing: MORPH_EASING };
+      // A frozen slot: the keyframes carry flex-grow/shrink 0 so the row does
+      // not redistribute the space while the widths are in flight.
+      if (Math.abs(from.width - to.width) > 0.5) {
+        for (const target of slotOf(child)) {
+          running.current.push(
+            target.animate(
+              [
+                { width: `${from.width}px`, minWidth: '0px', flexGrow: '0', flexShrink: '0' },
+                { width: `${to.width}px`, minWidth: '0px', flexGrow: '0', flexShrink: '0' },
+              ],
+              options,
+            ),
+          );
+        }
+      }
+      const label = child.querySelector<HTMLElement>('.segmented-tab-label');
+      if (label && Math.abs(from.label - to.label) > 0.5) {
+        running.current.push(
+          label.animate(
+            [
+              { maxWidth: `${from.label}px`, opacity: from.label > 0 ? 1 : 0 },
+              { maxWidth: `${to.label}px`, opacity: to.label > 0 ? 1 : 0 },
+            ],
+            options,
+          ),
+        );
+      }
+    });
+  });
+
   return (
-    <div className={clsx('segmented', compact && 'compact')} role="group" aria-label={ariaLabel}>
-      {children}
+    <div
+      ref={row}
+      className={clsx('segmented', compact && 'compact')}
+      data-collapsed={collapsed ? 'true' : undefined}
+      role="group"
+      aria-label={ariaLabel}
+    >
+      <SegmentedCollapsed.Provider value={collapsed}>{children}</SegmentedCollapsed.Provider>
     </div>
   );
 }
@@ -103,18 +297,39 @@ export function SegmentedTab({
   disabled?: boolean;
   /** A square tab: one symbol, as wide as it is tall. */
   square?: boolean;
+  /** What the tab does, shown in its bubble under the name (ADR 0052). */
   tooltip?: string;
   onClick?: () => void;
 }) {
-  return (
+  const collapsed = useContext(SegmentedCollapsed);
+  // A square tab is a symbol always. In a folded row every inactive tab with a
+  // symbol becomes one, so the active tab is the only word left on the line.
+  const hidesLabel = icon !== undefined && (square === true || (collapsed && !active));
+  // The name is not on the button, so the bubble has to carry it: the label
+  // first, then the tab's own hint with a small offset under it.
+  const named = square === true || hidesLabel;
+  const bubble = named ? (
+    tooltip ? (
+      <span className="tooltip-stack">
+        <span>{label}</span>
+        <span className="tooltip-hint">{tooltip}</span>
+      </span>
+    ) : (
+      label
+    )
+  ) : (
+    tooltip
+  );
+
+  const tab = (
     <button
       type="button"
       className={clsx('segmented-tab', square && 'square')}
       data-active={active ? 'true' : undefined}
+      data-label-hidden={hidesLabel ? 'true' : undefined}
       disabled={disabled}
       aria-pressed={active}
-      aria-label={square ? label : undefined}
-      title={tooltip ?? (square ? label : undefined)}
+      aria-label={named ? label : undefined}
       onClick={onClick}
     >
       {icon ? (
@@ -123,9 +338,18 @@ export function SegmentedTab({
         </span>
       ) : null}
       {/* A square tab with an icon is the symbol alone: the label is its name,
-          for the screen reader and the tooltip, not a word on the button. */}
+          for the screen reader and the bubble, not a word on the button. A tab
+          folded by the row keeps its label in the DOM — the measuring pass
+          needs it — and hides it with CSS instead. */}
       {square && icon ? null : <span className="segmented-tab-label">{label}</span>}
     </button>
+  );
+
+  if (bubble === null || bubble === undefined || bubble === '') return tab;
+  return (
+    <Tooltip content={bubble} className={clsx('segmented-anchor', named && 'narrow')}>
+      {tab}
+    </Tooltip>
   );
 }
 

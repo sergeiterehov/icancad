@@ -3341,6 +3341,7 @@ button.selection-item.sketch-entity-row[data-active='true'] {
   display: flex;
   gap: 1px;
   padding: 2px;
+  min-width: 0;
   border-radius: 6px;
   background: var(--panel-2);
 }
@@ -3350,12 +3351,29 @@ button.selection-item.sketch-entity-row[data-active='true'] {
   width: fit-content;
 }
 
+/* A tab that asks for a bubble is wrapped in the tooltip anchor: the anchor
+   takes the tab's slot in the row and the tab fills the anchor, so a row mixes
+   tabs with and without a bubble without stepping by a pixel. */
+.segmented > .tooltip-anchor {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.segmented > .tooltip-anchor.narrow {
+  flex: 0 0 auto;
+}
+
+/* The tab inside an anchor fills the slot the anchor took. */
+.segmented > .tooltip-anchor > .segmented-tab {
+  flex: 1 1 auto;
+}
+
 .segmented-tab {
   display: inline-flex;
   flex: 1 1 auto;
   align-items: center;
   justify-content: center;
-  gap: 3px;
+  gap: 6px;
   min-width: 0;
   height: 26px;
   padding: 0 3px;
@@ -3380,6 +3398,48 @@ button.selection-item.sketch-entity-row[data-active='true'] {
   flex: 0 0 auto;
   width: 26px;
   padding: 0;
+}
+
+/* The tab a folded row keeps as a symbol alone. Its label stays in the DOM at
+   zero width: the measuring pass has to lay it out, and the morph below grows
+   it back out of the icon. */
+.segmented-tab[data-label-hidden='true'] {
+  flex: 0 0 auto;
+  width: 26px;
+  padding: 0;
+  /* Nothing to space the symbol from: it stays centred in its square. */
+  gap: 0;
+}
+
+.segmented-tab[data-label-hidden='true'] .segmented-tab-label {
+  max-width: 0;
+  opacity: 0;
+}
+
+/* The measuring pass of a row that has to decide whether the labels fit: every
+   tab is laid out with its whole word, whatever the row decided last time. */
+.segmented[data-measure='true'] .segmented-tab {
+  flex: 0 0 auto;
+}
+
+.segmented[data-measure='true'] .segmented-tab[data-label-hidden='true'] {
+  width: auto;
+  padding: 0 7px;
+  gap: 6px;
+}
+
+.segmented[data-measure='true'] .segmented-tab .segmented-tab-label {
+  max-width: none;
+  opacity: 1;
+}
+
+/* The active tab is the one word a folded row keeps, and it takes the space the
+   icons leave: the whole name, never an ellipsis, and no empty tail on the
+   row. */
+.segmented[data-collapsed='true']
+  .segmented-tab[data-active='true']:not(.square):not([data-label-hidden]) {
+  flex: 1 1 auto;
+  min-width: max-content;
 }
 
 .segmented-tab:hover:not(:disabled) {
