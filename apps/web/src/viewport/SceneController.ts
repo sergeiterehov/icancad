@@ -470,6 +470,16 @@ export class SceneController {
     hitObjects: THREE.Object3D[];
     active: boolean;
   }[] = [];
+  /**
+   * Objects of one entity, kept while its shape and look hold. A preview rewrites
+   * the whole sketch list, but a drag moves one or two entities: reusing the rest
+   * spares the tessellation, the geometry upload and — since each object keeps
+   * its own material — a fresh shader program per frame.
+   */
+  private readonly sketchEntityCache = new Map<
+    string,
+    Map<string, { signature: string; objects: THREE.Object3D[] }>
+  >();
   private activeSketchGrid: SketchGridEntry | null = null;
   private readonly facePickMeshes: THREE.Mesh[] = [];
   /** Translucent volumes that only exist in the operation preview. */
@@ -546,7 +556,15 @@ export class SceneController {
     cursor: { point: Point2; snapped: boolean } | null;
     /** Entities of the edited sketch the preview takes over, hidden while it is up. */
     replaced: readonly string[];
-  } = { preview: null, draftPoints: [], highlight: false, marker: null, guides: [], cursor: null, replaced: [] };
+  } = {
+    preview: null,
+    draftPoints: [],
+    highlight: false,
+    marker: null,
+    guides: [],
+    cursor: null,
+    replaced: [],
+  };
 
   /** The entities the preview is hiding right now, so they can come back. */
   private hiddenSketchEntityIds: readonly string[] = [];
@@ -3062,7 +3080,16 @@ export class SceneController {
     // The groups are rebuilt below, so the hover has to be found again.
     this.hoveredSketchEdge = null;
     this.hoveredSketchId = null;
+    // The entity objects outlive this rebuild: take them out of the groups that
+    // are about to be disposed, so an unchanged curve keeps its geometry and
+    // its material, and put them back below where they still belong.
+    for (const cache of this.sketchEntityCache.values()) {
+      for (const entry of cache.values()) {
+        for (const object of entry.objects) object.removeFromParent();
+      }
+    }
     this.disposeSketchEntries();
+    const drawnIds = new Set<string>();
     const editingSketch = sketches.some((sketch) => sketch.active);
     // The sketch draws its own plane-aligned grid and its own axes; the world
     // ones would only duplicate it at a different orientation while editing.
@@ -3118,23 +3145,68 @@ export class SceneController {
       // object asks for it, or while that sketch itself is being edited.
       const showConstruction = sketch.active || Boolean(sketch.showConstruction);
       const tint = sketch.color ? new THREE.Color(sketch.color).getHex() : null;
+      const previous = this.sketchEntityCache.get(sketch.id);
+      const cache = new Map<string, { signature: string; objects: THREE.Object3D[] }>();
       for (const entity of sketch.entities) {
         if (entity.construction && !showConstruction) continue;
-        this.addSketchEntity(
-          group,
+        const selectedPointsOf = selectedPoints.get(entity.id) ?? new Set<number>();
+        const highlightedPointsOf = highlightedPoints.get(entity.id) ?? new Set<number>();
+        const hoveredPointsOf = hoveredPoints.get(entity.id) ?? new Set<number>();
+        const signature = JSON.stringify([
           entity,
-          sketch.frame,
+          sketch.frame.origin,
+          sketch.frame.xAxis,
+          sketch.frame.yAxis,
+          sketch.frame.normal,
           selected.has(entity.id),
-          selectedPoints.get(entity.id) ?? new Set<number>(),
           dimmed.has(entity.id),
           frozen.has(entity.id),
           problem.has(entity.id),
           projected.has(entity.id) && sketch.active,
           lost.has(entity.id) && sketch.active,
           highlighted.has(entity.id),
-          highlightedPoints.get(entity.id) ?? new Set<number>(),
           hovered.has(entity.id),
-          hoveredPoints.get(entity.id) ?? new Set<number>(),
+          [...selectedPointsOf],
+          [...highlightedPointsOf],
+          [...hoveredPointsOf],
+          editingSketch && !sketch.active,
+          sketch.error === true,
+          sketch.active ? null : tint,
+          sketch.onTop,
+          sketch.active,
+          sketch.fixedPointIds ?? [],
+          sketch.greyed === true,
+          this.theme,
+        ]);
+        const kept = previous?.get(entity.id);
+        if (kept && kept.signature === signature) {
+          for (const object of kept.objects) {
+            group.add(object);
+            // A kept curve holds the material it was built with: dashes are
+            // measured in screen pixels, so the scale follows the camera here.
+            const material = (object as THREE.Mesh).material as
+              (LineMaterial & { dashed?: boolean; dashScale?: number }) | undefined;
+            if (material && material.dashed) {
+              material.dashScale = this.pixelsPerWorldUnit();
+            }
+          }
+          cache.set(entity.id, kept);
+          continue;
+        }
+        const objects = this.sketchEntityObjects(
+          entity,
+          sketch.frame,
+          selected.has(entity.id),
+          selectedPointsOf,
+          dimmed.has(entity.id),
+          frozen.has(entity.id),
+          problem.has(entity.id),
+          projected.has(entity.id) && sketch.active,
+          lost.has(entity.id) && sketch.active,
+          highlighted.has(entity.id),
+          highlightedPointsOf,
+          hovered.has(entity.id),
+          hoveredPointsOf,
           editingSketch && !sketch.active,
           sketch.error === true,
           sketch.active ? null : tint,
@@ -3143,7 +3215,17 @@ export class SceneController {
           sketch.fixedPointIds ?? [],
           sketch.greyed === true,
         );
+        for (const object of objects) group.add(object);
+        cache.set(entity.id, { signature, objects });
       }
+      // Whatever changed shape or left the sketch gives up its geometry now.
+      if (previous) {
+        for (const [entityId, entry] of previous) {
+          if (cache.get(entityId) !== entry) this.disposeObjects(entry.objects);
+        }
+      }
+      this.sketchEntityCache.set(sketch.id, cache);
+      drawnIds.add(sketch.id);
       this.addSketchFacePickers(group, sketch);
       this.overlayScene.add(group);
       this.sketchEntries.push({
@@ -3153,6 +3235,13 @@ export class SceneController {
         hitObjects: [],
         active: sketch.active,
       });
+    }
+    // A sketch that is no longer drawn (hidden, deleted, or rolled back) gives up
+    // the objects it kept, or they would outlive the curves they drew.
+    for (const [sketchId, cache] of this.sketchEntityCache) {
+      if (drawnIds.has(sketchId)) continue;
+      for (const entry of cache.values()) this.disposeObjects(entry.objects);
+      this.sketchEntityCache.delete(sketchId);
     }
     this.rebuildSketchOverlay();
     this.applyFaceHighlights();
@@ -3169,15 +3258,7 @@ export class SceneController {
       const selected = this.faceHighlights.selected.has(key);
       const hovered = this.hoveredFaceKey === key;
       material.color.setHex(invalid ? 0xef4444 : this.sketchHighlightColor());
-      const opacity = invalid
-        ? 0.5
-        : selected
-          ? 0.45
-          : hovered
-            ? 0.3
-            : showAllFaces
-              ? 0.12
-              : 0;
+      const opacity = invalid ? 0.5 : selected ? 0.45 : hovered ? 0.3 : showAllFaces ? 0.12 : 0;
       material.opacity = opacity;
       material.visible = opacity > 0;
     }
@@ -3732,8 +3813,7 @@ export class SceneController {
     );
   }
 
-  private addSketchEntity(
-    group: THREE.Group,
+  private sketchEntityObjects(
     entity: SketchEntity,
     frame: SketchFrame,
     selected: boolean,
@@ -3754,7 +3834,8 @@ export class SceneController {
     editing: boolean,
     fixedPointKeys: readonly string[],
     greyed: boolean,
-  ): void {
+  ): THREE.Object3D[] {
+    const objects: THREE.Object3D[] = [];
     // A problem replaces the ordinary blue. Every explicit state above it
     // (selection, hover, magnet highlight, frozen, projection) still wins.
     const color = error
@@ -3762,22 +3843,22 @@ export class SceneController {
       : greyed
         ? this.sketchDisabledColor()
         : selected
-        ? this.sketchSelectedColor()
-        : hovered
-          ? this.sketchHoverColor()
-          : highlighted
-            ? this.sketchHighlightColor()
-            : lost
-              ? this.sketchLostProjectionColor()
-              : projected
-                ? this.sketchProjectionColor()
-                : frozen
-                  ? this.sketchFrozenLineColor()
-                  : entity.construction
-                    ? this.sketchConstructionColor()
-                    : problem
-                      ? this.sketchProblemColor()
-                      : (tint ?? this.sketchColor());
+          ? this.sketchSelectedColor()
+          : hovered
+            ? this.sketchHoverColor()
+            : highlighted
+              ? this.sketchHighlightColor()
+              : lost
+                ? this.sketchLostProjectionColor()
+                : projected
+                  ? this.sketchProjectionColor()
+                  : frozen
+                    ? this.sketchFrozenLineColor()
+                    : entity.construction
+                      ? this.sketchConstructionColor()
+                      : problem
+                        ? this.sketchProblemColor()
+                        : (tint ?? this.sketchColor());
     // Sketches that are not being edited are drawn thinner so they cannot be
     // mistaken for the sketch in progress.
     const width = selected ? 3 : hovered ? 3 : highlighted ? 3 : background ? 1 : 2;
@@ -3795,7 +3876,7 @@ export class SceneController {
         line.userData.entityId = entity.id;
         line.userData.baseColor = color;
         line.userData.baseWidth = width;
-        group.add(line);
+        objects.push(line);
       }
     }
     // Points read as handles only while the sketch is edited; elsewhere they
@@ -3817,20 +3898,20 @@ export class SceneController {
         : greyed
           ? this.sketchDisabledColor()
           : selectedPoint
-          ? this.sketchSelectedColor()
-          : pointHovered
-            ? this.sketchHoverColor()
-            : pointHighlighted
-              ? this.sketchHighlightColor()
-              : lost
-                ? this.sketchLostProjectionColor()
-                : projected
-                  ? this.sketchProjectionColor()
-                  : frozen || fixedPoints.has(index)
-                    ? this.sketchFrozenPointColor()
-                    : problem
-                      ? this.sketchProblemColor()
-                      : this.sketchPointColor();
+            ? this.sketchSelectedColor()
+            : pointHovered
+              ? this.sketchHoverColor()
+              : pointHighlighted
+                ? this.sketchHighlightColor()
+                : lost
+                  ? this.sketchLostProjectionColor()
+                  : projected
+                    ? this.sketchProjectionColor()
+                    : frozen || fixedPoints.has(index)
+                      ? this.sketchFrozenPointColor()
+                      : problem
+                        ? this.sketchProblemColor()
+                        : this.sketchPointColor();
       const pointSize = selectedPoint || pointHighlighted ? big : pointHovered ? small + 2 : small;
       const geometry = new THREE.BufferGeometry().setFromPoints([this.sketchWorld(frame, point)]);
       const points = new THREE.Points(
@@ -3855,8 +3936,9 @@ export class SceneController {
       points.userData.pointIndex = index;
       points.userData.baseColor = pointColor;
       points.userData.baseSize = pointSize;
-      group.add(points);
+      objects.push(points);
     });
+    return objects;
   }
 
   private sketchControlPoints(entity: SketchEntity): Point2[] {
@@ -4087,6 +4169,22 @@ export class SceneController {
     });
   }
 
+  /** Drops the objects of entities that changed shape, and of their sketches. */
+  private disposeObjects(objects: readonly THREE.Object3D[]): void {
+    for (const object of objects) {
+      object.removeFromParent();
+      this.disposeObject(object);
+    }
+  }
+
+  /** Every cached sketch object, for the controller's own disposal. */
+  private disposeSketchEntityCache(): void {
+    for (const cache of this.sketchEntityCache.values()) {
+      for (const entry of cache.values()) this.disposeObjects(entry.objects);
+    }
+    this.sketchEntityCache.clear();
+  }
+
   private applyClipping(): void {
     const planes = this.sectionClipPlanes;
     for (const entry of this.bodies.values()) {
@@ -4259,6 +4357,7 @@ export class SceneController {
     this.bodyFaceOverlays.clear();
     this.disposeSection();
     this.disposeSketchEntries();
+    this.disposeSketchEntityCache();
     this.capGeometry.dispose();
     this.pointTexture.dispose();
     this.grid.geometry.dispose();
@@ -4509,6 +4608,16 @@ export class SceneController {
     this.renderer.setSize(this.width, this.height, false);
     for (const material of this.sketchLineMaterials) {
       material.resolution.set(this.width, this.height);
+    }
+    // Curves kept between frames are not in that list any more: their materials
+    // came from an earlier call, and a thick line reads the resolution.
+    for (const cache of this.sketchEntityCache.values()) {
+      for (const entry of cache.values()) {
+        for (const object of entry.objects) {
+          const material = (object as THREE.Mesh).material;
+          if (material instanceof LineMaterial) material.resolution.set(this.width, this.height);
+        }
+      }
     }
     for (const entry of [...this.edgeHighlightEntries, ...this.edgeHoverEntries]) {
       entry.material.resolution.set(this.width, this.height);
@@ -5051,9 +5160,7 @@ export class SceneController {
     // The scene is the state before the sketch being edited, so a curve or a
     // region of any other sketch is a source like a body's edge or face. The
     // sketch being edited is the one thing that is not in that state.
-    const editing = this.faceHighlights.projecting
-      ? useUiStore.getState().activeSketchId
-      : null;
+    const editing = this.faceHighlights.projecting ? useUiStore.getState().activeSketchId : null;
     // While faces are being picked they win over the solids they produced, so a
     // face stays clickable after it has been extruded.
     if (faces && faceHit && !preferBody) {
@@ -5741,9 +5848,7 @@ export class SceneController {
     // The sketch being edited is not part of the state before it, so while
     // projecting it must not answer the pointer: its curves and regions would
     // sit in front of the geometry the projection is aimed at.
-    const editing = this.faceHighlights.projecting
-      ? useUiStore.getState().activeSketchId
-      : null;
+    const editing = this.faceHighlights.projecting ? useUiStore.getState().activeSketchId : null;
     // A selected sketch answers first: its curves and regions are what the next
     // click takes, even while its operation offers handles over the model.
     if (
