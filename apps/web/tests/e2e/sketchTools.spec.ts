@@ -132,6 +132,26 @@ async function entities(page: Page, sketchId: string) {
   }, sketchId);
 }
 
+async function constraints(page: Page, sketchId: string) {
+  return page.evaluate(async (id) => {
+    const url = (name: string) =>
+      performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .find((entry) => entry.includes(name));
+    const doc = await import(url('/src/stores/documentStore.ts') ?? '/src/stores/documentStore.ts');
+    const state = doc.useDocumentStore.getState();
+    const model = state.project.superObjects.find(
+      (candidate: { id: string }) => candidate.id === state.project.activeSuperObjectId,
+    ) as { features: Array<{ id: string; type: string; constraints?: unknown[] }> };
+    const feature = model.features.find((candidate) => candidate.id === id);
+    return (feature?.constraints ?? []) as Array<{
+      type: string;
+      refs: Array<{ entityId: string; pointIndex?: number }>;
+    }>;
+  }, sketchId);
+}
+
 async function selection(page: Page): Promise<string[]> {
   return page.evaluate(async () => {
     const url = (name: string) =>
@@ -325,39 +345,29 @@ test('anchors both ends of an arc that snap to an axis', async ({ page }) => {
     await page.mouse.click(at.x, at.y);
     await page.waitForTimeout(250);
   }
-  await page.waitForTimeout(900);
-
-  const state = await page.evaluate(async (id) => {
-    const url = (name: string) =>
-      performance
-        .getEntriesByType('resource')
-        .map((entry) => entry.name)
-        .find((entry) => entry.includes(name));
-    const doc = await import(url('/src/stores/documentStore.ts') ?? '/src/stores/documentStore.ts');
-    const store = doc.useDocumentStore.getState();
-    const model = store.project.superObjects.find(
-      (candidate: { id: string }) => candidate.id === store.project.activeSuperObjectId,
-    ) as { features: Array<{ id: string; entities: unknown[]; constraints: unknown[] }> };
-    const feature = model.features.find((candidate) => candidate.id === id)!;
-    return feature as unknown as {
-      entities: Array<Record<string, number | string>>;
-      constraints: Array<{ type: string; refs: Array<{ entityId: string; pointIndex?: number }> }>;
-    };
-  }, sketchId);
-
-  const arc = state.entities.find((entity) => entity.type === 'arc')!;
-  expect(arc).toBeDefined();
+  // The automatic relations are written once the solver answers, and on a busy
+  // machine that answer arrives well after the last click, so the count is
+  // waited for rather than slept through.
+  const axisRelations = async () => {
+    const arc = (await entities(page, sketchId)).find((entity) => entity.type === 'arc');
+    if (!arc) return 0;
+    return (await constraints(page, sketchId)).filter(
+      (constraint) =>
+        constraint.type === 'point-on-line' &&
+        constraint.refs.some(
+          (ref) => ref.entityId === arc.id && (ref.pointIndex === 1 || ref.pointIndex === 2),
+        ) &&
+        constraint.refs.some((ref) => ref.entityId === 'sketch:x-axis'),
+    ).length;
+  };
   // Both ends sit on the axis they snapped to, and each carries its own
   // constraint: a tangency would have let one of them slide away.
-  const onAxis = state.constraints.filter(
-    (constraint) =>
-      constraint.type === 'point-on-line' &&
-      constraint.refs.some(
-        (ref) => ref.entityId === arc.id && (ref.pointIndex === 1 || ref.pointIndex === 2),
-      ) &&
-      constraint.refs.some((ref) => ref.entityId === 'sketch:x-axis'),
-  );
-  expect(onAxis).toHaveLength(2);
+  await expect
+    .poll(axisRelations, { message: 'both arc ends anchored to the axis', timeout: 15_000 })
+    .toBe(2);
+
+  const arc = (await entities(page, sketchId)).find((entity) => entity.type === 'arc')!;
+  expect(arc).toBeDefined();
   const cx = Number(arc.cx);
   const cy = Number(arc.cy);
   const r = Number(arc.r);
@@ -508,35 +518,23 @@ test('snaps the ends of an elliptical arc to geometry', async ({ page }) => {
   await page.mouse.move(end.x, end.y);
   await page.waitForTimeout(300);
   await page.mouse.click(end.x, end.y);
-  await page.waitForTimeout(1200);
 
-  const constraints = await page.evaluate(async (id) => {
-    const url = (name: string) =>
-      performance
-        .getEntriesByType('resource')
-        .map((entry) => entry.name)
-        .find((entry) => entry.includes(name));
-    const doc = await import(url('/src/stores/documentStore.ts') ?? '/src/stores/documentStore.ts');
-    const store = doc.useDocumentStore.getState();
-    const model = store.project.superObjects.find(
-      (candidate: { id: string }) => candidate.id === store.project.activeSuperObjectId,
-    ) as { features: Array<{ id: string; entities: unknown[]; constraints: unknown[] }> };
-    const feature = model.features.find((candidate) => candidate.id === id)!;
-    return feature as unknown as {
-      entities: Array<{ id: string; type: string }>;
-      constraints: Array<{ type: string; refs: Array<{ entityId: string; pointIndex?: number }> }>;
-    };
-  }, sketchId);
-
-  const arc = constraints.entities.find((entity) => entity.type === 'elliptical-arc')!;
-  expect(arc).toBeDefined();
-  const onEnd = constraints.constraints.filter(
-    (constraint) =>
-      constraint.type === 'point-on-line' &&
-      constraint.refs.some((ref) => ref.entityId === arc.id && ref.pointIndex === 4) &&
-      constraint.refs.some((ref) => ref.entityId === 'edge'),
-  );
-  expect(onEnd).toHaveLength(1);
+  // The end lands on the line, so a point-on-line constraint should follow it.
+  // The click is a quarter of the way along, away from the midpoint the magnet
+  // would otherwise name.
+  const endRelations = async () => {
+    const arc = (await entities(page, sketchId)).find((entity) => entity.type === 'elliptical-arc');
+    if (!arc) return 0;
+    return (await constraints(page, sketchId)).filter(
+      (constraint) =>
+        constraint.type === 'point-on-line' &&
+        constraint.refs.some((ref) => ref.entityId === arc.id && ref.pointIndex === 4) &&
+        constraint.refs.some((ref) => ref.entityId === 'edge'),
+    ).length;
+  };
+  await expect
+    .poll(endRelations, { message: 'the arc end anchored to the line', timeout: 15_000 })
+    .toBe(1);
 });
 
 test('keeps the circle and arc variants behind their chevrons', async ({ page }) => {

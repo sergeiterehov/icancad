@@ -6,8 +6,16 @@ import type { SolverPin } from './protocol';
 
 const DELTA = 0.25;
 
-function nearlyEqual(first: number, second: number, tolerance = 1e-4): boolean {
-  return Math.abs(first - second) <= tolerance * Math.max(1, Math.abs(first), Math.abs(second));
+/**
+ * How close two coordinates must be to count as the same place. It is absolute
+ * on purpose: a relative tolerance grows with the coordinates, and a sketch of
+ * two metres made it wider than the probe step — every entity then looked
+ * unmoved and was reported as frozen.
+ */
+const SAME_TOLERANCE = DELTA / 100;
+
+function nearlyEqual(first: number, second: number, tolerance = SAME_TOLERANCE): boolean {
+  return Math.abs(first - second) <= tolerance;
 }
 
 function angleEqual(first: number, second: number): boolean {
@@ -115,6 +123,10 @@ function candidateHasMotion(
   const direct = solveEntities(gcs, entities, constraints, [], derived);
   const directTarget = direct?.find((entity) => entity.id === target.id);
   if (directTarget && !sameEntity(directTarget, target)) return true;
+  // Without an axis both coordinates are held, which is the state the move
+  // already left the point in: the solve below could only hand it back, so it
+  // proves nothing either way.
+  if (!axis) return false;
 
   const first = solveEntities(
     gcs,
@@ -126,13 +138,16 @@ function candidateHasMotion(
   if (!first) return false;
   const firstTarget = first.find((entity) => entity.id === target.id);
   if (!firstTarget || sameEntity(firstTarget, target)) return false;
-
-  // The first solve can leave a pinned point at an infeasible position if the
-  // solver ignores a conflicting constraint. Re-solve with the point free to
-  // verify that the moved state is actually part of the solution manifold.
-  const second = solveEntities(gcs, first, constraints, [], derived);
-  const secondTarget = second?.find((entity) => entity.id === target.id);
-  return Boolean(secondTarget && !sameEntity(secondTarget, target));
+  // A pin is an equation like any other, so the solver may satisfy it by giving
+  // up the relation it contradicts. Re-solving with the point held where the
+  // pinned solve put it turns that into a fixed parameter, which cannot be
+  // dropped: the state is real only if the sketch still solves. Re-solving with
+  // the point free would prove nothing either — the sketch keeps its other
+  // degrees of freedom, so the solver may simply slide the point back, and the
+  // way it happened to wander decided whether a curve could be dragged.
+  return (
+    solveEntities(gcs, first, constraints, [{ entityId: target.id, pointIndex }], derived) !== null
+  );
 }
 
 /**

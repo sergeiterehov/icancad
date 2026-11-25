@@ -209,3 +209,47 @@ it('does not mark coupled geometry as frozen when a global DoF remains', () => {
   // hides the motion. Sliding one coordinate exposes it.
   expect(diagnoseFrozenEntities(gcs, entities, constraints, 2)).toEqual([]);
 });
+
+it('does not freeze a curve that can slide along a fixed one', () => {
+  // The sketch from the field: two fixed points on the axis and a fixed line
+  // standing on it, with construction curves from the points to a point held on
+  // that line. Every such curve has one degree of freedom left — it slides along
+  // the line — so none of them is frozen. The probe moves a point by a quarter
+  // of a millimetre, and the coordinates here run to two metres: a tolerance
+  // that grew with them swallowed the step, so nothing looked moved and the
+  // curves were painted as fully constrained.
+  const entities: SketchEntity[] = [
+    { id: 'p1', type: 'point', construction: false, x: 0, y: 700 },
+    { id: 'p2', type: 'point', construction: false, x: 0, y: 2200 },
+    { id: 'L', type: 'line', construction: false, x1: 2000, y1: 0, x2: 2000, y2: 1700 },
+    { id: 'A', type: 'line', construction: true, x1: 0, y1: 700, x2: 2000, y2: 1700 },
+    { id: 'B', type: 'line', construction: true, x1: 2000, y1: 1700, x2: 0, y2: 2200 },
+    { id: 'C', type: 'line', construction: true, x1: 0, y1: 700, x2: 2000, y2: -359 },
+    { id: 'D', type: 'line', construction: true, x1: 0, y1: 2200, x2: 2000, y2: 2975 },
+  ];
+  const settle = (id: string, pointIndex: number, x: number, y: number): SketchConstraint => ({
+    id: `${id}-${pointIndex}`,
+    type: 'fix',
+    refs: [{ entityId: id, pointIndex }],
+    x,
+    y,
+  });
+  const constraints: SketchConstraint[] = [
+    settle('p1', 0, 0, 700),
+    settle('p2', 0, 0, 2200),
+    settle('L', 0, 2000, 0),
+    settle('L', 1, 2000, 1700),
+    { id: 'a0', type: 'coincident', refs: [{ entityId: 'A', pointIndex: 0 }, { entityId: 'p1' }] },
+    { id: 'a1', type: 'coincident', refs: [{ entityId: 'A', pointIndex: 1 }, { entityId: 'L', pointIndex: 1 }] },
+    { id: 'b0', type: 'coincident', refs: [{ entityId: 'B', pointIndex: 0 }, { entityId: 'L', pointIndex: 1 }] },
+    { id: 'b1', type: 'coincident', refs: [{ entityId: 'B', pointIndex: 1 }, { entityId: 'p2' }] },
+    { id: 'c0', type: 'coincident', refs: [{ entityId: 'C', pointIndex: 0 }, { entityId: 'p1' }] },
+    { id: 'c1', type: 'point-on-line', refs: [{ entityId: 'C', pointIndex: 1 }, { entityId: 'L' }] },
+    { id: 'd0', type: 'coincident', refs: [{ entityId: 'D', pointIndex: 0 }, { entityId: 'p2' }] },
+    { id: 'd1', type: 'point-on-line', refs: [{ entityId: 'D', pointIndex: 1 }, { entityId: 'L' }] },
+  ] as SketchConstraint[];
+
+  const frozen = diagnoseFrozenEntities(gcs, entities, constraints, 2);
+  // The fixed handful is frozen; the curves sliding on the line are not.
+  expect(frozen.sort()).toEqual(['A', 'B', 'L', 'p1', 'p2']);
+});
