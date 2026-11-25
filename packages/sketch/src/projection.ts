@@ -214,57 +214,100 @@ function fitCircle(points: readonly Point2[]): { cx: number; cy: number; r: numb
   return { cx, cy, r: Math.sqrt(radiusSquared) };
 }
 
+/** Solves a small dense system with partial pivoting, or null when it is singular. */
+function solveLinear(matrix: readonly number[][], rhs: readonly number[]): number[] | null {
+  const size = rhs.length;
+  const rows = matrix.map((row, index) => [...row, rhs[index]!]);
+  for (let column = 0; column < size; column += 1) {
+    let pivot = column;
+    for (let row = column + 1; row < size; row += 1) {
+      if (Math.abs(rows[row]![column]!) > Math.abs(rows[pivot]![column]!)) pivot = row;
+    }
+    if (Math.abs(rows[pivot]![column]!) < 1e-14) return null;
+    [rows[column], rows[pivot]] = [rows[pivot]!, rows[column]!];
+    for (let row = 0; row < size; row += 1) {
+      if (row === column) continue;
+      const factor = rows[row]![column]! / rows[column]![column]!;
+      for (let k = column; k <= size; k += 1) {
+        rows[row]![k] = rows[row]![k]! - factor * rows[column]![k]!;
+      }
+    }
+  }
+  return rows.map((row, index) => row[size]! / row[index]!);
+}
+
 function ellipseFromClosedLoop(
   points: readonly Point2[],
   options?: CurveFitOptions,
 ): SketchEntityDraft | null {
   if (points.length < 6) return null;
-  let cx = 0;
-  let cy = 0;
+  // The mean is only the origin of the normal equations; the centre falls out
+  // of the fit itself.
+  let mx = 0;
+  let my = 0;
   for (const [x, y] of points) {
-    cx += x;
-    cy += y;
+    mx += x;
+    my += y;
   }
-  cx /= points.length;
-  cy /= points.length;
-  let sxx = 0;
-  let syy = 0;
-  let sxy = 0;
+  mx /= points.length;
+  my /= points.length;
+  // Least squares for the whole implicit conic A u² + B uv + C v² + D u + E v = 1,
+  // which is linear in its five coefficients and therefore exact for points
+  // sampled from a real ellipse, however unevenly. Reading the axis off the
+  // second moments of the sample first is what turned a projected circle into a
+  // lobe: an uneven sample tilts the moments by a degree or so, the tilted fit
+  // misses by more than the sagitta, and the loop fell through to a single
+  // Bezier, which cannot close a curve at all.
+  const normal: number[][] = Array.from({ length: 5 }, () => [0, 0, 0, 0, 0]);
+  const rhs = [0, 0, 0, 0, 0];
   for (const [x, y] of points) {
-    sxx += (x - cx) * (x - cx);
-    syy += (y - cy) * (y - cy);
-    sxy += (x - cx) * (y - cy);
+    const u = x - mx;
+    const v = y - my;
+    const terms = [u * u, u * v, v * v, u, v];
+    for (let row = 0; row < 5; row += 1) {
+      for (let column = 0; column < 5; column += 1) {
+        normal[row]![column] = normal[row]![column]! + terms[row]! * terms[column]!;
+      }
+      rhs[row] = rhs[row]! + terms[row]!;
+    }
   }
-  const axis = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  const solved = solveLinear(normal, rhs);
+  if (!solved) return null;
+  const [a, b, c, d, e] = solved as [number, number, number, number, number];
+  // The centre is where the linear part of the conic vanishes.
+  const det = 4 * a * c - b * b;
+  if (!(Math.abs(det) > 1e-12)) return null;
+  const offsetX = (b * e - 2 * c * d) / det;
+  const offsetY = (b * d - 2 * a * e) / det;
+  const cx = mx + offsetX;
+  const cy = my + offsetY;
+  // What is left at the centre is a quadratic form and its constant.
+  const constant =
+    a * offsetX * offsetX +
+    b * offsetX * offsetY +
+    c * offsetY * offsetY +
+    d * offsetX +
+    e * offsetY -
+    1;
+  const middle = (a + c) / 2;
+  const half = Math.hypot((a - c) / 2, b / 2);
+  // The major axis is the eigenvector of the smaller eigenvalue: the conic's
+  // value grows with 1/rx² along it.
+  const major = middle - half;
+  const minor = middle + half;
+  if (!(major > 0) || !(minor > 0) || !(constant < 0)) return null;
+  const rx = Math.sqrt(-constant / major);
+  const ry = Math.sqrt(-constant / minor);
+  // Slope of that eigenvector, taken straight from the fit so the angle never
+  // drifts away from the radii it belongs to.
+  const axis =
+    Math.abs(b) <= 1e-12 * Math.max(Math.abs(a), Math.abs(c), 1)
+      ? a <= c
+        ? 0
+        : Math.PI / 2
+      : Math.atan2(-(a - major) / (b / 2), 1);
   const cos = Math.cos(axis);
   const sin = Math.sin(axis);
-  // Least squares for the implicit form (u/rx)^2 + (v/ry)^2 = 1, which is
-  // linear in 1/rx^2 and 1/ry^2 and therefore exact for a sampled ellipse.
-  let su = 0;
-  let sv = 0;
-  let suu = 0;
-  let svv = 0;
-  let suv = 0;
-  for (const [x, y] of points) {
-    const u = (x - cx) * cos + (y - cy) * sin;
-    const v = -(x - cx) * sin + (y - cy) * cos;
-    su += u * u;
-    sv += v * v;
-    suu += u * u * u * u;
-    svv += v * v * v * v;
-    suv += u * u * v * v;
-  }
-  const solved = solve2x2(suu, suv, suv, svv, su, sv);
-  if (!solved) return null;
-  const [inverseMajor, inverseMinor] = solved;
-  if (!(inverseMajor > 0) || !(inverseMinor > 0)) return null;
-  let rx = 1 / Math.sqrt(inverseMajor);
-  let ry = 1 / Math.sqrt(inverseMinor);
-  let rotation = (axis * 180) / Math.PI;
-  if (ry > rx) {
-    [rx, ry] = [ry, rx];
-    rotation += 90;
-  }
   const scale = Math.max(rx, ry);
   if (!Number.isFinite(scale) || scale <= 1e-6) return null;
   let error = 0;
@@ -278,6 +321,7 @@ function ellipseFromClosedLoop(
     const radius = (rx + ry) / 2;
     return { type: 'circle', construction: false, cx, cy, r: radius };
   }
+  const rotation = (axis * 180) / Math.PI;
   return {
     type: 'ellipse',
     construction: false,
@@ -416,6 +460,14 @@ function bezierFromPoints(points: readonly Point2[], closed: boolean): SketchEnt
   };
 }
 
+/** Whether a polyline comes back to its start, even when the source did not say so. */
+function endsMeet(points: readonly Point2[]): boolean {
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (!first || !last) return false;
+  return distance(first, last) <= Math.max(extent(points) * 1e-6, 1e-9);
+}
+
 /**
  * The sketch curve that best represents a projected polyline: a line, an arc,
  * a circle, an ellipse, or a cubic Bezier for everything else.
@@ -427,11 +479,14 @@ export function sketchCurveFromPolyline(
 ): SketchEntityDraft | null {
   const simplified = simplify(points);
   if (simplified.length < 2) return null;
+  // A body edge that rings the whole face often arrives with its `closed` flag
+  // unset; the fit still has to see a ring, or a circle becomes a lobe.
+  const ring = closed || endsMeet(simplified);
   // A flat projection is a line whether the source curve was open or closed:
   // a circle seen edge-on covers a segment twice.
   const flat = flatSegment(simplified, options);
   if (flat) return flat;
-  if (!closed) {
+  if (!ring) {
     const arc = arcFromOpenCurve(simplified, options);
     if (arc) return arc;
   } else {
@@ -449,7 +504,7 @@ export function sketchCurveFromPolyline(
       }
     }
   }
-  return bezierFromPoints(simplified, closed);
+  return bezierFromPoints(simplified, ring);
 }
 
 /** The projected sketch entity of a vertex. */

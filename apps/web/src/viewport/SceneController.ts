@@ -677,6 +677,10 @@ export class SceneController {
   private hoveredSketchEdge: { sketchId: string; entityId: string } | null = null;
   /** Sketch object under the pointer while no sketch is opened. */
   private hoveredSketchId: string | null = null;
+  /** Last target reported to the projection hover, so it is sent once. */
+  private projectionHoverKey = '';
+  /** Curves a projection would add, drawn as the preview of the hovered face. */
+  private projectionPreview: readonly SketchEntity[] | null = null;
   private edgeHoverEntries: Array<{ line: Line2; material: LineMaterial }> = [];
   private handleDrag: {
     id: string;
@@ -743,6 +747,12 @@ export class SceneController {
        * up and what the geometry tooltip names.
        */
       onGeometryHover?: (event: { pick: ScenePick; x: number; y: number } | null) => void;
+      /**
+       * Geometry under the pointer while projecting, so the viewport can draw the
+       * projection a click would make. One rule for every kind of source: a body
+       * edge or face, a vertex, a curve or a region of another sketch.
+       */
+      onProjectionHover?: (pick: ScenePick | null) => void;
     } = {},
   ) {
     this.renderer = new THREE.WebGLRenderer({
@@ -2413,6 +2423,10 @@ export class SceneController {
       this.hoveredFaceKey = null;
       this.setHoveredEdge(null);
     }
+    if (!this.faceHighlights.projecting) {
+      this.emitProjectionHover(null);
+      this.setProjectionPreview(null);
+    }
     if (!state.bodyPicking && this.hoveredBodyId !== null) {
       this.hoveredBodyId = null;
       this.applyBodyMaterials();
@@ -2995,6 +3009,11 @@ export class SceneController {
     return hoverColor(this.theme);
   }
 
+  /** Geometry the current tool cannot take: grey, not merely quieter. */
+  private sketchDisabledColor(): number {
+    return this.theme === 'dark' ? 0x5c6472 : 0x9aa2ad;
+  }
+
   private sketchFrozenLineColor(): number {
     return this.theme === 'dark' ? 0x3fbf73 : 0x2b8f57;
   }
@@ -3111,6 +3130,7 @@ export class SceneController {
           sketch.onTop,
           sketch.active,
           sketch.fixedPointIds ?? [],
+          sketch.greyed === true,
         );
       }
       this.addSketchFacePickers(group, sketch);
@@ -3129,6 +3149,10 @@ export class SceneController {
   }
 
   private applyFaceHighlights(): void {
+    // A face-picking tool shows every region it could take. Projection is not
+    // one of them: it takes bodies, so a sketch region lights up only while the
+    // pointer is on it.
+    const showAllFaces = this.faceHighlights.picking && !this.faceHighlights.projecting;
     for (const [key, material] of this.sketchFaceMaterials) {
       const invalid = this.faceHighlights.invalid.has(key);
       const selected = this.faceHighlights.selected.has(key);
@@ -3140,7 +3164,7 @@ export class SceneController {
           ? 0.45
           : hovered
             ? 0.3
-            : this.faceHighlights.picking
+            : showAllFaces
               ? 0.12
               : 0;
       material.opacity = opacity;
@@ -3414,7 +3438,12 @@ export class SceneController {
    * aim: the pick band around geometry grows to match it.
    */
   private pickReach(): number {
-    return isKeylessPointer(lastPointerType()) ? 2 : 1;
+    const keyless = isKeylessPointer(lastPointerType());
+    // A projection aims at geometry that is not the sketch being edited, and a
+    // face or an edge is what the click means: its targets get a band twice as
+    // wide, and a fingertip gets twice that again.
+    if (this.faceHighlights.projecting) return keyless ? 4 : 2;
+    return keyless ? 2 : 1;
   }
 
   pickSketch(
@@ -3590,19 +3619,25 @@ export class SceneController {
     grid.minor.geometry = new THREE.BufferGeometry().setFromPoints(minor);
     grid.major.geometry.dispose();
     grid.major.geometry = new THREE.BufferGeometry().setFromPoints(major);
-    this.updateSketchAxes(grid, extent);
+    this.updateSketchAxes(grid, { minU, maxU, minV, maxV });
     grid.key = key;
   }
 
-  private updateSketchAxes(grid: SketchGridEntry, extent: number): void {
+  private updateSketchAxes(
+    grid: SketchGridEntry,
+    range: { minU: number; maxU: number; minV: number; maxV: number },
+  ): void {
     const setAxis = (line: Line2 | null, from: Point2, to: Point2) => {
       if (!line) return;
       const a = this.sketchWorld(grid.frame, from);
       const b = this.sketchWorld(grid.frame, to);
       (line.geometry as LineGeometry).setPositions([a.x, a.y, a.z, b.x, b.y, b.z]);
     };
-    setAxis(grid.axisX, [-extent, 0], [extent, 0]);
-    setAxis(grid.axisY, [0, -extent], [0, extent]);
+    // The axes are unbounded, so they reach as far as the sheet the grid covers
+    // rather than a fixed patch around the origin: panning along an axis must
+    // not leave its drawn part behind.
+    setAxis(grid.axisX, [range.minU, 0], [range.maxU, 0]);
+    setAxis(grid.axisY, [0, range.minV], [0, range.maxV]);
   }
 
   /**
@@ -3707,12 +3742,15 @@ export class SceneController {
     onTop: boolean,
     editing: boolean,
     fixedPointKeys: readonly string[],
+    greyed: boolean,
   ): void {
     // A problem replaces the ordinary blue. Every explicit state above it
     // (selection, hover, magnet highlight, frozen, projection) still wins.
     const color = error
       ? this.sketchErrorColor()
-      : selected
+      : greyed
+        ? this.sketchDisabledColor()
+        : selected
         ? this.sketchSelectedColor()
         : hovered
           ? this.sketchHoverColor()
@@ -3738,7 +3776,7 @@ export class SceneController {
         frame,
         color,
         width,
-        dimmed && !error ? 0.2 : 1,
+        error ? 1 : greyed ? 0.25 : dimmed ? 0.2 : 1,
         entity.construction,
         !onTop,
       );
@@ -3765,7 +3803,9 @@ export class SceneController {
       const selectedPoint = selected || selectedPoints.has(index);
       const pointColor = error
         ? this.sketchErrorColor()
-        : selectedPoint
+        : greyed
+          ? this.sketchDisabledColor()
+          : selectedPoint
           ? this.sketchSelectedColor()
           : pointHovered
             ? this.sketchHoverColor()
@@ -3789,7 +3829,7 @@ export class SceneController {
           map: this.pointTexture,
           alphaTest: 0.5,
           transparent: true,
-          opacity: dimmed && !error ? 0.25 : 1,
+          opacity: (dimmed || greyed) && !error ? 0.25 : 1,
           size: pointSize,
           sizeAttenuation: false,
           depthTest: !onTop,
@@ -3898,6 +3938,44 @@ export class SceneController {
         const line = this.createSketchLine(entity, active.frame, previewColor, 2, 0.75);
         if (line) group.add(line);
       }
+    }
+    // What the hovered source would project, drawn where the click would put it
+    // and above every sketch curve: the pointer shows the result before it
+    // commits. A group of sketches carries RenderOrder.sketch as its group
+    // order, so a render order on the line alone only sorts it against the
+    // curves of the same group; the preview gets a group order of its own.
+    const projection = this.projectionPreview ?? [];
+    if (projection.length > 0) {
+      const previewGroup = new THREE.Group();
+      previewGroup.renderOrder = RenderOrder.sketchDraft;
+      for (const entity of projection) {
+        const line = this.createSketchLine(
+          entity,
+          active.frame,
+          this.sketchHighlightColor(),
+          2,
+          0.9,
+        );
+        if (line) previewGroup.add(line);
+        for (const point of this.sketchControlPoints(entity)) {
+          const dot = new THREE.Points(
+            new THREE.BufferGeometry().setFromPoints([this.sketchWorld(active.frame, point)]),
+            new THREE.PointsMaterial({
+              color: this.sketchHighlightColor(),
+              map: this.pointTexture,
+              alphaTest: 0.5,
+              transparent: true,
+              size: 8,
+              sizeAttenuation: false,
+              depthTest: false,
+              depthWrite: false,
+            }),
+          );
+          dot.renderOrder = RenderOrder.sketchDraft;
+          previewGroup.add(dot);
+        }
+      }
+      group.add(previewGroup);
     }
     if (draftPoints.length > 0) {
       const geometry = new THREE.BufferGeometry().setFromPoints(
@@ -4959,18 +5037,26 @@ export class SceneController {
     // a whole and wins over anything the ray reaches behind it.
     const section = this.pickSectionAt(raycaster, bodyHit);
     const visibleDistance = Math.min(bodyHit?.distance ?? Infinity, section?.distance ?? Infinity);
+    // The scene is the state before the sketch being edited, so a curve or a
+    // region of any other sketch is a source like a body's edge or face. The
+    // sketch being edited is the one thing that is not in that state.
+    const editing = this.faceHighlights.projecting
+      ? useUiStore.getState().activeSketchId
+      : null;
     // While faces are being picked they win over the solids they produced, so a
     // face stays clickable after it has been extruded.
     if (faces && faceHit && !preferBody) {
       const face = faceHit.object.userData.sketchFace as
         { sketchId: string; faceId: string } | undefined;
-      if (face) return { kind: 'face', sketchId: face.sketchId, faceId: face.faceId };
+      if (face && face.sketchId !== editing) {
+        return { kind: 'face', sketchId: face.sketchId, faceId: face.faceId };
+      }
     }
     // A sketch line is an edge too: a revolve axis can be drawn in a sketch.
     // The line has to be in front of the body for the click to mean it.
     if (edges) {
       const curve = this.pickSketchCurveAt(raycaster, this.localPoint(clientX, clientY));
-      if (curve && curve.depth <= visibleDistance + 0.5) {
+      if (curve && curve.id !== editing && curve.depth <= visibleDistance + 0.5) {
         return { kind: 'sketch-edge', sketchId: curve.id, entityId: curve.entityId };
       }
     }
@@ -5019,7 +5105,9 @@ export class SceneController {
     if (faceHit) {
       const face = faceHit.object.userData.sketchFace as
         { sketchId: string; faceId: string } | undefined;
-      if (face) return { kind: 'face', sketchId: face.sketchId, faceId: face.faceId };
+      if (face && face.sketchId !== editing) {
+        return { kind: 'face', sketchId: face.sketchId, faceId: face.faceId };
+      }
     }
     return null;
   }
@@ -5074,14 +5162,35 @@ export class SceneController {
     this.setHoveredSketch(null);
     this.setHoveredSketchEdge(edge);
     this.canvas.style.cursor = hit ? 'pointer' : '';
+    this.emitProjectionHover(null);
     this.applyBodyMaterials();
     this.applyFaceHighlights();
     this.invalidate();
     return hit;
   }
 
+  /**
+   * Reports the geometry under the pointer while projecting. Whatever the click
+   * would take — a body vertex, edge or face, a curve or a region of another
+   * sketch — arrives here, and the viewport shows the same preview for all.
+   */
+  private emitProjectionHover(pick: ScenePick | null): void {
+    const signature = pick ? JSON.stringify(pick) : '';
+    if (signature === this.projectionHoverKey) return;
+    this.projectionHoverKey = signature;
+    this.callbacks.onProjectionHover?.(this.faceHighlights.projecting ? pick : null);
+  }
+
+  /** Curves the projection of the hovered face would add, drawn into the overlay. */
+  setProjectionPreview(entities: readonly SketchEntity[] | null): void {
+    if (this.projectionPreview === entities) return;
+    this.projectionPreview = entities;
+    this.rebuildSketchOverlay();
+    this.invalidate();
+  }
+
   /** Highlights the face or region a face-picking tool would take. */
-  private hoverFacePick(key: string): void {
+  private hoverFacePick(key: string, pick: ScenePick | null): void {
     if (
       key === this.hoveredFaceKey &&
       this.hoveredBodyId === null &&
@@ -5095,6 +5204,7 @@ export class SceneController {
     this.hoveredFaceKey = key;
     this.setHoveredSketch(null);
     this.canvas.style.cursor = 'pointer';
+    this.emitProjectionHover(pick);
     this.applyBodyMaterials();
     this.applyFaceHighlights();
     this.invalidate();
@@ -5524,6 +5634,7 @@ export class SceneController {
 
   /** The pointer left the geometry: nothing is being pointed at any more. */
   private clearGeometryHover(): void {
+    this.emitProjectionHover(null);
     if (!this.geometryHover) return;
     this.geometryHover = null;
     this.callbacks.onGeometryHover?.(null);
@@ -5535,14 +5646,30 @@ export class SceneController {
    * near a visible part of its line and the face under it highlights otherwise.
    */
   private hoverBodyDetail(clientX: number, clientY: number): void {
+    const projecting = Boolean(this.faceHighlights.projecting);
+    // While projecting the pointer asks exactly what a click asks: the vertex
+    // first, then an edge or a curve, then the face or region behind them.
+    // Without that, an invisible region of another sketch would answer for the
+    // curve drawn inside it and no single edge could ever be named.
     const pick = this.pickSceneAt(
       clientX,
       clientY,
       true,
       this.faceHighlights.bodyFacesOnly,
-      false,
+      projecting,
       true,
+      projecting,
     );
+    // The preview follows the pick, not the highlight: the edge highlight is
+    // cleared by the caller before this runs, so leaving the geometry over an
+    // edge used to look unchanged and kept the last preview on screen.
+    this.emitProjectionHover(pick);
+    // A region of another sketch is a source like a body's face: it fills and
+    // previews the same way.
+    if (pick?.kind === 'face') {
+      this.hoverFacePick(`s:${pick.sketchId}#${pick.faceId}`, pick);
+      return;
+    }
     const edgeKey = pick?.kind === 'body-edge' ? `${pick.bodyId}#${pick.edgeId}` : null;
     const faceKey =
       !edgeKey && pick?.kind === 'body-face' ? `b:${pick.bodyId}#${pick.faceId}` : null;
@@ -5585,6 +5712,7 @@ export class SceneController {
     this.hoveredFaceKey = null;
     this.setHoveredSketch(null);
     this.canvas.style.cursor = objectId ? 'pointer' : '';
+    this.emitProjectionHover(null);
     this.applyBodyMaterials();
     this.applyFaceHighlights();
     this.invalidate();
@@ -5599,9 +5727,21 @@ export class SceneController {
       openedBodyIds: this.selectionDetail.bodyIds,
     };
     if (this.hoveredEdgeKey !== null) this.setHoveredEdge(null);
+    // The sketch being edited is not part of the state before it, so while
+    // projecting it must not answer the pointer: its curves and regions would
+    // sit in front of the geometry the projection is aimed at.
+    const editing = this.faceHighlights.projecting
+      ? useUiStore.getState().activeSketchId
+      : null;
     // A selected sketch answers first: its curves and regions are what the next
     // click takes, even while its operation offers handles over the model.
-    if (this.selectionDetail.sketchId && this.updateSketchDetailHover(clientX, clientY)) return;
+    if (
+      this.selectionDetail.sketchId &&
+      this.selectionDetail.sketchId !== editing &&
+      this.updateSketchDetailHover(clientX, clientY)
+    ) {
+      return;
+    }
     if (hover.geometryMode) {
       this.hoverBodyDetail(clientX, clientY);
       return;
@@ -5628,11 +5768,11 @@ export class SceneController {
     // A face-picking tool shows the face or region under the pointer itself.
     if (this.faceHighlights.picking) {
       if (pick?.kind === 'face') {
-        this.hoverFacePick(`s:${pick.sketchId}#${pick.faceId}`);
+        this.hoverFacePick(`s:${pick.sketchId}#${pick.faceId}`, pick);
         return;
       }
       if (pick?.kind === 'body-face') {
-        this.hoverFacePick(`b:${pick.bodyId}#${pick.faceId}`);
+        this.hoverFacePick(`b:${pick.bodyId}#${pick.faceId}`, pick);
         return;
       }
     }
@@ -5649,6 +5789,7 @@ export class SceneController {
     }
     if (pick?.kind === 'sketch-edge') {
       this.hoverSketchObject(pick.sketchId);
+      this.emitProjectionHover(pick);
       return;
     }
     const bodyId =
@@ -5849,6 +5990,7 @@ export class SceneController {
     this.hoveredBodyId = null;
     this.setHoveredSketchEdge(null);
     this.setHoveredSketch(null);
+    this.emitProjectionHover(null);
     this.canvas.style.cursor = '';
     this.applyBodyMaterials();
     this.applyFaceHighlights();

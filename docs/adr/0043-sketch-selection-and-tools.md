@@ -42,3 +42,7 @@ The sketch editor could select several entities, but dragging one of them collap
 - Selection is a stable set while the user works with it, so a group is moved as a group without re-selecting it.
 - The marquee needs the sketch-plane point under the pointer, so the viewport exposes `sketchPointAt` beside `snapSketch`.
 - The rail has room for more variants without another full-width button; a variant without its own shortcut is reached through the chevron.
+
+## Amendments
+
+- Escape takes the selection first: with geometry or a constraint selected it clears that and stays in the sketch, and only the next press returns to Select or leaves the sketch. A tool that is still drawing keeps its own order — the draft is rewound before anything else.

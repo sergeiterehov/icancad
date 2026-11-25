@@ -839,6 +839,33 @@ function lineOf(ref: SketchConstraintRef, entities: Map<string, SketchEntity>): 
 }
 
 /**
+ * Whether two curves are tangent right now. The gap alone cannot say it: a
+ * line across a circle and two crossing circles meet with a zero gap, and
+ * treating that as "already tangent" left the solver for the next edit, so the
+ * constraint looked like it had done nothing.
+ */
+function tangentHolds(first: SketchEntity, second: SketchEntity): boolean {
+  const round = (entity: SketchEntity): { center: Point2; radius: number } | null =>
+    entity.type === 'circle' || entity.type === 'arc'
+      ? { center: [entity.cx, entity.cy], radius: entity.r }
+      : null;
+  const a = round(first);
+  const b = round(second);
+  if (a && b) {
+    const centers = distancePoints(a.center, b.center);
+    return (
+      Math.abs(centers - (a.radius + b.radius)) <= HOLDS_TOLERANCE ||
+      Math.abs(centers - Math.abs(a.radius - b.radius)) <= HOLDS_TOLERANCE
+    );
+  }
+  const circle = a ?? b;
+  const other = a ? second : first;
+  if (!circle || other.type !== 'line') return false;
+  const gap = pointToLineDistance(circle.center, other);
+  return gap !== undefined && Math.abs(gap - circle.radius) <= HOLDS_TOLERANCE;
+}
+
+/**
  * Whether a constraint already holds for the current geometry. Applying a
  * relation the sketch already has must not go through the solver: an
  * under-constrained sketch may reach a different, degenerate branch that also
@@ -917,8 +944,7 @@ export function constraintHolds(
       const first = entities.get(refs[0]!.entityId);
       const second = entities.get(refs[1]!.entityId);
       if (!first || !second) return false;
-      const gap = curveCurveGap(first, second);
-      return gap !== null && gap.distance <= HOLDS_TOLERANCE;
+      return tangentHolds(first, second);
     }
     case 'point-on-line':
     case 'point-on-circle':

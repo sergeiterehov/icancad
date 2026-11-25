@@ -17,6 +17,7 @@ import {
   type ExtrudeFeature,
   type PrimitiveFeature,
   type Resolved,
+  type SketchEntity,
   type SketchFeature,
   type Vec3,
 } from '@icancad/model';
@@ -103,6 +104,7 @@ import {
   addProjectionToSketch,
   projectionEntityIds,
   resolveSketchProjections,
+  sketchProjectionSources,
   type ProjectionPick,
 } from '../sketch/projection';
 import { getViewport, registerViewport, type ScenePick } from './handle';
@@ -116,33 +118,32 @@ const AXIS_HINTS: Record<string, { text: string; color: string }> = {
   bottom: { text: '−Z', color: '#84a4e4' },
 };
 
-/** Turns a click in the 3D view into projected sketch geometry. */
-function projectPickIntoSketch(sketchId: string, pick: ScenePick | null): void {
-  if (!pick) return;
+/** What a projection click in the 3D view needs: the sketch to add to and its source. */
+function projectionTarget(sketchId: string, pick: ScenePick) {
   const store = useDocumentStore.getState();
   const feature = activeModel(store.project).features.find(
     (candidate): candidate is SketchFeature =>
       candidate.id === sketchId && candidate.type === 'sketch',
   );
-  if (!feature) return;
+  if (!feature) return null;
   const kernel = useKernelStore.getState();
-  if (
-    pick.kind === 'body' ||
-    pick.kind === 'mesh' ||
-    pick.kind === 'face' ||
-    pick.kind === 'sketch-edge'
-  ) {
-    return;
-  }
-  const mesh = kernel.meshes[pick.bodyId];
-  if (!mesh) return;
+  if (pick.kind === 'body' || pick.kind === 'mesh') return null;
   const driven = resolvedFeatureFor(feature) ?? feature;
   const frame = computeSketchFrame(
     driven,
     driven.plane.type === 'face' ? kernel.meshes[driven.plane.bodyId ?? ''] : undefined,
   );
   let projectionPick: ProjectionPick | null = null;
-  if (pick.kind === 'body-vertex') {
+  if (pick.kind === 'sketch-edge') {
+    // The scene is the state before this sketch, so a curve of another sketch is
+    // one of its edges; the sketch being edited is the one thing it cannot take.
+    if (pick.sketchId === sketchId) return null;
+    projectionPick = { kind: 'sketch-edge', sketchId: pick.sketchId, entityId: pick.entityId };
+  } else if (pick.kind === 'face') {
+    // A region of another sketch stands for the curves that bound it.
+    if (pick.sketchId === sketchId) return null;
+    projectionPick = { kind: 'sketch-face', sketchId: pick.sketchId, faceId: pick.faceId };
+  } else if (pick.kind === 'body-vertex') {
     projectionPick = {
       kind: 'vertex',
       bodyId: pick.bodyId,
@@ -154,9 +155,55 @@ function projectPickIntoSketch(sketchId: string, pick: ScenePick | null): void {
   } else if (pick.kind === 'body-face') {
     projectionPick = { kind: 'face', bodyId: pick.bodyId, faceId: pick.faceId };
   }
-  if (!projectionPick) return;
-  const next = addProjectionToSketch(feature, frame, mesh, projectionPick);
-  if (next) store.apply({ type: 'feature/replace', feature: next });
+  if (!projectionPick) return null;
+  const model = activeModel(store.project);
+  const sketchOf = sketchProjectionSources(
+    model.features.filter((candidate): candidate is SketchFeature => candidate.type === 'sketch'),
+    (candidate) => {
+      const source = resolvedFeatureFor(candidate) ?? candidate;
+      return computeSketchFrame(
+        source,
+        source.plane.type === 'face' ? kernel.meshes[source.plane.bodyId ?? ''] : undefined,
+      );
+    },
+  );
+  const mesh =
+    pick.kind === 'body-vertex' || pick.kind === 'body-edge' || pick.kind === 'body-face'
+      ? kernel.meshes[pick.bodyId]
+      : undefined;
+  return { feature, frame, pick: projectionPick, mesh, sketchOf };
+}
+
+/** Turns a click in the 3D view into projected sketch geometry. */
+function projectPickIntoSketch(sketchId: string, pick: ScenePick | null): void {
+  if (!pick) return;
+  const target = projectionTarget(sketchId, pick);
+  if (!target) return;
+  const next = addProjectionToSketch(
+    target.feature,
+    target.frame,
+    target.mesh,
+    target.pick,
+    target.sketchOf,
+  );
+  if (next) useDocumentStore.getState().apply({ type: 'feature/replace', feature: next });
+}
+
+/** The curves the pick under the pointer would add: the preview of a projection. */
+function projectionPreviewFor(pick: ScenePick): readonly SketchEntity[] | null {
+  const sketchId = useUiStore.getState().activeSketchId;
+  if (!sketchId) return null;
+  const target = projectionTarget(sketchId, pick);
+  if (!target) return null;
+  const before = new Set(target.feature.entities.map((entity) => entity.id));
+  const next = addProjectionToSketch(
+    target.feature,
+    target.frame,
+    target.mesh,
+    target.pick,
+    target.sketchOf,
+  );
+  return next ? next.entities.filter((entity) => !before.has(entity.id)) : null;
 }
 
 /** What the drag chip says: the extrude method or the edge treatment side. */
@@ -1081,6 +1128,11 @@ export function Viewport() {
           const featureId = featureOfPick(event.pick, useKernelStore.getState(), project);
           ui.setHoveredFeature(featureId ? { featureId, x: event.x, y: event.y } : null);
         },
+        onProjectionHover: (pick) => {
+          controllerRef.current?.setProjectionPreview(
+            pick ? projectionPreviewFor(pick) : null,
+          );
+        },
       },
     );
     controllerRef.current = controller;
@@ -1693,6 +1745,10 @@ export function Viewport() {
     // The edited operation is previewed on top of the cursor state, so a sketch
     // that is being configured or edited is drawn from that preview.
     const previewedId = preview?.featureId ?? null;
+    const sketchSource = sketchProjectionSources(
+      project.features.filter((feature): feature is SketchFeature => feature.type === 'sketch'),
+      (feature) => sketchFrameOf(resolvedFeatureFor(feature) ?? feature, sketchFrames[feature.id]),
+    );
     const sketches = project.features
       .filter(
         (feature): feature is SketchFeature =>
@@ -1718,7 +1774,7 @@ export function Viewport() {
         const override = sketchOverrides[feature.id];
         const resolved = override
           ? { entities: override, lostEntityIds: [] }
-          : resolveSketchProjections(feature, frame, (bodyId) => meshes[bodyId]);
+          : resolveSketchProjections(feature, frame, (bodyId) => meshes[bodyId], sketchSource);
         const dimmed = (() => {
           if (feature.id !== activeSketchId) return [];
           const constraints = feature.constraints.filter((candidate) =>
@@ -1773,6 +1829,9 @@ export function Viewport() {
           ],
           hoverIds: feature.id === activeSketchId ? sketchHoverIds : [],
           active: feature.id === activeSketchId,
+          // A projection takes the state before this sketch, so the sketch
+          // itself is greyed while the tool runs: it cannot be picked.
+          greyed: sketchProjecting && feature.id === activeSketchId,
           onTop:
             feature.id === activeSketchId ||
             feature.id === selectedSketchId ||
@@ -1791,6 +1850,7 @@ export function Viewport() {
     sketchProblemConstraintIds,
     sketchAutoHighlightIds,
     sketchHoverIds,
+    sketchProjecting,
     pickingExtrude,
     pickingArrayFace,
     featureErrors,

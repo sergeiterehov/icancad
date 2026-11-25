@@ -42,3 +42,14 @@ selection accent is.
   and `--hover` the pointer blue, so a DOM surface (a constraint chip, a row in
   the inspector) and a curve in the viewport never disagree about what is being
   pointed at.
+
+## Amendments
+
+- The segment being drawn turns to `--pick` only when it is about to be ruled
+  horizontal or vertical. That colour is the promise of a constraint, so a snap
+  to another curve is shown by the magnet's highlight and the cursor dot instead
+  of painting the whole segment as though a rule were being added.
+- While a tool previews what it would add, the geometry under the pointer keeps
+  the hover blue and the preview itself is the selection purple: two nearby
+  blues would read as one curve. The preview draws above every sketch layer, so
+  what a click would add is never hidden by the curves it is copied from.

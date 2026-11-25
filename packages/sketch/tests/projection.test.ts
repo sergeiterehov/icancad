@@ -99,6 +99,38 @@ describe('sketch projection math', () => {
     expect(Math.min(curve.rx, curve.ry)).toBeCloseTo(3, 5);
   });
 
+  it('fits a rotated ellipse that a mesh samples without even spacing', () => {
+    // A tessellated body edge is sampled by the surface parameter, not by the
+    // angle: the points bunch up near the seam and thin out along the sides.
+    // The second moments of such a sample tilt by about a degree, which is
+    // already more than the sagitta allows, and a rejected ring fell through to
+    // a single Bezier — which closed a projected ellipse into a lobe.
+    const cx = -28;
+    const cy = -23;
+    const rx = 22.67;
+    const ry = 9.33;
+    const rotation = (41.42 * Math.PI) / 180;
+    const cos = Math.cos(rotation);
+    const sin = Math.sin(rotation);
+    const points: Point2[] = [];
+    for (let index = 0; index < 83; index += 1) {
+      const angle = ((index / 83) ** 1.2) * Math.PI * 2;
+      const u = Math.cos(angle) * rx;
+      const v = Math.sin(angle) * ry;
+      points.push([cx + u * cos - v * sin, cy + u * sin + v * cos]);
+    }
+    const curve = sketchCurveFromPolyline(points, true, {
+      tolerance: polylineSagitta(points),
+    });
+    expect(curve?.type).toBe('ellipse');
+    if (curve?.type !== 'ellipse') return;
+    expect(curve.cx).toBeCloseTo(cx, 6);
+    expect(curve.cy).toBeCloseTo(cy, 6);
+    expect(curve.rx).toBeCloseTo(rx, 5);
+    expect(curve.ry).toBeCloseTo(ry, 5);
+    expect(curve.rotation).toBeCloseTo(41.42, 3);
+  });
+
   it('keeps the sweep direction of projected arcs', () => {
     const counterClockwise = sketchCurveFromPolyline(arcPoints(0, 0, 10, 0, Math.PI), false);
     expect(counterClockwise?.type).toBe('arc');

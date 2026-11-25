@@ -1111,8 +1111,21 @@ async function evaluateFeature(
     );
     state.sketchFrames[feature.id] = frame;
     // Projected geometry follows the bodies as they exist at this point of the
-    // history; the stored entities remain the snapshot for a lost link.
-    const resolved = resolveSketchProjections(feature, frame, (bodyId) => state.meshes[bodyId]);
+    // history; the stored entities remain the snapshot for a lost link. A curve
+    // of an earlier sketch is a source too: the scene here is the state before
+    // this sketch, and its curves are the edges that sketch object stands for.
+    const resolved = resolveSketchProjections(
+      feature,
+      frame,
+      (bodyId) => state.meshes[bodyId],
+      (sketchId) => {
+        const source = state.sketches.get(sketchId);
+        const sourceFrame = state.sketchFrames[sketchId];
+        return source && sourceFrame
+          ? { entities: source.entities, frame: sourceFrame }
+          : undefined;
+      },
+    );
     // A projection that moved drags the constrained geometry with it: the sketch
     // is solved again, projected curves held in place, so changing a projected
     // feature earlier in the history recomputes this sketch instead of leaving

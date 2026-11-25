@@ -40,6 +40,8 @@ export interface SceneSketch {
   active: boolean;
   /** Draws over the bodies: the sketch is edited, selected, or its operation is. */
   onTop: boolean;
+  /** Geometry the current tool cannot take: drawn grey and faded. */
+  greyed?: boolean;
 }
 
 export interface ViewportCamera {

@@ -37,7 +37,6 @@ import { faceIdByName } from '../kernel/topologyLookup';
 import { rebuildScene } from '../kernel/rebuild';
 import {
   autoConstraintsForEntity,
-  axisOrientation,
   hasMagnetTarget,
   snapHighlightIds,
 } from '../sketch/autoConstraints';
@@ -112,6 +111,7 @@ import {
   isProjectedEntity,
   projectionEntityIds,
   resolveSketchProjections,
+  sketchProjectionSources,
 } from '../sketch/projection';
 import { entitiesInMarquee, marqueeMode, marqueeRect } from '../sketch/regionSelect';
 import { referenceMenuItems } from '../sketch/referenceMenu';
@@ -722,7 +722,17 @@ export function SketchEditor() {
   // snapshot is refreshed so the editor, the solver and the profile agree.
   useEffect(() => {
     if (!sketch || !frame || (sketch.projections?.length ?? 0) === 0) return;
-    const resolved = resolveSketchProjections(sketch, frame, (bodyId) => meshes[bodyId]);
+    const model = activeModel(useDocumentStore.getState().project);
+    const sketchSource = sketchProjectionSources(
+      model.features.filter((feature): feature is SketchFeature => feature.type === 'sketch'),
+      (feature) => sketchFrameOf(resolvedFeatureFor(feature) ?? feature, sketchFrames[feature.id]),
+    );
+    const resolved = resolveSketchProjections(
+      sketch,
+      frame,
+      (bodyId) => meshes[bodyId],
+      sketchSource,
+    );
     const ids = projectionEntityIds(sketch);
     const current = sketch.entities.filter((entity) => ids.has(entity.id));
     const next = resolved.entities.filter((entity) => ids.has(entity.id));
@@ -2357,12 +2367,11 @@ export function SketchEditor() {
   ]);
   const previewShape = previewEntity();
   const previewAlignment = Boolean(hoverInput?.alignment);
-  const previewSnap =
-    draft.some(({ input }) => hasMagnetTarget(input)) ||
-    Boolean(hoverSnap?.pointSnap ?? hoverSnap?.curveSnap);
-  const previewNearAxis =
-    previewShape?.type === 'line' ? axisOrientation(previewShape) !== null : false;
-  const previewAuto = magnetEnabled && (previewAlignment || (previewSnap && !previewNearAxis));
+  // A segment turns into the accent only when it is about to be ruled
+  // horizontal or vertical: that is the promise the colour stands for. A snap
+  // to another curve is shown by the magnet's own highlight and the cursor dot,
+  // not by painting the whole segment as if a rule were being added.
+  const previewAuto = magnetEnabled && previewAlignment;
 
   // A creating tool names its points one click at a time, and an arc or an
   // ellipse preview carries no marker of its own until the shape exists. The
@@ -2453,9 +2462,17 @@ export function SketchEditor() {
           setSketchHover([]);
           return;
         }
-        setSketchSelection([]);
+        // A selection is taken away first: the Select tool would otherwise leave
+        // the sketch on the same press and throw the set away with it.
         if (activeTool !== 'select') {
+          setSketchSelection([]);
           setSketchTool('select');
+          return;
+        }
+        if (selectedConstraintIds.length > 0 || selectionIds.length > 0) {
+          selectSketchConstraint(null);
+          setSketchSelection([]);
+          setHover(null);
           return;
         }
         setActiveSketch(null);

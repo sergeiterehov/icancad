@@ -316,12 +316,20 @@ export interface SketchReference {
 export interface SketchProjection {
   id: string;
   entityId: string;
-  source: {
-    kind: 'vertex' | 'edge' | 'silhouette';
-    bodyId: string;
-    /** Persistent name of the vertex, edge or silhouette part (ADR 0042). */
-    name: string;
-  };
+  source:
+    | {
+        kind: 'vertex' | 'edge' | 'silhouette';
+        bodyId: string;
+        /** Persistent name of the vertex, edge or silhouette part (ADR 0042). */
+        name: string;
+      }
+    | {
+        /** A curve of another sketch, which is an edge of that sketch object. */
+        kind: 'sketch';
+        sketchId: string;
+        /** Id of the entity the projection follows. */
+        name: string;
+      };
   /** Persistent name of the face the projection was taken from, if any. */
   faceName?: string;
 }

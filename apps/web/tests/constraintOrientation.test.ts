@@ -129,4 +129,37 @@ describe('constraint orientation', () => {
     expect(applied.feature.constraints).toHaveLength(1);
     expect(applied.feature.constraints[0]!.type).toBe('horizontal');
   });
+
+  it('solves a tangency that a crossing curve only makes look satisfied', async () => {
+    // The line runs through the circle, so the gap between them is zero while
+    // they are not tangent. Reading that gap as "already tangent" left the
+    // solver for the next edit, and the constraint looked like it did nothing.
+    const feature = sketch([
+      line('base', -50, 0, 50, 0),
+      { id: 'ring', type: 'circle', construction: false, cx: 0, cy: 0, r: 20 },
+    ]);
+    const tangent: SketchConstraint = con('t', 'tangent', [
+      { entityId: 'base' },
+      { entityId: 'ring' },
+    ]);
+    expect(constraintHolds(tangent, sketchEntityIndex(feature.entities))).toBe(false);
+
+    const applied = await applyConstraintAction(feature, {
+      key: 'tangent',
+      type: 'tangent',
+      refs: tangent.refs,
+    });
+    const base = applied.feature.entities.find(
+      (entity): entity is Extract<SketchEntity, { type: 'line' }> => entity.id === 'base',
+    )!;
+    const ring = applied.feature.entities.find(
+      (entity): entity is Extract<SketchEntity, { type: 'circle' }> => entity.id === 'ring',
+    )!;
+    const length = Math.hypot(base.x2 - base.x1, base.y2 - base.y1);
+    const gap = Math.abs(
+      ((base.x2 - base.x1) * (base.y1 - ring.cy) - (base.x1 - ring.cx) * (base.y2 - base.y1)) /
+        length,
+    );
+    expect(gap).toBeCloseTo(ring.r, 3);
+  });
 });

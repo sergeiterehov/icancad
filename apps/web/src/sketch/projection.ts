@@ -14,7 +14,10 @@ import {
   sketchCurveFromPolyline,
   sketchCurvesFromPolyline,
   sketchPointFromProjected,
+  sketchPointToWorld,
+  sketchTopology,
   stitchCurves,
+  tessellateEntity,
   type Point2,
   type SketchEntityDraft,
 } from '@icancad/sketch';
@@ -25,7 +28,32 @@ import { faceSilhouettes } from './silhouette';
 export type ProjectionPick =
   | { kind: 'vertex'; bodyId: string; elementId: string; position: Vec3 }
   | { kind: 'edge'; bodyId: string; edgeId: string }
-  | { kind: 'face'; bodyId: string; faceId: string };
+  | { kind: 'face'; bodyId: string; faceId: string }
+  /** A curve of another sketch: an edge of that sketch object. */
+  | { kind: 'sketch-edge'; sketchId: string; entityId: string }
+  /** A region of another sketch: the curves that bound it and their points. */
+  | { kind: 'sketch-face'; sketchId: string; faceId: string };
+
+/**
+ * Another sketch as a source of projection. The scene is the state before the
+ * sketch being edited, so its curves are picked like the edges they become.
+ */
+export type ProjectionSketchSource = (
+  sketchId: string,
+) => { entities: readonly SketchEntity[]; frame: SketchFrame } | undefined;
+
+/** Builds the resolver from the sketches of the model being shown. */
+export function sketchProjectionSources(
+  features: readonly SketchFeature[],
+  frameOf: (feature: SketchFeature) => SketchFrame | undefined,
+): ProjectionSketchSource {
+  return (sketchId) => {
+    const feature = features.find((candidate) => candidate.id === sketchId);
+    if (!feature) return undefined;
+    const frame = frameOf(feature);
+    return frame ? { entities: feature.entities, frame } : undefined;
+  };
+}
 
 interface BodyElements {
   /** Vertices by their stable name: the edges that meet there. */
@@ -103,7 +131,9 @@ export function edgeWorldPoints(edge: BodyEdge): Vec3[] {
 }
 
 function sourceKey(source: SketchProjection['source']): string {
-  return `${source.bodyId}:${source.kind}:${source.name}`;
+  return source.kind === 'sketch'
+    ? `sketch:${source.sketchId}:${source.name}`
+    : `${source.bodyId}:${source.kind}:${source.name}`;
 }
 
 /**
@@ -128,6 +158,31 @@ export function isProjectedEntity(feature: SketchFeature, entityId: string): boo
 function projectedCurve(frame: SketchFrame, edge: BodyEdge): SketchEntityDraft | null {
   const projected = projectPolylineToFrame(frame, edgeWorldPoints(edge));
   return sketchCurveFromPolyline(projected, edge.closed, {
+    tolerance: polylineSagitta(projected),
+  });
+}
+
+/**
+ * A curve of another sketch, taken to world space through its own frame and
+ * projected onto the frame being edited. A circle stays closed; every other
+ * entity is a span between its ends.
+ */
+function projectedSketchCurve(
+  frame: SketchFrame,
+  source: { entities: readonly SketchEntity[]; frame: SketchFrame },
+  entityId: string,
+): SketchEntityDraft | null {
+  const entity = source.entities.find((candidate) => candidate.id === entityId);
+  if (!entity || entity.type === 'point') return null;
+  const points = tessellateEntity(entity, 96);
+  if (points.length < 2) return null;
+  // A circle and an ellipse have no ends: fitted as an open span, their closing
+  // polyline became a lobe instead of the closed curve they are. The fit closes
+  // the loop itself, so the first point is not repeated.
+  const closed = entity.type === 'circle' || entity.type === 'ellipse';
+  const world = points.map((point) => sketchPointToWorld(source.frame, point));
+  const projected = projectPolylineToFrame(frame, world);
+  return sketchCurveFromPolyline(projected, closed, {
     tolerance: polylineSagitta(projected),
   });
 }
@@ -309,17 +364,84 @@ function stitchProjected(entities: SketchEntity[], projectedIds: Set<string>): S
   return next;
 }
 
+/** A projection of one region of another sketch: every curve that bounds it. */
+function addSketchFaceProjection(
+  feature: SketchFeature,
+  frame: SketchFrame,
+  pick: Extract<ProjectionPick, { kind: 'sketch-face' }>,
+  sketchOf?: ProjectionSketchSource,
+): SketchFeature | null {
+  const source = sketchOf?.(pick.sketchId);
+  if (!source) return null;
+  const face = sketchTopology(source.entities).faces.find(
+    (candidate) => candidate.id === pick.faceId,
+  );
+  if (!face) return null;
+  let next = feature;
+  for (const entityId of [...face.boundary, ...face.holes.flat()]) {
+    const added = addSketchCurveProjection(
+      next,
+      frame,
+      { kind: 'sketch-edge', sketchId: pick.sketchId, entityId },
+      sketchOf,
+    );
+    if (added) next = added;
+  }
+  return next === feature ? null : next;
+}
+
+/** A projection of one curve of another sketch, linked to that entity. */
+function addSketchCurveProjection(
+  feature: SketchFeature,
+  frame: SketchFrame,
+  pick: Extract<ProjectionPick, { kind: 'sketch-edge' }>,
+  sketchOf?: ProjectionSketchSource,
+): SketchFeature | null {
+  const source = sketchOf?.(pick.sketchId);
+  if (!source) return null;
+  const projections = [...(feature.projections ?? [])];
+  const key = `sketch:${pick.sketchId}:${pick.entityId}`;
+  if (projections.some((projection) => sourceKey(projection.source) === key)) return null;
+  const curve = projectedSketchCurve(frame, source, pick.entityId);
+  if (!curve) return null;
+  const entities = [...feature.entities];
+  const entity = { id: createStableId('entity', 'projection', key), ...curve } as SketchEntity;
+  replaceEntity(entities, entity);
+  projections.push({
+    id: createStableId('proj', key),
+    entityId: entity.id,
+    source: { kind: 'sketch', sketchId: pick.sketchId, name: pick.entityId },
+  });
+  return {
+    ...feature,
+    entities: stitchProjected(
+      entities,
+      new Set(projections.map((projection) => projection.entityId)),
+    ),
+    projections,
+  };
+}
+
 /**
  * Adds the geometry a click in the 3D view stands for to the sketch: a vertex
- * becomes a point, an edge becomes a curve, and a face contributes its boundary
- * edges and their corner points. Nothing is added twice.
+ * becomes a point, an edge becomes a curve, a face contributes its boundary
+ * edges and their corner points, and a curve of another sketch becomes the
+ * curve it draws. Nothing is added twice.
  */
 export function addProjectionToSketch(
   feature: SketchFeature,
   frame: SketchFrame,
-  mesh: TessellationResult,
+  mesh: TessellationResult | undefined,
   pick: ProjectionPick,
+  sketchOf?: ProjectionSketchSource,
 ): SketchFeature | null {
+  if (pick.kind === 'sketch-edge') {
+    return addSketchCurveProjection(feature, frame, pick, sketchOf);
+  }
+  if (pick.kind === 'sketch-face') {
+    return addSketchFaceProjection(feature, frame, pick, sketchOf);
+  }
+  if (!mesh) return null;
   const projections = [...(feature.projections ?? [])];
   const entities = [...feature.entities];
   const known = new Set(projections.map((projection) => sourceKey(projection.source)));
@@ -438,6 +560,7 @@ export function resolveSketchProjections(
   feature: SketchFeature,
   frame: SketchFrame,
   meshOf: (bodyId: string) => TessellationResult | undefined,
+  sketchOf?: ProjectionSketchSource,
 ): ProjectionResolution {
   const projections = feature.projections ?? [];
   if (projections.length === 0) return { entities: feature.entities, lostEntityIds: [] };
@@ -447,38 +570,46 @@ export function resolveSketchProjections(
   for (const projection of projections) {
     const snapshot = byId.get(projection.entityId);
     if (!snapshot) continue;
-    const mesh = meshOf(projection.source.bodyId);
-    const elements = mesh ? bodyElements(mesh) : null;
     let entity: SketchEntity | null = null;
-    if (elements && projection.source.kind === 'vertex') {
-      const point = elements.vertices.get(projection.source.name);
-      if (point) {
-        entity = {
-          id: projection.entityId,
-          ...sketchPointFromProjected(projectPointToFrame(frame, point)),
-          // The construction flag is the user's choice, so it survives a refresh.
-          construction: snapshot.construction,
-        };
-      }
-    } else if (elements && projection.faceName) {
-      const curves = faceCurveCache(mesh!, frame, projection.faceName);
-      const curve = curves.find(
-        (entry) =>
-          entry.kind === projection.source.kind && entry.elementId === projection.source.name,
-      );
+    if (projection.source.kind === 'sketch') {
+      const source = sketchOf?.(projection.source.sketchId);
+      const curve = source ? projectedSketchCurve(frame, source, projection.source.name) : null;
       if (curve) {
-        entity = {
-          id: projection.entityId,
-          ...curve.curve,
-          construction: snapshot.construction,
-        };
+        entity = { id: projection.entityId, ...curve, construction: snapshot.construction };
       }
-    } else if (elements) {
-      const edge = elements.edges.get(projection.source.name);
-      if (edge) {
-        const curve = projectedCurve(frame, edge);
+    } else {
+      const mesh = meshOf(projection.source.bodyId);
+      const elements = mesh ? bodyElements(mesh) : null;
+      if (elements && projection.source.kind === 'vertex') {
+        const point = elements.vertices.get(projection.source.name);
+        if (point) {
+          entity = {
+            id: projection.entityId,
+            ...sketchPointFromProjected(projectPointToFrame(frame, point)),
+            // The construction flag is the user's choice, so it survives a refresh.
+            construction: snapshot.construction,
+          };
+        }
+      } else if (elements && projection.faceName) {
+        const curves = faceCurveCache(mesh!, frame, projection.faceName);
+        const curve = curves.find(
+          (entry) =>
+            entry.kind === projection.source.kind && entry.elementId === projection.source.name,
+        );
         if (curve) {
-          entity = { id: projection.entityId, ...curve, construction: snapshot.construction };
+          entity = {
+            id: projection.entityId,
+            ...curve.curve,
+            construction: snapshot.construction,
+          };
+        }
+      } else if (elements) {
+        const edge = elements.edges.get(projection.source.name);
+        if (edge) {
+          const curve = projectedCurve(frame, edge);
+          if (curve) {
+            entity = { id: projection.entityId, ...curve, construction: snapshot.construction };
+          }
         }
       }
     }

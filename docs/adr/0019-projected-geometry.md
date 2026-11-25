@@ -32,3 +32,11 @@ The sketch model must stay serializable and independent from the kernel, a proje
 - `Project` schema version 2 gains an optional `projections` array; old files load with an empty list.
 - The warning state is derived during the rebuild and published with the scene; it is not stored in the document.
 - Persistent names for faces, edges and vertices (ADR 0042) are the link; the snapshot remains the fallback when the source is gone.
+
+## Amendments
+
+- The sketch being edited is not a source of projection: only what existed before its operation can be projected. Its own curves and regions neither offer themselves nor stand in front of the body behind them, so a click lands on the body, not on the sketch.
+- The state before the sketch includes the other sketches, so their curves are sources like body edges and their regions like body faces: a curve projects as the edge it would become, a region as every curve that bounds it.
+- While projecting, the pointer asks exactly what a click asks: a vertex first, then an edge or a curve, then the face or region behind them. An invisible region must not answer for the curve drawn inside it, or no single edge of another sketch can ever be named.
+- The preview follows the pick and not the highlight: it is drawn where the click would put the curve, above every sketch layer, and it goes away as soon as the pointer leaves the geometry — the highlight of the edge under the pointer is cleared before the hover resolves, so the preview cannot lean on it to notice the change.
+- A closed loop is fitted as a conic by least squares on its implicit form rather than from the second moments of the sample. A tessellated edge bunches its points near the seam, which tilts those moments by about a degree — more than the sagitta allows — and a rejected loop fell through to a single Bézier, which cannot close a curve and drew a projected ellipse as a lobe.

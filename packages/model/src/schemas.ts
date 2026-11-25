@@ -279,11 +279,18 @@ const sketchReference = z.object({
 const sketchProjection = z.object({
   id: z.string().min(1),
   entityId: z.string().min(1),
-  source: z.object({
-    kind: z.enum(['vertex', 'edge', 'silhouette']),
-    bodyId: z.string().min(1),
-    name: z.string().min(1),
-  }),
+  source: z.union([
+    z.object({
+      kind: z.enum(['vertex', 'edge', 'silhouette']),
+      bodyId: z.string().min(1),
+      name: z.string().min(1),
+    }),
+    z.object({
+      kind: z.literal('sketch'),
+      sketchId: z.string().min(1),
+      name: z.string().min(1),
+    }),
+  ]),
   faceName: z.string().min(1).optional(),
 });
 
