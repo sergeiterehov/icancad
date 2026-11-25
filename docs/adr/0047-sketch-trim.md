@@ -36,3 +36,10 @@ Status: accepted
 - Trimming does not extend: a piece that ends short of a crossing is not stretched to it. Продление is its own memo entry.
 - A Bezier can be cut only after it has been replaced by arcs, which the offset and contour tools already do when they need exact curves.
 - Because the commit does not solve, a sketch that was already in conflict stays in conflict: the cut changes nothing about the relations it did not touch.
+
+## Amendments
+
+- The pointer only reaches so far. The nearest curve answers while the pointer stands within 20 screen pixels of it — twice that under a finger, like every other pick band — and nothing is offered beyond that, because a click into the empty part of the sheet used to cut the nearest curve however far away it was. The band is turned into sketch units by the viewport, so the reach stays the same number of pixels at any zoom. A click with nothing in reach says so instead of doing nothing.
+- The tool places nothing, so no point is drawn under the pointer: the mark that tells the user a creation tool is about to place a point belongs to the tools that place one.
+- A finger has no hover to read before it lands, so the scissors take the whole gesture: the press starts nothing, the drag shows the piece it would cut, and the release makes that cut. A press that stays put is a tap, and the click the browser sends after it still cuts; a finger that travelled gets no click, so the release is the only chance to act, and the click that may still arrive is ignored.
+- A joint speaks for the relation it makes redundant. A cut end always lies on its own curve — that is what an end of a line or an arc is — so when the end is joined to a point the sketch already has, a `point-on-line`, `point-on-circle` or `point-on-ellipse` holding that point on the piece's curve is dropped: it is what the joint says. Without that, the two cuts that meet at one crossing left a redundant constraint behind, and which cut came first decided whether the warning appeared.

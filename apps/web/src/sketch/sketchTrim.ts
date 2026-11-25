@@ -60,6 +60,13 @@ const CURVE_TYPES = new Set(['line', 'arc', 'circle', 'ellipse', 'elliptical-arc
 export interface TrimOptions {
   /** Construction curves take part too: they are cut, and they cut. */
   construction?: boolean;
+  /**
+   * How far from a curve the pointer may stand and still cut it, in sketch
+   * units. The caller turns the band of screen pixels into that length; without
+   * it the tool would cut whatever curve happens to be nearest, however far the
+   * pointer is from it.
+   */
+  tolerance?: number;
 }
 
 /**
@@ -106,6 +113,9 @@ export function planTrim(
       source = candidate;
     }
   }
+  // A click into the empty part of the sheet is not a cut: the tool only acts
+  // on a curve the pointer is close to.
+  if (closest > (options.tolerance ?? Infinity)) return { ok: false, error: 'distance' };
 
   const others = feature.entities.filter(
     (entity) =>
@@ -259,6 +269,14 @@ export async function commitTrim(
   // a joint — the two are the same point and a joint says so; where the curve
   // only passes through, the point is held on the curve instead.
   const added: SketchConstraint[] = [];
+  /**
+   * A point a piece now ends on, with the curve of that piece: an end of a line
+   * or an arc lies on its own curve, so a relation that held that point on it is
+   * what the joint already says. The pair used to be reported as a redundant
+   * constraint the moment two cuts met at the same crossing, and which of the two
+   * cuts came first decided whether the warning appeared.
+   */
+  const superseded: Array<{ entityId: string; pointIndex: number; curveId: string }> = [];
   const sourceEnds = entityEndpoints(cut.source) ?? [];
   const others = entities.filter((entity) => entity.id !== cut.source.id);
   const same = (a: readonly [number, number], b: readonly [number, number]) =>
@@ -285,6 +303,11 @@ export async function commitTrim(
           auto: true,
           refs: [pieceRef, { entityId: joint.other.id, pointIndex: joint.at }],
         } as SketchConstraint);
+        superseded.push({
+          entityId: joint.other.id,
+          pointIndex: joint.at,
+          curveId: piece.entity.id,
+        });
         continue;
       }
       // Nothing of the sketch has a point there, so the cut end is held on the
@@ -311,9 +334,35 @@ export async function commitTrim(
       }
     }
   }
-  const unique = uniqueConstraints(added, constraints, sketchEntityIndex(entities));
+  // A joint speaks for the relations it makes redundant: a point held on the
+  // curve a piece now ends on needs no relation of its own any more.
+  const surviving: SketchConstraint[] = [];
+  for (const constraint of constraints) {
+    const implied =
+      constraint.auto &&
+      constraint.type.startsWith('point-on-') &&
+      superseded.some(
+        (entry) =>
+          constraint.refs.some(
+            (ref) => ref.entityId === entry.entityId && ref.pointIndex === entry.pointIndex,
+          ) &&
+          constraint.refs.some(
+            (ref) => ref.entityId === entry.curveId && ref.pointIndex === undefined,
+          ),
+      );
+    if (implied) {
+      removed.push(constraint.id);
+      continue;
+    }
+    surviving.push(constraint);
+  }
+  const unique = uniqueConstraints(added, surviving, sketchEntityIndex(entities));
 
-  const next: SketchFeature = { ...feature, entities, constraints: [...constraints, ...unique] };
+  const next: SketchFeature = {
+    ...feature,
+    entities,
+    constraints: [...surviving, ...unique],
+  };
   // Nothing is solved here: a cut takes geometry away and adds nothing, so the
   // pieces are exact pieces of the curves the sketch already held. Solving would
   // only let an under-constrained sketch move something the user did not ask it

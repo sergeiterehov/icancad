@@ -445,3 +445,81 @@ test('turns a cut circle into the arcs that are left', async ({ page }) => {
   expect(arc.id).toBe('c');
   await expect(page.locator('.toast-error')).toHaveCount(0);
 });
+
+/** A finger on the canvas: the drag that shows the cut and the release that makes it. */
+async function touch(
+  page: Page,
+  type: 'pointerdown' | 'pointermove' | 'pointerup',
+  at: { x: number; y: number },
+) {
+  await page.evaluate(
+    ({ type, at }) => {
+      const canvas = document.querySelector('[data-testid="viewport-canvas"]')!;
+      canvas.dispatchEvent(
+        new PointerEvent(type, {
+          pointerType: 'touch',
+          isPrimary: true,
+          pointerId: 9,
+          clientX: at.x,
+          clientY: at.y,
+          button: 0,
+          buttons: type === 'pointerup' ? 0 : 1,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    },
+    { type, at },
+  );
+}
+
+test('leaves the sketch alone when the pointer stands away from every curve', async ({ page }) => {
+  await openApp(page);
+  const sketchId = await openSketch(page);
+  await replaceEntities(page, sketchId, crossed());
+  await page.waitForTimeout(300);
+  await startTool(page, 'trim');
+
+  // Four millimetres above the line is well outside the band of screen pixels
+  // the scissors reach over, so the nearest curve is not offered at all.
+  const away = await screenPoint(page, sketchId, [20, 4]);
+  await page.mouse.move(away.x, away.y);
+  await page.waitForTimeout(250);
+  await page.mouse.click(away.x, away.y);
+  await page.waitForTimeout(600);
+  expect((await feature(page, sketchId)).entities).toHaveLength(4);
+  // The click is not silently ignored: the tool says why nothing happened.
+  await expect(page.locator('.toast-error')).toHaveCount(1);
+});
+
+test('a finger shows the cut while it drags and makes it when it lifts', async ({ page }) => {
+  await openApp(page);
+  const sketchId = await openSketch(page);
+  await replaceEntities(page, sketchId, crossed());
+  await page.waitForTimeout(300);
+  await startTool(page, 'trim');
+
+  const from = await screenPoint(page, sketchId, [5, 6]);
+  const to = await screenPoint(page, sketchId, [20, 0]);
+  await touch(page, 'pointerdown', from);
+  await touch(page, 'pointermove', to);
+  // The piece under the finger is only a promise until the finger lifts.
+  await page.waitForTimeout(700);
+  expect((await feature(page, sketchId)).entities).toHaveLength(4);
+
+  await touch(page, 'pointerup', to);
+  await expect
+    .poll(async () => (await feature(page, sketchId)).entities.length, { timeout: 15_000 })
+    .toBe(5);
+  const { entities } = await feature(page, sketchId);
+  // The piece the finger stood on is the one that went: the middle span between
+  // the two crossings.
+  expect(spans(entities)).toEqual([
+    [0, 10],
+    [10, 10],
+    [30, 30],
+    [30, 40],
+    [40, 40],
+  ]);
+  await expect(page.locator('.toast-error')).toHaveCount(0);
+});

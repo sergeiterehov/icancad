@@ -213,6 +213,8 @@ export interface ViewportHandle {
   projectSketchPoint: (frame: SketchFrame, point: Point2) => { x: number; y: number } | null;
   /** The point of the edited sketch plane under the pointer, without a magnet. */
   sketchPointAt: (clientX: number, clientY: number) => Point2 | null;
+  /** Length of the sketch plane a band of screen pixels covers, in sketch units. */
+  sketchLength: (px: number) => number;
 }
 
 let current: ViewportHandle | null = null;

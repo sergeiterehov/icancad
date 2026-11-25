@@ -138,6 +138,18 @@ function distance(a: Point2, b: Point2): number {
   return Math.hypot(b[0] - a[0], b[1] - a[1]);
 }
 
+/**
+ * How far from a curve the scissors still take it. The reach is a band of screen
+ * pixels, not a distance in the sketch: a cut has to be as easy to aim at when
+ * the view is zoomed out as when it is close in.
+ */
+const TRIM_REACH_PX = 20;
+
+/** The sketch length the scissors reach over, in the units of the sketch plane. */
+function trimReach(): number {
+  return getViewport()?.sketchLength(TRIM_REACH_PX) ?? Number.POSITIVE_INFINITY;
+}
+
 /** The message a failed offset or contour shows. */
 function filletErrorKey(error: FilletFailure): string {
   switch (error) {
@@ -175,6 +187,8 @@ function trimErrorKey(error: TrimFailure): string {
   switch (error) {
     case 'selection':
       return 'sketch.trimSelect';
+    case 'distance':
+      return 'sketch.trimFar';
     default:
       return 'sketch.trimFailed';
   }
@@ -462,6 +476,14 @@ export function SketchEditor() {
    * takes the object out of it.
    */
   const pendingTap = useRef<{ key: string; pointerId: number } | null>(null);
+  /**
+   * Where a finger came down with the scissors in hand, and the last place the
+   * preview stood. A finger has no hover to read before it lands, so the cut it
+   * means is the one its drag has been showing, and the release is what commits
+   * it — the browser sends no click after a finger that travelled.
+   */
+  const trimPress = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+  const trimAim = useRef<Point2 | null>(null);
   const highlightKey = useRef('');
   const commitQueue = useRef<Promise<void>>(Promise.resolve());
   // Last line of a polyline, so the next segment can be joined to it.
@@ -864,15 +886,17 @@ export function SketchEditor() {
             : { ok: false as const, message: filletErrorKey(result.error) },
         )
       : isTrim
-        ? commitTrim(current, point, { construction: pointerConstructionRef.current }).then(
-            (result) =>
-              result.ok
-                ? {
-                    ok: true as const,
-                    feature: result.commit.feature,
-                    selection: null,
-                  }
-                : { ok: false as const, message: trimErrorKey(result.error) },
+        ? commitTrim(current, point, {
+            construction: pointerConstructionRef.current,
+            tolerance: trimReach(),
+          }).then((result) =>
+            result.ok
+              ? {
+                  ok: true as const,
+                  feature: result.commit.feature,
+                  selection: null,
+                }
+              : { ok: false as const, message: trimErrorKey(result.error) },
           )
         : isSplit
           ? commitSplit(current, point, { construction: pointerConstructionRef.current }).then(
@@ -1466,7 +1490,10 @@ export function SketchEditor() {
         pendingTap.current = null;
         if (interrupted?.active) setSketchSelection(interrupted.base);
         // A pinch is a camera gesture: the geometry a first finger had begun to
-        // drag goes back where it was instead of following that finger.
+        // drag goes back where it was instead of following that finger, and a
+        // cut that finger had lined up is not made when it lifts.
+        trimPress.current = null;
+        trimAim.current = null;
         const interruptedDrag = drag.current;
         drag.current = null;
         if (interruptedDrag?.active) {
@@ -1498,6 +1525,17 @@ export function SketchEditor() {
         activeTool === 'split' ||
         activeTool === 'extend'
       ) {
+        // A finger has no hover to read before it lands, so with the scissors in
+        // hand the press only remembers where it began: the drag that follows
+        // shows the cut, and the release makes it.
+        if (activeTool === 'trim' && isKeylessPointer(event.pointerType)) {
+          trimPress.current = {
+            pointerId: event.pointerId,
+            x: event.clientX,
+            y: event.clientY,
+          };
+          trimAim.current = null;
+        }
         return;
       }
       if (activeTool !== 'select') {
@@ -1689,6 +1727,9 @@ export function SketchEditor() {
         // towards the geometry.
         const point = getViewport()?.sketchPointAt(event.clientX, event.clientY);
         if (point) setHover(point);
+        // The scissors remember the last place their preview stood, so a finger
+        // that lifts cuts what it was shown, not where it stopped being read.
+        if (activeTool === 'trim') trimAim.current = point ?? null;
         setSketchHover([]);
         return;
       }
@@ -2090,7 +2131,28 @@ export function SketchEditor() {
       createPress.current = null;
       marquee.current = null;
       pendingTap.current = null;
+      trimPress.current = null;
+      trimAim.current = null;
       setMarqueeBox(null);
+    };
+    /**
+     * A finger that dragged the scissors cuts on the release: the browser sends
+     * no click after a pointer that travelled, and the piece it means is the one
+     * the preview has been showing. A press that stayed put is a tap, and the
+     * click that follows still makes that cut.
+     */
+    const finishTrim = (event: PointerEvent) => {
+      const press = trimPress.current;
+      trimPress.current = null;
+      if (!press || press.pointerId !== event.pointerId) return;
+      const aim = trimAim.current;
+      trimAim.current = null;
+      if (useUiStore.getState().sketchTool !== 'trim') return;
+      const travelled = Math.hypot(event.clientX - press.x, event.clientY - press.y);
+      if (!aim || travelled <= TAP_SLOP_PX) return;
+      // The cut is made here, so the click that may still arrive is its echo.
+      skipClick.current = true;
+      commitPointerToolAt(aim);
     };
     const finishMarquee = () => {
       const active = marquee.current;
@@ -2111,6 +2173,7 @@ export function SketchEditor() {
     window.addEventListener('pointerup', finishDrag);
     window.addEventListener('pointerup', finishCreate);
     window.addEventListener('pointerup', finishMarquee);
+    window.addEventListener('pointerup', finishTrim);
     return () => {
       canvas.style.cursor = '';
       canvas.removeEventListener('pointerdown', onPointerDown);
@@ -2123,6 +2186,7 @@ export function SketchEditor() {
       window.removeEventListener('pointerup', finishDrag);
       window.removeEventListener('pointerup', finishCreate);
       window.removeEventListener('pointerup', finishMarquee);
+      window.removeEventListener('pointerup', finishTrim);
     };
   }, [
     activeSketchId,
@@ -2305,7 +2369,10 @@ export function SketchEditor() {
       };
     }
     if (tool === 'trim') {
-      const plan = planTrim(sketch, hover, { construction: pointerConstruction });
+      const plan = planTrim(sketch, hover, {
+        construction: pointerConstruction,
+        tolerance: trimReach(),
+      });
       if (!plan.ok) return none;
       // The cut curve stands aside so the piece that goes is seen as a gap, and
       // the pieces that stay take its place before the click.
@@ -2392,6 +2459,9 @@ export function SketchEditor() {
     markers.cursorAtPointer &&
     tool !== 'select' &&
     tool !== 'project' &&
+    // The scissors cut what is already drawn and place nothing, so a point under
+    // the pointer would promise a point that no click will make.
+    tool !== 'trim' &&
     // A stretch places nothing until a curve is chosen; before that the pointer
     // only says what it would take, and a point under it would say otherwise.
     (tool !== 'extend' || extendGrip !== null)
@@ -2598,7 +2668,7 @@ export function SketchEditor() {
                   : tool === 'fillet'
                     ? t('sketch.filletHint')
                     : tool === 'trim'
-                      ? t('sketch.trimHint')
+                      ? t(keylessInput ? 'sketch.trimHintTouch' : 'sketch.trimHint')
                       : tool === 'split'
                         ? t('sketch.splitHint')
                         : tool === 'extend'

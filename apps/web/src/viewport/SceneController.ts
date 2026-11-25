@@ -2966,6 +2966,17 @@ export class SceneController {
     };
   }
 
+  /**
+   * How much of the sketch plane a band of screen pixels covers. A tool that has
+   * to answer "is the pointer close enough" converts the band once, so its reach
+   * stays the same number of pixels at any zoom, and grows with the touch reach
+   * the rest of the picking uses.
+   */
+  sketchLength(px: number): number {
+    const unitsPerPixel = (this.camera.top - this.camera.bottom) / Math.max(1, this.height);
+    return unitsPerPixel * px * this.pickReach();
+  }
+
   /** The point of the edited sketch plane under the pointer, without a magnet. */
   sketchPointAt(clientX: number, clientY: number): Point2 | null {
     const active = this.sketchEntries.find((entry) => entry.active);

@@ -1316,6 +1316,7 @@ export function Viewport() {
       snapSketch: (x, y, tolerance) => controller.snapSketch(x, y, tolerance),
       projectSketchPoint: (frame, point) => controller.projectSketchPoint(frame, point),
       sketchPointAt: (x, y) => controller.sketchPointAt(x, y),
+      sketchLength: (px) => controller.sketchLength(px),
       getHandles: () => controller.getHandles(),
       getGhosts: () => controller.getGhosts(),
     });

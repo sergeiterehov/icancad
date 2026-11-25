@@ -143,6 +143,56 @@ describe('trim tool', () => {
     ).toBe(false);
   });
 
+  it('only cuts a curve the pointer stands close to', () => {
+    const sketch = feature(crossed());
+    // The pointer stands on the middle piece.
+    expect(planTrim(sketch, [5, 0.2], { tolerance: 0.5 }).ok).toBe(true);
+    // Two millimetres away is outside the reach, so no piece is offered: a click
+    // into the empty part of the sheet must not cut the nearest curve.
+    expect(planTrim(sketch, [5, 2], { tolerance: 0.5 })).toEqual({ ok: false, error: 'distance' });
+    // Without a reach the tool takes whatever is nearest, however far away: the
+    // band is the caller's to give, because only it knows the zoom.
+    expect(planTrim(sketch, [5, 2]).ok).toBe(true);
+  });
+
+  it('does not leave the relation the next cut already says', async () => {
+    // A line across a circle. Cutting the circle holds the ends of the arc that
+    // is left on the line; cutting the line then joins its pieces to those very
+    // ends, which is what the point-on-line already said. The pair was reported
+    // as a redundant constraint, and the order of the two cuts decided whether
+    // the warning appeared at all.
+    const circle: SketchEntity = {
+      id: 'c',
+      type: 'circle',
+      construction: false,
+      cx: 0,
+      cy: 0,
+      r: 10,
+    };
+    const first = await commitTrim(feature([circle, line('l', -20, 5, 20, 5)]), [0, 10]);
+    if (!first.ok) throw new Error(first.error);
+    expect(first.commit.feature.constraints.map((constraint) => constraint.type)).toEqual([
+      'point-on-line',
+      'point-on-line',
+    ]);
+
+    const second = await commitTrim(first.commit.feature, [0, 5]);
+    if (!second.ok) throw new Error(second.error);
+    const next = second.commit.feature;
+    // The joint the cut made replaces the relation that held that point on the
+    // curve the joint now ends on.
+    expect(second.commit.removedConstraintIds).toHaveLength(1);
+    expect(next.constraints.map((constraint) => constraint.type)).toEqual([
+      'point-on-line',
+      'coincident',
+      'coincident',
+    ]);
+
+    const solved = await solveSketch(next.entities, next.constraints, [], { diagnose: true });
+    expect(solved.conflicting).toEqual([]);
+    expect(solved.redundant).toEqual([]);
+  });
+
   it('moves the relations onto the pieces that carry their points', async () => {
     const entities = crossed();
     const joined = feature(entities, [

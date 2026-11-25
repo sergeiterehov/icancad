@@ -13,7 +13,7 @@ import { exactCurveIntersections, segmentIntersection } from './intersect';
  * that has no parameter of its own is refused rather than approximated.
  */
 
-export type TrimFailure = 'selection' | 'unsupported' | 'piece';
+export type TrimFailure = 'selection' | 'unsupported' | 'piece' | 'distance';
 
 /** Two crossings closer than this along a curve are one crossing. */
 const PARAMETER_EPSILON = 1e-6;
