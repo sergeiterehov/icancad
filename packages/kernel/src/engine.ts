@@ -9,6 +9,7 @@ import type {
   ExportStepResult,
   FaceCentreParams,
   FaceCentreResult,
+  FacePlane,
   HealthResult,
   ImportStepParams,
   ImportStepResult,
@@ -66,6 +67,7 @@ import type {
   OcctTransformation,
   OcctTriangulation,
 } from './occt-types';
+import type { Vec3 } from '@icancad/model';
 
 export const OCCT_VERSION = '7.4.0p1';
 
@@ -180,6 +182,53 @@ function polygonClosed(points: readonly number[]): boolean {
     Math.abs(points[1]! - points[last + 1]!) < 1e-6 &&
     Math.abs(points[2]! - points[last + 2]!) < 1e-6
   );
+}
+
+/**
+ * How far a surface may stand from its own triangles and still be the plane they
+ * lie in. A flat face is tessellated exactly, so the gap is the float32 error of
+ * the vertices — fractions of a micron. A surface reported in another placement
+ * is off by millimetres and is refused.
+ */
+const EXACT_PLANE_TOLERANCE = 1e-3;
+
+/**
+ * The plane of a flat face, read from the surface rather than from its triangles.
+ *
+ * A sketch on a face is placed on this plane, and the operation it starts there
+ * begins on it. The tessellation is float32, so a plane fitted to the vertices
+ * sits a fraction of a micron inside the solid — enough for a cut that starts on
+ * the face to leave an unbroken skin over itself.
+ */
+function exactFacePlane(
+  oc: OcctBindings,
+  face: OcctShape,
+  reversed: boolean,
+  sample: readonly [number, number, number],
+): FacePlane | null {
+  try {
+    const surface = new oc.BRepAdaptor_Surface_2(face, true);
+    if (surface.GetType() !== oc.GeomAbs_SurfaceType.GeomAbs_Plane) return null;
+    const position = surface.Plane().Position();
+    const point = position.Location();
+    const direction = position.Direction();
+    // The face's own orientation says which side the material is on, so the
+    // normal agrees with the triangles the viewport draws. A zero stays a zero:
+    // `-0` is a different number to every comparison and to JSON, and a face
+    // square to an axis would hand one out.
+    const sign = reversed ? -1 : 1;
+    const axis = (value: number) => (value === 0 ? 0 : value * sign);
+    const origin: Vec3 = [point.X(), point.Y(), point.Z()];
+    const normal: Vec3 = [axis(direction.X()), axis(direction.Y()), axis(direction.Z())];
+    const distance =
+      normal[0] * (sample[0] - origin[0]) +
+      normal[1] * (sample[1] - origin[1]) +
+      normal[2] * (sample[2] - origin[2]);
+    if (!Number.isFinite(distance) || Math.abs(distance) > EXACT_PLANE_TOLERANCE) return null;
+    return { origin, normal };
+  } catch {
+    return null;
+  }
 }
 
 /** Distance from a point to a polyline stored as a flat xyz array. */
@@ -1344,6 +1393,7 @@ export class KernelEngine {
     );
 
     const buffers: TessellationBuffers = { positions: [], normals: [], indices: [], faceIds: [] };
+    const facePlanes: (FacePlane | null)[] = [];
     const min: [number, number, number] = [Infinity, Infinity, Infinity];
     const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
     let triangleCount = 0;
@@ -1375,6 +1425,9 @@ export class KernelEngine {
       // shape is still worth drawing with the faces that did come out.
       const triangulationHandle = oc.BRep_Tool.Triangulation(face, location);
       const triangulation = triangulationHandle ? triangulationHandle.get() : null;
+      // A flat face hands over the surface it lies in, not the float32 copy of it
+      // its triangles carry: see `exactFacePlane`.
+      let plane: FacePlane | null = null;
 
       if (triangulationHandle && triangulation) {
         const nbNodes = triangulation.NbNodes();
@@ -1448,6 +1501,12 @@ export class KernelEngine {
           buffers.normals.push(nx / length, ny / length, nz / length);
         }
 
+        plane = exactFacePlane(oc, face, reversed, [
+          buffers.positions[base * 3]!,
+          buffers.positions[base * 3 + 1]!,
+          buffers.positions[base * 3 + 2]!,
+        ]);
+
         const edgeExplorer = new oc.TopExp_Explorer_2(
           face,
           oc.TopAbs_ShapeEnum.TopAbs_EDGE,
@@ -1491,6 +1550,7 @@ export class KernelEngine {
         }
       }
 
+      facePlanes.push(plane);
       faceIndex += 1;
       explorer.Next();
     }
@@ -1525,6 +1585,7 @@ export class KernelEngine {
       // A seam inside one face has only one adjacent face and is not an edge
       // the user can pick or fillet.
       edges: keptEdges,
+      facePlanes,
       ...(names
         ? {
             faceNames: names.faces,
@@ -2922,10 +2983,7 @@ export class KernelEngine {
       });
       const knots = new oc.TColStd_Array1OfReal_2(1, curve.knots.length);
       curve.knots.forEach((knot, index) => knots.SetValue(index + 1, knot));
-      const multiplicities = new oc.TColStd_Array1OfInteger_2(
-        1,
-        curve.multiplicities.length,
-      );
+      const multiplicities = new oc.TColStd_Array1OfInteger_2(1, curve.multiplicities.length);
       curve.multiplicities.forEach((multiplicity, index) =>
         multiplicities.SetValue(index + 1, multiplicity),
       );
@@ -3434,9 +3492,7 @@ function ellipsePoint(curve: ProfileEllipse, angle: number): [number, number] {
 function curveStart(curve: ProfileCurve): [number, number] {
   if (curve.type === 'line') return [curve.x1, curve.y1];
   if (curve.type === 'bspline') {
-    const pole = curve.reversed
-      ? curve.poles[curve.poles.length - 1]
-      : curve.poles[0];
+    const pole = curve.reversed ? curve.poles[curve.poles.length - 1] : curve.poles[0];
     return pole ?? [0, 0];
   }
   if (curve.type === 'circle') return [curve.cx + curve.r, curve.cy];
@@ -3450,9 +3506,7 @@ function curveStart(curve: ProfileCurve): [number, number] {
 function curveEnd(curve: ProfileCurve): [number, number] {
   if (curve.type === 'line') return [curve.x2, curve.y2];
   if (curve.type === 'bspline') {
-    const pole = curve.reversed
-      ? curve.poles[0]
-      : curve.poles[curve.poles.length - 1];
+    const pole = curve.reversed ? curve.poles[0] : curve.poles[curve.poles.length - 1];
     return pole ?? [0, 0];
   }
   if (curve.type === 'circle') return [curve.cx + curve.r, curve.cy];

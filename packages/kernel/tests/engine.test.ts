@@ -184,6 +184,34 @@ describe('OCCT kernel engine', () => {
     ).toMatchObject({ faces: 3, solids: 1 });
   });
 
+  it('reports the exact plane of a flat face, not the tessellated one', () => {
+    // A sketch placed on a face starts where its plane is; the face itself is at
+    // 12.9 while its triangles are float32 and say 12.899999…
+    engine.makeBox({ shapeId: 'exact-plane', dx: 32, dy: 32, dz: 12.9 });
+    const mesh = engine.tessellate('exact-plane');
+    const top = faceFacing(mesh, [0, 0, 1]);
+    const plane = mesh.facePlanes?.[top];
+    expect(plane).toBeTruthy();
+    expect(plane!.origin[2]).toBe(12.9);
+    expect(plane!.normal).toEqual([0, 0, 1]);
+    // The position along the normal is what the sketch sits on, not the middle
+    // of the face: any point of the plane answers the same way.
+    const distance =
+      plane!.normal[0] * plane!.origin[0] +
+      plane!.normal[1] * plane!.origin[1] +
+      plane!.normal[2] * plane!.origin[2];
+    expect(distance).toBe(12.9);
+  });
+
+  it('reports no plane for a curved face', () => {
+    engine.makePrimitive({ kind: 'cylinder', shapeId: 'exact-plane-round', radius: 5, height: 10 });
+    const mesh = engine.tessellate('exact-plane-round');
+    const planes = mesh.facePlanes ?? [];
+    expect(planes).toHaveLength(3);
+    // Cap, side, cap: only the caps are flat.
+    expect(planes.filter((plane) => plane === null)).toHaveLength(1);
+  });
+
   it('stands round primitives on the Z axis', () => {
     engine.makePrimitive({ kind: 'cylinder', shapeId: 'cylinder-z', radius: 5, height: 10 });
     const cylinder = engine.tessellate('cylinder-z');

@@ -139,10 +139,58 @@ function facesFrame(
   if (area === 0) return null;
   const length = Math.hypot(normal[0], normal[1], normal[2]);
   if (length === 0) return null;
-  return faceFrame(
-    [centre[0] / area, centre[1] / area, centre[2] / area],
-    [normal[0] / length, normal[1] / length, normal[2] / length],
-  );
+  const middle: Vec3 = [centre[0] / area, centre[1] / area, centre[2] / area];
+  const fitted: Vec3 = [normal[0] / length, normal[1] / length, normal[2] / length];
+  const exact = exactFacePlane(mesh, ids, middle, fitted);
+  if (exact) return faceFrame(exact[0], exact[1]);
+  return faceFrame(middle, fitted);
+}
+
+/**
+ * The plane of the face taken from the surface itself instead of its triangles,
+ * with the middle of the face snapped onto it.
+ *
+ * The tessellation is float32: a plane fitted to it sits a fraction of a micron
+ * inside the solid, and an operation that starts on the face then begins under
+ * the surface — a cut leaves a skin over its own hole. The kernel reports the
+ * exact plane, and it is used only where it lies with the triangles, so a face
+ * whose surface is reported in another placement keeps the fitted plane.
+ */
+function exactFacePlane(
+  mesh: TessellationResult,
+  ids: ReadonlySet<number>,
+  middle: Vec3,
+  fitted: Vec3,
+): [Vec3, Vec3] | null {
+  for (const id of ids) {
+    const plane = mesh.facePlanes?.[id];
+    if (!plane) continue;
+    const [nx, ny, nz] = plane.normal;
+    const length = Math.hypot(nx, ny, nz);
+    if (length === 0) continue;
+    // The surface says where the plane is; the fitted normal says which of its
+    // two sides the material is on.
+    const sign = nx * fitted[0] + ny * fitted[1] + nz * fitted[2] < 0 ? -1 : 1;
+    // A zero stays a zero: `-0` survives every comparison as a different number.
+    const tidy = (value: number) => (value === 0 ? 0 : value);
+    const normal: Vec3 = [
+      tidy((nx / length) * sign),
+      tidy((ny / length) * sign),
+      tidy((nz / length) * sign),
+    ];
+    const distance =
+      normal[0] * plane.origin[0] + normal[1] * plane.origin[1] + normal[2] * plane.origin[2];
+    const away = normal[0] * middle[0] + normal[1] * middle[1] + normal[2] * middle[2] - distance;
+    return [
+      [
+        tidy(middle[0] - normal[0] * away),
+        tidy(middle[1] - normal[1] * away),
+        tidy(middle[2] - normal[2] * away),
+      ],
+      normal,
+    ];
+  }
+  return null;
 }
 
 function withSketchOffset(frame: SketchFrame, offset: number): SketchFrame {

@@ -36,6 +36,17 @@ export interface BodyEdge {
   convex?: boolean;
 }
 
+/**
+ * The plane a flat face lies in, measured on the surface itself rather than on
+ * its triangles. A sketch placed on a face takes this plane, so a cut that
+ * starts on the face begins on the surface instead of a fraction of a micron
+ * under it — which is enough to leave a skin the boolean keeps.
+ */
+export interface FacePlane {
+  origin: Vec3;
+  normal: Vec3;
+}
+
 export interface TessellationResult {
   positions: Float32Array;
   normals: Float32Array;
@@ -52,6 +63,8 @@ export interface TessellationResult {
   faceAliases?: string[][];
   /** Operation that owns every face, aligned with `faceIds`. */
   faceOwners?: string[];
+  /** Exact plane of every flat face, aligned with `faceIds`; null when curved. */
+  facePlanes?: (FacePlane | null)[];
 }
 
 export interface ShapeStats {
@@ -196,11 +209,7 @@ export interface ProfileBSpline {
 }
 
 export type ProfileCurve =
-  | ProfileLine
-  | ProfileArc
-  | ProfileCircle
-  | ProfileEllipse
-  | ProfileBSpline;
+  ProfileLine | ProfileArc | ProfileCircle | ProfileEllipse | ProfileBSpline;
 
 export interface ProfileLoop {
   curves: ProfileCurve[];
