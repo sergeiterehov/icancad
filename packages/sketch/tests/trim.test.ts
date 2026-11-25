@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SketchEntity } from '@icancad/model';
 import {
   curveCrossings,
+  curveDistance,
   curveIntervals,
   curveParameterAt,
   curvePointAt,
@@ -161,5 +162,41 @@ describe('trim crossings', () => {
     const whole: [number, number] = [0, 1];
     expect(isWholeCurve(whole)).toBe(true);
     expect(isWholeCurve([0.3, 0.7])).toBe(false);
+  });
+  it('measures the distance to a curve, not to the samples it is walked in', () => {
+    const loop = circle('c', 0, 0, 10);
+    // A degree along the circle stands between any two samples of it. Measured
+    // to the nearest sample the answer would be a fifth of a millimetre — tens
+    // of pixels at a normal zoom, which is what made the scissors catch a
+    // circle only where a sample happened to land.
+    const onCurve: [number, number] = [10 * Math.cos(0.0175), 10 * Math.sin(0.0175)];
+    expect(curveDistance(loop, onCurve)).toBeLessThan(1e-9);
+
+    // Half a millimetre outside the circle is half a millimetre away, and half a
+    // millimetre inside is as far.
+    const outside: [number, number] = [10.5 * Math.cos(0.0175), 10.5 * Math.sin(0.0175)];
+    expect(curveDistance(loop, outside)).toBeCloseTo(0.5, 9);
+    const inside: [number, number] = [9.5, 0];
+    expect(curveDistance(loop, inside)).toBeCloseTo(0.5, 9);
+
+    // A curve with no closed form is walked as its chords, which leaves their
+    // sagitta — a hundredth of a millimetre, a fraction of a pixel.
+    const oval: SketchEntity = {
+      id: 'e',
+      type: 'ellipse',
+      construction: false,
+      cx: 0,
+      cy: 0,
+      rx: 10,
+      ry: 4,
+      rotation: 0,
+    };
+    expect(Math.abs(curveDistance(oval, [10.5, 0]) - 0.5)).toBeLessThan(0.01);
+    expect(curveDistance(oval, [0, 4.5])).toBeCloseTo(0.5, 1);
+
+    // A line is measured exactly, including beyond its ends.
+    const segment = line('a', 0, 0, 10, 0);
+    expect(curveDistance(segment, [5, 2])).toBeCloseTo(2, 9);
+    expect(curveDistance(segment, [13, 4])).toBeCloseTo(5, 9);
   });
 });

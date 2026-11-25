@@ -1,10 +1,10 @@
 import { createId, type SketchConstraint, type SketchFeature, type SketchEntity } from '@icancad/model';
 import {
   curveCrossingSources,
+  curveDistance,
   curveEndIndices,
   curveIntervals,
   curveParameterAt,
-  curvePointAt,
   entityControlPoints,
   entityEndpoints,
   intervalDistance,
@@ -107,7 +107,7 @@ export function planTrim(
   let source = targets[0]!;
   let closest = Infinity;
   for (const candidate of targets) {
-    const distance = curveNearDistance(candidate, at);
+    const distance = curveDistance(candidate, at);
     if (distance < closest) {
       closest = distance;
       source = candidate;
@@ -174,17 +174,6 @@ function groupCrossings(
     grouped.push({ parameter: crossing.parameter, otherIds: [crossing.otherId] });
   }
   return grouped;
-}
-
-/** How far the nearest point of a curve stands from the pointer, coarsely. */
-function curveNearDistance(entity: SketchEntity, pointer: [number, number]): number {
-  let best = Infinity;
-  for (let index = 0; index <= 24; index += 1) {
-    const point = curvePointAt(entity, index / 24);
-    if (!point) continue;
-    best = Math.min(best, Math.hypot(point[0] - pointer[0], point[1] - pointer[1]));
-  }
-  return best;
 }
 
 /** The preview: the pieces that stay, standing where the cut leaves them. */

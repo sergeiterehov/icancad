@@ -139,11 +139,11 @@ function distance(a: Point2, b: Point2): number {
 }
 
 /**
- * How far from a curve the scissors still take it. The reach is a band of screen
- * pixels, not a distance in the sketch: a cut has to be as easy to aim at when
- * the view is zoomed out as when it is close in.
+ * How far from a curve the scissors still take it: one band of screen pixels on
+ * each side of the curve. The reach is a band, not a distance in the sketch, so a
+ * cut is as easy to aim at when the view is zoomed out as when it is close in.
  */
-const TRIM_REACH_PX = 20;
+const TRIM_REACH_PX = 10;
 
 /** The sketch length the scissors reach over, in the units of the sketch plane. */
 function trimReach(): number {

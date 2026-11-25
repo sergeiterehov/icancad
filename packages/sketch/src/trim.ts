@@ -380,18 +380,76 @@ export function isWholeCurve(interval: [number, number]): boolean {
   return interval[1] - interval[0] >= 1 - PARAMETER_EPSILON;
 }
 
+/** How many chords one whole turn of a curve is walked with. */
+const DISTANCE_STEPS = 96;
+
+/** Distance from a point to one chord of the walk. */
+function chordDistance(point: Point2, start: Point2, end: Point2): number {
+  const dx = end[0] - start[0];
+  const dy = end[1] - start[1];
+  const length = dx * dx + dy * dy;
+  const along = length < 1e-18
+    ? 0
+    : Math.min(1, Math.max(0, ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length));
+  return Math.hypot(start[0] + dx * along - point[0], start[1] + dy * along - point[1]);
+}
+
+/** Distance from a point to the chords of a parameter range. */
+function walkDistance(
+  entity: SketchEntity,
+  from: number,
+  to: number,
+  pointer: Point2,
+  steps: number,
+): number {
+  let best = Infinity;
+  let previous = curvePointAt(entity, from);
+  for (let index = 1; index <= steps; index += 1) {
+    const current = curvePointAt(entity, from + ((to - from) * index) / steps);
+    if (previous && current) best = Math.min(best, chordDistance(pointer, previous, current));
+    previous = current ?? previous;
+  }
+  return best;
+}
+
+/**
+ * How far a point stands from a curve. The curve is measured as the chords it is
+ * walked in, not as a handful of isolated samples: half the gap between two
+ * samples of a circle is tens of pixels at a normal zoom, and a tool that
+ * measured that as the distance caught the circle only where a sample happened
+ * to be. A line is measured exactly.
+ */
+export function curveDistance(entity: SketchEntity, point: Point2): number {
+  if (entity.type === 'line') {
+    return chordDistance(point, [entity.x1, entity.y1], [entity.x2, entity.y2]);
+  }
+  // A circle and an arc are measured exactly: the nearest point of a circle lies
+  // on the ray from its centre, and an arc clamps that to whichever end is
+  // nearer.
+  if (entity.type === 'circle' || entity.type === 'arc') {
+    const parameter = curveParameterAt(entity, point);
+    const at = parameter === null
+      ? null
+      : curvePointAt(entity, Math.min(1, Math.max(0, parameter)));
+    if (at) return Math.hypot(at[0] - point[0], at[1] - point[1]);
+  }
+  return walkDistance(entity, 0, 1, point, DISTANCE_STEPS);
+}
+
 /** The nearest point of an interval to a pointer, and how far it stands. */
 export function intervalDistance(
   entity: SketchEntity,
   interval: [number, number],
   pointer: Point2,
 ): number {
-  const steps = 24;
-  let best = Infinity;
-  for (let index = 0; index <= steps; index += 1) {
-    const point = curvePointAt(entity, interval[0] + ((interval[1] - interval[0]) * index) / steps);
-    if (!point) continue;
-    best = Math.min(best, Math.hypot(point[0] - pointer[0], point[1] - pointer[1]));
-  }
-  return best;
+  // The same walk as the whole curve, so a long piece is measured as finely as a
+  // short one: a quarter of a turn deserves a quarter of the steps.
+  const span = Math.min(1, Math.max(0, interval[1] - interval[0]));
+  return walkDistance(
+    entity,
+    interval[0],
+    interval[1],
+    pointer,
+    Math.max(8, Math.round(DISTANCE_STEPS * span)),
+  );
 }
