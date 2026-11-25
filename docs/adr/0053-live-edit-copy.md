@@ -41,5 +41,9 @@ rebuild was 3.4 ms before it learned to keep its curves (ADR 0054 note in
 - Anything that used to see the document mid-drag must use `liveProject()` or
   the hooks. The stores keep the rule in one place, so a new drag has one seam
   to call: `begin`, `preview`, `finish`.
+- A gesture begins when the pointer travels, not when it lands. A press that
+  ends where it started is a selection, and a copy opened by it would stand in
+  front of the document for every later edit — a constraint added after such a
+  tap never reached the annotations, and its row was never the active one.
 - The live copy is a whole project, so `applyCommands` semantics (and its
   failure handling) are exactly the document's.

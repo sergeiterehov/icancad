@@ -94,12 +94,7 @@ import {
   splitPreviewEntities,
   type SplitFailure,
 } from '../sketch/sketchSplit';
-import {
-  commitTrim,
-  planTrim,
-  trimPreviewEntities,
-  type TrimFailure,
-} from '../sketch/sketchTrim';
+import { commitTrim, planTrim, trimPreviewEntities, type TrimFailure } from '../sketch/sketchTrim';
 import {
   commitOffsetSolved,
   offsetPreviewEntities,
@@ -862,13 +857,7 @@ export function SketchEditor() {
     // A cut or a split leaves the tool where it is: the next piece is one click
     // away.
     const staysOn = isTrim || isSplit;
-    if (
-      activeTool !== 'offset' &&
-      activeTool !== 'outline' &&
-      !isFillet &&
-      !isTrim &&
-      !isSplit
-    ) {
+    if (activeTool !== 'offset' && activeTool !== 'outline' && !isFillet && !isTrim && !isSplit) {
       return;
     }
     if (offsetCommitPending.current) return;
@@ -910,18 +899,18 @@ export function SketchEditor() {
                     }
                   : { ok: false as const, message: splitErrorKey(result.error) },
             )
-        : commitOffsetSolved(current, selectionIds, point, {
-            tool: activeTool,
-            join: offsetJoinRef.current,
-          }).then((result) =>
-            result.ok
-              ? {
-                  ok: true as const,
-                  feature: result.commit.feature,
-                  selection: result.commit.createdIds,
-                }
-              : { ok: false as const, message: offsetErrorKey(result.error) },
-          );
+          : commitOffsetSolved(current, selectionIds, point, {
+              tool: activeTool,
+              join: offsetJoinRef.current,
+            }).then((result) =>
+              result.ok
+                ? {
+                    ok: true as const,
+                    feature: result.commit.feature,
+                    selection: result.commit.createdIds,
+                  }
+                : { ok: false as const, message: offsetErrorKey(result.error) },
+            );
     void settling
       .then((result) => {
         if (!result.ok) {
@@ -1363,11 +1352,7 @@ export function SketchEditor() {
     // alone: a late commit must not drop the pointer over geometry.
     const hovering = useUiStore.getState().sketchHoverIds.length > 0;
     canvas.style.cursor =
-      tool === 'select' || tool === 'extend'
-        ? hovering
-          ? 'pointer'
-          : 'default'
-        : 'crosshair';
+      tool === 'select' || tool === 'extend' ? (hovering ? 'pointer' : 'default') : 'crosshair';
 
     /**
      * The point a click or a finger gives the current tool: the neighbour the
@@ -1639,9 +1624,6 @@ export function SketchEditor() {
         solvedPoint: null,
         switchedAxis: false,
       };
-      // A drag writes to the live copy: the document is touched once, when the
-      // pointer lets go, instead of once per frame for the whole interface.
-      useLiveEditStore.getState().begin('sketch', sketch.id);
     };
     // One solve at a time, always for the newest pointer position: a queue of
     // solves would reach the sketch long after the pointer left, which reads as
@@ -1788,6 +1770,12 @@ export function SketchEditor() {
             return;
           }
           activeDrag.active = true;
+          // The copy opens when the drag means to move something, not on the
+          // press: a press that never travelled is a selection tap, and a copy
+          // left open by it would hide every edit the document gets afterwards.
+          // A drag writes to the live copy, so the document is touched once,
+          // when the pointer lets go.
+          useLiveEditStore.getState().begin('sketch', activeDrag.original.id);
           const pending = pendingTap.current;
           pendingTap.current = null;
           // A finger that travels is moving, not tapping: an object it pressed
@@ -2630,8 +2618,7 @@ export function SketchEditor() {
 
   // A finger and a pen have no key to hold: a hint must not ask for one, and a
   // step they take is a drag or a tap rather than a click.
-  const keylessInput =
-    isKeylessPointer(lastPointerType()) || primaryInputProfile() === 'touch';
+  const keylessInput = isKeylessPointer(lastPointerType()) || primaryInputProfile() === 'touch';
 
   const hint =
     tool === 'line'
@@ -2670,23 +2657,23 @@ export function SketchEditor() {
                   : t('sketch.addBezier')
                 : tool === 'polygon'
                   ? t(polygonHint(draft.length, keylessInput))
-                : tool === 'project'
-                  ? t('sketch.projectionPickHint')
-                  : tool === 'fillet'
-                    ? t('sketch.filletHint')
-                    : tool === 'trim'
-                      ? t(keylessInput ? 'sketch.trimHintTouch' : 'sketch.trimHint')
-                      : tool === 'split'
-                        ? t('sketch.splitHint')
-                        : tool === 'extend'
-                          ? extendGrip
-                            ? t('sketch.extendHintGrow')
-                            : t('sketch.extendHint')
-                          : tool === 'offset'
-                            ? t('sketch.offsetHint')
-                            : tool === 'outline'
-                              ? t('sketch.outlineHint')
-                              : '';
+                  : tool === 'project'
+                    ? t('sketch.projectionPickHint')
+                    : tool === 'fillet'
+                      ? t('sketch.filletHint')
+                      : tool === 'trim'
+                        ? t(keylessInput ? 'sketch.trimHintTouch' : 'sketch.trimHint')
+                        : tool === 'split'
+                          ? t('sketch.splitHint')
+                          : tool === 'extend'
+                            ? extendGrip
+                              ? t('sketch.extendHintGrow')
+                              : t('sketch.extendHint')
+                            : tool === 'offset'
+                              ? t('sketch.offsetHint')
+                              : tool === 'outline'
+                                ? t('sketch.outlineHint')
+                                : '';
 
   const liveMeasure = (() => {
     if (tool === 'fillet') {
