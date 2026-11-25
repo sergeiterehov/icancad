@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNarrowLayout } from './hooks/useNarrowLayout';
 import { useShortcuts } from './hooks/useShortcuts';
 import { useFormulaResolution } from './hooks/useFormulaResolution';
+import { useLivePreviewBuild } from './hooks/useLivePreviewBuild';
 import { useApplyTheme } from './hooks/useTheme';
 import {
   useAutosave,
@@ -39,6 +40,7 @@ export default function App() {
   useAutosave();
   useFormulaResolution();
   useRebuildScene();
+  useLivePreviewBuild();
   useApplyTheme();
   useShortcuts();
 

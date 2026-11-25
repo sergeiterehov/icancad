@@ -179,6 +179,7 @@
     "kernelLoading": "Загрузка ядра OCCT…",
     "kernelReady": "Компоненты ядра готовы",
     "rebuild": "Пересчёт модели",
+    "preview": "Обновление превью",
     "queue": "Очередь",
     "taskRunning": "выполняется",
     "taskQueued": "в очереди",

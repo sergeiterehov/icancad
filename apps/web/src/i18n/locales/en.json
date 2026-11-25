@@ -179,6 +179,7 @@
     "kernelLoading": "Loading OCCT kernel…",
     "kernelReady": "Kernel components are ready",
     "rebuild": "Rebuilding model",
+    "preview": "Updating preview",
     "queue": "Queue",
     "taskRunning": "running",
     "taskQueued": "waiting",

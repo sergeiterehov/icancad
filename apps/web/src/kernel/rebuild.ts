@@ -190,9 +190,7 @@ function transformImportedMesh(
   }
 
   const bounds: MeshStats['bounds'] =
-    mesh.positions.length > 0
-      ? { min, max }
-      : { min: [0, 0, 0], max: [0, 0, 0] };
+    mesh.positions.length > 0 ? { min, max } : { min: [0, 0, 0], max: [0, 0, 0] };
   return {
     mesh: {
       positions,
@@ -498,11 +496,20 @@ export function rebuildScene(
     fromIndex?: number;
     expressionErrors?: ReadonlySet<string>;
     drivenSketches?: ReadonlySet<string>;
+    /**
+     * The operation to evaluate on top of the model and publish as a preview.
+     * Absent means the one whose settings are open; a live drag names the copy
+     * it is writing so the preview follows the pointer.
+     */
+    previewFeatureId?: string | null;
   },
 ): Promise<void> {
   if (useKernelStore.getState().status !== 'ready') return Promise.resolve();
   // Read at enqueue time so the preview matches the project being rebuilt.
-  const previewFeatureId = useDocumentStore.getState().editingFeatureId;
+  const previewFeatureId =
+    options && 'previewFeatureId' in options
+      ? (options.previewFeatureId ?? null)
+      : useDocumentStore.getState().editingFeatureId;
   const fromIndex = options?.fromIndex;
   return kernelTaskQueue.enqueue({
     key: 'rebuild',
