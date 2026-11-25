@@ -8,6 +8,7 @@ import {
   type Vec3,
 } from '@icancad/model';
 import { useDocumentStore } from '../stores/documentStore';
+import { liveProject, useLiveEditStore } from '../stores/liveEditStore';
 import {
   PYRAMID_MAX_SIDES,
   PYRAMID_MIN_SIDES,
@@ -391,16 +392,17 @@ class PrimitiveDrag implements OperationHandleDrag {
         : this.target.kind === 'sides' && this.resolved.kind === 'pyramid'
           ? this.resolved.params.sides
           : 0;
+    useLiveEditStore.getState().begin('feature', this.featureId);
   }
 
   update(value: number, _shift?: boolean, move?: Vec3): void {
     if (!this.before || !this.original) return;
-    const state = useDocumentStore.getState();
-    const feature = activeModel(state.project).features.find(
+    const feature = activeModel(liveProject()).features.find(
       (candidate): candidate is PrimitiveFeature =>
         candidate.id === this.featureId && candidate.type === 'primitive',
     );
     if (!feature) return;
+    const state = useLiveEditStore.getState();
 
     if (this.target.kind === 'position-axis') {
       const axis = this.target.axis;
@@ -453,19 +455,12 @@ class PrimitiveDrag implements OperationHandleDrag {
   }
 
   end(): void {
-    if (this.changed && this.before) {
-      useDocumentStore.getState().commitPreview(this.before);
-    }
+    if (this.changed && this.before) useLiveEditStore.getState().finish(true);
     this.reset();
   }
 
   cancel(): void {
-    if (this.original) {
-      useDocumentStore.getState().preview({
-        type: 'feature/replace',
-        feature: this.original,
-      });
-    }
+    useLiveEditStore.getState().finish(false);
     this.reset();
   }
 

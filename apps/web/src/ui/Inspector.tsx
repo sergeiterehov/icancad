@@ -63,8 +63,8 @@ import {
   bodyFaceKey,
   sketchFaceKey,
   useDocumentStore,
-  useViewModel,
 } from '../stores/documentStore';
+import { useLiveModel } from '../stores/liveEditStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { resolvedFeatureFor, useFormulaStore } from '../stores/formulaStore';
 import {
@@ -378,7 +378,7 @@ function SketchComposition({ feature }: { feature: SketchFeature }) {
   const selectSketchConstraints = useUiStore((state) => state.selectSketchConstraints);
   const setSketchSelection = useUiStore((state) => state.setSketchSelection);
   const openMenu = useContextMenuStore((state) => state.open);
-  const project = useViewModel();
+  const project = useLiveModel('feature');
   // A sketch drawn in its own colour lists its geometry in that colour; the
   // default one is left to the theme, which is what the rest of the list reads.
   const objectTint = objectColor(project, sketchObjectId(feature.id), SKETCH_COLOR);
@@ -578,7 +578,7 @@ export function Inspector() {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? 'en';
   const selection = useDocumentStore((state) => state.selection);
-  const project = useViewModel();
+  const project = useLiveModel('feature');
   const projectName = useDocumentStore((state) => state.project.name);
   const projectUnits = useDocumentStore((state) => state.project.units);
   const apply = useDocumentStore((state) => state.apply);

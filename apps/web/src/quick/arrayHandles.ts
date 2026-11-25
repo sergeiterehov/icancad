@@ -24,6 +24,7 @@ import {
 } from '../kernel/arrayPlacement';
 import { previewArrayCopies } from '../kernel/rebuild';
 import { useDocumentStore } from '../stores/documentStore';
+import { liveProject, useLiveEditStore } from '../stores/liveEditStore';
 import { resolvedFeatureFor } from '../stores/formulaStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { snapLength } from './handleDrag';
@@ -374,12 +375,13 @@ export class ArrayDrag implements OperationHandleDrag {
     const direction = this.resolved?.directions[this.index];
     this.changed = false;
     this.currentValue = currentValueOf(direction, this.grip) ?? 0;
+    useLiveEditStore.getState().begin('feature', this.featureId);
   }
 
   update(value: number): void {
     if (!this.before || !this.original) return;
-    const state = useDocumentStore.getState();
-    const feature = arrayOf(activeModel(state.project), this.featureId);
+    const state = useLiveEditStore.getState();
+    const feature = arrayOf(activeModel(liveProject()), this.featureId);
     const direction = this.resolved?.directions[this.index];
     if (!feature || !direction || !this.resolved) return;
     const next = nextDirection(direction, this.grip, value, this.options);
@@ -401,14 +403,12 @@ export class ArrayDrag implements OperationHandleDrag {
   }
 
   end(): void {
-    if (this.changed && this.before) useDocumentStore.getState().commitPreview(this.before);
+    if (this.changed && this.before) useLiveEditStore.getState().finish(true);
     this.reset();
   }
 
   cancel(): void {
-    if (this.original) {
-      useDocumentStore.getState().preview({ type: 'feature/replace', feature: this.original });
-    }
+    useLiveEditStore.getState().finish(false);
     this.reset();
   }
 

@@ -10,6 +10,7 @@ import type {
   Vec3,
 } from '@icancad/model';
 import { useDocumentStore } from '../stores/documentStore';
+import { liveProject, useLiveEditStore } from '../stores/liveEditStore';
 import { resolvedFeatureFor } from '../stores/formulaStore';
 import { snapAngle, snapLength } from './handleDrag';
 import {
@@ -104,6 +105,7 @@ export class QuickExtrudeDrag {
             ? -resolved.distance
             : (resolved?.distance ?? 0);
       this.currentOp = bound.op;
+      useLiveEditStore.getState().begin('feature', bound.id);
       return;
     }
     this.featureId = null;
@@ -111,6 +113,7 @@ export class QuickExtrudeDrag {
     this.locked = false;
     this.currentValue = 0;
     this.currentOp = null;
+    useLiveEditStore.getState().begin('feature', null);
   }
 
   update(value: number): void {
@@ -128,7 +131,7 @@ export class QuickExtrudeDrag {
     if (!this.featureId) {
       const prediction = this.predict(value);
       const feature = buildQuickExtrude(this.geometry, prediction, value, this.name);
-      if (!useDocumentStore.getState().previewAddFeature(feature)) return;
+      if (!useLiveEditStore.getState().previewAddFeature(feature)) return;
       this.featureId = feature.id;
       this.created = true;
       this.changed = true;
@@ -140,8 +143,7 @@ export class QuickExtrudeDrag {
       return;
     }
 
-    const state = useDocumentStore.getState();
-    const feature = activeModel(state.project).features.find(
+    const feature = activeModel(liveProject()).features.find(
       (candidate): candidate is ExtrudeFeature =>
         candidate.id === this.featureId && candidate.type === 'extrude',
     );
@@ -152,7 +154,7 @@ export class QuickExtrudeDrag {
     }
     const prediction = this.locked ? null : this.predict(value);
     if (prediction) this.currentOp = prediction.op;
-    state.preview({
+    useLiveEditStore.getState().preview({
       type: 'feature/replace',
       feature: {
         ...feature,
@@ -174,8 +176,7 @@ export class QuickExtrudeDrag {
       this.restore();
       return;
     }
-    const state = useDocumentStore.getState();
-    const feature = activeModel(state.project).features.find(
+    const feature = activeModel(liveProject()).features.find(
       (candidate): candidate is ExtrudeFeature =>
         candidate.id === this.featureId && candidate.type === 'extrude',
     );
@@ -184,7 +185,7 @@ export class QuickExtrudeDrag {
       this.originalFeature = null;
       return;
     }
-    state.preview({
+    useLiveEditStore.getState().preview({
       type: 'feature/replace',
       feature: {
         ...feature,
@@ -198,9 +199,7 @@ export class QuickExtrudeDrag {
     if (!this.before) return;
     const featureId = this.featureId;
     const changed = this.changed;
-    if (changed && featureId) {
-      useDocumentStore.getState().commitPreview(this.before);
-    }
+    useLiveEditStore.getState().finish(changed && Boolean(featureId));
     this.reset();
     // A quick gesture is not a silent model edit: it creates or finds an
     // operation and focuses it, so its parameters and handle are right there.
@@ -211,7 +210,7 @@ export class QuickExtrudeDrag {
 
   cancel(): void {
     if (!this.before) return;
-    this.restore();
+    useLiveEditStore.getState().finish(false);
     this.reset();
   }
 
@@ -234,21 +233,10 @@ export class QuickExtrudeDrag {
     });
   }
 
-  /** Returns the document to its state before this drag without a history step. */
+  /** Returns the gesture to the document on screen without ending it. */
   private restore(): void {
-    const state = useDocumentStore.getState();
-    if (this.created && this.featureId) {
-      state.preview({ type: 'feature/remove', featureId: this.featureId });
-      this.featureId = null;
-    } else if (this.originalFeature) {
-      state.preview({ type: 'feature/replace', feature: this.originalFeature });
-    }
-    if (
-      this.before &&
-      activeModel(state.project).historyEnd !== activeModel(this.before).historyEnd
-    ) {
-      state.preview({ type: 'history/set-end', featureId: activeModel(this.before).historyEnd });
-    }
+    useLiveEditStore.getState().reset();
+    if (this.created) this.featureId = null;
     this.created = false;
     this.changed = false;
   }
@@ -304,12 +292,12 @@ export class RevolveAngleDrag {
   start(): void {
     this.before = useDocumentStore.getState().project;
     this.changed = false;
+    useLiveEditStore.getState().begin('feature', this.featureId);
   }
 
   update(value: number): void {
     if (!this.before) return;
-    const state = useDocumentStore.getState();
-    const feature = activeModel(state.project).features.find(
+    const feature = activeModel(liveProject()).features.find(
       (candidate): candidate is ExtrudeFeature =>
         candidate.id === this.featureId && candidate.type === 'extrude',
     );
@@ -319,27 +307,18 @@ export class RevolveAngleDrag {
     const next =
       this.which === 'start' ? { ...revolve, start: stored } : { ...revolve, end: stored };
     this.currentValue = this.inverted ? -stored : stored;
-    state.preview({ type: 'feature/replace', feature: { ...feature, revolve: next } });
+    useLiveEditStore.getState().preview({ type: 'feature/replace', feature: { ...feature, revolve: next } });
     this.changed = true;
   }
 
   end(): void {
-    if (this.changed && this.before) {
-      useDocumentStore.getState().commitPreview(this.before);
-    }
+    if (this.changed && this.before) useLiveEditStore.getState().finish(true);
     this.before = null;
     this.changed = false;
   }
 
   cancel(): void {
-    const state = useDocumentStore.getState();
-    if (this.before && activeModel(state.project).features.some((f) => f.id === this.featureId)) {
-      const feature = activeModel(this.before).features.find(
-        (candidate): candidate is ExtrudeFeature =>
-          candidate.id === this.featureId && candidate.type === 'extrude',
-      );
-      if (feature) state.preview({ type: 'feature/replace', feature });
-    }
+    useLiveEditStore.getState().finish(false);
     this.before = null;
     this.changed = false;
   }
@@ -387,12 +366,12 @@ export class SketchRotationDrag {
   start(): void {
     this.before = useDocumentStore.getState().project;
     this.changed = false;
+    useLiveEditStore.getState().begin('feature', this.featureId);
   }
 
   update(value: number): void {
     if (!this.before) return;
-    const state = useDocumentStore.getState();
-    const feature = activeModel(state.project).features.find(
+    const feature = activeModel(liveProject()).features.find(
       (candidate): candidate is SketchFeature =>
         candidate.id === this.featureId && candidate.type === 'sketch',
     );
@@ -401,7 +380,7 @@ export class SketchRotationDrag {
     const rotation: ParamVec3 = [...feature.plane.rotation];
     rotation[this.index] = stored;
     this.currentValue = stored;
-    state.preview({
+    useLiveEditStore.getState().preview({
       type: 'feature/replace',
       feature: { ...feature, plane: { ...feature.plane, rotation } },
     });
@@ -409,22 +388,13 @@ export class SketchRotationDrag {
   }
 
   end(): void {
-    if (this.changed && this.before) {
-      useDocumentStore.getState().commitPreview(this.before);
-    }
+    if (this.changed && this.before) useLiveEditStore.getState().finish(true);
     this.before = null;
     this.changed = false;
   }
 
   cancel(): void {
-    const state = useDocumentStore.getState();
-    if (this.before && activeModel(state.project).features.some((f) => f.id === this.featureId)) {
-      const feature = activeModel(this.before).features.find(
-        (candidate): candidate is SketchFeature =>
-          candidate.id === this.featureId && candidate.type === 'sketch',
-      );
-      if (feature) state.preview({ type: 'feature/replace', feature });
-    }
+    useLiveEditStore.getState().finish(false);
     this.before = null;
     this.changed = false;
   }
@@ -492,6 +462,7 @@ export class QuickEdgeTreatmentDrag {
       this.originalKind = bound.kind;
       this.currentKind = bound.kind;
       this.currentSize = resolvedFeatureFor(bound)?.size ?? 0;
+      useLiveEditStore.getState().begin('feature', bound.id);
       return;
     }
     this.featureId = null;
@@ -500,6 +471,7 @@ export class QuickEdgeTreatmentDrag {
     this.originalKind = null;
     this.currentKind = null;
     this.currentSize = 0;
+    useLiveEditStore.getState().begin('feature', null);
   }
 
   update(offset: number, shift = false): void {
@@ -525,7 +497,7 @@ export class QuickEdgeTreatmentDrag {
 
     if (!this.featureId) {
       const feature = buildQuickEdgeTreatment(this.geometry.target, kind, size, this.name);
-      if (!useDocumentStore.getState().previewAddFeature(feature)) return;
+      if (!useLiveEditStore.getState().previewAddFeature(feature)) return;
       this.featureId = feature.id;
       this.created = true;
       this.changed = true;
@@ -533,8 +505,7 @@ export class QuickEdgeTreatmentDrag {
       return;
     }
 
-    const state = useDocumentStore.getState();
-    const feature = activeModel(state.project).features.find(
+    const feature = activeModel(liveProject()).features.find(
       (candidate): candidate is EdgeTreatmentFeature =>
         candidate.id === this.featureId && candidate.type === 'edge-treatment',
     );
@@ -543,7 +514,7 @@ export class QuickEdgeTreatmentDrag {
       this.originalFeature = null;
       return;
     }
-    state.preview({
+    useLiveEditStore.getState().preview({
       type: 'feature/replace',
       feature: { ...feature, kind, size },
     });
@@ -554,8 +525,8 @@ export class QuickEdgeTreatmentDrag {
     if (!this.before) return;
     const featureId = this.featureId;
     const changed = this.changed;
-    if (changed && featureId) {
-      useDocumentStore.getState().commitPreview(this.before);
+    useLiveEditStore.getState().finish(changed && Boolean(featureId));
+    if (changed) {
       // The kind is part of the operation from now on: the modifier that was
       // held during the first grab cannot change it any more.
       this.locked = true;
@@ -568,24 +539,14 @@ export class QuickEdgeTreatmentDrag {
 
   cancel(): void {
     if (!this.before) return;
-    this.restore();
+    useLiveEditStore.getState().finish(false);
     this.reset(true);
   }
 
+  /** Returns the gesture to the document on screen without ending it. */
   private restore(): void {
-    const state = useDocumentStore.getState();
-    if (this.created && this.featureId) {
-      state.preview({ type: 'feature/remove', featureId: this.featureId });
-      this.featureId = null;
-    } else if (this.originalFeature) {
-      state.preview({ type: 'feature/replace', feature: this.originalFeature });
-    }
-    if (
-      this.before &&
-      activeModel(state.project).historyEnd !== activeModel(this.before).historyEnd
-    ) {
-      state.preview({ type: 'history/set-end', featureId: activeModel(this.before).historyEnd });
-    }
+    useLiveEditStore.getState().reset();
+    if (this.created) this.featureId = null;
     this.created = false;
     this.changed = false;
   }

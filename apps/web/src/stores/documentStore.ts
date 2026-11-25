@@ -113,6 +113,8 @@ interface DocumentState {
   /** Adds a feature without a history step, for a live handle drag. */
   previewAddFeature: (feature: Feature) => boolean;
   commitPreview: (before: Project) => void;
+  /** Takes the document a live gesture produced as one undoable edit. */
+  commitLiveDocument: (project: Project) => void;
   undo: () => void;
   redo: () => void;
   hydrate: (project: Project) => void;
@@ -333,7 +335,7 @@ function projectContent(project: Project): string {
 // belongs at that position, and the cursor moves onto it so everything after it
 // stays rolled back until the user moves forward again. It also belongs to the
 // folder the cursor is in, so the strip keeps one item where it showed one.
-function addFeatureCommands(model: Model, feature: Feature): Command[] {
+export function addFeatureCommands(model: Model, feature: Feature): Command[] {
   const point = insertionPoint(
     model,
     historyInsertIndex(model),
@@ -913,6 +915,27 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       past: [...state.past, before].slice(-HISTORY_LIMIT),
       future: [],
     }));
+  },
+
+  /**
+   * Takes the document a finished gesture produced. The document was not touched
+   * while the gesture ran (a drag writes to the live edit store), so the state it
+   * replaces is exactly the one the history should return to.
+   */
+  commitLiveDocument: (project) => {
+    const state = get();
+    const selection = sanitizeSelection(
+      modelForView(project, state.editingFeatureId),
+      state.selection,
+      state.editingFeatureId,
+    );
+    set({
+      project,
+      past: [...state.past, state.project].slice(-HISTORY_LIMIT),
+      future: [],
+      selection,
+      ...reconcileEditMode(state, project, selection),
+    });
   },
 
   undo: () => {

@@ -8,6 +8,7 @@ import {
 } from '../src/quick/edgeTreatment';
 import { QuickEdgeTreatmentDrag } from '../src/quick/controller';
 import { useDocumentStore } from '../src/stores/documentStore';
+import { liveProject } from '../src/stores/liveEditStore';
 import { edgedCube } from './edgedCube';
 import { modelOf, modelProject } from './modelFixture';
 
@@ -56,7 +57,7 @@ describe('quick edge treatment drag', () => {
   });
 
   const treatments = (): EdgeTreatmentFeature[] =>
-    modelOf(useDocumentStore.getState().project).features.filter(
+    modelOf(liveProject()).features.filter(
       (feature): feature is EdgeTreatmentFeature => feature.type === 'edge-treatment',
     );
 

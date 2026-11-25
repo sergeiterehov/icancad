@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { PrimitiveFeature, Project, TransformFeature } from '@icancad/model';
 import { operationHandles } from '../src/quick/operationHandles';
 import { useDocumentStore } from '../src/stores/documentStore';
+import { liveProject } from '../src/stores/liveEditStore';
 import { useFormulaStore } from '../src/stores/formulaStore';
 import { useKernelStore } from '../src/stores/kernelStore';
 import { transformMesh } from '../src/kernel/transformPreview';
@@ -104,7 +105,7 @@ function near(actual: readonly number[], expected: readonly number[]): void {
 }
 
 function stored(): TransformFeature {
-  const feature = modelOf(useDocumentStore.getState().project).features.find(
+  const feature = modelOf(liveProject()).features.find(
     (candidate): candidate is TransformFeature => candidate.type === 'transform',
   );
   if (!feature) throw new Error('no transform');

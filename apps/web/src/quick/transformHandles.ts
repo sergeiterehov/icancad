@@ -28,6 +28,7 @@ import {
 } from '../kernel/transformPlacement';
 import { placementDelta, transformMesh } from '../kernel/transformPreview';
 import { useDocumentStore } from '../stores/documentStore';
+import { liveProject, useLiveEditStore } from '../stores/liveEditStore';
 import { resolvedFeatureFor } from '../stores/formulaStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { snapAngle, snapLength } from './handleDrag';
@@ -290,6 +291,7 @@ class TransformDrag implements OperationHandleDrag {
       this.currentValue = 0;
     }
     this.capturePlacement(feature);
+    useLiveEditStore.getState().begin('feature', this.featureId);
   }
 
   /**
@@ -324,8 +326,7 @@ class TransformDrag implements OperationHandleDrag {
 
   update(value: number, _shift?: boolean, move?: Vec3): void {
     if (!this.before || !this.original || !this.resolved) return;
-    const state = useDocumentStore.getState();
-    const feature = transformOf(state.project, this.featureId);
+    const feature = transformOf(liveProject(), this.featureId);
     if (!feature) return;
 
     if (this.target.kind === 'position-axis') {
@@ -386,19 +387,12 @@ class TransformDrag implements OperationHandleDrag {
   }
 
   end(): void {
-    if (this.changed && this.before) {
-      useDocumentStore.getState().commitPreview(this.before);
-    }
+    if (this.changed && this.before) useLiveEditStore.getState().finish(true);
     this.reset();
   }
 
   cancel(): void {
-    if (this.original) {
-      useDocumentStore.getState().preview({
-        type: 'feature/replace',
-        feature: this.original,
-      });
-    }
+    useLiveEditStore.getState().finish(false);
     // The scene goes back to what the grab found, without waiting for a rebuild.
     useKernelStore.getState().setPreviewPlacement(this.startMeshes, this.startSketches);
     this.reset();
@@ -409,7 +403,7 @@ class TransformDrag implements OperationHandleDrag {
     authored: Transform,
     resolved: Resolved<Transform>,
   ): void {
-    useDocumentStore.getState().preview({
+    useLiveEditStore.getState().preview({
       type: 'feature/replace',
       feature: { ...feature, transform: authored },
     });

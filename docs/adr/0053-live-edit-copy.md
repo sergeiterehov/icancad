@@ -1,0 +1,42 @@
+# ADR 0053 — A gesture writes to a live copy, not to the document
+
+Status: accepted
+
+## Context
+
+Every drag — sketch geometry, the extrude arrow, a primitive's grip, the
+transform gizmo, the array grips, an edge-treatment arrow — wrote the whole
+project back through `useDocumentStore.preview(...)` on each pointer move. The
+project is the one source the whole interface reads, so every frame re-rendered
+the inspector, the timeline, the tool rails and the viewport: about **21–26 ms
+of main-thread work per frame** in a dev build even for a scene with one box,
+36 ms with a hundred sketch curves. A drag therefore landed ~15–25 updates per
+second and the sketch trailed the pointer.
+
+None of that work was the geometry. The solver answers in ~1 ms, and the scene
+rebuild was 3.4 ms before it learned to keep its curves (ADR 0054 note in
+`SceneController`), 0.5 ms after.
+
+## Decisions
+
+| Area                            | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| The live copy                   | `stores/liveEditStore.ts` holds `project`, `feature` (the operation being dragged) and a `kind` — `'sketch'` or `'feature'`. A gesture begins with `begin(kind, featureId)`, writes with `preview(...)` / `previewAddFeature(...)` and ends with `finish(commit)`.                                                                                                                                                                               |
+| The document                    | It is not touched while the gesture runs. `finish(true)` hands the live copy to `documentStore.commitLiveDocument(project)`, which pushes the pre-gesture document onto the history exactly as `apply` does; `finish(false)` drops the copy and the document never changed. So a whole drag is still **one** undo step.                                                                                                                          |
+| Who reads it                    | `useLiveModel()` (viewport, sketch annotations) takes the live copy of the dragged operation into the model it draws, for both kinds. `useLiveModel('feature')` (inspector) ignores a sketch gesture — the geometry list is what made the sketch drag expensive, and its numbers can wait for the release. `liveProject()` is the document-with-gesture for code that is not React: the sketch solver loop, the handle drags, `currentSketch()`. |
+| Reads that stay on the document | The timeline, the rails, the formula resolution and the kernel rebuild. They describe the model, not the gesture, and the rebuild only has to happen once the drag ends.                                                                                                                                                                                                                                                                         |
+| Mid-drag 3D                     | A dragged operation's body does not follow the pointer in the kernel; the ghost meshes a tool draws itself (primitive delta, array copies, transform placement) still do. That was already the case — the rebuild has always been debounced past the end of a gesture.                                                                                                                                                                           |
+| Tests                           | The handle tests read `liveProject()`, which is the live copy during a gesture and the document otherwise, and assert that the document has exactly one history step after `end()`.                                                                                                                                                                                                                                                              |
+
+## Consequences
+
+- Per-frame cost of a drag fell from 21–26 ms to **4–7 ms** on the measured
+  scenes (a box grip, a 120-curve sketch): the drag now keeps up with a
+  pointer at 60 Hz instead of every second or third frame.
+- The inspector follows a handle drag live (its panel is small); it catches up
+  with a sketch drag on release.
+- Anything that used to see the document mid-drag must use `liveProject()` or
+  the hooks. The stores keep the rule in one place, so a new drag has one seam
+  to call: `begin`, `preview`, `finish`.
+- The live copy is a whole project, so `applyCommands` semantics (and its
+  failure handling) are exactly the document's.

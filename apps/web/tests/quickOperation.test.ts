@@ -14,6 +14,7 @@ import { operationHandles } from '../src/quick/operationHandles';
 import { buildQuickExtrude, findBoundExtrude, quickTargetFromSelection } from '../src/quick/target';
 import type { QuickTargetGeometry } from '../src/quick/types';
 import { useDocumentStore } from '../src/stores/documentStore';
+import { liveProject } from '../src/stores/liveEditStore';
 import { cubeMesh } from './cubeMesh';
 import { modelOf, modelProject } from './modelFixture';
 
@@ -365,7 +366,7 @@ describe('quick revolve handles', () => {
     const drag = new RevolveAngleDrag('revolve', 'end', false, 360);
     drag.start();
     drag.update(90);
-    const during = modelOf(useDocumentStore.getState().project).features.find(
+    const during = modelOf(liveProject()).features.find(
       (feature): feature is ExtrudeFeature => feature.id === 'revolve',
     );
     expect(during!.revolve).toMatchObject({ start: 0, end: 90 });
@@ -394,7 +395,7 @@ describe('quick revolve handles', () => {
     const drag = new RevolveAngleDrag('revolve', 'start', true, 0);
     drag.start();
     drag.update(-45);
-    const feature = modelOf(useDocumentStore.getState().project).features.find(
+    const feature = modelOf(liveProject()).features.find(
       (candidate): candidate is ExtrudeFeature => candidate.id === 'revolve',
     );
     // The chip shows the effective angle; the document keeps the stored one.
@@ -410,7 +411,7 @@ describe('quick operation drag', () => {
   });
 
   const extrudes = (): ExtrudeFeature[] =>
-    modelOf(useDocumentStore.getState().project).features.filter(
+    modelOf(liveProject()).features.filter(
       (feature): feature is ExtrudeFeature => feature.type === 'extrude',
     );
 

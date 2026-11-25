@@ -9,6 +9,7 @@ import { operationHandles } from '../src/quick/operationHandles';
 import { useDocumentStore } from '../src/stores/documentStore';
 import { useFormulaStore } from '../src/stores/formulaStore';
 import { modelOf, modelProject } from './modelFixture';
+import { liveProject } from '../src/stores/liveEditStore';
 import { resolved } from './resolvedFixture';
 
 const labels = {
@@ -292,7 +293,7 @@ describe('primitive drags', () => {
     expect(handle).toBeDefined();
     const drag = handle!.beginDrag();
     drag.update(30);
-    const edited = modelOf(useDocumentStore.getState().project).features.find(
+    const edited = modelOf(liveProject()).features.find(
       (feature) => feature.id === box.id,
     ) as PrimitiveFeature;
     expect(edited.params).toMatchObject({ dx: 30 });
@@ -318,7 +319,7 @@ describe('primitive drags', () => {
     expect(handle).toBeDefined();
     const drag = handle!.beginDrag();
     drag.update(30);
-    const edited = modelOf(useDocumentStore.getState().project).features.find(
+    const edited = modelOf(liveProject()).features.find(
       (feature) => feature.id === pyramid.id,
     ) as PrimitiveFeature;
     expect(edited.params).toMatchObject({ sides: 6 });

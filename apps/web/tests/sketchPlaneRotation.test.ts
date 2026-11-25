@@ -14,6 +14,7 @@ import {
 } from '../src/sketch/sectionPlane';
 import { sketchRotationRings } from '../src/sketch/rotation';
 import { useDocumentStore } from '../src/stores/documentStore';
+import { liveProject } from '../src/stores/liveEditStore';
 import { modelOf, modelProject } from './modelFixture';
 
 const labels = {
@@ -266,7 +267,7 @@ describe('sketch rotation drag', () => {
     expect(drag.unit).toBe('angle');
     expect(drag.label).toBe('Rotate Y');
     drag.update(45);
-    const edited = modelOf(useDocumentStore.getState().project).features.find(
+    const edited = modelOf(liveProject()).features.find(
       (candidate) => candidate.id === feature.id,
     ) as SketchFeature;
     expect(edited.plane.rotation).toEqual([0, 45, 0]);

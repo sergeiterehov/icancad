@@ -17,7 +17,8 @@ import {
   type DimensionAnnotation,
   type ReferenceAnnotation,
 } from '../sketch/dimensions';
-import { useDocumentStore, useViewModel } from '../stores/documentStore';
+import { useDocumentStore } from '../stores/documentStore';
+import { useLiveModel } from '../stores/liveEditStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { resolvedFeatureFor, useFormulaStore } from '../stores/formulaStore';
 import { useUiStore } from '../stores/uiStore';
@@ -69,7 +70,7 @@ export function SketchAnnotations() {
   const setDimensionEdit = useUiStore((state) => state.setSketchDimensionEdit);
   const openMenu = useContextMenuStore((state) => state.open);
   const showToast = useUiStore((state) => state.showToast);
-  const project = useViewModel();
+  const project = useLiveModel();
   const apply = useDocumentStore((state) => state.apply);
   const beginWheelGesture = useDocumentStore((state) => state.beginWheelGesture);
   const endApplyGesture = useDocumentStore((state) => state.endApplyGesture);

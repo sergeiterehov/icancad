@@ -37,7 +37,8 @@ import {
   sketchSectionPlane,
 } from '../sketch/sectionPlane';
 import { useStartupProgress } from '../hooks/useStartupProgress';
-import { useDocumentStore, useViewModel } from '../stores/documentStore';
+import { useDocumentStore } from '../stores/documentStore';
+import { useLiveModel, useLiveResolvedModel } from '../stores/liveEditStore';
 import { resolvedFeatureFor, useFormulaStore } from '../stores/formulaStore';
 import { bootFormulaEngine, resetFormulaEngine } from '../formula/client';
 import { useUiStore } from '../stores/uiStore';
@@ -311,8 +312,8 @@ export function Viewport() {
     cameraSaveTimer.current = setTimeout(writeCamera, CAMERA_SAVE_DELAY_MS);
   }, [writeCamera]);
 
-  const project = useViewModel();
-  const resolvedProject = useFormulaStore((state) => state.resolution?.model ?? null);
+  const project = useLiveModel();
+  const resolvedProject = useLiveResolvedModel();
   const formulaRevision = useFormulaStore((state) => state.resolution?.revision ?? 0);
   const editingFeatureId = useDocumentStore((state) => state.editingFeatureId);
   const editingPrimitive = useMemo(() => {

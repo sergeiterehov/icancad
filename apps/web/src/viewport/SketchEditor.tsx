@@ -120,6 +120,7 @@ import { constraintsForSolve, sketchHasFormulaError } from '../sketch/resolvedCo
 import type { SketchSnap, SketchSnapInput } from '../sketch/snap';
 import type { SketchTool } from '../sketch/tool';
 import { useDocumentStore } from '../stores/documentStore';
+import { liveProject, useLiveEditStore } from '../stores/liveEditStore';
 import {
   expressionErrors,
   resolvedFeatureFor,
@@ -838,7 +839,7 @@ export function SketchEditor() {
   };
 
   const currentSketch = (): SketchFeature | undefined =>
-    activeModel(useDocumentStore.getState().project).features.find(
+    activeModel(liveProject()).features.find(
       (feature): feature is SketchFeature => feature.id === sketch?.id && feature.type === 'sketch',
     );
 
@@ -1497,7 +1498,7 @@ export function SketchEditor() {
         const interruptedDrag = drag.current;
         drag.current = null;
         if (interruptedDrag?.active) {
-          preview({ type: 'feature/replace', feature: interruptedDrag.original });
+          useLiveEditStore.getState().finish(false);
         }
         if (interrupted?.active) {
           // The gesture became a pinch, so the tap the browser sends when the
@@ -1638,6 +1639,9 @@ export function SketchEditor() {
         solvedPoint: null,
         switchedAxis: false,
       };
+      // A drag writes to the live copy: the document is touched once, when the
+      // pointer lets go, instead of once per frame for the whole interface.
+      useLiveEditStore.getState().begin('sketch', sketch.id);
     };
     // One solve at a time, always for the newest pointer position: a queue of
     // solves would reach the sketch long after the pointer left, which reads as
@@ -1649,7 +1653,7 @@ export function SketchEditor() {
         while (drag.current === activeDrag && activeDrag.target) {
           const point = activeDrag.target;
           activeDrag.target = null;
-          const current = activeModel(useDocumentStore.getState().project).features.find(
+          const current = activeModel(liveProject()).features.find(
             (feature): feature is SketchFeature =>
               feature.id === activeDrag.original.id && feature.type === 'sketch',
           );
@@ -1683,12 +1687,12 @@ export function SketchEditor() {
           }
           activeDrag.attempt = solved.attempt;
           activeDrag.solvedPoint = point;
-          const latest = activeModel(useDocumentStore.getState().project).features.find(
+          const latest = activeModel(liveProject()).features.find(
             (feature): feature is SketchFeature =>
               feature.id === activeDrag.original.id && feature.type === 'sketch',
           );
           if (!latest) return;
-          preview({
+          useLiveEditStore.getState().preview({
             type: 'feature/replace',
             feature: { ...latest, entities: solved.result.entities },
           });
@@ -1793,8 +1797,7 @@ export function SketchEditor() {
         }
         const pick = getViewport()?.pickSketch(event.clientX, event.clientY);
         if (!pick) return;
-        const state = useDocumentStore.getState();
-        const current = activeModel(state.project).features.find(
+        const current = activeModel(liveProject()).features.find(
           (feature): feature is SketchFeature =>
             feature.id === activeDrag.original.id && feature.type === 'sketch',
         );
@@ -1809,7 +1812,7 @@ export function SketchEditor() {
             activeDrag.mode === 'point' ? [activeDrag.entityId] : activeDrag.movedIds,
           )
         ) {
-          preview({
+          useLiveEditStore.getState().preview({
             type: 'feature/replace',
             feature: { ...current, entities: dragEntities(activeDrag, point, current.entities) },
           });
@@ -1917,16 +1920,16 @@ export function SketchEditor() {
         }
         return;
       }
-      const latest = activeModel(useDocumentStore.getState().project).features.find(
+      const latest = activeModel(liveProject()).features.find(
         (feature): feature is SketchFeature =>
           feature.id === activeDrag.original.id && feature.type === 'sketch',
       );
       if (!latest) {
-        preview({ type: 'feature/replace', feature: activeDrag.original });
+        useLiveEditStore.getState().finish(false);
         return;
       }
       if (sketchHasFormulaError(latest.id)) {
-        preview({ type: 'feature/replace', feature: activeDrag.original });
+        useLiveEditStore.getState().finish(false);
         return;
       }
       // The last pointer position may still be waiting for its solve.
@@ -1959,23 +1962,23 @@ export function SketchEditor() {
             // A frame that would have jumped the sketch leaves the last good
             // solution in place instead of undoing the whole drag.
             if (activeDrag.solvedPoint) {
-              commitPreview(activeDrag.before);
+              useLiveEditStore.getState().finish(true);
               return;
             }
-            preview({ type: 'feature/replace', feature: activeDrag.original });
+            useLiveEditStore.getState().finish(false);
             useUiStore.getState().showToast('constraint.conflict', 'error');
             return;
           }
-          preview({
+          useLiveEditStore.getState().preview({
             type: 'feature/replace',
             feature: { ...activeDrag.original, entities: result.entities },
           });
           setSketchFrozen(result.frozenEntityIds);
           setSketchProblems([...new Set([...result.conflicting, ...result.redundant])]);
-          commitPreview(activeDrag.before);
+          useLiveEditStore.getState().finish(true);
         })
         .catch(() => {
-          preview({ type: 'feature/replace', feature: activeDrag.original });
+          useLiveEditStore.getState().finish(false);
           useUiStore.getState().showToast('constraint.failed', 'error');
         });
     };
@@ -2128,6 +2131,10 @@ export function SketchEditor() {
     // leaves nothing behind: the stretch is dropped, not committed at its last
     // known place.
     const onPointerCancel = () => {
+      // A gesture the browser takes away leaves nothing behind: the live copy of
+      // the sketch is dropped, never written into the document.
+      useLiveEditStore.getState().finish(false);
+      drag.current = null;
       createPress.current = null;
       marquee.current = null;
       pendingTap.current = null;
