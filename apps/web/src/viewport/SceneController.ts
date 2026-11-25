@@ -187,6 +187,11 @@ const GHOST_FADE_PX = 100;
 /** Length of the idle arrow, before an operation gives the handle a value. */
 const HANDLE_IDLE_PX = 48;
 const HANDLE_HIT_PX = 9;
+/**
+ * Preferred distance between ground grid lines, in screen pixels. The sketch
+ * grid is the surface being worked on and is finer; the ground is a backdrop.
+ */
+const WORLD_GRID_TARGET_PX = 48;
 /** Edge of the square grip a uniform scale is dragged by, in screen pixels. */
 const SQUARE_SIZE_PX = 11;
 /** Overlays are lifted off the surface they annotate to avoid depth fighting. */
@@ -443,7 +448,14 @@ export class SceneController {
   private readonly camera: THREE.OrthographicCamera;
   private readonly bodies = new Map<string, BodyEntry>();
   private readonly resizeObserver: ResizeObserver;
-  private grid: THREE.GridHelper;
+  /**
+   * The ground grid: minor and major lines, rebuilt as the camera moves. Its step
+   * follows the visible scale, so a model in millimetres and one in metres both
+   * get squares the eye can count.
+   */
+  private grid: THREE.Group;
+  /** What the grid currently covers; a change in it rebuilds the lines. */
+  private gridKey = '';
   /** World axes: a view aid of the 3D view, drawn on request. */
   private axes: THREE.LineSegments;
   private showAxes = false;
@@ -1930,6 +1942,33 @@ export class SceneController {
     return Math.atan2(offset.dot(tangent), offset.dot(reference));
   }
 
+  /**
+   * The screen direction of a handle's axis, in pixels per millimetre along it.
+   *
+   * A one-millimetre probe is the obvious measurement and the wrong one: far
+   * enough out a millimetre is a fraction of a pixel, the axis looks
+   * unmeasurable and every handle switched itself off. The probe is as long as a
+   * drawn arrow instead, so it stays tens of pixels at any zoom. Only an axis
+   * pointing at the camera comes back as nothing: it has no direction on screen.
+   */
+  private handleAxis(
+    handle: SceneHandle,
+    origin: { x: number; y: number },
+  ): { axisX: number; axisY: number; pixelsPerMm: number } | null {
+    const direction = new THREE.Vector3(...handle.direction);
+    if (direction.lengthSq() < 1e-12) return null;
+    direction.normalize();
+    const probe = HANDLE_IDLE_PX / this.pixelsPerWorldUnit();
+    const along = this.projectWorld(
+      new THREE.Vector3(...handle.origin).addScaledVector(direction, probe),
+    );
+    const dx = along.x - origin.x;
+    const dy = along.y - origin.y;
+    const reach = Math.hypot(dx, dy);
+    if (!(reach >= 1)) return null;
+    return { axisX: dx / reach, axisY: dy / reach, pixelsPerMm: reach / probe };
+  }
+
   private handleAt(
     clientX: number,
     clientY: number,
@@ -1964,21 +2003,17 @@ export class SceneController {
       if (!handle.enabled || !handle.tipOnly) continue;
       const projected = this.handleScreenGeometry(handle);
       if (!projected) continue;
-      const direction = new THREE.Vector3(...handle.direction).normalize();
-      const unit = this.projectWorld(new THREE.Vector3(...handle.origin).add(direction));
-      const axisX = unit.x - projected.origin.x;
-      const axisY = unit.y - projected.origin.y;
-      const pixelsPerMm = Math.hypot(axisX, axisY);
-      if (pixelsPerMm < 0.5) continue;
       const tipDistance = Math.hypot(local.x - projected.tip.x, local.y - projected.tip.y);
       const hitPx = (HANDLE_HIT_PX * (handle.thickness ?? 1) + 4) * this.pickReach();
       if (tipDistance > hitPx) continue;
+      const axis = this.handleAxis(handle, projected.origin);
+      if (!axis) continue;
       if (tipBest && tipDistance >= tipBest.tipDistance) continue;
       tipBest = {
         handle,
-        axisX: axisX / pixelsPerMm,
-        axisY: axisY / pixelsPerMm,
-        pixelsPerMm,
+        axisX: axis.axisX,
+        axisY: axis.axisY,
+        pixelsPerMm: axis.pixelsPerMm,
         distance: tipDistance,
         tipDistance,
       };
@@ -1997,14 +2032,6 @@ export class SceneController {
       if (!handle.enabled || handle.tipOnly) continue;
       const projected = this.handleScreenGeometry(handle);
       if (!projected) continue;
-      const direction = new THREE.Vector3(...handle.direction).normalize();
-      const unit = this.projectWorld(new THREE.Vector3(...handle.origin).add(direction));
-      // `direction` is the positive axis even when the arrow is drawn on the
-      // opposite side, so dragging past zero keeps moving the same way.
-      const axisX = unit.x - projected.origin.x;
-      const axisY = unit.y - projected.origin.y;
-      const pixelsPerMm = Math.hypot(axisX, axisY);
-      if (pixelsPerMm < 0.5) continue;
       const distance = pointSegmentDistance(
         [local.x, local.y],
         [projected.origin.x, projected.origin.y],
@@ -2014,6 +2041,10 @@ export class SceneController {
       // A heavier arrow is easier to catch, so its band grows with it.
       const hitPx = HANDLE_HIT_PX * (handle.thickness ?? 1) * this.pickReach();
       if (distance > hitPx && tipDistance > hitPx + 3) continue;
+      // `direction` is the positive axis even when the arrow is drawn on the
+      // opposite side, so dragging past zero keeps moving the same way.
+      const axis = this.handleAxis(handle, projected.origin);
+      if (!axis) continue;
       if (best) {
         // Opposite handles of one extrusion lie on the same line, so a point
         // can be on both shafts. The nearer tip then says which one is meant.
@@ -2022,9 +2053,9 @@ export class SceneController {
       }
       best = {
         handle,
-        axisX: axisX / pixelsPerMm,
-        axisY: axisY / pixelsPerMm,
-        pixelsPerMm,
+        axisX: axis.axisX,
+        axisY: axis.axisY,
+        pixelsPerMm: axis.pixelsPerMm,
         distance,
         tipDistance,
       };
@@ -2677,8 +2708,7 @@ export class SceneController {
     }
 
     this.scene.remove(this.grid);
-    this.grid.geometry.dispose();
-    (this.grid.material as THREE.Material).dispose();
+    this.disposeObjects(this.grid.children);
     this.grid = this.createGrid();
     this.scene.add(this.grid);
     this.scene.remove(this.axes);
@@ -2691,6 +2721,7 @@ export class SceneController {
     if (this.sketchData.length > 0) this.setSketches(this.sketchData);
     if (this.handleData.length > 0) this.updateHandles();
     this.updateSketchGrid();
+    this.updateWorldGrid(true);
     this.invalidate();
   }
 
@@ -4360,30 +4391,93 @@ export class SceneController {
     this.disposeSketchEntityCache();
     this.capGeometry.dispose();
     this.pointTexture.dispose();
-    this.grid.geometry.dispose();
-    (this.grid.material as THREE.Material).dispose();
+    this.disposeObjects(this.grid.children);
     this.axes.geometry.dispose();
     (this.axes.material as THREE.Material).dispose();
     this.waveMaterial.dispose();
     this.renderer.dispose();
   }
 
-  private createGrid(): THREE.GridHelper {
+  private createGrid(): THREE.Group {
     const major = this.theme === 'dark' ? 0x353b46 : 0xbcc3cd;
     const minor = this.theme === 'dark' ? 0x20252c : 0xdbdfe7;
-    const grid = new THREE.GridHelper(2000, 200, major, minor);
-    grid.rotation.x = Math.PI / 2;
-    const material = grid.material as THREE.LineBasicMaterial;
-    // The grid is a backdrop, not geometry: it draws in the opaque pass before
-    // the model but writes no depth, so a body always covers it — even where a
-    // line happens to lie at the very same depth. Being opaque is what lets the
-    // low render order take effect; a transparent material would be drawn after
-    // every body regardless of its slot.
-    material.depthWrite = false;
-    material.transparent = false;
-    material.opacity = 1;
-    grid.renderOrder = RenderOrder.grid;
-    return grid;
+    const group = new THREE.Group();
+    for (const [color, opacity] of [
+      [minor, 1],
+      [major, 1],
+    ] as const) {
+      const material = new THREE.LineBasicMaterial({
+        color,
+        depthWrite: false,
+        transparent: false,
+        opacity,
+      });
+      const lines = new THREE.LineSegments(new THREE.BufferGeometry(), material);
+      // The grid is a backdrop, not geometry: it draws in the opaque pass before
+      // the model but writes no depth, so a body always covers it — even where a
+      // line happens to lie at the very same depth. Being opaque is what lets the
+      // low render order take effect; a transparent material would be drawn after
+      // every body regardless of its slot.
+      lines.renderOrder = RenderOrder.grid;
+      lines.frustumCulled = false;
+      group.add(lines);
+    }
+    this.gridKey = '';
+    return group;
+  }
+
+  /**
+   * The ground grid follows the camera the way the sketch grid does: its step
+   * comes from the visible scale and its lines cover the view around the target,
+   * so the same grid serves a 20 mm part and a 2 m assembly. Line positions stay
+   * on absolute multiples of the step, so panning changes only which lines exist.
+   */
+  private updateWorldGrid(force = false): void {
+    if (!this.grid) return;
+    const [minor, major] = this.grid.children as [THREE.LineSegments, THREE.LineSegments];
+    const halfHeight = (this.camera.top - this.camera.bottom) / 2;
+    const halfWidth = halfHeight * (this.width / Math.max(1, this.height));
+    const step = niceGridStep((1 / this.pixelsPerWorldUnit()) * WORLD_GRID_TARGET_PX);
+    const centerX = this.target.x;
+    const centerY = this.target.y;
+    const chunk = step * 10;
+    const chunkX = Math.floor(centerX / chunk);
+    const chunkY = Math.floor(centerY / chunk);
+    // The visible span changes between two step changes too. A quarter-octave
+    // bucket rebuilds long before the old range could fall inside the view.
+    const spanBucket = Math.round(Math.log2(Math.max(halfHeight, 1e-9)) * 4);
+    const key = `${step}:${chunkX}:${chunkY}:${spanBucket}:${this.width}:${this.height}`;
+    if (!force && this.gridKey === key) return;
+
+    // One chunk of margin each way keeps the view covered until the target moves
+    // into the next chunk; the lines are then rebuilt at the same absolute
+    // coordinates, so nothing shifts under the pointer.
+    const extent = Math.max(halfWidth, halfHeight) * 1.4 + chunk * 1.5;
+    const minX = centerX - extent;
+    const maxX = centerX + extent;
+    const minY = centerY - extent;
+    const maxY = centerY + extent;
+    const minorLines: THREE.Vector3[] = [];
+    const majorLines: THREE.Vector3[] = [];
+    const { start: startX, end: endX } = gridLineRange(centerX, extent, step);
+    const { start: startY, end: endY } = gridLineRange(centerY, extent, step);
+    for (let index = startX; index <= endX; index += 1) {
+      const x = index * step;
+      const target = index % 5 === 0 ? majorLines : minorLines;
+      target.push(new THREE.Vector3(x, minY, 0), new THREE.Vector3(x, maxY, 0));
+    }
+    for (let index = startY; index <= endY; index += 1) {
+      const y = index * step;
+      const target = index % 5 === 0 ? majorLines : minorLines;
+      target.push(new THREE.Vector3(minX, y, 0), new THREE.Vector3(maxX, y, 0));
+    }
+    // setFromPoints reuses the existing buffer and refuses a longer line list, so
+    // a fresh geometry is needed when the covered range grows.
+    minor.geometry.dispose();
+    minor.geometry = new THREE.BufferGeometry().setFromPoints(minorLines);
+    major.geometry.dispose();
+    major.geometry = new THREE.BufferGeometry().setFromPoints(majorLines);
+    this.gridKey = key;
   }
 
   /**
@@ -4709,6 +4803,7 @@ export class SceneController {
     this.updateGhostFades();
     if (this.handleData.length > 0) this.updateHandles();
     this.updateSketchGrid();
+    this.updateWorldGrid();
     this.invalidate();
   }
 
