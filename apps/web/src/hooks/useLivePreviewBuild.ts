@@ -20,6 +20,27 @@ import { useLiveEditStore } from '../stores/liveEditStore';
 const PREVIEW_REBUILD_MS = 120;
 
 /**
+ * The operations the kernel builds for a gesture. A handle drag creates the
+ * operation it previews, so the gesture's copy decides which operations exist
+ * and where they sit — the document has none of it yet. Everything else keeps
+ * the resolved values the formulas gave it.
+ */
+function gestureFeatures(
+  resolved: ResolvedModel,
+  live: Project | null,
+  preview: Feature | null,
+): Resolved<Feature>[] {
+  if (!live) return resolved.features;
+  const byId = new Map(resolved.features.map((candidate) => [candidate.id, candidate]));
+  return activeModel(live).features.map(
+    (candidate) =>
+      (candidate.id === preview?.id
+        ? candidate
+        : (byId.get(candidate.id) ?? candidate)) as Resolved<Feature>,
+  );
+}
+
+/**
  * Keeps the 3D preview of a dragged operation up with the pointer.
  *
  * The document is not touched during a gesture (ADR 0053), so the ordinary
@@ -40,16 +61,18 @@ export function useLivePreviewBuild(): void {
       const model =
         useFormulaStore.getState().resolution?.model ??
         (activeModel(useDocumentStore.getState().project) as unknown as ResolvedModel);
-      const features = feature
-        ? model.features.map((candidate) =>
-            candidate.id === feature.id ? (feature as unknown as Resolved<Feature>) : candidate,
-          )
-        : model.features;
-      void rebuildScene({ ...model, features }, i18n.t('status.preview'), {
-        // A live copy names itself; a cancelled gesture goes back to whatever
-        // operation the document has open.
-        previewFeatureId: feature ? feature.id : useDocumentStore.getState().editingFeatureId,
-      }).catch(() => undefined);
+      void rebuildScene(
+        {
+          ...model,
+          features: gestureFeatures(model, useLiveEditStore.getState().project, feature),
+        },
+        i18n.t('status.preview'),
+        {
+          // A live copy names itself; a cancelled gesture goes back to whatever
+          // operation the document has open.
+          previewFeatureId: feature ? feature.id : useDocumentStore.getState().editingFeatureId,
+        },
+      ).catch(() => undefined);
     };
 
     const flush = () => {
