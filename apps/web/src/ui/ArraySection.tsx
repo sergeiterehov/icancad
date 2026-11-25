@@ -1,3 +1,4 @@
+import type { ExpressionDiagnostic } from '@icancad/formula';
 import type { TessellationResult } from '@icancad/kernel';
 import {
   activeModel,
@@ -50,6 +51,9 @@ import { PickableSection, type PickableRow } from './PickableSection';
 import { Tooltip } from './Tooltip';
 
 const AXES = ['x', 'y', 'z'] as const;
+
+/** One stable map for "no formula errors", so the store selector stays cached. */
+const NO_FORMULA_ERRORS: Record<string, Record<string, ExpressionDiagnostic>> = {};
 
 /**
  * One picked path as a row: the edge of a body, or a curve of a sketch. The row
@@ -113,7 +117,8 @@ export function ArraySection({ feature }: { feature: ArrayFeature }) {
   const removeArrayDirection = useDocumentStore((state) => state.removeArrayDirection);
   const setArrayDirectionKind = useDocumentStore((state) => state.setArrayDirectionKind);
   const setFeatureParameter = useDocumentStore((state) => state.setFeatureParameter);
-  const formulaErrors = useFormulaStore((state) => state.resolution?.errors ?? {});
+  const formulaErrors =
+    useFormulaStore((state) => state.resolution?.errors) ?? NO_FORMULA_ERRORS;
   const paramError = (path: string) => formulaMessage(t, formulaErrors[feature.id]?.[path]);
   const setArrayAxis = useDocumentStore((state) => state.setArrayAxis);
   const setArrayAxisFace = useDocumentStore((state) => state.setArrayAxisFace);

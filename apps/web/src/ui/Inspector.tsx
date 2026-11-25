@@ -1,3 +1,4 @@
+import type { ExpressionDiagnostic } from '@icancad/formula';
 import type { TessellationResult } from '@icancad/kernel';
 import { sketchTopology } from '@icancad/sketch';
 import {
@@ -229,6 +230,9 @@ interface ResolvedItem {
   name: string;
   bodyId: string | null;
 }
+
+/** One stable map for "no formula errors", so the store selector stays cached. */
+const NO_FORMULA_ERRORS: Record<string, Record<string, ExpressionDiagnostic>> = {};
 
 const EXTRUDE_OPS = [
   { id: 'new' as const, label: 'extrude.op_new', icon: <ExtrudeOpIcon op="new" /> },
@@ -598,7 +602,8 @@ export function Inspector() {
   const setRevolveAxis = useDocumentStore((state) => state.setRevolveAxis);
   const setRevolveAngles = useDocumentStore((state) => state.setRevolveAngles);
   const setFeatureParameter = useDocumentStore((state) => state.setFeatureParameter);
-  const formulaErrors = useFormulaStore((state) => state.resolution?.errors ?? {});
+  const formulaErrors =
+    useFormulaStore((state) => state.resolution?.errors) ?? NO_FORMULA_ERRORS;
   const paramError = (featureId: string, path: string) =>
     formulaMessage(t, formulaErrors[featureId]?.[path]);
   const setRevolveInverted = useDocumentStore((state) => state.setRevolveInverted);

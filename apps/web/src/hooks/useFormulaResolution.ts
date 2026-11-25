@@ -16,6 +16,13 @@ import { useDocumentStore } from '../stores/documentStore';
 import { useFormulaStore, type FormulaResolution } from '../stores/formulaStore';
 
 const DEBOUNCE_MS = 80;
+/**
+ * A model without formulas still hands its newest document to the resolution,
+ * because the rebuild reads that document. Waiting for the pointer to rest is
+ * invisible — no value in the resolution can change without a formula — and it
+ * keeps a drag from re-rendering the whole app twice per frame.
+ */
+const LITERAL_DEBOUNCE_MS = 60;
 
 interface CachedResolution {
   valuesKey: string;
@@ -146,16 +153,22 @@ export function useFormulaResolution(): void {
     if (expressions.length === 0 && variables.length === 0) {
       // Nothing to evaluate, but the rebuild reads this model: it has to follow
       // every literal edit instead of staying at the document it started from.
-      store.setResolution({
-        model: model as unknown as ResolvedModel,
-        inputKey,
-        variableValues: {},
-        variableErrors: {},
-        errors: {},
-        drivenSketches: new Set<string>(),
-        revision: (store.resolution?.revision ?? 0) + 1,
-      });
-      return;
+      // One write per burst of edits, not one per frame: a sketch drag changes
+      // the document sixty times a second and every write re-renders the app.
+      const timer = setTimeout(() => {
+        const current = useFormulaStore.getState();
+        if (current.resolution?.inputKey === inputKey) return;
+        current.setResolution({
+          model: model as unknown as ResolvedModel,
+          inputKey,
+          variableValues: {},
+          variableErrors: {},
+          errors: {},
+          drivenSketches: new Set<string>(),
+          revision: (current.resolution?.revision ?? 0) + 1,
+        });
+      }, LITERAL_DEBOUNCE_MS);
+      return () => clearTimeout(timer);
     }
 
     if (status !== 'ready') return;
