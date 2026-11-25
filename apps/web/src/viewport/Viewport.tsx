@@ -1130,9 +1130,7 @@ export function Viewport() {
           ui.setHoveredFeature(featureId ? { featureId, x: event.x, y: event.y } : null);
         },
         onProjectionHover: (pick) => {
-          controllerRef.current?.setProjectionPreview(
-            pick ? projectionPreviewFor(pick) : null,
-          );
+          controllerRef.current?.setProjectionPreview(pick ? projectionPreviewFor(pick) : null);
         },
       },
     );
@@ -1308,9 +1306,19 @@ export function Viewport() {
       setView: (name) => controller.setView(name),
       setSketches: (sketches) => controller.setSketches(sketches),
       setSketchOverlay: (preview, draftPoints, highlight, marker, guides, cursor, replaced) =>
-        controller.setSketchOverlay(preview, draftPoints, highlight, marker, guides, cursor, replaced),
+        controller.setSketchOverlay(
+          preview,
+          draftPoints,
+          highlight,
+          marker,
+          guides,
+          cursor,
+          replaced,
+        ),
       alignSketch: (frame, entities, extraPoints) =>
         controller.alignSketch(frame, entities, extraPoints),
+      sketchFits: (frame, entities, extraPoints) =>
+        controller.sketchFits(frame, entities, extraPoints),
       getCameraState: () => controller.getCameraState(),
       setCameraState: (state) => controller.setCameraState(state),
       pickSketch: (x, y) => controller.pickSketch(x, y),

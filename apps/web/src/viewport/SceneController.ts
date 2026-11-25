@@ -3435,6 +3435,44 @@ export class SceneController {
     this.transitionTo(this.sketchPose(frame, entities, extraPoints, azimuth, polar));
   }
 
+  /**
+   * Whether all of the sketch's geometry stands in the picture as it is now.
+   *
+   * A sketch is read by its geometry, so an edit that carries it out of the frame
+   * leaves nothing to look at. The editor asks this around a change and pulls the
+   * view back only when the answer turns from yes to no: a view the user zoomed
+   * by hand is never taken away from them. An empty sketch counts as fitting —
+   * there is nothing that could have fallen outside.
+   */
+  sketchFits(
+    frame: SketchFrame,
+    entities: readonly SketchEntity[] = [],
+    extraPoints: readonly Point2[] = [],
+  ): boolean {
+    const margin = 4;
+    const world = new THREE.Vector3();
+    const inside = (point: Point2): boolean => {
+      const [x, y, z] = sketchPointToWorld(frame, point);
+      world.set(x, y, z);
+      const projected = this.projectWorld(world);
+      return (
+        projected.x >= margin &&
+        projected.x <= this.width - margin &&
+        projected.y >= margin &&
+        projected.y <= this.height - margin
+      );
+    };
+    for (const entity of entities) {
+      for (const point of tessellateEntity(entity)) {
+        if (!inside(point)) return false;
+      }
+    }
+    for (const point of extraPoints) {
+      if (!inside(point)) return false;
+    }
+    return true;
+  }
+
   // Frames the sketch content with a fixed margin on both sides of the viewport.
   private sketchPose(
     frame: SketchFrame,

@@ -197,6 +197,12 @@ export interface ViewportHandle {
     entities?: readonly SketchEntity[],
     extraPoints?: readonly Point2[],
   ) => void;
+  /** Whether all of the sketch's geometry stands in the picture as it is now. */
+  sketchFits: (
+    frame: SketchFrame,
+    entities?: readonly SketchEntity[],
+    extraPoints?: readonly Point2[],
+  ) => boolean;
   getCameraState: () => ViewportCamera;
   setCameraState: (state: ViewportCamera) => void;
   pickSketch: (

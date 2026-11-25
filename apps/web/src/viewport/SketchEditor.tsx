@@ -35,6 +35,7 @@ import {
 import { solveSketch } from '../sketch/client';
 import { faceIdByName } from '../kernel/topologyLookup';
 import { rebuildScene } from '../kernel/rebuild';
+import { sketchBounds } from '../kernel/transformPlacement';
 import {
   autoConstraintsForEntity,
   hasMagnetTarget,
@@ -794,6 +795,43 @@ export function SketchEditor() {
     alignedFrame.current = key;
     getViewport()?.alignSketch(frame, sketch?.entities ?? [], faceOutline);
   }, [activeSketchId, frame, faceOutline, sketch?.entities, activeSketchReady]);
+
+  /**
+   * A dimension can be typed into a sketch that was drawn small: a line of a few
+   * millimetres with a metre-sized value leaves nothing on screen, and the user
+   * has to zoom out by hand to find out what happened. The view pulls back
+   * instead — once, and only for an edit that grew the sketch out of the frame.
+   *
+   * Growth is the guard, not the camera: a view the user zoomed by hand is
+   * theirs, and an edit that changes nothing about the size must not move it.
+   * The threshold is a tenth of the sketch, so a stepped dimension refits on the
+   * step that actually matters.
+   */
+  const sketchSize = useRef<{ sketchId: string; diagonal: number } | null>(null);
+  useEffect(() => {
+    if (!activeSketchId || !frame || !activeSketchReady || !sketch) return;
+    const timer = setTimeout(() => {
+      // A gesture owns the picture while it runs: its commit lands at the end.
+      if (drag.current?.active) return;
+      const viewport = getViewport();
+      if (!viewport) return;
+      const bounds = sketchBounds(frame, sketch.entities);
+      const diagonal = bounds
+        ? Math.hypot(
+            bounds.max[0] - bounds.min[0],
+            bounds.max[1] - bounds.min[1],
+            bounds.max[2] - bounds.min[2],
+          )
+        : 0;
+      const previous = sketchSize.current;
+      sketchSize.current = { sketchId: activeSketchId, diagonal };
+      if (previous?.sketchId !== activeSketchId) return;
+      if (!(diagonal > previous.diagonal * 1.1)) return;
+      if (viewport.sketchFits(frame, sketch.entities, faceOutline)) return;
+      viewport.alignSketch(frame, sketch.entities, faceOutline);
+    }, 160);
+    return () => clearTimeout(timer);
+  }, [activeSketchId, activeSketchReady, frame, sketch, faceOutline]);
 
   useEffect(() => {
     if (activeSketchId) return;
