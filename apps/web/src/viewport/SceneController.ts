@@ -192,6 +192,11 @@ const HANDLE_HIT_PX = 9;
  * grid is the surface being worked on and is finer; the ground is a backdrop.
  */
 const WORLD_GRID_TARGET_PX = 48;
+/**
+ * Edge of the square patch a section cap is drawn with, in millimetres. The
+ * patch is scaled to the body it fills, so this only sets its starting size.
+ */
+const CAP_PATCH_SIZE = 4000;
 /** Edge of the square grip a uniform scale is dragged by, in screen pixels. */
 const SQUARE_SIZE_PX = 11;
 /** Overlays are lifted off the surface they annotate to avoid depth fighting. */
@@ -465,7 +470,7 @@ export class SceneController {
   private readonly sectionScene = new THREE.Scene();
   /** Transparent annotations drawn after the section caps. */
   private readonly overlayScene = new THREE.Scene();
-  private readonly capGeometry = new THREE.PlaneGeometry(4000, 4000);
+  private readonly capGeometry = new THREE.PlaneGeometry(CAP_PATCH_SIZE, CAP_PATCH_SIZE);
   private sectionPlanes: SectionPlane[] = [];
   private sectionClipPlanes: THREE.Plane[] = [];
   private sectionEntries: {
@@ -4387,7 +4392,17 @@ export class SceneController {
         const cap = new THREE.Mesh(this.capGeometry, capMaterial);
         cap.renderOrder = RenderOrder.section;
         cap.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), effectiveNormal);
-        cap.position.copy(effectiveNormal).multiplyScalar(-plane.constant);
+        // The patch is a fixed 4 m square, so it is moved onto the body it has
+        // to cover and scaled to it: a model measured in metres used to poke out
+        // of its own section cap, and one built away from the origin left the
+        // patch behind.
+        const sphere = body.geometry.boundingSphere ?? body.geometry.computeBoundingSphere();
+        const reach = Math.max(sphere?.radius ?? 0, 1);
+        const centre = sphere?.center ?? new THREE.Vector3();
+        cap.position
+          .copy(centre)
+          .addScaledVector(effectiveNormal, -(effectiveNormal.dot(centre) + plane.constant));
+        cap.scale.setScalar(Math.max(1, (reach * 2) / CAP_PATCH_SIZE));
         group.add(cap);
         group.visible = false;
 
@@ -4470,11 +4485,21 @@ export class SceneController {
    * so the same grid serves a 20 mm part and a 2 m assembly. Line positions stay
    * on absolute multiples of the step, so panning changes only which lines exist.
    */
+  /**
+   * Half-width of the square the ground grid is drawn on, around the target: the
+   * view plus a cell of margin, which is what the depth range has to cover too.
+   */
+  private gridExtent(): number {
+    const halfHeight = (this.camera.top - this.camera.bottom) / 2;
+    const halfWidth = halfHeight * (this.width / Math.max(1, this.height));
+    const step = niceGridStep((1 / this.pixelsPerWorldUnit()) * WORLD_GRID_TARGET_PX);
+    return Math.max(halfWidth, halfHeight) * 1.4 + step * 10 * 1.5;
+  }
+
   private updateWorldGrid(force = false): void {
     if (!this.grid) return;
     const [minor, major] = this.grid.children as [THREE.LineSegments, THREE.LineSegments];
     const halfHeight = (this.camera.top - this.camera.bottom) / 2;
-    const halfWidth = halfHeight * (this.width / Math.max(1, this.height));
     const step = niceGridStep((1 / this.pixelsPerWorldUnit()) * WORLD_GRID_TARGET_PX);
     const centerX = this.target.x;
     const centerY = this.target.y;
@@ -4490,7 +4515,7 @@ export class SceneController {
     // One chunk of margin each way keeps the view covered until the target moves
     // into the next chunk; the lines are then rebuilt at the same absolute
     // coordinates, so nothing shifts under the pointer.
-    const extent = Math.max(halfWidth, halfHeight) * 1.4 + chunk * 1.5;
+    const extent = this.gridExtent();
     const minX = centerX - extent;
     const maxX = centerX + extent;
     const minY = centerY - extent;
@@ -4803,7 +4828,13 @@ export class SceneController {
     this.camera.top = halfHeight;
     this.camera.bottom = -halfHeight;
 
-    const { eye, near, far } = cameraFrustum(this.distance, this.contentRadius());
+    const { eye, near, far } = cameraFrustum(
+      this.distance,
+      this.contentRadius(),
+      // The grid is the widest thing in the picture: a depth range that stopped
+      // short of it cut the ground plane off halfway across the screen.
+      Math.max(Math.hypot(halfHeight * aspect, halfHeight), this.gridExtent()),
+    );
     this.camera.near = near;
     this.camera.far = far;
 

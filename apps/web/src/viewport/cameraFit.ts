@@ -10,17 +10,24 @@ export const CAMERA_REACH = 5000;
  * frustum size, so the eye keeps a constant clearance behind the content:
  * following the zoom with the eye would move it inside the model, where the
  * near plane clips exactly what is being inspected.
+ *
+ * `viewRadius` is how far the picture reaches from the target at the current
+ * zoom. The far plane has to cover it: at a wide zoom the ground grid and the
+ * section caps spread well past the model, and a depth range measured on the
+ * model alone cut them off halfway across the screen.
  */
 export function cameraFrustum(
   distance: number,
   radius: number,
+  viewRadius = 0,
 ): { eye: number; near: number; far: number } {
   const span = Math.max(radius, 1);
+  const reach = Math.max(span, viewRadius);
   const eye = Math.max(distance, 0.01) + span * 2;
   return {
     eye,
     near: Math.max(0.01, distance * 0.001),
-    far: eye + span * 2 + CAMERA_REACH,
+    far: eye + reach * 2 + CAMERA_REACH,
   };
 }
 

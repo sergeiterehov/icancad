@@ -12,12 +12,7 @@ import {
 const WIDTH = 1000;
 const HEIGHT = 800;
 
-function projected(
-  span: number,
-  distance: number,
-  viewportPx: number,
-  axis: 'width' | 'height',
-) {
+function projected(span: number, distance: number, viewportPx: number, axis: 'width' | 'height') {
   const tan = Math.tan((CAMERA_FOV_DEGREES * Math.PI) / 180 / 2);
   const visible = 2 * distance * tan * (axis === 'width' ? WIDTH / HEIGHT : 1);
   return (span / visible) * viewportPx;
@@ -85,6 +80,16 @@ describe('cameraFrustum', () => {
       const { far, eye } = cameraFrustum(distance, 17.3);
       expect(far - eye).toBeGreaterThanOrEqual(CAMERA_REACH);
     }
+  });
+
+  it('reaches as far as the view at a wide zoom, not only as far as the model', () => {
+    // A 40 mm part seen from 20 m away: the picture spans tens of metres, and a
+    // depth range measured on the part alone cut the grid off mid-screen.
+    const viewRadius = 20_000 * Math.tan((CAMERA_FOV_DEGREES * Math.PI) / 180 / 2) * Math.SQRT2;
+    const { far, eye } = cameraFrustum(20_000, 20, viewRadius);
+    expect(far - eye).toBeGreaterThan(viewRadius);
+    // Zoomed in on the same part the model still sets the range.
+    expect(cameraFrustum(50, 20, 10).far).toBeCloseTo(cameraFrustum(50, 20).far, 6);
   });
 
   it('keeps a positive depth range for an empty scene', () => {
