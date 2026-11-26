@@ -1,6 +1,6 @@
 # ADR 0057 — The view pulls back when an edit takes the sketch out of the frame
 
-Status: proposed — a prototype for review
+Status: accepted
 
 ## Context
 
@@ -38,5 +38,5 @@ button that has to be remembered.
 - Zooming into one corner of a large sketch and then editing it _does_ pull the
   view back the first time the sketch grows past a tenth: the picture was already
   missing most of the sketch, and the growth is what made the question worth
-  asking. Open for review — the alternative, tracking the camera too, remembers
-  a camera the refit itself has just moved.
+  asking. The alternative — tracking the camera as well — remembers a camera the
+  refit itself has just moved, so it was not taken.
