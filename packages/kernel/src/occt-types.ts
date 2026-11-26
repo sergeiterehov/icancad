@@ -6,6 +6,7 @@ export interface OcctValueArray<T> {
 export interface OcctArray<T> {
   Length(): number;
   Value(index: number): T;
+  delete?: () => void;
 }
 
 export interface OcctPoint {
@@ -13,6 +14,8 @@ export interface OcctPoint {
   Y(): number;
   Z(): number;
   Transformed(transformation: OcctTransformation): OcctPoint;
+  /** Frees the C++ object now: the wasm heap never gives the memory back. */
+  delete?: () => void;
 }
 
 export interface OcctTransformation {
@@ -32,11 +35,13 @@ export interface OcctAxis3 {
   Direction(): OcctDirection3;
   XDirection(): OcctDirection3;
   YDirection(): OcctDirection3;
+  delete?: () => void;
 }
 
 /** A `gp_Pln`: the plane a flat face lies in. */
 export interface OcctPlane {
   Position(): OcctAxis3;
+  delete?: () => void;
 }
 
 /** A `Bnd_Box`: the axis-aligned box around a shape. */
@@ -78,34 +83,41 @@ export interface OcctTransformation3 {
 
 export interface OcctTriangle {
   Value(index: number): number;
+  delete?: () => void;
 }
 
 export interface OcctTriangulation {
   NbNodes(): number;
   NbTriangles(): number;
+  /** A copy of the node array, allocated in C++: fetch it once, delete it after. */
   Nodes(): OcctArray<OcctPoint>;
   Triangles(): OcctArray<OcctTriangle>;
+  delete?: () => void;
 }
 
 export interface OcctTriangulationHandle {
   /** Null when meshing gave the face no triangulation. */
   get(): OcctTriangulation | null;
+  delete?: () => void;
 }
 
 /** `Poly_PolygonOnTriangulation`: node indices into the face triangulation. */
 export interface OcctPolygonOnTriangulation {
   NbNodes(): number;
   Nodes(): OcctArray<number>;
+  delete?: () => void;
 }
 
 export interface OcctLocation {
   Transformation(): OcctTransformation;
+  delete?: () => void;
 }
 
 export interface OcctExplorer {
   More(): boolean;
   Next(): void;
   Current(): OcctShape;
+  delete?: () => void;
 }
 
 export interface OcctShape {
@@ -114,6 +126,8 @@ export interface OcctShape {
   IsNull(): boolean;
   Orientation_1(): unknown;
   Reversed(): OcctShape;
+  /** Frees the C++ object now: the wasm heap never gives the memory back. */
+  delete?: () => void;
 }
 
 export interface OcctPoint3 {
@@ -323,6 +337,12 @@ export interface OcctFileSystem {
 }
 
 export interface OcctBindings {
+  /**
+   * The linear memory of the wasm module. It only ever grows, so a test can tell
+   * a leak from garbage: memory the kernel gives back is reused and the size
+   * stays where it is.
+   */
+  HEAPU8?: { buffer: ArrayBuffer };
   BRepPrimAPI_MakeBox_1: new (dx: number, dy: number, dz: number) => OcctShapeMaker;
   BRepPrimAPI_MakeBox_2: new (
     origin: OcctPoint3,
@@ -356,7 +376,7 @@ export interface OcctBindings {
     isRelative: boolean,
     angularDeflection: number,
     isInParallel: boolean,
-  ) => unknown;
+  ) => { delete?: () => void };
   TopExp_Explorer_2: new (shape: OcctShape, toFind: number, toAvoid: number) => OcctExplorer;
   TopAbs_ShapeEnum: {
     TopAbs_FACE: number;
@@ -380,6 +400,7 @@ export interface OcctBindings {
   ) => {
     GetType(): unknown;
     Plane(): OcctPlane;
+    delete?: () => void;
   };
   /** The frame the standard XY plane sits in, so a face can be measured flat. */
   gp_Ax3_1: new () => OcctAxis3;

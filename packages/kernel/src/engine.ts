@@ -51,6 +51,7 @@ import {
   type ShapeNames,
 } from './naming';
 import type {
+  OcctArray,
   OcctBindings,
   OcctBooleanMaker,
   OcctColorTool,
@@ -60,12 +61,12 @@ import type {
   OcctThickSolidMaker,
   OcctHistory,
   OcctLabel,
+  OcctPoint,
   OcctPolygonOnTriangulation,
   OcctShape,
   OcctShapeList,
   OcctShapeTool,
   OcctTransformation,
-  OcctTriangulation,
 } from './occt-types';
 import type { Vec3 } from '@icancad/model';
 
@@ -135,19 +136,29 @@ function edgeBucketKey(points: readonly number[]): string {
   return center.map((value) => Math.round(value * EDGE_BUCKET_SCALE)).join(',');
 }
 
+/**
+ * Points of one edge's polyline, read from the face's own node array.
+ *
+ * The nodes are passed in because asking the triangulation for them copies the
+ * whole array: doing that per point was both a copy per node and a wasm
+ * allocation per node that nobody freed.
+ */
 function polygonPoints(
   polygon: OcctPolygonOnTriangulation,
-  triangulation: OcctTriangulation,
+  nodes: OcctArray<OcctPoint>,
   transformation: OcctTransformation,
 ): number[] {
   const count = polygon.NbNodes();
-  const nodes = polygon.Nodes();
+  const indices = polygon.Nodes();
   const points: number[] = [];
   for (let index = 1; index <= count; index += 1) {
-    const node = nodes.Value(index);
-    const point = triangulation.Nodes().Value(node).Transformed(transformation);
+    const source = nodes.Value(indices.Value(index));
+    const point = source.Transformed(transformation);
     points.push(point.X(), point.Y(), point.Z());
+    point.delete?.();
+    source.delete?.();
   }
+  indices.delete?.();
   return points;
 }
 
@@ -208,24 +219,31 @@ function exactFacePlane(
 ): FacePlane | null {
   try {
     const surface = new oc.BRepAdaptor_Surface_2(face, true);
-    if (surface.GetType() !== oc.GeomAbs_SurfaceType.GeomAbs_Plane) return null;
-    const position = surface.Plane().Position();
-    const point = position.Location();
-    const direction = position.Direction();
-    // The face's own orientation says which side the material is on, so the
-    // normal agrees with the triangles the viewport draws. A zero stays a zero:
-    // `-0` is a different number to every comparison and to JSON, and a face
-    // square to an axis would hand one out.
-    const sign = reversed ? -1 : 1;
-    const axis = (value: number) => (value === 0 ? 0 : value * sign);
-    const origin: Vec3 = [point.X(), point.Y(), point.Z()];
-    const normal: Vec3 = [axis(direction.X()), axis(direction.Y()), axis(direction.Z())];
-    const distance =
-      normal[0] * (sample[0] - origin[0]) +
-      normal[1] * (sample[1] - origin[1]) +
-      normal[2] * (sample[2] - origin[2]);
-    if (!Number.isFinite(distance) || Math.abs(distance) > EXACT_PLANE_TOLERANCE) return null;
-    return { origin, normal };
+    try {
+      if (surface.GetType() !== oc.GeomAbs_SurfaceType.GeomAbs_Plane) return null;
+      const plane = surface.Plane();
+      const position = plane.Position();
+      const point = position.Location();
+      const direction = position.Direction();
+      // The face's own orientation says which side the material is on, so the
+      // normal agrees with the triangles the viewport draws. A zero stays a zero:
+      // `-0` is a different number to every comparison and to JSON, and a face
+      // square to an axis would hand one out.
+      const sign = reversed ? -1 : 1;
+      const axis = (value: number) => (value === 0 ? 0 : value * sign);
+      const origin: Vec3 = [point.X(), point.Y(), point.Z()];
+      const normal: Vec3 = [axis(direction.X()), axis(direction.Y()), axis(direction.Z())];
+      point.delete?.();
+      position.delete?.();
+      const distance =
+        normal[0] * (sample[0] - origin[0]) +
+        normal[1] * (sample[1] - origin[1]) +
+        normal[2] * (sample[2] - origin[2]);
+      if (!Number.isFinite(distance) || Math.abs(distance) > EXACT_PLANE_TOLERANCE) return null;
+      return { origin, normal };
+    } finally {
+      surface.delete?.();
+    }
   } catch {
     return null;
   }
@@ -447,11 +465,45 @@ export class KernelEngine {
     return this.shapes.size;
   }
 
-  /** Stores a shape together with the names of its topology. */
+  /**
+   * Stores a shape together with the names of its topology.
+   *
+   * An id is a slot, not a new object: a rebuild evaluates the same operation
+   * under the same id, so whatever was there is replaced. The old shape is freed
+   * here — an OCCT shape holds wasm memory until someone deletes it, and a drag
+   * preview replaces a body's shape a hundred times in a few seconds.
+   */
   private storeShape(shapeId: string, shape: OcctShape, names?: ShapeNames): void {
+    const previous = this.shapes.get(shapeId);
     this.shapes.set(shapeId, shape);
+    if (previous && previous !== shape) {
+      this.releaseEdges(shapeId);
+      this.releaseShape(previous);
+    }
     if (names) this.shapeNames.set(shapeId, names);
     else this.shapeNames.delete(shapeId);
+  }
+
+  /**
+   * Frees a shape unless another id still names it: a treatment pass aliases the
+   * shape it runs on, and the alias outlives the temporary id.
+   */
+  private releaseShape(shape: OcctShape): void {
+    for (const other of this.shapes.values()) if (other === shape) return;
+    try {
+      shape.delete?.();
+    } catch {
+      // Already freed through another handle; nothing left to do.
+    }
+  }
+
+  /**
+   * Forgets the edge polylines measured on one shape. Their OCCT handles are
+   * small and a caller may still hold one across a treatment pass, so they go
+   * with the garbage collector rather than with the shape.
+   */
+  private releaseEdges(shapeId: string): void {
+    this.shapeEdges.delete(shapeId);
   }
 
   private namesOf(shapeId: string): ShapeNames | undefined {
@@ -1384,7 +1436,7 @@ export class KernelEngine {
     const oc = this.requireOc();
     const shape = this.getShape(shapeId);
 
-    new oc.BRepMesh_IncrementalMesh_2(
+    const mesher = new oc.BRepMesh_IncrementalMesh_2(
       shape,
       quality.linearDeflection,
       false,
@@ -1417,6 +1469,8 @@ export class KernelEngine {
       oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
     );
     while (explorer.More()) {
+      // `Current()` hands back a reference to a shape the explorer owns, so the
+      // copy `Face_1` makes is the only thing here that may be freed.
       const face = oc.TopoDS.Face_1(explorer.Current());
       const reversed = face.Orientation_1() === oc.TopAbs_Orientation.TopAbs_REVERSED;
       const location = new oc.TopLoc_Location_1();
@@ -1440,10 +1494,15 @@ export class KernelEngine {
         triangleRanges[faceIndex] = [triangleCount, nbTriangles];
 
         for (let i = 1; i <= nbNodes; i += 1) {
-          const point = nodes.Value(i).Transformed(transformation);
+          // `Value()` hands back a point of its own that nothing else holds;
+          // the transformation makes another, so both are freed here.
+          const source = nodes.Value(i);
+          const point = source.Transformed(transformation);
           const x = point.X();
           const y = point.Y();
           const z = point.Z();
+          point.delete?.();
+          source.delete?.();
           buffers.positions.push(x, y, z);
           updateBounds(min, max, x, y, z);
         }
@@ -1525,7 +1584,10 @@ export class KernelEngine {
               ? (raw as { get(): OcctPolygonOnTriangulation }).get()
               : (raw as OcctPolygonOnTriangulation | null);
           if (!polygon) continue;
-          const points = polygonPoints(polygon, triangulation, transformation);
+          const points = polygonPoints(polygon, nodes, transformation);
+          // The polygon itself belongs to the triangulation; the handle the
+          // tool returned is the only thing here that is ours.
+          if (raw !== (polygon as unknown)) (raw as { delete?: () => void } | null)?.delete?.();
           if (points.length < 6) continue;
           const bucketKey = edgeBucketKey(points);
           const bucket = edgeBuckets.get(bucketKey) ?? [];
@@ -1548,12 +1610,20 @@ export class KernelEngine {
           }
           if (!record.edge.faceIds.includes(faceIndex)) record.edge.faceIds.push(faceIndex);
         }
+        edgeExplorer.delete?.();
+        nodes.delete?.();
+        triangles.delete?.();
       }
 
       facePlanes.push(plane);
       faceIndex += 1;
+      triangulationHandle?.delete?.();
+      location.delete?.();
+      face.delete?.();
       explorer.Next();
     }
+    explorer.delete?.();
+    mesher.delete?.();
 
     // Edges are the only handle a treatment has on the shape, so they outlive
     // the tessellation for as long as the shape does.
@@ -2509,7 +2579,9 @@ export class KernelEngine {
       }
       return found;
     } finally {
-      this.shapeEdges.delete(temporaryId);
+      // The shape itself belongs to the id that made it; only the edges measured
+      // through this temporary name are ours to free.
+      this.releaseEdges(temporaryId);
       this.shapes.delete(temporaryId);
     }
   }
@@ -2693,15 +2765,29 @@ export class KernelEngine {
   }
 
   dispose(shapeId: string): boolean {
-    this.shapeEdges.delete(shapeId);
+    this.releaseEdges(shapeId);
     this.shapeNames.delete(shapeId);
-    return this.shapes.delete(shapeId);
+    const shape = this.shapes.get(shapeId);
+    const removed = this.shapes.delete(shapeId);
+    if (shape) this.releaseShape(shape);
+    return removed;
   }
 
   clear(): void {
+    for (const shapeId of [...this.shapeEdges.keys()]) this.releaseEdges(shapeId);
+    // The same shape can be named twice (a treatment pass aliases its input), so
+    // every object is freed once.
+    const shapes = [...new Set(this.shapes.values())];
     this.shapes.clear();
     this.shapeEdges.clear();
     this.shapeNames.clear();
+    for (const shape of shapes) {
+      try {
+        shape.delete?.();
+      } catch {
+        // Already freed through another handle.
+      }
+    }
   }
 
   private extrudeLoop(loop: ProfileLoop, params: MakePrismParams, scope: string): NamedShape {
