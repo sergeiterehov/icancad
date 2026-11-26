@@ -659,6 +659,28 @@ export const projectSchema = z
   );
 
 /**
+ * Marker of a sketch clipboard payload (ADR 0059). The clipboard is plain JSON
+ * text, so it travels through the system clipboard between tabs and browsers;
+ * geometry is validated with the very schema a project file is read with.
+ */
+export const SKETCH_CLIPBOARD_KIND = 'icancad.sketch-geometry';
+
+export const sketchClipboardSchema = z.object({
+  kind: z.literal(SKETCH_CLIPBOARD_KIND),
+  version: z.literal(1),
+  /** Geometry in the sketch's own coordinates; its bounds centre is the grip. */
+  entities: z.array(sketchEntity).min(1),
+});
+
+export type SketchClipboardPayload = z.infer<typeof sketchClipboardSchema>;
+
+/** Reads a clipboard payload; `null` when the text is something else. */
+export function parseSketchClipboard(input: unknown): SketchClipboardPayload | null {
+  const parsed = sketchClipboardSchema.safeParse(input);
+  return parsed.success ? parsed.data : null;
+}
+
+/**
  * Marks topology references written by version 8. Their names were derived
  * from face keys, so a parameter change could rename a face or an edge; the
  * pose stored next to the name is what resolves them in that case.

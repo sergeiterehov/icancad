@@ -531,7 +531,7 @@
     "polygonCorners_few": "{{count}} corners",
     "polygonCorners_many": "{{count}} corners",
     "polygonCorners_one": "{{count}} corner",
-    "polygonCorners_other": "{{count}} corners", 
+    "polygonCorners_other": "{{count}} corners",
     "toolExtend": "Extend",
     "extendHint": "Click a curve to choose it for extending; Shift also chooses construction curves",
     "extendHintGrow": "Move the pointer past the end and click to finish the extension",
@@ -543,7 +543,12 @@
     "offsetSelect": "Select the curves to offset first",
     "offsetBranching": "The curves fork at a point; select one chain",
     "offsetDistance": "Move the pointer away from the curves to set the distance",
-    "offsetFailed": "The offset cannot be built at this distance"
+    "offsetFailed": "The offset cannot be built at this distance",
+    "copy": "Copy",
+    "paste": "Paste",
+    "pasteHint": "Click to place the geometry; Shift keeps pasting, Esc cancels",
+    "pasteHintTouch": "Tap the editor to place the geometry",
+    "pasteEmpty": "The clipboard holds no sketch geometry"
   },
   "constraint": {
     "fix": "Fix",

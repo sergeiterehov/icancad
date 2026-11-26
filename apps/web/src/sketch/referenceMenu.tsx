@@ -5,7 +5,7 @@ import {
   type SketchMeasure,
 } from '@icancad/model';
 import { isFundamentalEntityId } from '@icancad/sketch';
-import { LineStyle, Ruler, Split, Trash2 } from 'lucide-react';
+import { ClipboardPaste, Copy, LineStyle, Ruler, Split, Trash2 } from 'lucide-react';
 import type { ContextMenuItem } from '../ui/ContextMenu';
 import { referenceIcon } from '../ui/referenceCatalog';
 import { constructionSelection, toggleConstruction } from './construction';
@@ -17,6 +17,28 @@ export interface ReferenceMenuOptions {
   selectedEntityIds?: string[];
   onSelectConstraints?: (constraintIds: string[]) => void;
   onDelete?: (entityIds: string[]) => void;
+  /** Copies the named geometry to the system clipboard (ADR 0059). */
+  onCopy?: (entityIds: string[]) => void;
+  /** Pastes the clipboard where the menu was opened, with no preview. */
+  onPaste?: () => void;
+}
+
+/**
+ * The menu of an empty spot in the sketch. Pasting is the whole of it: with no
+ * geometry under the pointer there is nothing else the click could mean.
+ */
+export function sketchBackgroundMenuItems(
+  t: (key: string) => string,
+  onPaste: () => void,
+): ContextMenuItem[] {
+  return [
+    {
+      id: 'paste-geometry',
+      label: t('sketch.paste'),
+      icon: <ClipboardPaste size={14} />,
+      onSelect: onPaste,
+    },
+  ];
 }
 
 export function referenceMenuItems(
@@ -48,7 +70,27 @@ export function referenceMenuItems(
   const targets = options.selectedEntityIds?.includes(entityId)
     ? options.selectedEntityIds
     : [entityId];
-  const { onSelectConstraints, onDelete } = options;
+  const { onSelectConstraints, onDelete, onCopy, onPaste } = options;
+  // The clipboard stands first: it is what a right-click on the drawing is most
+  // often for, and it reads as the same pair in every editor.
+  if (onPaste) {
+    items.push({
+      id: 'paste-geometry',
+      label: t('sketch.paste'),
+      icon: <ClipboardPaste size={14} />,
+      onSelect: onPaste,
+    });
+  }
+  if (onCopy) {
+    items.push({
+      id: 'copy-geometry',
+      label: t('sketch.copy'),
+      icon: <Copy size={14} />,
+      disabled: targets.filter((id) => !isFundamentalEntityId(id)).length === 0,
+      onSelect: () => onCopy(targets),
+    });
+  }
+  if (items.length > 0) items.push({ id: 'clipboard-separator', separator: true });
   const constructionTargets = constructionSelection(feature, targets);
   if (constructionTargets.length > 0) {
     items.push({

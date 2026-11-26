@@ -110,7 +110,7 @@ import {
   sketchProjectionSources,
 } from '../sketch/projection';
 import { entitiesInMarquee, marqueeMode, marqueeRect } from '../sketch/regionSelect';
-import { referenceMenuItems } from '../sketch/referenceMenu';
+import { referenceMenuItems, sketchBackgroundMenuItems } from '../sketch/referenceMenu';
 import { resolveSketchPoint, snapModeFor } from '../sketch/resolvePoint';
 import { constraintsForSolve, sketchHasFormulaError } from '../sketch/resolvedConstraints';
 import type { SketchSnap, SketchSnapInput } from '../sketch/snap';
@@ -125,6 +125,14 @@ import {
 } from '../stores/formulaStore';
 import { useKernelStore } from '../stores/kernelStore';
 import { useUiStore } from '../stores/uiStore';
+import { readSketchClipboard, writeSketchClipboard } from '../clipboard';
+import {
+  buildSketchClipboard,
+  clipboardAnchor,
+  newClipboardEntities,
+  placeClipboardEntities,
+  reidentify,
+} from '../clipboard/payload';
 import { useContextMenuStore } from '../ui/ContextMenu';
 import { isKeylessPointer, lastPointerType, primaryInputProfile } from './inputProfile';
 import { emptyTapClearsSelectionCount } from './selectionPick';
@@ -210,6 +218,18 @@ function offsetErrorKey(error: OffsetPlanError): string {
 interface ExtendGrip {
   entityId: string;
   end: 'start' | 'end';
+}
+
+/**
+ * Clipboard geometry waiting for its place (ADR 0059). The entities carry the
+ * ids the next click will keep, so the ghost under the pointer and the geometry
+ * that click commits are the same object; a Shift run arms a fresh set for the
+ * copy after it. `anchor` is the point that follows the pointer — the centre of
+ * the copied bounds.
+ */
+interface ArmedPaste {
+  entities: SketchEntity[];
+  anchor: Point2;
 }
 
 /** Where a pointer or a click stands; both ask the view what is under them. */
@@ -384,6 +404,18 @@ export function SketchEditor() {
   const drag = useRef<DragState | null>(null);
   const marquee = useRef<MarqueeState | null>(null);
   const [marqueeBox, setMarqueeBox] = useState<MarqueeBox | null>(null);
+  /**
+   * The clipboard (ADR 0059): a copy puts the selected geometry on the system
+   * clipboard as plain JSON, so it can be pasted in another sketch, another tab
+   * or another browser; a paste waits for a place, the geometry following the
+   * pointer until a click takes it.
+   */
+  const [paste, setPaste] = useState<ArmedPaste | null>(null);
+  /** Where the pointer stands while a paste is armed; null until it is over the sketch. */
+  const [pasteAt, setPasteAt] = useState<Point2 | null>(null);
+  /** Ids a run of pastes has placed, so holding Shift keeps all of them selected. */
+  const pastedIds = useRef<string[]>([]);
+  const pastePending = useRef(false);
 
   // Driven dimensions resolve to numbers, but the solver is what moves the
   // geometry: solving here writes the solved entities back, so the editor shows
@@ -854,6 +886,9 @@ export function SketchEditor() {
   }, [activeSketchId]);
 
   useEffect(() => {
+    // A paste belongs to the sketch it was armed in; leaving takes it with it.
+    setPaste(null);
+    setPasteAt(null);
     getViewport()?.setSketchOverlay(null, []);
     return () => getViewport()?.setSketchOverlay(null, []);
   }, [activeSketchId]);
@@ -875,6 +910,97 @@ export function SketchEditor() {
     activeModel(liveProject()).features.find(
       (feature): feature is SketchFeature => feature.id === sketch?.id && feature.type === 'sketch',
     );
+
+  /**
+   * The clipboard's acts, all read from the sketch as it stands now (ADR 0059).
+   * A copy puts the selected geometry on the system clipboard as plain JSON, so
+   * it can be pasted in another sketch, another tab or another browser; a paste
+   * waits for a place, the geometry following the pointer until a click takes it.
+   */
+  const dropPaste = () => {
+    setPaste(null);
+    setPasteAt(null);
+    pastedIds.current = [];
+  };
+
+  /**
+   * Places an armed paste where the click stood. The geometry lands as one edit
+   * and becomes the selection: the next step starts from what just arrived. With
+   * **Shift** held the paste stays armed, so a second click adds another copy —
+   * and the selection is every object this run of pastes has placed.
+   */
+  const commitPaste = (armed: ArmedPaste, at: Point2, keep: boolean) => {
+    const current = currentSketch();
+    const entities = current ? placeClipboardEntities(armed.entities, armed.anchor, at) : [];
+    if (!current || entities.length === 0) {
+      dropPaste();
+      return;
+    }
+    apply({
+      type: 'feature/replace',
+      feature: { ...current, entities: [...current.entities, ...entities] },
+    });
+    pastedIds.current = [...pastedIds.current, ...entities.map((entity) => entity.id)];
+    setSketchSelection(pastedIds.current);
+    // The copy that was just placed used the armed ids up, so a run of pastes
+    // arms the same shape under a new set for its next copy. A plain click ends
+    // the run instead.
+    if (keep) setPaste({ ...armed, entities: reidentify(armed.entities) });
+    else dropPaste();
+  };
+
+  /** Copies geometry to the clipboard, from a menu or from the key. */
+  const copyGeometry = (entityIds: readonly string[]) => {
+    const current = currentSketch();
+    const payload = current ? buildSketchClipboard(current, entityIds) : null;
+    if (payload) void writeSketchClipboard(payload);
+  };
+
+  /**
+   * Arms a paste. A paste from a menu already has its place and lands with no
+   * preview at all; one from the key waits for the pointer (a click places it)
+   * or, for a finger that cannot hover, for its own tap.
+   */
+  const startPaste = (place?: Point2) => {
+    if (pastePending.current || !activeSketchReady) return;
+    pastePending.current = true;
+    void readSketchClipboard()
+      .then((payload) => {
+        if (!payload) {
+          useUiStore.getState().showToast('sketch.pasteEmpty', 'error');
+          return;
+        }
+        // A run of pastes starts here: what the previous run placed is not part
+        // of the selection this one builds.
+        pastedIds.current = [];
+        const armed: ArmedPaste = {
+          entities: newClipboardEntities(payload),
+          anchor: clipboardAnchor(payload),
+        };
+        if (place) {
+          commitPaste(armed, place, false);
+          return;
+        }
+        updateDraft([]);
+        setHover(null);
+        setHoverPreview(null);
+        setSketchHover([]);
+        setPasteAt(null);
+        setPaste(armed);
+        // Placing a paste is a pointer act, so the drawing tools step aside: a
+        // click is the paste, not a new point.
+        setSketchTool('select');
+      })
+      .catch(() => useUiStore.getState().showToast('sketch.pasteEmpty', 'error'))
+      .finally(() => {
+        pastePending.current = false;
+      });
+  };
+
+  /** A tool other than Select is a different act: an armed paste is dropped. */
+  useEffect(() => {
+    if (tool !== 'select') dropPaste();
+  }, [tool]);
 
   /**
    * Commits what the pointer currently describes — an offset, a contour or a
@@ -1389,8 +1515,13 @@ export function SketchEditor() {
     // so it restores the cursor from the current hover instead of the tool
     // alone: a late commit must not drop the pointer over geometry.
     const hovering = useUiStore.getState().sketchHoverIds.length > 0;
-    canvas.style.cursor =
-      tool === 'select' || tool === 'extend' ? (hovering ? 'pointer' : 'default') : 'crosshair';
+    canvas.style.cursor = paste
+      ? 'crosshair'
+      : tool === 'select' || tool === 'extend'
+        ? hovering
+          ? 'pointer'
+          : 'default'
+        : 'crosshair';
 
     /**
      * The point a click or a finger gives the current tool: the neighbour the
@@ -1536,6 +1667,10 @@ export function SketchEditor() {
       skipClick.current = false;
       marquee.current = null;
       pointerDown.current = { x: event.clientX, y: event.clientY };
+      // A paste owns the press: the click that follows places it, so no box and
+      // no drag may start here. The press is still remembered, because a click
+      // is what places the geometry.
+      if (paste) return;
       const activeTool = useUiStore.getState().sketchTool;
       // The offset, contour, fillet and trim tools read the selection and the
       // pointer distance; a press starts neither a draft nor a selection box.
@@ -1725,6 +1860,20 @@ export function SketchEditor() {
       const activeTool = useUiStore.getState().sketchTool;
       // The projection tool aims at the 3D scene, so the sketch has no hover.
       if (activeTool === 'project') return;
+      // An armed paste follows a pointer that can hover: the geometry stands
+      // where the click would put it. A finger has no hover to read, so its tap
+      // is the place and nothing is drawn under it beforehand.
+      if (paste) {
+        if (!isKeylessPointer(event.pointerType)) {
+          const point = getViewport()?.sketchPointAt(event.clientX, event.clientY);
+          if (point) setPasteAt(point);
+        }
+        setSketchHover([]);
+        setHover(null);
+        setHoverPreview(null);
+        canvas.style.cursor = 'crosshair';
+        return;
+      }
       // The stretch is chosen and ended by clicks, so the pointer is free to
       // say what it would take hold of and where the end would go. The geometry
       // it would take is painted the accent the editor already uses for "this
@@ -2020,6 +2169,14 @@ export function SketchEditor() {
       if (down && !isTap(event.clientX - down.x, event.clientY - down.y)) return;
       const activeTool = useUiStore.getState().sketchTool;
       if (activeTool === 'project') return;
+      // A click is the paste: the geometry stands where the click does, and a
+      // finger that cannot hover places it the same way, with its tap. Shift
+      // keeps the paste armed for the next click.
+      if (paste) {
+        const point = getViewport()?.sketchPointAt(event.clientX, event.clientY);
+        if (point) commitPaste(paste, point, event.shiftKey);
+        return;
+      }
       // The first click takes hold of a curve, the second one ends the stretch:
       // the pointer says which curve and how far, and neither needs a press.
       if (activeTool === 'extend') {
@@ -2115,12 +2272,30 @@ export function SketchEditor() {
       if (useUiStore.getState().sketchTool !== 'select') return;
       const current = currentSketch();
       if (!current) return;
+      // The menu is a new act: an armed paste is dropped, and the menu's own
+      // Paste starts a fresh one where the menu was opened.
+      dropPaste();
+      // The place travels with the item, not with the menu: the pointer may be
+      // somewhere else entirely by the time an item is picked.
+      const menuPoint = getViewport()?.sketchPointAt(event.clientX, event.clientY) ?? null;
+      const pasteHere = menuPoint ? () => startPaste(menuPoint) : undefined;
       const pick = getViewport()?.pickSketch(
         event.clientX,
         event.clientY,
         currentSketchEntities(current.id),
       );
-      if (!pick?.entityId) return;
+      if (!pick?.entityId) {
+        // Empty space offers the one thing it can: a paste where the menu was
+        // opened, with no preview — the place is already known.
+        if (!pasteHere) return;
+        event.preventDefault();
+        openContextMenu(
+          event.clientX,
+          event.clientY,
+          sketchBackgroundMenuItems((key) => t(key as never), pasteHere),
+        );
+        return;
+      }
       event.preventDefault();
       const entityId = pick.entityId;
       const entityIds = selectionIds.map((key) => key.split('#')[0]!).filter(Boolean);
@@ -2142,6 +2317,8 @@ export function SketchEditor() {
               setSketchSelection([]);
               void diagnoseSketch(next);
             },
+            onCopy: copyGeometry,
+            onPaste: pasteHere,
           },
         ),
       );
@@ -2227,6 +2404,7 @@ export function SketchEditor() {
     draft,
     sketch,
     selectionIds,
+    paste,
     setSketchSelection,
     selectSketchConstraints,
     preview,
@@ -2473,6 +2651,23 @@ export function SketchEditor() {
   // not by painting the whole segment as if a rule were being added.
   const previewAuto = magnetEnabled && previewAlignment;
 
+  // The paste ghost: the armed geometry moved so its anchor stands under the
+  // pointer. The ids are the ones the click will keep, so the ghost is exactly
+  // what lands.
+  const pasteEntities = useMemo(
+    () => (paste && pasteAt ? placeClipboardEntities(paste.entities, paste.anchor, pasteAt) : null),
+    [paste, pasteAt],
+  );
+  // A lone point has no line to draw it with; on the ghost it still reads as a
+  // dot, the way the point a creation tool is about to place does.
+  const pasteMarkers = useMemo(
+    () =>
+      (pasteEntities ?? []).flatMap((entity) =>
+        entity.type === 'point' ? [[entity.x, entity.y] as Point2] : [],
+      ),
+    [pasteEntities],
+  );
+
   // A creating tool names its points one click at a time, and an arc or an
   // ellipse preview carries no marker of its own until the shape exists. The
   // point the next click would place is drawn under the pointer, in the magnet
@@ -2506,6 +2701,13 @@ export function SketchEditor() {
     const midpointMarker =
       magnetEnabled && hoverSnap?.midpointSnap ? hoverSnap.midpointSnap.point : null;
     const previewGuides = draftGuides(tool, markers.markers, hover, () => createId('guide'));
+    if (paste) {
+      // A paste is the whole of the picture while it is armed: no draft markers,
+      // no magnet point and nothing hidden. The ghost is the selection accent,
+      // because it is exactly what the click selects.
+      getViewport()?.setSketchOverlay(pasteEntities ?? [], pasteMarkers, true, null, [], null, []);
+      return;
+    }
     getViewport()?.setSketchOverlay(
       pointerTool ? pointerPreview.entities : (polygonPreview?.entities ?? previewEntity()),
       pointerTool ? [...markers.markers, ...pointerPreview.points] : markers.markers,
@@ -2517,6 +2719,9 @@ export function SketchEditor() {
     );
   }, [
     activeSketchId,
+    paste,
+    pasteEntities,
+    pasteMarkers,
     tool,
     draft,
     hover,
@@ -2547,6 +2752,13 @@ export function SketchEditor() {
       if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
       const activeTool = useUiStore.getState().sketchTool;
       if (event.key === 'Escape') {
+        // An armed paste is a click that has not happened yet, so Escape drops
+        // it before it rewinds anything else.
+        if (paste) {
+          dropPaste();
+          setSketchHover([]);
+          return;
+        }
         // While a tool has progress, Escape only rewinds it. With no progress
         // it returns to Select, and Select itself finishes the sketch.
         if (draftRef.current.length > 0) {
@@ -2580,6 +2792,31 @@ export function SketchEditor() {
         }
         setActiveSketch(null);
         return;
+      }
+      // The clipboard (ADR 0059). A copy leaves the selection alone, so the same
+      // geometry can be pasted again or used for the next step; a paste arms the
+      // geometry under the pointer and waits for a click.
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey) {
+        const letter = shortcutLetter(event);
+        if (letter === 'C') {
+          const current = currentSketch();
+          const entityIds = selectionIds
+            .map((key) => key.split('#')[0]!)
+            .filter((id) => Boolean(id));
+          const payload = current ? buildSketchClipboard(current, entityIds) : null;
+          if (payload) {
+            event.preventDefault();
+            void writeSketchClipboard(payload);
+            return;
+          }
+          // A selection of nothing but the origin and the axes is not geometry
+          // to copy: the key stays the browser's own.
+        }
+        if (letter === 'V') {
+          event.preventDefault();
+          startPaste();
+          return;
+        }
       }
       if (event.key === 'Delete' || event.key === 'Backspace') {
         if (selectedConstraintIds.length > 0 && sketch) {
@@ -2658,8 +2895,9 @@ export function SketchEditor() {
   // step they take is a drag or a tap rather than a click.
   const keylessInput = isKeylessPointer(lastPointerType()) || primaryInputProfile() === 'touch';
 
-  const hint =
-    tool === 'line'
+  const hint = paste
+    ? t(keylessInput ? 'sketch.pasteHintTouch' : 'sketch.pasteHint')
+    : tool === 'line'
       ? draft.length === 0
         ? t('sketch.startLine')
         : t('sketch.finishLine')
